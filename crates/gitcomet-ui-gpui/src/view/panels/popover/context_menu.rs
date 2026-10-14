@@ -381,6 +381,18 @@ impl PopoverHost {
     }
 
     pub(super) fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
+        if let Some(binding) = self.store.binding {
+            let repo = binding
+                .repository(&self.state)
+                .filter(|repo| repo.id == repo_id)?;
+            return Some(
+                repo.diff_sessions
+                    .get(&binding.view)?
+                    .worktree()
+                    .unwrap_or(&repo.spec.workdir)
+                    .to_path_buf(),
+            );
+        }
         self.state
             .repos
             .iter()
@@ -605,7 +617,7 @@ impl PopoverHost {
                 load_remote_image_url,
             } => {
                 let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
-                    self.main_pane.read(cx).remote_markdown_images.policy
+                    self.diff_renderer.read(cx).remote_markdown_images.policy
                         == RemoteMarkdownImagePolicy::AskBeforeLoading
                 });
                 Some(web_link::model(url, load_remote_image_url))
@@ -618,7 +630,7 @@ impl PopoverHost {
                 load_remote_image_url,
             } => {
                 let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
-                    self.main_pane.read(cx).remote_markdown_images.policy
+                    self.diff_renderer.read(cx).remote_markdown_images.policy
                         == RemoteMarkdownImagePolicy::AskBeforeLoading
                 });
                 Some(local_file_link::model(
@@ -1007,7 +1019,7 @@ impl PopoverHost {
                 self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
             }
             ContextMenuAction::DiscardFileEdits { repo_id, path } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.discard_file_edits_for(repo_id, &path, cx);
                 });
             }
@@ -1345,7 +1357,7 @@ impl PopoverHost {
                 });
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.open_submodule_inner_diff(path, target, cx);
                 });
             }
@@ -1534,12 +1546,12 @@ impl PopoverHost {
                 });
             }
             ContextMenuAction::SetImageSampling { mode } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.set_image_preferences(Some(mode), None, cx)
                 });
             }
             ContextMenuAction::SetImageSmoothFilter { filter } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.set_image_preferences(None, Some(filter), cx)
                 });
             }
@@ -1547,42 +1559,42 @@ impl PopoverHost {
                 crate::view::image_preview::apply_menu_zoom(zoom, window, cx);
             }
             ContextMenuAction::SetTextEncoding { encoding } => {
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.set_text_encoding_override(encoding, cx);
                     });
                 });
             }
             ContextMenuAction::SaveWithEncoding { format } => {
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.set_save_text_format(format, cx);
                     });
                 });
             }
             ContextMenuAction::ConvertLineEndings { ending } => {
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.convert_file_editor_line_endings(ending, cx);
                     });
                 });
             }
             ContextMenuAction::SetTabSize { size } => {
-                self.main_pane
+                self.diff_renderer
                     .update(cx, |pane, _| pane.set_tab_size_override(size));
             }
             ContextMenuAction::AddGitattributesRule { rule } => {
-                self.main_pane
+                self.diff_renderer
                     .update(cx, |pane, _| pane.add_text_encoding_rule(rule));
             }
             ContextMenuAction::SetDiffContentMode { mode } => {
                 self.diff_content_mode = mode;
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.set_diff_content_mode_and_persist(mode, cx);
                     });
                 });
@@ -1591,9 +1603,9 @@ impl PopoverHost {
                 close_after_action = false;
                 restore_diff_panel_focus_after_action = true;
                 self.diff_whitespace_mode = mode;
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.set_diff_whitespace_mode_and_persist(mode, cx);
                     });
                 });
@@ -1602,9 +1614,9 @@ impl PopoverHost {
                 close_after_action = false;
                 restore_diff_panel_focus_after_action = true;
                 self.diff_reveal_whitespace_chars = enabled;
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.set_diff_reveal_whitespace_chars_and_persist(enabled, cx);
                     });
                 });
@@ -1613,9 +1625,9 @@ impl PopoverHost {
                 close_after_action = false;
                 restore_diff_panel_focus_after_action = true;
                 self.diff_word_wrap = enabled;
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.set_diff_word_wrap_and_persist(enabled, cx);
                     });
                 });
@@ -1624,9 +1636,9 @@ impl PopoverHost {
                 close_after_action = false;
                 restore_diff_panel_focus_after_action = true;
                 self.diff_show_line_numbers = enabled;
-                let main_pane = self.main_pane.clone();
+                let diff_renderer = self.diff_renderer.clone();
                 cx.defer(move |cx| {
-                    main_pane.update(cx, |pane, cx| {
+                    diff_renderer.update(cx, |pane, cx| {
                         pane.set_diff_show_line_numbers_and_persist(enabled, cx);
                     });
                 });
@@ -1997,67 +2009,67 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::ConflictResolverPick { target } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_apply_pick_target(target, cx);
                 });
             }
             ContextMenuAction::ConflictResolverUnresolve { conflict_ix } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_select_conflict(conflict_ix, cx);
                     pane.conflict_resolver_unresolve_active_conflict(cx);
                 });
             }
             ContextMenuAction::ConflictResolverSplitSelection => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_split_selection(cx);
                 });
             }
             ContextMenuAction::ConflictResolverAlignManually => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_align_manually(cx);
                 });
             }
             ContextMenuAction::ConflictResolverClearManualAlignments => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_clear_manual_alignments(cx);
                 });
             }
             ContextMenuAction::ConflictResolverJoinRegions { target } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_join_regions(target, cx);
                 });
             }
             ContextMenuAction::SetMergetoolAutoAdvance { enabled } => {
                 close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.set_mergetool_auto_advance_and_persist(enabled, cx);
                 });
                 cx.notify();
             }
             ContextMenuAction::ToggleMergetoolCollapseUnchanged => {
                 close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_toggle_collapse_context(cx);
                 });
                 cx.notify();
             }
             ContextMenuAction::SetMergetoolOutputScrollSync { enabled } => {
                 close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.set_mergetool_output_scroll_sync_and_persist(enabled, cx);
                 });
                 cx.notify();
             }
             ContextMenuAction::SetMergetoolShowLineNumbers { enabled } => {
                 close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.set_mergetool_show_line_numbers_and_persist(enabled, cx);
                 });
                 cx.notify();
             }
             ContextMenuAction::SetMergetoolThreeWayView { enabled } => {
                 close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_set_view_mode(
                         if enabled {
                             ConflictResolverViewMode::ThreeWay
@@ -2071,13 +2083,13 @@ impl PopoverHost {
             }
             ContextMenuAction::ConflictResolverOutputCut { text } => {
                 crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_output_delete_selection(cx);
                 });
             }
             ContextMenuAction::ConflictResolverOutputPaste => {
                 if let Some(text) = crate::clipboard::read_text(cx) {
-                    self.main_pane.update(cx, |pane, cx| {
+                    self.diff_renderer.update(cx, |pane, cx| {
                         pane.conflict_resolver_output_paste_text(&text, cx);
                     });
                 }
@@ -2096,7 +2108,7 @@ impl PopoverHost {
                 );
             }
             ContextMenuAction::LoadRemoteMarkdownImage { url } => {
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.approve_remote_markdown_image(url, cx);
                 });
             }
@@ -2125,7 +2137,7 @@ impl PopoverHost {
             }
             ContextMenuAction::CopyDiffText { visible_ix, region } => {
                 window.activate();
-                self.main_pane.update(cx, |pane, cx| {
+                self.diff_renderer.update(cx, |pane, cx| {
                     pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
                 });
             }
@@ -2264,7 +2276,7 @@ impl PopoverHost {
             }
         } else {
             if restore_diff_panel_focus_after_action {
-                let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+                let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
                 window.focus(&focus, cx);
             }
             cx.notify();
@@ -2585,7 +2597,7 @@ impl PopoverHost {
         hunk_src_ix: usize,
         cx: &gpui::App,
     ) -> Option<gitcomet_state::msg::ContentBytes> {
-        let pane = self.main_pane.read(cx);
+        let pane = self.diff_renderer.read(cx);
         // Payload row numbers do not address hunks in the Git pointer patch.
         if pane.active_repo_id() != Some(repo_id)
             || pane.is_inline_submodule_diff_active()

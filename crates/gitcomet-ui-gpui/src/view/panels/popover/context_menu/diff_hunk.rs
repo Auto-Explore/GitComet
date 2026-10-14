@@ -47,7 +47,7 @@ pub(super) fn model(
     let mut items = vec![ContextMenuItem::Header("Hunk".into())];
     items.push(ContextMenuItem::Separator);
 
-    let pane = this.main_pane.read(cx);
+    let pane = this.diff_renderer.read(cx);
     let diff_target = pane.rendered_diff_target();
     let (disabled, label, icon, shortcut) = diff_hunk_primary_metadata(diff_target);
     let patch = this.build_unified_patch_for_hunk_src_ix(repo_id, src_ix, cx);

@@ -232,7 +232,7 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         };
 
         let handled = entry
-            .main_pane
+            .diff_renderer
             .update(cx, |pane, cx| {
                 let handled = pane.handle_diff_shortcut(&event.keystroke, window, cx);
                 if handled {

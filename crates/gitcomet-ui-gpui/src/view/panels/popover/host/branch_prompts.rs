@@ -379,7 +379,7 @@ impl PopoverHost {
             local_branch,
             mode,
         });
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.rebuild_diff_cache(cx);
             cx.notify();
         });

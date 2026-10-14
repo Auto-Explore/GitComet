@@ -12,6 +12,76 @@ const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
 
 #[gpui::test]
+fn settings_snapshot_uses_the_shared_renderer_without_a_repository_window(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_extension_api::{DiffLayout, DiffPaneOptions, DiffSnapshot, Registry};
+    let _guard = lock_visual_test();
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(
+                gitcomet_extension_example::review::ReviewExtension,
+            )])
+            .unwrap(),
+            app,
+        );
+    });
+    let (settings, settings_cx) = cx.add_window_view(SettingsWindowView::new);
+    settings_cx.run_until_parked();
+    let pane = settings_cx.update(|_, app| {
+        let host = settings.read(app).extension_window.as_ref().unwrap().host();
+        let state = host.state(app).unwrap();
+        assert!(state.repos.is_empty());
+        assert!(state.active_repo.is_none());
+        host.create_snapshot_pane(
+            DiffSnapshot::new("rootless.rs", "before\n", "after\n"),
+            DiffPaneOptions {
+                layout: DiffLayout::Inline,
+                ..Default::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    settings_cx.run_until_parked();
+    struct SnapshotWindow(gpui::AnyView);
+    impl Render for SnapshotWindow {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.0.clone())
+        }
+    }
+    let snapshot = pane.view();
+    let (_, cx) = cx.add_window_view(move |_, _| SnapshotWindow(snapshot));
+    for _ in 0..3 {
+        crate::view::test_support::redraw(cx);
+        cx.run_until_parked();
+    }
+    cx.update(|_, app| {
+        assert_eq!(app.windows().len(), 2);
+        assert!(
+            app.windows()
+                .iter()
+                .all(|window| window.downcast::<GitCometView>().is_none())
+        );
+        assert!(!pane.is_loading(app));
+        pane.set_search("after", app);
+        assert_eq!(pane.search_matches(app), 1);
+        let hosted = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap();
+        let renderer = hosted.read(app).renderer().unwrap().read(app);
+        assert!(renderer.active_repo().is_none());
+        assert!(renderer.editor_documents.all().is_empty());
+        assert!(!renderer.store.policy.allow_edit);
+        assert!(!renderer.store.policy.allow_stage);
+    });
+    assert!(cx.debug_bounds("diff_bar_stage").is_none());
+    assert!(cx.debug_bounds("diff_file_edit").is_none());
+    assert!(cx.debug_bounds("diff_body_container").is_some());
+}
+
+#[gpui::test]
 fn restart_cancellation_only_applies_to_application_close_prompts(cx: &mut gpui::TestAppContext) {
     use gitcomet_extension_api::CloseScope;
     let _visual_guard = lock_visual_test();
@@ -2781,7 +2851,11 @@ fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppCon
 
     cx.update(|_window, app| {
         assert!(
-            !main_view.read(app).main_pane.read(app).auto_save_file_edits,
+            !main_view
+                .read(app)
+                .diff_renderer
+                .read(app)
+                .auto_save_file_edits,
             "auto-save is off until it is turned on"
         );
     });
@@ -2806,7 +2880,11 @@ fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppCon
 
     cx.update(|_window, app| {
         assert!(
-            main_view.read(app).main_pane.read(app).auto_save_file_edits,
+            main_view
+                .read(app)
+                .diff_renderer
+                .read(app)
+                .auto_save_file_edits,
             "the pane that owns the editor must see the new value"
         );
         assert!(
@@ -3224,9 +3302,9 @@ fn diff_render_defaults_from_session_subprocess(cx: &mut gpui::TestAppContext) {
         ));
         assert!(crate::view::test_support::diff_word_wrap(view));
         assert!(!crate::view::test_support::diff_show_line_numbers(view));
-        assert!(view.main_pane.read(app).reveal_whitespace_chars);
-        assert!(view.main_pane.read(app).diff_word_wrap);
-        assert!(!view.main_pane.read(app).diff_show_line_numbers);
+        assert!(view.diff_renderer.read(app).reveal_whitespace_chars);
+        assert!(view.diff_renderer.read(app).diff_word_wrap);
+        assert!(!view.diff_renderer.read(app).diff_show_line_numbers);
     });
 
     cx.update(|window, app| {
@@ -3765,7 +3843,7 @@ fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independen
             assert_eq!(view.theme.metrics.editor_font_size_px, 26);
             assert_eq!(view.theme.metrics.markdown_preview_font_size_px, 18);
             assert_eq!(
-                view.main_pane
+                view.diff_renderer
                     .read(app)
                     .file_editor_input
                     .read(app)

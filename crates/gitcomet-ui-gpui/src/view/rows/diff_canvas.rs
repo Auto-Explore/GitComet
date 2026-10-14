@@ -13,8 +13,10 @@ use super::diff_text::{
     whitespace_visible_styled_text,
 };
 use super::*;
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
-use crate::view::panes::main::{DiffChangeSide, DiffHorizontalScrollColumn, FocusedChangeBlockRow};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::diff::helpers::state::DiffChangeSide;
+use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
+use crate::view::panes::diff::helpers::state::FocusedChangeBlockRow;
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use gpui::{
@@ -619,7 +621,7 @@ fn paint_stage_gutter(
     ui_scale_percent: u32,
     row_hitbox: &Hitbox,
     column_bounds: Option<Bounds<Pixels>>,
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<StageGutterMouse> {
@@ -687,7 +689,7 @@ fn paint_stage_gutter(
 /// one side in split views, where both columns paint their own button.
 fn install_stage_gutter_hover_handler(
     window: &mut Window,
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     visible_ix: usize,
     spec: StageGutterSpec,
     hitbox: &Hitbox,
@@ -738,7 +740,7 @@ fn install_stage_gutter_hover_handler(
 #[allow(clippy::too_many_arguments)]
 fn install_blame_annotation_mouse_handler(
     window: &mut Window,
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     scope: gpui::ElementId,
     message_hitbox: &Hitbox,
     prior_icon_hitbox: &Hitbox,
@@ -845,7 +847,7 @@ fn render_blame_column(
     ui_scale_percent: u32,
     visible_ix: usize,
     annot_hitboxes: Option<&AnnotHitboxes>,
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     style: &TextStyle,
     window: &mut Window,
     cx: &mut App,
@@ -944,7 +946,7 @@ fn render_blame_column(
 /// (which drives the accent highlight on repaint) and the shared tooltip host.
 fn install_blame_annotation_hover_handler(
     window: &mut Window,
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     visible_ix: usize,
     hitboxes: &AnnotHitboxes,
     summary: SharedString,
@@ -2265,7 +2267,7 @@ fn diff_text_paint_payload(
 pub(super) fn inline_diff_line_row_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     ui_scale_percent: u32,
     visible_ix: usize,
     min_width: Pixels,
@@ -2523,7 +2525,7 @@ pub(super) fn inline_diff_line_row_canvas(
 pub(super) fn split_diff_line_row_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     ui_scale_percent: u32,
     visible_ix: usize,
     min_width: Pixels,
@@ -2886,7 +2888,7 @@ pub(super) fn split_diff_line_row_canvas(
 pub(super) fn patch_split_column_row_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     ui_scale_percent: u32,
     column: super::diff::PatchSplitColumn,
     visible_ix: usize,
@@ -3147,7 +3149,7 @@ pub(super) fn patch_split_column_row_canvas(
 /// with unsaved edits.
 pub(in crate::view) fn blame_gutter_row_canvas(
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     ui_scale_percent: u32,
     visual_ix: usize,
     row_height: Pixels,
@@ -3205,7 +3207,7 @@ pub(in crate::view) fn blame_gutter_row_canvas(
 pub(super) fn worktree_preview_row_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     ui_scale_percent: u32,
     ix: usize,
     min_width: Pixels,
@@ -3603,7 +3605,7 @@ fn should_handle_row_mouse_event(
 /// revisions it shows: a redraw keeps a pending click, new content never
 /// inherits one.
 fn diff_canvas_click_target(
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     visible_ix: usize,
     action: impl Hash,
     cx: &App,
@@ -3629,7 +3631,7 @@ fn diff_canvas_click_target(
 
 fn install_diff_row_mouse_handlers(
     window: &mut Window,
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     visible_ix: usize,
     handlers: DiffRowMouseHandlers,
     cx: &App,
@@ -3948,7 +3950,7 @@ fn shaped_gutter_line(
 #[allow(clippy::too_many_arguments)]
 fn paint_selectable_diff_text(
     tab_width: usize,
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     visible_ix: usize,
     region: DiffTextRegion,
     bounds: Bounds<Pixels>,
@@ -4291,7 +4293,7 @@ fn diff_layout_base_key(
 
 #[allow(clippy::too_many_arguments)]
 fn ensure_layout_cached(
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     text_hash: u64,
     text: &SharedString,
     base_style: &TextStyle,

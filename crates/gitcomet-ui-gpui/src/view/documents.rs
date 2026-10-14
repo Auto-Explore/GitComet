@@ -1,8 +1,8 @@
-use super::panes::main::file_editor::{file_editor_gutter_width, file_editor_line_for_visual_row};
-use super::panes::main::{
-    FileImagePreviewAnimationSide, TextDecodeRequest, preflight_worktree_file_for_editing,
-    read_worktree_file_version_for_editing,
-};
+use super::panes::diff::TextDecodeRequest;
+use super::panes::diff::file_editor::{file_editor_gutter_width, file_editor_line_for_visual_row};
+use super::panes::diff::helpers::state::FileImagePreviewAnimationSide;
+use super::panes::diff::preflight_worktree_file_for_editing;
+use super::panes::diff::read_worktree_file_version_for_editing;
 use super::*;
 use crate::kit::{TextInput, TextInputOptions};
 use buffers::{BufferId, BufferSave, DocumentBuffer, DocumentOwner, SaveOrigin};
@@ -849,10 +849,11 @@ impl StandaloneBuffer {
         let source_len = snapshot.len();
         let heuristic_rope = rope.clone();
         let provider = crate::kit::HighlightProvider::with_pending(
-            move |range: std::ops::Range<usize>| crate::kit::HighlightProviderResult {
+            move |range: std::ops::Range<usize>| {
+                crate::kit::HighlightProviderResult {
                 highlights: language
                     .map(|language| {
-                        panes::main::helpers::resolved_output_heuristic_highlights_for_range(
+                        panes::diff::helpers::presentation::resolved_output_heuristic_highlights_for_range(
                             theme,
                             &heuristic_rope,
                             language,
@@ -861,6 +862,7 @@ impl StandaloneBuffer {
                     })
                     .unwrap_or_default(),
                 pending: false,
+            }
             },
             || 0,
             || false,

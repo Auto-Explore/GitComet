@@ -1891,7 +1891,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     // a file edited and navigated away from is the one hardest to find again.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let identity = pane
                     .document_identity(RepoId(1), std::path::Path::new("b.rs"))
                     .unwrap();
@@ -1928,7 +1928,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     // Discarding through the same entry point the row's button uses clears it.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.discard_file_edits_for(RepoId(1), &PathBuf::from("b.rs"), cx);
             });
         });
@@ -2065,7 +2065,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
     // Now give `b.rs` an unsaved buffer and click it in the tree.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let identity = pane
                     .document_identity(RepoId(1), std::path::Path::new("b.rs"))
                     .unwrap();

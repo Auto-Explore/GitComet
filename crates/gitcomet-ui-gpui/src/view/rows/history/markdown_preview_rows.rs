@@ -53,7 +53,7 @@ impl MarkdownPreviewHoveredLink {
 pub(in crate::view) struct MarkdownRemoteImageAccess {
     pub(in crate::view) policy: RemoteMarkdownImagePolicy,
     pub(in crate::view) approved_urls: Arc<FxHashSet<SharedString>>,
-    pub(in crate::view) approval_view: Option<Entity<MainPaneView>>,
+    pub(in crate::view) approval_view: Option<Entity<DiffRenderer>>,
 }
 
 impl Default for MarkdownRemoteImageAccess {
@@ -1220,14 +1220,14 @@ pub(in crate::view) fn markdown_preview_image_placeholder_element(
 /// Gutter colour the flowing markdown preview marks a wholly added or removed
 /// file with, shared with the source preview so the two agree.
 pub(in crate::view) fn worktree_markdown_preview_bar_color(
-    this: &MainPaneView,
+    this: &DiffRenderer,
     theme: AppTheme,
 ) -> Option<gpui::Rgba> {
     worktree_preview_bar_color(this, theme)
 }
 
 pub(in crate::view) fn worktree_preview_bar_color(
-    this: &MainPaneView,
+    this: &DiffRenderer,
     theme: AppTheme,
 ) -> Option<gpui::Rgba> {
     let highlight_deleted_file = this.deleted_file_preview_abs_path().is_some();

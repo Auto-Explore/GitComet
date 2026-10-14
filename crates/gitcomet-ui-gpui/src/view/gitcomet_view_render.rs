@@ -639,17 +639,13 @@ impl Render for GitCometView {
             }))
             .on_action(cx.listener(
                 |this, _: &TextInputDiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_prev_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 },
             ))
             .on_action(cx.listener(
                 |this, _: &TextInputDiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_next_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 },
             ))
@@ -679,17 +675,13 @@ impl Render for GitCometView {
             }))
             .on_action(
                 cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_prev_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_next_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 }),
             )

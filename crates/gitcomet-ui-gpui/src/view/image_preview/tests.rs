@@ -272,7 +272,7 @@ fn svg_text_survives_bounded_image_preview() {
         "system-ui",
     ] {
         let tree = svg::parse(&text_svg(family)).unwrap();
-        let preview = panes::main::diff_cache::render_svg_image_diff_preview(&tree).unwrap();
+        let preview = panes::diff::diff_cache::render_svg_image_diff_preview(&tree).unwrap();
         assert!(
             preview
                 .as_bytes(0)
@@ -414,12 +414,15 @@ fn image_preview_regression_svg_conflict_keeps_encoded_fallback(cx: &mut gpui::T
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let group = cx.update(|window, app| {
-        root.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.conflict_resolver.image_preview.sources[0] = Some(source);
-            pane.conflict_resolver.image_preview.images.base =
-                Loadable::Ready(Some(ConflictPreviewImage::Encoded(encoded)));
-            pane.prepare_conflict_image_preview(window, cx)
-        })
+        root.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.conflict_resolver.image_preview.sources[0] = Some(source);
+                pane.conflict_resolver.image_preview.images.base =
+                    Loadable::Ready(Some(ConflictPreviewImage::Encoded(encoded)));
+                pane.prepare_conflict_image_preview(window, cx)
+            })
     });
     cx.update(|window, app| {
         window.replace_root(app, |_, _| Harness {

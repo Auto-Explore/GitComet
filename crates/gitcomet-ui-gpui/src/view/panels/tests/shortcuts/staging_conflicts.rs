@@ -68,7 +68,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(pane.conflict_has_prev_delta());
                 assert!(pane.conflict_has_next_delta());
                 pane.conflict_jump_first(cx);
@@ -77,7 +77,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     });
     let (anchor, active, can_prev_conflict, can_next_conflict, can_first) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (
                 pane.conflict_resolver.nav_anchor,
                 pane.conflict_resolver.active_conflict,
@@ -89,7 +89,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     assert_eq!(anchor.unwrap().order_hint, 0);
     assert_eq!(active, None, "automatic deltas have no marker block");
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let (has_base, selected) = pane
             .conflict_resolver_active_pick_state()
             .expect("the semantic automatic delta remains actionable");
@@ -128,7 +128,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_jump_next(cx);
             });
         });
@@ -138,7 +138,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_jump_last(cx);
             });
         });
@@ -146,16 +146,16 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     assert_eq!(active_conflict_ix(cx, &view), 1);
     assert_eq!(conflict_navigation_anchor(cx, &view), Some(3));
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.conflict_has_prev_delta());
         assert!(!pane.conflict_has_next_delta());
     });
 
     // A block click resets the semantic anchor before subsequent F2/F3/F7
     // traversal, even when another target was selected previously.
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_select_conflict(0, cx);
             pane.conflict_resolver_toggle_collapse_context(cx);
             pane.conflict_resolver_toggle_hide_resolved(cx);
@@ -188,7 +188,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     // behavior, but the destination is selected through the semantic target
     // list (and therefore skips both automatic deltas).
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_pick_active_conflict(
                 crate::view::conflict_resolver::ConflictChoice::Ours,
                 cx,
@@ -205,7 +205,7 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
     // Ctrl+Shift+3 is Choose C Everywhere, not "all unresolved conflicts".
     // It must replace both original conflicts and both automatic deltas.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
         });
     });
@@ -271,7 +271,7 @@ fn diff_editor_staging_context_menu_restores_diff_panel_focus_for_f4(
         cx,
         &view,
         PopoverKind::DiffEditorMenu {
-            repo_id,
+            repo_id: Some(repo_id),
             area: DiffArea::Unstaged,
             path: Some(first.clone()),
             hunk_patch: Some("diff --git a/src/first.rs b/src/first.rs\n".into()),
@@ -829,8 +829,8 @@ fn the_bar_stage_button_stages_and_advances_like_space(cx: &mut gpui::TestAppCon
     assert_eq!(active_worktree_diff_target_path(cx, &view), Some(second));
     assert!(
         cx.update(|window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer
                 .read(app)
                 .diff_panel_focus_handle
                 .is_focused(window)

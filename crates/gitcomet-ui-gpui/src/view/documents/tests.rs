@@ -494,7 +494,7 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
                 cx,
             );
             if outcome != TransferOutcome::Cancelled {
-                for view in [&root.main_pane, &other.read(cx).main_pane] {
+                for view in [&root.diff_renderer, &other.read(cx).diff_renderer] {
                     assert!(view.read(cx).editor_documents.paused_by(id));
                 }
                 other_buffer.update(cx, |buffer, cx| {
@@ -546,7 +546,12 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
             root.update(app, |root, cx| {
                 crate::view::test_support::sync_store_snapshot(root, cx)
             });
-            !root.read(app).main_pane.read(app).editor_documents.paused()
+            !root
+                .read(app)
+                .diff_renderer
+                .read(app)
+                .editor_documents
+                .paused()
         });
         if released {
             break;
@@ -556,7 +561,7 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
     cx.update(|_, app| {
         for view in [&root, &other] {
             let view = view.read(app);
-            assert!(!view.main_pane.read(app).editor_documents.paused());
+            assert!(!view.diff_renderer.read(app).editor_documents.paused());
             let docs = view.documents.read(app);
             assert!(
                 docs.buffers.values().all(|buffer| buffer

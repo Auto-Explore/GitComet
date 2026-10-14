@@ -188,6 +188,20 @@ fn full_chrome_layout_caches_the_pane_subviews() {
         normalized.contains("stable_cached_fill_view(self.main_pane.clone())"),
         "expected the focused-layout main pane mount to stay cached"
     );
+    let (_, main_render) = include_str!("../panes/main.rs")
+        .split_once("impl Render for MainPaneView")
+        .expect("the main pane composes its retained child views");
+    let normalized_main: String = main_render.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        normalized_main
+            .contains("MainPaneContent::History=>self.history_view.clone().into_any_element()"),
+        "expected the cached compositor to render its retained history view"
+    );
+    assert!(
+        normalized_main
+            .contains("MainPaneContent::Diff=>self.diff_renderer.clone().into_any_element()"),
+        "expected the cached compositor to render its retained diff renderer"
+    );
     assert!(
         normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
         "expected the expanded sidebar pane to mount behind the stable cache boundary"

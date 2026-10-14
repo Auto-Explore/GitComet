@@ -3,9 +3,9 @@ use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::ui_scale;
 use crate::view::{
     DiffNextChange, DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevChange, DiffPrevFile,
-    DiffPrevSearchMatchOrChange, FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView,
-    GitCometViewConfig, GitCometViewMode, HistoryFindPrevious, InitialRepositoryLaunchMode,
-    LocateFileInExplorer, MainPaneView, OpenActiveViewSearch, OpenRemoteInBrowser,
+    DiffPrevSearchMatchOrChange, DiffRenderer, FocusedMergetoolLabels, FocusedMergetoolViewConfig,
+    GitCometView, GitCometViewConfig, GitCometViewMode, HistoryFindPrevious,
+    InitialRepositoryLaunchMode, LocateFileInExplorer, OpenActiveViewSearch, OpenRemoteInBrowser,
     PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, PushUpstreamRemoteClose,
     PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev,
     SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll,

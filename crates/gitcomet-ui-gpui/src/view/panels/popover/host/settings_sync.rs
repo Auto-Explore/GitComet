@@ -141,7 +141,7 @@ impl PopoverHost {
             return;
         }
         self.date_time_format = next;
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
         self.sync_pane_date_settings(cx);
         cx.notify();

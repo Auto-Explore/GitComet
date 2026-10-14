@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::panes::main::DiffHorizontalScrollColumn;
+use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
 
 fn file_diff_ready_shows_processing(
     has_file: bool,
@@ -70,7 +70,7 @@ fn annex_whereis_lines(
 /// so the document does not start and end flush against the pane edges.
 pub(in crate::view) const MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX: f32 = 12.0;
 
-impl MainPaneView {
+impl DiffRenderer {
     pub(in crate::view) fn render_diff_horizontal_scrollbar(
         theme: AppTheme,
         id: &'static str,
@@ -122,7 +122,8 @@ impl MainPaneView {
         }
         if !self.is_inline_submodule_diff_active()
             && let Some(repo) = self.active_repo()
-            && let Loadable::Ready(Some(preview)) = &repo.diff_state.diff_preview_text_file
+            && let Loadable::Ready(Some(preview)) =
+                &self.bound_diff_state(repo).diff_preview_text_file
             && preview.large_file.is_some()
         {
             return match preview.side {
@@ -167,7 +168,7 @@ impl MainPaneView {
             .flatten()
             .any(|side| side.pointer.is_lfs() && side.content == LargeFileContent::MissingLocally);
         if missing_lfs && !content_shown {
-            let tool_missing = self.large_file_tools().git_lfs.is_not_found();
+            let tool_missing = self.large_file_tools()?.git_lfs.is_not_found();
             let target = target.clone();
             any = true;
             buttons = buttons.child(
@@ -192,7 +193,7 @@ impl MainPaneView {
             );
         }
 
-        let annex_missing_tool = self.large_file_tools().git_annex.is_not_found();
+        let annex_missing_tool = self.large_file_tools()?.git_annex.is_not_found();
         let annex_keys = annex_card_keys(old, new, true);
         if !annex_keys.is_empty() && !content_shown {
             any = true;
@@ -558,7 +559,7 @@ impl MainPaneView {
                         components::empty_state(theme, "Diff", "No file contents available.")
                             .into_any_element()
                     } else if let Some(
-                        crate::view::panes::main::diff_cache::FileDiffCacheError::NotText {
+                        crate::view::panes::diff::diff_cache::FileDiffCacheError::NotText {
                             old_bytes,
                             new_bytes,
                         },

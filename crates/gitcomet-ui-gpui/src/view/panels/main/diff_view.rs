@@ -1,8 +1,9 @@
 use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
-use crate::view::panes::main::DiskSurface;
-use crate::view::panes::main::diff_search::DiffSearchOptions;
+use crate::view::panes::diff::DiskSurface;
+use crate::view::panes::diff::diff_search::DiffSearchOptions;
+use crate::view::panes::diff::services::{DiffCommand, DiffPreference};
 use gpui::Focusable;
 
 struct DiffSearchOverlayLayer {
@@ -66,13 +67,13 @@ impl Element for DiffSearchOverlayLayer {
     }
 }
 
-impl Focusable for MainPaneView {
+impl Focusable for DiffRenderer {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.diff_panel_focus_handle.clone()
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// A thin vertical drag handle at the annotation column's right edge that
     /// resizes the column. Positioned absolutely; the caller's container must
     /// be `relative()`.
@@ -193,7 +194,8 @@ impl MainPaneView {
             status_section_order.as_deref(),
         )
         .and_then(|navigation| navigation.next_or_prev_path());
-        let status_ready = repo.status_entries_for_area(area).is_some();
+        let status_ready =
+            !self.shows_linked_worktree() && repo.status_entries_for_area(area).is_some();
 
         // A multi-file status selection wins over the single shown file, so
         // the shortcut matches what the status row button and context menu
@@ -505,7 +507,8 @@ impl MainPaneView {
         {
             let path = path.clone();
             let area = *area;
-            let status_ready = repo.status_entries_for_area(area).is_some();
+            let status_ready =
+                !self.shows_linked_worktree() && repo.status_entries_for_area(area).is_some();
 
             match key {
                 "s" if area == DiffArea::Unstaged && !mods.shift => {
@@ -665,16 +668,10 @@ impl MainPaneView {
                 }
                 "e" if !mods.shift && self.external_editor_available() => {
                     let full_path = repo.spec.workdir.join(&path);
-                    let root_view = self.root_view.clone();
-                    let bound = self.store.binding.is_some();
-                    let p = full_path;
-                    cx.defer(move |cx| {
-                        if !bound && let Some(root) = root_view.upgrade() {
-                            root.update(cx, |root, cx| {
-                                root.open_path_in_external_code_editor(p, cx);
-                            });
-                        }
-                    });
+                    if self.hosted_decor.is_none() {
+                        self.commands
+                            .defer(DiffCommand::OpenExternal(full_path), cx);
+                    }
                     handled = true;
                 }
                 "c" if mods.shift => {
@@ -732,16 +729,10 @@ impl MainPaneView {
 
                     "e" if !mods.shift && self.external_editor_available() => {
                         let full_path = repo.spec.workdir.join(&path);
-                        let root_view = self.root_view.clone();
-                        let bound = self.store.binding.is_some();
-                        let p = full_path;
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.open_path_in_external_code_editor(p, cx);
-                                });
-                            }
-                        });
+                        if self.hosted_decor.is_none() {
+                            self.commands
+                                .defer(DiffCommand::OpenExternal(full_path), cx);
+                        }
                         handled = true;
                     }
                     _ => {}
@@ -829,15 +820,14 @@ impl MainPaneView {
                     } else if self.active_conflict_target().is_some() {
                         self.set_diff_view_mode(DiffViewMode::Split, cx);
                         handled = true;
-                        let root_view = self.root_view.clone();
-                        let bound = self.store.binding.is_some();
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.set_diff_view_mode(DiffViewMode::Split, cx);
-                                });
-                            }
-                        });
+                        if self.hosted_decor.is_none() {
+                            self.commands.defer(
+                                DiffCommand::Preference(DiffPreference::Layout(
+                                    DiffViewMode::Split,
+                                )),
+                                cx,
+                            );
+                        }
                     // The markdown diff preview renders both layouts (see
                     // `render_markdown_diff_preview`), so these switch it just
                     // like the text diff. The single-pane file preview has no
@@ -850,16 +840,12 @@ impl MainPaneView {
                         };
                         self.set_diff_view_mode(new_mode, cx);
                         handled = true;
-                        let root_view = self.root_view.clone();
-                        let bound = self.store.binding.is_some();
-                        let mode = new_mode;
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.set_diff_view_mode(mode, cx);
-                                });
-                            }
-                        });
+                        if self.hosted_decor.is_none() {
+                            self.commands.defer(
+                                DiffCommand::Preference(DiffPreference::Layout(new_mode)),
+                                cx,
+                            );
+                        }
                     }
                 }
                 "w" if !markdown_preview_active && !conflict_preview_active => {
@@ -873,15 +859,10 @@ impl MainPaneView {
                     }
                     self.set_annotate_enabled(next, cx);
                     handled = true;
-                    let root_view = self.root_view.clone();
-                    let bound = self.store.binding.is_some();
-                    cx.defer(move |cx| {
-                        if !bound && let Some(root) = root_view.upgrade() {
-                            root.update(cx, |root, cx| {
-                                root.set_annotate_enabled(next, cx);
-                            });
-                        }
-                    });
+                    if self.hosted_decor.is_none() {
+                        self.commands
+                            .defer(DiffCommand::Preference(DiffPreference::Annotate(next)), cx);
+                    }
                 }
                 "up" => {
                     handled = self.navigate_prev_diff_change(cx);
@@ -1269,15 +1250,10 @@ impl MainPaneView {
                 this.set_annotate_enabled(next, cx);
                 cx.notify();
                 this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                let root_view = this.root_view.clone();
-                let bound = this.store.binding.is_some();
-                cx.defer(move |cx| {
-                    if !bound && let Some(root) = root_view.upgrade() {
-                        root.update(cx, |root, cx| {
-                            root.set_annotate_enabled(next, cx);
-                        });
-                    }
-                });
+                if this.hosted_decor.is_none() {
+                    this.commands
+                        .defer(DiffCommand::Preference(DiffPreference::Annotate(next)), cx);
+                }
                 cx.notify();
             })
             .debug_selector(|| "diff_annotate".to_string())
@@ -1611,10 +1587,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let diff_visible = self
-            .active_repo()
-            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
-            .is_some();
+        let diff_visible = self.rendered_diff_target().is_some();
         if diff_visible {
             if !self.store.policy.search {
                 return false;
@@ -1622,12 +1595,7 @@ impl MainPaneView {
             self.activate_diff_search(window, cx);
             return true;
         }
-        if !self.history_is_active_surface() {
-            return false;
-        }
-        self.history_view
-            .update(cx, |history, cx| history.open_history_find(window, cx));
-        true
+        false
     }
 
     fn render_diff_search_overlay(
@@ -1742,7 +1710,7 @@ impl MainPaneView {
         let title = self.diff_panel_title(theme, cx);
         self.ensure_diagram_search_source(cx);
         // What the pane shows, as every other question about it answers it.
-        let surface = self.main_pane_surface();
+        let surface = self.diff_surface();
         let inline_submodule_diff_active = surface.inline_submodule_diff;
         let has_submodule_summary = surface.submodule_summary;
         let untracked_directory_notice = surface
@@ -1997,13 +1965,10 @@ impl MainPaneView {
                         };
                         this.set_diff_view_mode(mode, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                        let root_view = this.root_view.clone();
-                        let bound = this.store.binding.is_some();
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| root.set_diff_view_mode(mode, cx));
-                            }
-                        });
+                        if this.hosted_decor.is_none() {
+                            this.commands
+                                .defer(DiffCommand::Preference(DiffPreference::Layout(mode)), cx);
+                        }
                         cx.notify();
                     });
 
@@ -2101,7 +2066,7 @@ impl MainPaneView {
             );
         }
 
-        if let Some(repo_id) = repo_id {
+        {
             // The full text resolver gets its own settings menu under the cog
             // (section 30); everything else keeps the diff actions menu.
             let resolver_settings_active = is_conflict_resolver && !is_simple_conflict_strategy;
@@ -2148,6 +2113,8 @@ impl MainPaneView {
                     .debug_selector(move || cog_id.to_string())
                     .gitcomet_tooltip(theme, cog_tooltip.into()),
             );
+        }
+        if let Some(repo_id) = repo_id {
             controls = controls.when(self.store.policy.close_button, |controls| {
                 controls.child(
                     components::Button::new("diff_close", "")

@@ -1,6 +1,6 @@
 use super::*;
 use crate::kit::click::PointerClickExt as _;
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 use palette::IntoColor;
 
 #[inline]
@@ -152,7 +152,7 @@ pub(in super::super) fn selectable_cached_diff_text(
     base_fg: gpui::Rgba,
     styled: Option<&CachedDiffStyledText>,
     fallback_text: SharedString,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let view = cx.entity();
     let (text, highlights) = if let Some(styled) = styled {

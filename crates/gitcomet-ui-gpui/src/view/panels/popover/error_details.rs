@@ -306,7 +306,7 @@ fn detail(
     let available = notice
         .actions
         .iter()
-        .map(|action| this.main_pane.read(cx).error_action_available(action))
+        .map(|action| this.diff_renderer.read(cx).error_action_available(action))
         .collect::<Vec<_>>();
     let mut actions = div().w_full().flex_none().flex().items_center().gap_2();
     for (ix, (action, available)) in notice.actions.iter().zip(available).enumerate() {
@@ -452,7 +452,7 @@ fn run_action(
         }
         ErrorAction::SaveEditorAs { format, .. } => {
             let saved = this
-                .main_pane
+                .diff_renderer
                 .update(cx, |pane, cx| pane.save_file_editor_as(format, cx));
             if saved {
                 dismiss(this, Some(toast_id), window, cx);
@@ -463,7 +463,7 @@ fn run_action(
         }
         ErrorAction::RevealInEditor { line, column, .. } => {
             this.close_popover(cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.reveal_in_file_editor(line, column, window, cx)
             });
         }

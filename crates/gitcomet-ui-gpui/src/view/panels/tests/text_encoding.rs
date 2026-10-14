@@ -77,7 +77,7 @@ fn show(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, state, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 if edit {
                     pane.ensure_file_editor_loaded(cx);
                 } else {
@@ -131,7 +131,7 @@ fn whole_file_diagram_previews_use_decoded_utf16_and_legacy_text(cx: &mut gpui::
             .unwrap();
             std::fs::write(directory.path().join(&path), bytes.as_ref()).unwrap();
             cx.update(|_, app| {
-                view.read(app).main_pane.clone().update(app, |pane, _| {
+                view.read(app).diff_renderer.clone().update(app, |pane, _| {
                     pane.rendered_preview_modes
                         .set(RenderedPreviewKind::Diagram, RenderedPreviewMode::Rendered);
                 });
@@ -155,18 +155,17 @@ fn whole_file_diagram_previews_use_decoded_utf16_and_legacy_text(cx: &mut gpui::
                 "decoded whole-file diagram",
                 |pane| {
                     matches!(pane.worktree_preview, Loadable::Ready(_))
-                        && pane.main_pane_surface().toggle_kind
-                            == Some(RenderedPreviewKind::Diagram)
+                        && pane.diff_surface().toggle_kind == Some(RenderedPreviewKind::Diagram)
                 },
                 |pane| {
                     (
                         pane.worktree_preview.clone(),
-                        pane.main_pane_surface().toggle_kind,
+                        pane.diff_surface().toggle_kind,
                     )
                 },
             );
             cx.update(|_, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 assert_eq!(pane.worktree_preview_text.as_ref(), source);
                 assert!(pane.worktree_preview_source_path.is_some());
             });
@@ -186,10 +185,13 @@ fn whole_file_diagram_previews_use_decoded_utf16_and_legacy_text(cx: &mut gpui::
             crate::view::test_support::redraw(cx);
             assert!(cx.debug_bounds("diagram_preview").is_none());
             cx.update(|window, app| {
-                view.read(app).main_pane.clone().update(app, |pane, cx| {
-                    pane.select_all_diff_text(window, cx);
-                    pane.copy_selected_diff_text_to_clipboard(cx);
-                });
+                view.read(app)
+                    .diff_renderer
+                    .clone()
+                    .update(app, |pane, cx| {
+                        pane.select_all_diff_text(window, cx);
+                        pane.copy_selected_diff_text_to_clipboard(cx);
+                    });
             });
             assert_eq!(
                 cx.update(|_, app| app.read_from_clipboard().and_then(|item| item.text())),
@@ -220,15 +222,18 @@ fn read_only_line_ending_conversion_preserves_buffer_and_format(cx: &mut gpui::T
         true,
     );
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            let before = pane.file_editor_text_format();
-            assert!(!before.unwrap().is_writable());
-            let text = pane.file_editor_input.read(cx).text().to_owned();
-            pane.convert_file_editor_line_endings(LineEnding::CrLf, cx);
-            assert_eq!(pane.file_editor_text_format(), before);
-            assert_eq!(pane.file_editor_input.read(cx).text(), text);
-            assert!(!pane.file_editor_is_dirty());
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                let before = pane.file_editor_text_format();
+                assert!(!before.unwrap().is_writable());
+                let text = pane.file_editor_input.read(cx).text().to_owned();
+                pane.convert_file_editor_line_endings(LineEnding::CrLf, cx);
+                assert_eq!(pane.file_editor_text_format(), before);
+                assert_eq!(pane.file_editor_input.read(cx).text(), text);
+                assert!(!pane.file_editor_is_dirty());
+            });
     });
 }
 
@@ -249,7 +254,7 @@ fn display_attributes_keep_the_preview_decode_key(cx: &mut gpui::TestAppContext)
     show(cx, &view, state.clone(), false);
     let original = cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .selected_text_decode_request(SideKind::Worktree)
             .unwrap()
@@ -270,7 +275,7 @@ fn display_attributes_keep_the_preview_decode_key(cx: &mut gpui::TestAppContext)
         assert_eq!(
             original,
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .selected_text_decode_request(SideKind::Worktree)
                 .unwrap()
@@ -301,7 +306,7 @@ fn absolute_file_target_produces_repo_relative_attribute_pattern(cx: &mut gpui::
     cx.update(|_, app| {
         let state = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .text_encoding_menu_state()
             .unwrap();
@@ -368,10 +373,18 @@ fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
         cx.run_until_parked();
         let _ = std::fs::remove_file(workdir.path().join(FILE));
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                assert!(pane.conflict_output_text_format().is_none());
-                pane.focused_mergetool_write_side_and_exit(repo_id, Path::new(FILE), &bytes, cx);
-            });
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    assert!(pane.conflict_output_text_format().is_none());
+                    pane.focused_mergetool_write_side_and_exit(
+                        repo_id,
+                        Path::new(FILE),
+                        &bytes,
+                        cx,
+                    );
+                });
         });
         assert_eq!(std::fs::read(workdir.path().join(FILE)).unwrap(), original);
     }
@@ -413,20 +426,23 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
     });
     cx.run_until_parked();
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert_eq!(
-                pane.conflict_resolver.path.as_deref(),
-                Some(Path::new(FILE))
-            );
-            assert!(!pane.conflict_resolved_output_is_modified());
-            pane.conflict_resolver_input.update(cx, |input, cx| {
-                input.replace_utf8_range(0..0, "my resolution\n", cx);
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert_eq!(
+                    pane.conflict_resolver.path.as_deref(),
+                    Some(Path::new(FILE))
+                );
+                assert!(!pane.conflict_resolved_output_is_modified());
+                pane.conflict_resolver_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "my resolution\n", cx);
+                });
             });
-        });
     });
     cx.run_until_parked();
     let edited = cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.conflict_resolved_output_is_modified());
         pane.conflict_resolver_input.read(app).text().to_string()
     });
@@ -434,7 +450,7 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
     // the sources are not reread and the edits stay.
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.main_pane.update(cx, |pane, cx| {
+            view.diff_renderer.update(cx, |pane, cx| {
                 pane.set_text_encoding_override(Some(koi8()), cx)
             });
         });
@@ -442,7 +458,7 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
     crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|_, app| {
         let root = view.read(app);
-        let pane = root.main_pane.read(app);
+        let pane = root.diff_renderer.read(app);
         assert_eq!(pane.conflict_resolver_input.read(app).text(), edited);
         assert_eq!(
             pane.conflict_output_text_format()
@@ -468,14 +484,14 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
     // so it must keep the edits.
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.main_pane
+            view.diff_renderer
                 .update(cx, |pane, cx| pane.set_text_encoding_override(None, cx));
         });
     });
     crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|_, app| {
         let root = view.read(app);
-        let pane = root.main_pane.read(app);
+        let pane = root.diff_renderer.read(app);
         assert_eq!(pane.conflict_resolver_input.read(app).text(), edited);
         assert!(pane.conflict_resolved_output_is_modified());
         let state = root.store.snapshot();
@@ -498,10 +514,13 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
     });
     // Once the output has been saved, the same request can reload normally.
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.mark_conflict_resolved_output_saved(cx);
-            pane.set_text_encoding_override(Some(koi8()), cx);
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.mark_conflict_resolved_output_saved(cx);
+                pane.set_text_encoding_override(Some(koi8()), cx);
+            });
     });
     crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|_, app| {
@@ -560,32 +579,35 @@ fn conflict_save_uses_output_encoding_without_reopening_sources(cx: &mut gpui::T
     });
     cx.run_until_parked();
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            let bytes = pane
-                .conflict_output_bytes_for_save("日本語\n".into(), cx)
-                .unwrap();
-            assert_eq!(bytes.as_bytes(), "日本語\n".as_bytes());
-            pane.set_save_text_format(
-                gitcomet_core::text_format::TextFormat {
-                    encoding: TextEncoding::WINDOWS_1252,
-                    bom: false,
-                },
-                cx,
-            );
-            let first = pane
-                .conflict_output_bytes_for_save("café\n".into(), cx)
-                .unwrap();
-            pane.mark_conflict_resolved_output_saved(cx);
-            assert!(pane.conflict_resolver.output_save_format.is_none());
-            let second = pane
-                .conflict_output_bytes_for_save("café\n".into(), cx)
-                .unwrap();
-            assert_eq!(
-                second.as_bytes(),
-                first.as_bytes(),
-                "saving again must keep the encoding just written"
-            );
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                let bytes = pane
+                    .conflict_output_bytes_for_save("日本語\n".into(), cx)
+                    .unwrap();
+                assert_eq!(bytes.as_bytes(), "日本語\n".as_bytes());
+                pane.set_save_text_format(
+                    gitcomet_core::text_format::TextFormat {
+                        encoding: TextEncoding::WINDOWS_1252,
+                        bom: false,
+                    },
+                    cx,
+                );
+                let first = pane
+                    .conflict_output_bytes_for_save("café\n".into(), cx)
+                    .unwrap();
+                pane.mark_conflict_resolved_output_saved(cx);
+                assert!(pane.conflict_resolver.output_save_format.is_none());
+                let second = pane
+                    .conflict_output_bytes_for_save("café\n".into(), cx)
+                    .unwrap();
+                assert_eq!(
+                    second.as_bytes(),
+                    first.as_bytes(),
+                    "saving again must keep the encoding just written"
+                );
+            })
     });
 }
 
@@ -613,7 +635,7 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
             );
             cx.update(|window, app| {
                 view.update(app, |view, cx| {
-                    view.main_pane.update(cx, |pane, cx| {
+                    view.diff_renderer.update(cx, |pane, cx| {
                         pane.set_auto_save_file_edits(true, cx);
                         pane.file_editor_input.update(cx, |input, cx| {
                             input.replace_utf8_range(0..0, prefix, cx);
@@ -628,10 +650,10 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
                     });
                     assert_eq!(view.pending_unsaved_file_edits_flush.is_some(), writable);
                     // Unsaved until the worker confirms the write.
-                    assert!(view.main_pane.read(cx).file_editor_is_dirty());
+                    assert!(view.diff_renderer.read(cx).file_editor_is_dirty());
                     assert_eq!(
                         !view
-                            .main_pane
+                            .diff_renderer
                             .read(cx)
                             .editor_documents
                             .pending()
@@ -648,7 +670,7 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
                             .as_ref()
                             .expect("offer Save/Discard instead of retrying a failed encoding");
                         assert_eq!(prompt.files, [SharedString::from(FILE)]);
-                        let pane = view.main_pane.read(cx);
+                        let pane = view.diff_renderer.read(cx);
                         assert_eq!(pane.file_editor_input.read(cx).text(), "Ācafé\n");
                     }
                 });
@@ -690,12 +712,15 @@ fn save_all_encoding_failure_cancels_quit_and_preserves_stashed_edits(
         true,
     );
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.file_editor_input
-                .update(cx, |input, cx| input.replace_utf8_range(0..0, "Ā", cx));
-            pane.on_file_editor_edited(cx);
-            pane.stash_current_file_editor_buffer(cx);
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.file_editor_input
+                    .update(cx, |input, cx| input.replace_utf8_range(0..0, "Ā", cx));
+                pane.on_file_editor_edited(cx);
+                pane.stash_current_file_editor_buffer(cx);
+            })
     });
     show(
         cx,
@@ -718,7 +743,7 @@ fn save_all_encoding_failure_cancels_quit_and_preserves_stashed_edits(
                 "failed saves must not retry quit"
             );
             assert!(view.pending_unsaved_file_edits_prompt.is_none());
-            let pane = view.main_pane.read(cx);
+            let pane = view.diff_renderer.read(cx);
             let key = pane
                 .document_identity(repo_id, Path::new(FILE))
                 .expect("open repository");
@@ -758,48 +783,51 @@ fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::Tes
     });
     cx.run_until_parked();
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.diff_view = DiffViewMode::Inline;
-            pane.diff_word_wrap = false;
-            pane.default_tab_size = 2;
-            pane.sync_display_tab_width(cx);
-            pane.diff_search_active = true;
-            pane.diff_search_query = "+        needle".into();
-            pane.diff_search_recompute_matches();
-            assert!(pane.diff_search_matches.is_empty());
-            assert!(pane.diff_search_inline_patch_trigram_index.is_some());
-            let projection = (
-                pane.diff_visible_cache_len,
-                pane.diff_visible_cache_projection_rev,
-            );
-            pane.default_tab_size = 8;
-            pane.sync_display_tab_width(cx);
-            assert_eq!(pane.diff_search_matches.len(), 1);
-            assert_eq!(
-                projection,
-                (
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                pane.diff_word_wrap = false;
+                pane.default_tab_size = 2;
+                pane.sync_display_tab_width(cx);
+                pane.diff_search_active = true;
+                pane.diff_search_query = "+        needle".into();
+                pane.diff_search_recompute_matches();
+                assert!(pane.diff_search_matches.is_empty());
+                assert!(pane.diff_search_inline_patch_trigram_index.is_some());
+                let projection = (
                     pane.diff_visible_cache_len,
-                    pane.diff_visible_cache_projection_rev
-                )
-            );
-            assert_eq!(
-                pane.diff_text_full_line_for_region(
-                    pane.diff_search_matches[0],
-                    DiffTextRegion::Inline
-                )
-                .as_ref(),
-                "+        needle"
-            );
+                    pane.diff_visible_cache_projection_rev,
+                );
+                pane.default_tab_size = 8;
+                pane.sync_display_tab_width(cx);
+                assert_eq!(pane.diff_search_matches.len(), 1);
+                assert_eq!(
+                    projection,
+                    (
+                        pane.diff_visible_cache_len,
+                        pane.diff_visible_cache_projection_rev
+                    )
+                );
+                assert_eq!(
+                    pane.diff_text_full_line_for_region(
+                        pane.diff_search_matches[0],
+                        DiffTextRegion::Inline
+                    )
+                    .as_ref(),
+                    "+        needle"
+                );
 
-            // Changing width while the search is closed must invalidate it too.
-            pane.diff_search_active = false;
-            pane.default_tab_size = 2;
-            pane.sync_display_tab_width(cx);
-            pane.diff_search_active = true;
-            pane.diff_search_query = "+  needle".into();
-            pane.diff_search_recompute_matches();
-            assert_eq!(pane.diff_search_matches.len(), 1);
-        });
+                // Changing width while the search is closed must invalidate it too.
+                pane.diff_search_active = false;
+                pane.default_tab_size = 2;
+                pane.sync_display_tab_width(cx);
+                pane.diff_search_active = true;
+                pane.diff_search_query = "+  needle".into();
+                pane.diff_search_recompute_matches();
+                assert_eq!(pane.diff_search_matches.len(), 1);
+            });
     });
 }
 
@@ -829,7 +857,7 @@ fn check_unsaved_buffer_roundtrip(cx: &mut gpui::TestAppContext, auto_save: bool
         let (view, cx) = open_window(cx);
         show(cx, &view, state(FILE, TextEncoding::WINDOWS_1252), true);
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.clone();
+            let pane = view.read(app).diff_renderer.clone();
             pane.update(app, |pane, cx| {
                 pane.set_auto_save_file_edits(auto_save, cx);
                 pane.file_editor_input.update(cx, |input, cx| {
@@ -843,7 +871,7 @@ fn check_unsaved_buffer_roundtrip(cx: &mut gpui::TestAppContext, auto_save: bool
         });
         show(cx, &view, state("read_only.txt", other_encoding), true);
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert!(pane.file_editor_input.read(app).is_read_only());
             assert_eq!(pane.unsaved_file_edit_keys(), vec![(repo_id, FILE.into())]);
         });
@@ -851,7 +879,7 @@ fn check_unsaved_buffer_roundtrip(cx: &mut gpui::TestAppContext, auto_save: bool
 
         show(cx, &view, state(FILE, TextEncoding::WINDOWS_1252), true);
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.clone();
+            let pane = view.read(app).diff_renderer.clone();
             pane.update(app, |pane, cx| {
                 let input = pane.file_editor_input.read(cx);
                 assert_eq!(input.text(), "Ācafé\n");
@@ -891,13 +919,16 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
         |attributes, encoding| file_state(repo_id, workdir.path(), true, attributes, encoding);
     show(cx, &view, state(Loadable::NotLoaded, None), true);
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.set_auto_save_file_edits(false, cx);
-            pane.file_editor_input.update(cx, |input, cx| {
-                input.replace_utf8_range(0..0, "edit ", cx);
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.set_auto_save_file_edits(false, cx);
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "edit ", cx);
+                });
+                pane.on_file_editor_edited(cx);
             });
-            pane.on_file_editor_edited(cx);
-        });
     });
     show(
         cx,
@@ -914,7 +945,7 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
     );
     show(cx, &view, state(Loadable::Loading, None), true);
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "edit café\n");
         assert!(pane.file_editor_decode_key.is_none());
     });
@@ -926,16 +957,27 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
         true,
     );
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert_eq!(pane.file_editor_input.read(cx).text(), "edit café\n");
-            assert!(pane.file_editor_is_dirty());
-            assert!(pane.file_editor_decode_key.is_some());
-            assert!(pane.save_file_editor_buffer(cx));
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert_eq!(pane.file_editor_input.read(cx).text(), "edit café\n");
+                assert!(pane.file_editor_is_dirty());
+                assert!(pane.file_editor_decode_key.is_some());
+                assert!(pane.save_file_editor_buffer(cx));
+            });
     });
     // The save writes the edit back in the encoding it was read in.
     finish_editor_saves(&view, cx);
-    cx.update(|_, app| assert!(!view.read(app).main_pane.read(app).file_editor_is_dirty()));
+    cx.update(|_, app| {
+        assert!(
+            !view
+                .read(app)
+                .diff_renderer
+                .read(app)
+                .file_editor_is_dirty()
+        )
+    });
     show(
         cx,
         &view,
@@ -943,7 +985,7 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
         true,
     );
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "edit cafИ\n");
         assert_eq!(
             pane.file_editor_text_format().unwrap().format.encoding,
@@ -983,7 +1025,7 @@ async fn a_latin1_file_previews_decoded_and_the_strip_names_its_encoding(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.worktree_preview_text.as_ref(), "Café crème\r\n");
         let format = pane.worktree_preview_text_format.expect("format recorded");
         assert_eq!(format.format.encoding, TextEncoding::WINDOWS_1252);
@@ -1012,7 +1054,7 @@ async fn the_preview_waits_for_attributes_and_follows_an_encoding_attribute(
         false,
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.worktree_preview_text.is_empty(),
             "nothing is decoded before the attributes are known"
@@ -1036,7 +1078,7 @@ async fn the_preview_waits_for_attributes_and_follows_an_encoding_attribute(
         false,
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.worktree_preview_text.as_ref(), "Привет\n");
         assert_eq!(
             pane.worktree_preview_text_format
@@ -1067,7 +1109,7 @@ async fn choosing_an_encoding_rereads_the_preview(cx: &mut gpui::TestAppContext)
         false,
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.worktree_preview_text.as_ref(), "cafИ\n");
         assert_eq!(
             pane.worktree_preview_text_format
@@ -1096,7 +1138,7 @@ async fn the_editor_edits_a_latin1_file_and_refuses_to_save_what_it_cannot_encod
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "café\n");
         assert!(!pane.file_editor_input.read(app).is_read_only());
         assert_eq!(
@@ -1113,7 +1155,7 @@ async fn the_editor_edits_a_latin1_file_and_refuses_to_save_what_it_cannot_encod
     // U+0100 has no windows-1252 byte.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "Ā", cx);
                 });
@@ -1123,7 +1165,7 @@ async fn the_editor_edits_a_latin1_file_and_refuses_to_save_what_it_cannot_encod
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_is_dirty(),
             "an unwritable character keeps the edit unsaved"
@@ -1154,7 +1196,7 @@ async fn text_that_does_not_decode_opens_read_only(cx: &mut gpui::TestAppContext
         true,
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "caf\u{fffd}\n");
         assert!(
             pane.file_editor_input.read(app).is_read_only(),
@@ -1188,7 +1230,7 @@ async fn a_new_encoding_choice_rereads_a_clean_editor(cx: &mut gpui::TestAppCont
         true,
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "cafИ\n");
         assert!(!pane.file_editor_is_dirty());
     });
@@ -1210,14 +1252,14 @@ async fn save_with_encoding_converts_on_the_next_save(cx: &mut gpui::TestAppCont
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(!pane.file_editor_is_dirty());
                 pane.set_file_editor_save_format(gitcomet_core::text_format::TextFormat::UTF_8, cx);
             });
         });
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_is_dirty(),
             "a conversion is unsaved until it is written"
@@ -1234,13 +1276,19 @@ async fn save_with_encoding_converts_on_the_next_save(cx: &mut gpui::TestAppCont
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
         });
     });
     finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
-        assert!(!view.read(app).main_pane.read(app).file_editor_is_dirty());
+        assert!(
+            !view
+                .read(app)
+                .diff_renderer
+                .read(app)
+                .file_editor_is_dirty()
+        );
     });
     assert_eq!(
         std::fs::read(workdir.join(FILE)).unwrap(),
@@ -1280,7 +1328,7 @@ async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::Test
         true,
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "café\n");
     });
 
@@ -1288,7 +1336,7 @@ async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::Test
     // replaced by its own) changes how the clean buffer reads.
     show(cx, &view, with_attributes(koi8_rule(), 3), true);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "cafИ\n");
         assert_eq!(
             pane.file_editor_text_format().map(|format| format.source),
@@ -1300,7 +1348,7 @@ async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::Test
     // encoding it was read in.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "Ж", cx);
                 });
@@ -1315,7 +1363,7 @@ async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::Test
         true,
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "ЖcafИ\n");
         assert!(pane.file_editor_is_dirty());
         assert_eq!(
@@ -1343,7 +1391,7 @@ fn open_unencodable_edit(
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "Ā", cx);
                 });
@@ -1366,7 +1414,7 @@ fn sync_and_read_editor_state(
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.is_file_editor_active(),
             pane.file_editor_is_dirty(),
@@ -1388,9 +1436,12 @@ async fn save_button_stays_in_editor_when_the_text_cannot_be_encoded(
     open_unencodable_edit(cx, &view, repo_id, &workdir);
 
     cx.update(|window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.save_file_editor_buffer_and_exit(window, cx);
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.save_file_editor_buffer_and_exit(window, cx);
+            });
     });
     let (active, dirty, _) = sync_and_read_editor_state(cx, &view);
     assert!(
@@ -1414,7 +1465,7 @@ async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
     let repo_id = gitcomet_state::model::RepoId(9513);
     open_unencodable_edit(cx, &view, repo_id, &workdir);
     cx.update(|_window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, _| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
             pane.auto_save_file_edits = true;
             assert!(
                 !pane.file_editor_shows_save_controls(),
@@ -1424,9 +1475,12 @@ async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
     });
 
     cx.update(|window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.toggle_file_editor(window, cx);
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.toggle_file_editor(window, cx);
+            });
     });
     let (active, dirty, save_controls) = sync_and_read_editor_state(cx, &view);
     assert!(
@@ -1442,10 +1496,13 @@ async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
 
     // Auto-save off keeps today's way out: the edits are kept and the editor closes.
     cx.update(|window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.auto_save_file_edits = false;
-            pane.toggle_file_editor(window, cx);
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.auto_save_file_edits = false;
+                pane.toggle_file_editor(window, cx);
+            });
     });
     let (active, _, _) = sync_and_read_editor_state(cx, &view);
     assert!(!active);
@@ -1464,17 +1521,20 @@ async fn picking_an_encoding_with_unsaved_edits_sets_the_save_format(
     open_unencodable_edit(cx, &view, repo_id, &workdir);
 
     cx.update(|_window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.set_text_encoding_override(Some(TextEncoding::UTF_8), cx);
-            assert_eq!(
-                pane.file_editor_text_format().map(|format| format.format),
-                Some(gitcomet_core::text_format::TextFormat::UTF_8),
-                "the pick is what Save writes"
-            );
-            assert!(pane.file_editor_is_dirty());
-            assert_eq!(pane.file_editor_input.read(cx).text(), "Ācafé\n");
-            assert!(pane.save_file_editor_buffer(cx), "UTF-8 can write Ā");
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.set_text_encoding_override(Some(TextEncoding::UTF_8), cx);
+                assert_eq!(
+                    pane.file_editor_text_format().map(|format| format.format),
+                    Some(gitcomet_core::text_format::TextFormat::UTF_8),
+                    "the pick is what Save writes"
+                );
+                assert!(pane.file_editor_is_dirty());
+                assert_eq!(pane.file_editor_input.read(cx).text(), "Ācafé\n");
+                assert!(pane.save_file_editor_buffer(cx), "UTF-8 can write Ā");
+            });
     });
     let _ = std::fs::remove_dir_all(&workdir);
 }
@@ -1501,16 +1561,19 @@ async fn converting_away_from_a_reopen_override_reads_back_in_the_new_encoding(
         true,
     );
     cx.update(|_window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert_eq!(pane.file_editor_input.read(cx).text(), "café\n");
-            pane.file_editor_input.update(cx, |input, cx| {
-                input.replace_utf8_range(0..0, "ŝ", cx);
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert_eq!(pane.file_editor_input.read(cx).text(), "café\n");
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "ŝ", cx);
+                });
+                pane.on_file_editor_edited(cx);
+                assert!(!pane.save_file_editor_buffer(cx), "ŝ has no Latin-1 byte");
+                pane.set_text_encoding_override(Some(TextEncoding::UTF_8), cx);
+                assert!(pane.save_file_editor_buffer(cx));
             });
-            pane.on_file_editor_edited(cx);
-            assert!(!pane.save_file_editor_buffer(cx), "ŝ has no Latin-1 byte");
-            pane.set_text_encoding_override(Some(TextEncoding::UTF_8), cx);
-            assert!(pane.save_file_editor_buffer(cx));
-        });
     });
     // The test backend opens no repo, so land the write the store would make.
     std::fs::write(workdir.join(FILE), "ŝcafé\n").expect("simulate the write");
@@ -1528,7 +1591,7 @@ async fn converting_away_from_a_reopen_override_reads_back_in_the_new_encoding(
         );
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.file_editor_decode_key,
             pane.selected_text_decode_request(gitcomet_core::text_format::SideKind::Worktree)
@@ -1539,13 +1602,16 @@ async fn converting_away_from_a_reopen_override_reads_back_in_the_new_encoding(
 
     // Reading the new bytes back must not garble them.
     cx.update(|_window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.reload_file_editor_from_disk(cx);
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.reload_file_editor_from_disk(cx);
+            });
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "ŝcafé\n");
     });
     let _ = std::fs::remove_dir_all(&workdir);
@@ -1560,9 +1626,12 @@ async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui:
     let repo_id = gitcomet_state::model::RepoId(9516);
     open_unencodable_edit(cx, &view, repo_id, &workdir);
     cx.update(|_window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert!(!pane.save_file_editor_buffer(cx));
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert!(!pane.save_file_editor_buffer(cx));
+            });
     });
     cx.run_until_parked();
     let (toast_id, actions) = cx.update(|_window, app| {
@@ -1620,7 +1689,7 @@ async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui:
     cx.update(|_window, app| {
         let root = view.read(app);
         assert_eq!(root.popover_host.read(app).popover_kind_for_tests(), None);
-        let input = root.main_pane.read(app).file_editor_input.read(app);
+        let input = root.diff_renderer.read(app).file_editor_input.read(app);
         assert_eq!(
             input.selected_range(),
             0.."Ā".len(),
@@ -1634,7 +1703,7 @@ async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui:
     finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
         let root = view.read(app);
-        let pane = root.main_pane.read(app);
+        let pane = root.diff_renderer.read(app);
         assert!(
             !pane.file_editor_is_dirty(),
             "Save as UTF-8 wrote the buffer"
@@ -1671,23 +1740,26 @@ fn review_editor_returning_to_lossy_encoding_stays_read_only(cx: &mut gpui::Test
         true,
     );
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert!(pane.file_editor_text_format().unwrap().lossy);
-            pane.set_file_editor_save_format(TextFormat::UTF_8, cx);
-            assert!(!pane.file_editor_input.read(cx).is_read_only());
-            pane.set_file_editor_save_format(
-                TextFormat {
-                    encoding,
-                    bom: false,
-                },
-                cx,
-            );
-            assert!(
-                pane.file_editor_input.read(cx).is_read_only(),
-                "the original bytes still do not round trip"
-            );
-            assert!(!pane.save_file_editor_buffer(cx));
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert!(pane.file_editor_text_format().unwrap().lossy);
+                pane.set_file_editor_save_format(TextFormat::UTF_8, cx);
+                assert!(!pane.file_editor_input.read(cx).is_read_only());
+                pane.set_file_editor_save_format(
+                    TextFormat {
+                        encoding,
+                        bom: false,
+                    },
+                    cx,
+                );
+                assert!(
+                    pane.file_editor_input.read(cx).is_read_only(),
+                    "the original bytes still do not round trip"
+                );
+                assert!(!pane.save_file_editor_buffer(cx));
+            });
     });
     assert_eq!(std::fs::read(workdir.path().join(FILE)).unwrap(), original);
 }
@@ -1728,15 +1800,18 @@ fn review_conflict_returning_to_lossy_encoding_cannot_save(cx: &mut gpui::TestAp
     repo.conflict_state.conflict_session = Some(session);
     show(cx, &view, app_state_with_repo(repo, repo_id), false);
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert!(pane.conflict_output_text_format().unwrap().lossy);
-            pane.set_save_text_format(TextFormat::UTF_8, cx);
-            pane.set_save_text_format(format.format, cx);
-            assert!(
-                pane.conflict_output_bytes_for_save("≒\n".into(), cx)
-                    .is_none()
-            );
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert!(pane.conflict_output_text_format().unwrap().lossy);
+                pane.set_save_text_format(TextFormat::UTF_8, cx);
+                pane.set_save_text_format(format.format, cx);
+                assert!(
+                    pane.conflict_output_bytes_for_save("≒\n".into(), cx)
+                        .is_none()
+                );
+            })
     });
 }
 
@@ -1762,7 +1837,7 @@ fn review_conflict_encoding_choice_is_cleared_with_conflict_lifecycle(
     show(cx, &view, state.clone(), false);
     let original = cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .conflict_output_text_format()
     });
@@ -1770,20 +1845,23 @@ fn review_conflict_encoding_choice_is_cleared_with_conflict_lifecycle(
         show(cx, &view, Arc::new(AppState::test_default()), false);
         show(cx, &view, state.clone(), false);
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.set_save_text_format(
-                    gitcomet_core::text_format::TextFormat {
-                        encoding: koi8(),
-                        bom: false,
-                    },
-                    cx,
-                );
-            })
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.set_save_text_format(
+                        gitcomet_core::text_format::TextFormat {
+                            encoding: koi8(),
+                            bom: false,
+                        },
+                        cx,
+                    );
+                })
         });
         match transition {
             "save" => cx.update(|_, app| {
                 view.read(app)
-                    .main_pane
+                    .diff_renderer
                     .clone()
                     .update(app, |pane, cx| pane.mark_conflict_resolved_output_saved(cx))
             }),
@@ -1797,7 +1875,7 @@ fn review_conflict_encoding_choice_is_cleared_with_conflict_lifecycle(
         }
         show(cx, &view, state.clone(), false);
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert!(pane.conflict_resolver.output_save_format.is_none());
             if transition == "save" {
                 assert_eq!(
@@ -1830,13 +1908,16 @@ fn review_detect_encoding_with_edits_is_a_warning(cx: &mut gpui::TestAppContext)
         true,
     );
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.file_editor_input.update(cx, |input, cx| {
-                input.replace_utf8_range(0..0, "edit ", cx);
-            });
-            pane.on_file_editor_edited(cx);
-            pane.set_text_encoding_override(None, cx);
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "edit ", cx);
+                });
+                pane.on_file_editor_edited(cx);
+                pane.set_text_encoding_override(None, cx);
+            })
     });
     cx.run_until_parked();
     cx.update(|_, app| {
@@ -1878,13 +1959,16 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
         );
         show(cx, &view, state, true);
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.file_editor_input.update(cx, |input, cx| {
-                    input.replace_utf8_range(0..0, "saved ", cx);
-                });
-                pane.on_file_editor_edited(cx);
-                pane.set_file_editor_save_format(TextFormat::UTF_8, cx);
-            })
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        input.replace_utf8_range(0..0, "saved ", cx);
+                    });
+                    pane.on_file_editor_edited(cx);
+                    pane.set_file_editor_save_format(TextFormat::UTF_8, cx);
+                })
         });
         show(
             cx,
@@ -1900,18 +1984,21 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
         );
         let write = hold_editor_saves();
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                let expected = pane
-                    .file_editor_decode_key
-                    .unwrap()
-                    .with_encoding(saved_override);
-                assert!(pane.save_file_editor_buffer(cx));
-                assert_eq!(
-                    pane.file_editor_decode_key,
-                    Some(expected),
-                    "a queued save must keep the read identity until the write lands"
-                );
-            })
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    let expected = pane
+                        .file_editor_decode_key
+                        .unwrap()
+                        .with_encoding(saved_override);
+                    assert!(pane.save_file_editor_buffer(cx));
+                    assert_eq!(
+                        pane.file_editor_decode_key,
+                        Some(expected),
+                        "a queued save must keep the read identity until the write lands"
+                    );
+                })
         });
         // The store has accepted the write, but disk still contains the old
         // bytes. Attribute completion must not read them over the saved buffer.
@@ -1928,7 +2015,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
             true,
         );
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(pane.file_editor_input.read(app).text(), "saved café\n");
             assert_eq!(
                 pane.file_editor_text_format().unwrap().format,

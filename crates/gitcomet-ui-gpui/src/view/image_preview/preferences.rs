@@ -33,7 +33,7 @@ impl Preferences {
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     pub(in crate::view) fn set_image_preferences(
         &mut self,
         mode: Option<ImageSamplingMode>,
@@ -67,14 +67,14 @@ impl MainPaneView {
             .await;
             if let Err(error) = result {
                 let _ = view.update(cx, |this, cx| {
-                    let root = this.root_view.clone();
                     let report = ErrorReport::message(
                         this.active_repo_id(),
                         format!("Could not save image sampling preferences: {error}"),
                     );
-                    cx.defer(move |cx| {
-                        let _ = root.update(cx, |root, cx| root.report_error(report, cx));
-                    });
+                    this.commands.defer(
+                        crate::view::panes::diff::services::DiffCommand::Error(report),
+                        cx,
+                    );
                 });
             }
         })

@@ -4,10 +4,15 @@ use gitcomet_state::model::CloneProgressStage;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
-pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64 {
+pub(super) fn notify_fingerprint(
+    state: &AppState,
+    popover: &PopoverKind,
+    binding: Option<crate::view::pane_store::DiffBinding>,
+) -> u64 {
     let mut hasher = FxHasher::default();
-    state
-        .active_repo
+    binding
+        .map(|binding| binding.repo_id)
+        .or(state.active_repo)
         .and_then(|id| state.repos.iter().find(|repo| repo.id == id))
         .and_then(|repo| repo.shared_preferences.as_ref())
         .map(|snapshot| snapshot.revision)
@@ -77,7 +82,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         | PopoverKind::AddRepoMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
             state.active_repo.hash(&mut hasher);
-            if let Some(repo) = repo_for_popover(state, popover) {
+            if let Some(repo) = repo_for_popover(state, popover, binding) {
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
                 // The app menu enables "Open remote in web browser" from them.
                 if matches!(popover, PopoverKind::AppMenu) {
@@ -89,8 +94,11 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
             ..
         } => {
-            if let Some(repo) = repo_for_popover(state, popover) {
-                hash_repo_for_popover(repo, popover, &mut hasher);
+            if let Some(repo) = repo_for_popover(state, popover, binding) {
+                let diff = binding
+                    .and_then(|binding| binding.diff(repo))
+                    .unwrap_or(&repo.diff_state);
+                hash_repo_for_popover(repo, diff, popover, &mut hasher);
             } else {
                 state.active_repo.hash(&mut hasher);
             }
@@ -134,8 +142,11 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         _ => {
-            if let Some(repo) = repo_for_popover(state, popover) {
-                hash_repo_for_popover(repo, popover, &mut hasher);
+            if let Some(repo) = repo_for_popover(state, popover, binding) {
+                let diff = binding
+                    .and_then(|binding| binding.diff(repo))
+                    .unwrap_or(&repo.diff_state);
+                hash_repo_for_popover(repo, diff, popover, &mut hasher);
                 if matches!(popover, PopoverKind::PullPicker | PopoverKind::PushPicker) {
                     hash_large_file_picker_entries(state, repo, &mut hasher);
                 }
@@ -161,7 +172,11 @@ fn hash_large_file_picker_entries(state: &AppState, repo: &RepoState, hasher: &m
     (repo.worktree_pull_in_flight > 0).hash(hasher);
 }
 
-fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'a RepoState> {
+fn repo_for_popover<'a>(
+    state: &'a AppState,
+    popover: &PopoverKind,
+    binding: Option<crate::view::pane_store::DiffBinding>,
+) -> Option<&'a RepoState> {
     let repo_id = match popover {
         PopoverKind::RepoPicker { .. }
         | PopoverKind::CloneRepo
@@ -194,7 +209,9 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
-        | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
+        | PopoverKind::ConflictResolverOutputMenu { .. } => {
+            binding.map(|binding| binding.repo_id).or(state.active_repo)
+        }
 
         // Popovers that carry an explicit repo id.
         PopoverKind::CommitPrompt { repo_id }
@@ -233,7 +250,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CommitOptionsMenu { repo_id }
         | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
-        | PopoverKind::DiffEditorMenu { repo_id, .. }
         | PopoverKind::CommitMenu { repo_id, .. }
         | PopoverKind::StatusFileMenu { repo_id, .. }
         | PopoverKind::StatusConflictMenu { repo_id, .. }
@@ -259,12 +275,21 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::LocalFileLinkMenu { repo_id, .. }
         | PopoverKind::ReflogEntryMenu { repo_id, .. }
         | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
+        PopoverKind::DiffEditorMenu { repo_id, .. } => *repo_id,
     }?;
 
+    if let Some(binding) = binding {
+        return binding.repository(state).filter(|repo| repo.id == repo_id);
+    }
     state.repos.iter().find(|r| r.id == repo_id)
 }
 
-fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, hasher: &mut H) {
+fn hash_repo_for_popover<H: Hasher>(
+    repo: &RepoState,
+    diff: &gitcomet_state::model::DiffState,
+    popover: &PopoverKind,
+    hasher: &mut H,
+) {
     view_fingerprint::hash_loadable_kind(&repo.open, hasher);
 
     match popover {
@@ -382,7 +407,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
                 mark.commit_id.hash(hasher);
                 mark.label.hash(hasher);
             }
-            if let Some(target) = repo.diff_state.diff_target.as_ref() {
+            if let Some(target) = diff.diff_target.as_ref() {
                 view_fingerprint::hash_diff_target(target, hasher);
             }
             super::rows_cache::date_bucket(std::time::SystemTime::now()).hash(hasher);
@@ -393,18 +418,18 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         PopoverKind::DiffHunkMenu { .. }
         | PopoverKind::DiffEditorMenu { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => {
-            repo.diff_state.diff_rev.hash(hasher);
-            if let Some(t) = repo.diff_state.diff_target.as_ref() {
+            diff.diff_rev.hash(hasher);
+            if let Some(t) = diff.diff_target.as_ref() {
                 view_fingerprint::hash_diff_target(t, hasher)
             }
-            view_fingerprint::hash_loadable_arc(&repo.diff_state.diff, hasher);
-            repo.diff_state.diff_file_rev.hash(hasher);
-            view_fingerprint::hash_loadable_kind(&repo.diff_state.diff_file, hasher);
-            view_fingerprint::hash_loadable_kind(&repo.diff_state.diff_file_image, hasher);
+            view_fingerprint::hash_loadable_arc(&diff.diff, hasher);
+            diff.diff_file_rev.hash(hasher);
+            view_fingerprint::hash_loadable_kind(&diff.diff_file, hasher);
+            view_fingerprint::hash_loadable_kind(&diff.diff_file_image, hasher);
 
             // Working tree diff popovers need status for file-kind/conflict decisions.
             if matches!(
-                repo.diff_state.diff_target,
+                diff.diff_target,
                 Some(DiffTarget::WorkingTree { .. })
             ) {
                 repo.status_cache_rev().hash(hasher);
@@ -1463,7 +1488,8 @@ mod tests {
         };
 
         let popover = PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu);
-        let resolved = repo_for_popover(&state, &popover).expect("expected repo lookup to work");
+        let resolved =
+            repo_for_popover(&state, &popover, None).expect("expected repo lookup to work");
 
         assert_eq!(resolved.id, repo_id);
     }
@@ -1494,9 +1520,9 @@ mod tests {
         };
         state.repos.push(repo);
 
-        let before = notify_fingerprint(&state, &PopoverKind::PullPicker);
+        let before = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
-        let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
+        let after = notify_fingerprint(&state, &PopoverKind::PullPicker, None);
 
         assert_ne!(before, after);
     }
@@ -1517,10 +1543,10 @@ mod tests {
         state.repos.push(repo);
 
         let kind = PopoverKind::ExplorerSettingsMenu { repo_id };
-        let before = notify_fingerprint(&state, &kind);
+        let before = notify_fingerprint(&state, &kind, None);
         state.repos[0].file_browser.show_ignored = true;
         state.repos[0].file_browser.bump_rev();
-        let after = notify_fingerprint(&state, &kind);
+        let after = notify_fingerprint(&state, &kind, None);
 
         assert_ne!(before, after, "the check marks read the visibility flags");
         assert_ne!(
@@ -1545,20 +1571,20 @@ mod tests {
                 repos: vec![repo],
                 ..AppState::test_default()
             };
-            let before = notify_fingerprint(&state, &popover);
+            let before = notify_fingerprint(&state, &popover, None);
             let mut support = gitcomet_core::large_files::LargeFileSupport::default();
             support.annex.uuid = Some("u".into());
             state.repos[0].large_file_support = Loadable::Ready(Arc::new(support));
-            let detected = notify_fingerprint(&state, &popover);
+            let detected = notify_fingerprint(&state, &popover, None);
             assert_eq!(
                 before, detected,
                 "unknown support already protects the adjusted branch"
             );
             state.repos[0].large_file_support = Loadable::Ready(Arc::default());
-            assert_ne!(detected, notify_fingerprint(&state, &popover));
+            assert_ne!(detected, notify_fingerprint(&state, &popover, None));
             state.repos[0].large_file_support = Loadable::Loading;
             state.large_file_settings.annex_pull_push = false;
-            assert_ne!(detected, notify_fingerprint(&state, &popover));
+            assert_ne!(detected, notify_fingerprint(&state, &popover, None));
         }
     }
 
@@ -1581,9 +1607,9 @@ mod tests {
                 repos: vec![repo],
                 ..AppState::test_default()
             };
-            let mut previous = notify_fingerprint(&state, &popover);
+            let mut previous = notify_fingerprint(&state, &popover, None);
             let mut assert_changed = |state: &AppState, what: &str| {
-                let next = notify_fingerprint(state, &popover);
+                let next = notify_fingerprint(state, &popover, None);
                 assert_ne!(previous, next, "{popover:?}: {what}");
                 previous = next;
             };
@@ -1623,9 +1649,9 @@ mod tests {
         };
         state.repos.push(repo);
 
-        let before = notify_fingerprint(&state, &PopoverKind::AppMenu);
+        let before = notify_fingerprint(&state, &PopoverKind::AppMenu, None);
         state.repos[0].remotes_rev = state.repos[0].remotes_rev.wrapping_add(1);
-        let after = notify_fingerprint(&state, &PopoverKind::AppMenu);
+        let after = notify_fingerprint(&state, &PopoverKind::AppMenu, None);
 
         assert_ne!(before, after, "the Open remote row reads the remotes");
     }
@@ -1646,9 +1672,9 @@ mod tests {
         state.repos.push(repo);
         let picker = PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu);
 
-        let before = notify_fingerprint(&state, &picker);
+        let before = notify_fingerprint(&state, &picker, None);
         state.repos[0].remotes_rev = state.repos[0].remotes_rev.wrapping_add(1);
-        let after = notify_fingerprint(&state, &picker);
+        let after = notify_fingerprint(&state, &picker, None);
 
         assert_ne!(before, after, "the picker's rows are the remotes");
     }
@@ -1660,6 +1686,7 @@ mod tests {
             notify_fingerprint(
                 &state,
                 &PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
+                None,
             )
         };
         assert_ne!(picker(RepoId(1)), picker(RepoId(2)));
@@ -1672,6 +1699,7 @@ mod tests {
         let picker = notify_fingerprint(
             &state,
             &PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
+            None,
         );
         let menu = notify_fingerprint(
             &state,
@@ -1681,6 +1709,7 @@ mod tests {
                     name: "origin".to_string(),
                 },
             ),
+            None,
         );
         assert_ne!(picker, menu);
     }
@@ -1701,14 +1730,17 @@ mod tests {
         state.repos.push(repo);
 
         let popover = PopoverKind::CommitOptionsMenu { repo_id };
-        let before = notify_fingerprint(&state, &popover);
+        let before = notify_fingerprint(&state, &popover, None);
 
         state.repos[0].head_branch_rev = state.repos[0].head_branch_rev.wrapping_add(1);
-        let after_head_branch = notify_fingerprint(&state, &popover);
+        let after_head_branch = notify_fingerprint(&state, &popover, None);
         assert_ne!(before, after_head_branch);
 
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
-        assert_ne!(after_head_branch, notify_fingerprint(&state, &popover));
+        assert_ne!(
+            after_head_branch,
+            notify_fingerprint(&state, &popover, None)
+        );
     }
 
     #[test]
@@ -1730,10 +1762,10 @@ mod tests {
             repo_id,
             commit_id: CommitId("deadbeef".into()),
         };
-        let before = notify_fingerprint(&state, &popover);
+        let before = notify_fingerprint(&state, &popover, None);
         state.git_log_settings.show_history_tags = !state.git_log_settings.show_history_tags;
 
-        assert_ne!(before, notify_fingerprint(&state, &popover));
+        assert_ne!(before, notify_fingerprint(&state, &popover, None));
     }
 
     #[test]
@@ -1751,9 +1783,9 @@ mod tests {
         };
         state.repos.push(repo);
 
-        let before = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id });
+        let before = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id }, None);
         state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
-        let after = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id });
+        let after = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id }, None);
 
         assert_ne!(before, after);
     }
@@ -1773,9 +1805,9 @@ mod tests {
         };
         state.repos.push(repo);
 
-        let before = notify_fingerprint(&state, &PopoverKind::PushPicker);
+        let before = notify_fingerprint(&state, &PopoverKind::PushPicker, None);
         state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
-        let after = notify_fingerprint(&state, &PopoverKind::PushPicker);
+        let after = notify_fingerprint(&state, &PopoverKind::PushPicker, None);
 
         assert_ne!(before, after);
     }
@@ -1793,12 +1825,14 @@ mod tests {
             &PopoverKind::RepoPicker {
                 scope: RepoPickerScope::All,
             },
+            None,
         );
         let after = notify_fingerprint(
             &with_active_repo,
             &PopoverKind::RepoPicker {
                 scope: RepoPickerScope::All,
             },
+            None,
         );
 
         assert_ne!(before, after);

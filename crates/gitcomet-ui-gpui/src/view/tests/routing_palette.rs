@@ -601,7 +601,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx.update(|window, app| {
         let focus = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();
@@ -633,7 +633,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
 
     let diff_focus = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone()

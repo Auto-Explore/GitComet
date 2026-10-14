@@ -60,7 +60,7 @@ impl DiagramInput {
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     fn diagram_kind(&self) -> Option<DiagramKind> {
         let path = match self.rendered_diff_target()? {
             DiffTarget::WorkingTree { path, .. }
@@ -74,7 +74,7 @@ impl MainPaneView {
     }
 
     fn diagram_inputs(&self, kind: DiagramKind) -> (Option<DiagramInput>, Option<DiagramInput>) {
-        if self.main_pane_surface().file_preview {
+        if self.diff_surface().file_preview {
             let input = matches!(self.worktree_preview, Loadable::Ready(_))
                 .then(|| {
                     if !self.worktree_preview_text.is_empty()
@@ -156,7 +156,7 @@ impl MainPaneView {
             .into_any_element(),
             None => components::empty_state_message(theme, "No diagram").into_any_element(),
         };
-        let content = if self.main_pane_surface().file_preview {
+        let content = if self.diff_surface().file_preview {
             super::rendered_preview::PreviewContent::File(preview("diagram_file", new.or(old)))
         } else {
             super::rendered_preview::PreviewContent::Diff {

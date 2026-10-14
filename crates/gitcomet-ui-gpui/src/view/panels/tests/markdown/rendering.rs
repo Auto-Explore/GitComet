@@ -86,7 +86,7 @@ fn markdown_empty_cells_and_code_lines_keep_their_selection_layout(cx: &mut gpui
     // Redrawing exercises the cached backend layout as well as its first build.
     draw_frames(cx, 2);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for row_ix in &rows[1..] {
             let row = pane
                 .diff_text_hitboxes
@@ -227,10 +227,10 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
     );
 
     let baseline_seq =
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_markdown.seq);
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_markdown.seq);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -247,7 +247,7 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
         cx.run_until_parked();
 
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(
                 pane.diff_markdown.seq, baseline_seq,
                 "identical markdown diff payload should not trigger preview rebuild when diff_file_rev changes"
@@ -342,8 +342,8 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -365,7 +365,7 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(!pane.is_file_preview_active());
         assert!(
             pane.is_markdown_preview_active(),
@@ -436,7 +436,7 @@ fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let old = crate::view::markdown_preview::parse_markdown(old_text)
                     .expect("empty Markdown document should parse");
                 let new = crate::view::markdown_preview::parse_markdown(new_text)
@@ -444,7 +444,7 @@ fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppC
                 pane.diff_view = DiffViewMode::Split;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -589,7 +589,7 @@ fn a_document_as_long_as_the_parser_allows_renders_as_a_preview(cx: &mut gpui::T
     let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, abs_path.clone(), preview_lines, source.len(), cx);
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
@@ -605,7 +605,7 @@ fn a_document_as_long_as_the_parser_allows_renders_as_a_preview(cx: &mut gpui::T
     }
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -674,7 +674,7 @@ fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -693,7 +693,7 @@ fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_markdown_preview_active());
         assert!(
             pane.worktree_markdown.inflight.is_none(),
@@ -776,7 +776,7 @@ fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -792,7 +792,7 @@ fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_markdown_preview_active());
         assert!(
             pane.worktree_markdown.inflight.is_none(),
@@ -886,7 +886,7 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.worktree_preview_path = Some(workdir.join(&preview_path));
                 pane.worktree_preview = gitcomet_state::model::Loadable::Loading;
                 pane.worktree_preview_content_rev = 9;
@@ -978,7 +978,7 @@ fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
             let next_state = app_state_with_repo(repo, repo_id);
 
             push_test_state(this, next_state, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 cx.notify();
@@ -991,7 +991,7 @@ fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_markdown_preview_active());
         assert!(
             pane.diff_markdown.inflight.is_none(),
@@ -1053,7 +1053,7 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
             let next_state = app_state_with_repo(repo, repo_id);
 
             push_test_state(this, next_state, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 cx.notify();
@@ -1097,7 +1097,7 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -1173,7 +1173,7 @@ fn a_markdown_diff_too_big_to_lay_out_falls_back_to_the_text_diff(cx: &mut gpui:
             let next_state = app_state_with_repo(repo, repo_id);
 
             push_test_state(this, next_state, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 cx.notify();
@@ -1217,7 +1217,7 @@ fn a_markdown_diff_too_big_to_lay_out_falls_back_to_the_text_diff(cx: &mut gpui:
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         // Each side parsed, only the inline form outgrew the cap: the diff
         // reads fine as text, so the pane goes there rather than to an error.
         assert_eq!(
@@ -1292,7 +1292,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 pane.diff_view = DiffViewMode::Split;
@@ -1304,7 +1304,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     focus_diff_panel(cx, &view);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_markdown_preview_active());
     });
     // The change-nav buttons stay: `diff_nav_entries` walks the rendered
@@ -1324,7 +1324,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert!(
-            !view.read(app).main_pane.read(app).annotate_enabled,
+            !view.read(app).diff_renderer.read(app).annotate_enabled,
             "clicking blame in the markdown preview should not enable annotations"
         );
     });
@@ -1344,7 +1344,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Inline);
         assert!(!pane.reveal_whitespace_chars);
         assert_eq!(
@@ -1363,7 +1363,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Split);
         assert!(!pane.reveal_whitespace_chars);
         assert_eq!(
@@ -1377,7 +1377,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     // the preview rather than unavailable for markdown files.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
                 cx.notify();
@@ -1395,7 +1395,7 @@ fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert!(
-            view.read(app).main_pane.read(app).annotate_enabled,
+            view.read(app).diff_renderer.read(app).annotate_enabled,
             "clicking blame in markdown text mode should enable annotations"
         );
     });
@@ -1462,13 +1462,16 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
 
     let nav_entries = cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
         });
-        view.read(app).main_pane.read(app).conflict_nav_entries()
+        view.read(app)
+            .diff_renderer
+            .read(app)
+            .conflict_nav_entries()
     });
     assert!(
         nav_entries.len() > 1,
@@ -1477,7 +1480,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
                 pane.conflict_resolver.active_conflict = Some(0);
                 pane.conflict_resolver.nav_anchor = None;
@@ -1488,7 +1491,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     focus_diff_panel(cx, &view);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_conflict_rendered_preview_active());
     });
     assert!(
@@ -1520,7 +1523,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
@@ -1535,7 +1538,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
                 pane.conflict_resolver.active_conflict = Some(1);
                 cx.notify();
@@ -1551,7 +1554,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
@@ -1662,7 +1665,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let output = pane.conflict_resolver_input.read(app).text().to_string();
         assert!(
             output.lines().any(|line| line.len() >= 240),
@@ -1674,7 +1677,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
                 cx.notify();
@@ -1726,7 +1729,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
     // The long code lines scroll inside their own blocks, so no column has a
     // sideways range for the output to drive.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for handle in [
             &pane.conflict_resolver_diff_scroll,
             &pane.conflict_preview_ours_scroll,
@@ -1741,7 +1744,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
          view: &gpui::Entity<super::super::super::GitCometView>| {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         reset_uniform_list_offsets(&[
                             &pane.conflict_resolver_diff_scroll,
                             &pane.conflict_preview_ours_scroll,
@@ -1768,7 +1771,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
         reset_offsets(cx, &view);
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     set_uniform_list_offset(
                         &pane.conflict_resolver_diff_scroll,
                         point(px(0.0), px(-80.0)),
@@ -1779,7 +1782,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
         });
         draw_and_drain_test_window(cx);
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let expected = if ScrollSyncAxis::Vertical.includes(mode) {
                 px(-80.0)
             } else {
@@ -1811,7 +1814,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
         reset_offsets(cx, &view);
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     set_scroll_handle_offset(
                         &pane.conflict_resolved_output_editor_scroll,
                         point(px(-72.0), px(0.0)),
@@ -1823,7 +1826,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
         draw_and_drain_test_window(cx);
         draw_and_drain_test_window(cx);
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(
                 scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).x,
                 px(-72.0),
@@ -1925,7 +1928,7 @@ fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -1983,7 +1986,7 @@ fn worktree_markdown_preview_wraps_long_rows_within_the_viewport(cx: &mut gpui::
     // wrapped row keeps — the whole paragraph stays one row.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let pane = this.main_pane.read(cx);
+            let pane = this.diff_renderer.read(cx);
             let document = match &pane.worktree_markdown.document {
                 gitcomet_state::model::Loadable::Ready(document) => Arc::clone(document),
                 other => panic!("expected a ready preview document, got {other:?}"),
@@ -2024,7 +2027,7 @@ fn source_mode_word_wrap_splits_a_long_line_over_several_rows(cx: &mut gpui::Tes
     let set_mode_and_wrap = |cx: &mut gpui::VisualTestContext, wrap: bool| {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.rendered_preview_modes
                         .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
                     pane.diff_word_wrap = wrap;
@@ -2039,7 +2042,7 @@ fn source_mode_word_wrap_splits_a_long_line_over_several_rows(cx: &mut gpui::Tes
 
     set_mode_and_wrap(cx, false);
     let (lines, unwrapped) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.worktree_preview_line_count()
                 .expect("the file is ready"),
@@ -2054,7 +2057,7 @@ fn source_mode_word_wrap_splits_a_long_line_over_several_rows(cx: &mut gpui::Tes
 
     set_mode_and_wrap(cx, true);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let wrapped = pane
             .worktree_preview_visible_len()
             .expect("the list has rows");
@@ -2117,7 +2120,7 @@ fn source_mode_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
                 pane.diff_word_wrap = true;
@@ -2131,8 +2134,8 @@ fn source_mode_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::
 
     cx.update(|window, app| {
         let editor_font_family = crate::font_preferences::current_editor_font_family(app);
-        let main_pane = view.read(app).main_pane.clone();
-        let (measured, columns) = main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let (measured, columns) = diff_renderer.update(app, |pane, cx| {
             (
                 pane.diff_wrap_measure_font_family(cx),
                 pane.worktree_preview_wrap_columns(window, cx),
@@ -2154,7 +2157,7 @@ fn source_mode_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::
         );
 
         // And the projection has to have used that count, not merely reported it.
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         let rows = (0..pane.worktree_preview_visible_len().unwrap_or(0))
             .filter(|ix| pane.diff_source_visible_ix_for_visible_ix(*ix) == Some(0))
             .count();
@@ -2362,7 +2365,7 @@ fn a_code_block_wider_than_the_pane_gets_a_scrollbar(cx: &mut gpui::TestAppConte
     cx.update(|_window, app| {
         let scrolls = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .worktree_markdown
             .block_scrolls
@@ -2435,7 +2438,7 @@ fn a_code_block_does_not_swallow_the_page_scroll(cx: &mut gpui::TestAppContext) 
     let page_offset = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .worktree_preview_scroll
                 .0
@@ -2650,7 +2653,7 @@ fn split_markdown_diff_leaves_blank_space_so_both_sides_stay_lined_up(
     );
 
     let (old_end, new_end) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -2660,7 +2663,7 @@ fn split_markdown_diff_leaves_blank_space_so_both_sides_stay_lined_up(
         )
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left = pane
             .diff_text_hitbox_bounds_for_tests(old_end, DiffTextRegion::SplitLeft)
             .expect("old End. is drawn");
@@ -2720,8 +2723,8 @@ fn markdown_diff_scrollbar_markers_sit_where_the_change_is_drawn(cx: &mut gpui::
     );
 
     let markers = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview
             else {
                 panic!("the preview is ready");
@@ -2765,7 +2768,7 @@ fn inline_markdown_diff_shows_the_removed_version_before_the_added_one(
     );
 
     let (removed, added) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -2859,11 +2862,11 @@ fn split_markdown_eof_ignores_trailing_alignment_padding(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview =
@@ -2887,7 +2890,7 @@ fn split_markdown_eof_ignores_trailing_alignment_padding(cx: &mut gpui::TestAppC
 
     cx.simulate_click(empty_space.center(), Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_text_head,
             Some(DiffTextPos {
@@ -2975,7 +2978,7 @@ fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestApp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -3007,7 +3010,7 @@ fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestApp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_wrap_visible_rows = (0..4)
                     .map(|ix| DiffWrapVisualRow {
                         source_visible_ix: ix + 900,
@@ -3022,7 +3025,7 @@ fn markdown_preview_ignores_the_text_diff_wrap_projection(cx: &mut gpui::TestApp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let pane = this.main_pane.read(cx);
+            let pane = this.diff_renderer.read(cx);
             assert_eq!(
                 pane.markdown_preview_row_count(),
                 Some(row_count),
@@ -3093,7 +3096,7 @@ fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::Tes
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let hitbox = this
-                .main_pane
+                .diff_renderer
                 .read(cx)
                 .diff_text_hitbox_bounds_for_tests(0, DiffTextRegion::Inline)
                 .expect("expected a diff text hitbox for the preview row");
@@ -3156,7 +3159,7 @@ fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestA
     let source_len = source.len();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -3174,7 +3177,7 @@ fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestA
     // Stand in for the window before the parse lands, or after it failed.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.worktree_markdown.document = gitcomet_state::model::Loadable::Loading;
                 pane.diff_search_active = true;
                 pane.diff_search_query = "needle".into();
@@ -3187,7 +3190,7 @@ fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestA
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.rendered_markdown_preview_owns_view(),
             "the preview toggle is still on Rendered"
@@ -3232,7 +3235,7 @@ fn split_markdown_diff_new_side_rows_take_clicks_and_context_menus(cx: &mut gpui
         DiffViewMode::Split,
     );
     let row = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -3260,7 +3263,7 @@ fn split_markdown_diff_new_side_rows_take_clicks_and_context_menus(cx: &mut gpui
 
     let text = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_text_hitbox_bounds_for_tests(row, DiffTextRegion::SplitRight)
             .expect("the new row is drawn")
@@ -3303,7 +3306,7 @@ fn inline_markdown_diff_keeps_table_rows_whole_when_a_column_is_added(
         DiffViewMode::Inline,
     );
     let rows: Vec<(usize, usize)> = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -3357,7 +3360,7 @@ fn the_budget_fallback_to_source_ends_with_the_file_that_needed_it(cx: &mut gpui
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 cx.notify();
@@ -3407,7 +3410,7 @@ fn the_budget_fallback_to_source_ends_with_the_file_that_needed_it(cx: &mut gpui
     cx.update(|_window, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -3443,7 +3446,7 @@ fn split_markdown_diff_of_an_added_file_says_the_old_side_is_empty(cx: &mut gpui
         .expect("the empty old column says so");
     let added = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_text_hitbox_bounds_for_tests(0, DiffTextRegion::SplitRight)
             .expect("the added heading is drawn")
@@ -3518,7 +3521,7 @@ fn switching_between_dark_themes_restyles_an_open_markdown_preview(cx: &mut gpui
     let set_pane_theme = |cx: &mut gpui::VisualTestContext, theme: AppTheme| {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane
+                this.diff_renderer
                     .update(cx, |pane, cx| pane.set_theme(theme, cx));
             });
         });
@@ -3539,7 +3542,7 @@ fn switching_between_dark_themes_restyles_an_open_markdown_preview(cx: &mut gpui
     draw_frames(cx, 2);
 
     let (shown, fresh) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(document) = &pane.worktree_markdown.document
         else {
             panic!("expected a ready preview");
@@ -3887,7 +3890,7 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     let row_bounds = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
         cx.update(|_window, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_text_hitbox_bounds_for_tests(row_ix, DiffTextRegion::Inline)
         })
@@ -3895,7 +3898,7 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     let point_on_link = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
         let bounds = row_bounds(cx, row_ix).expect("the link's row is drawn");
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let mut y = bounds.top() + px(2.0);
             while y < bounds.bottom() {
                 let mut x = bounds.left();
@@ -3921,7 +3924,7 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     }
     let scroll = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .worktree_preview_scroll
             .0
@@ -3931,9 +3934,9 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     });
     let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let _subscription = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
+        let diff_renderer = view.read(app).diff_renderer.clone();
         let notified = std::rc::Rc::clone(&notified);
-        app.observe(&main_pane, move |_, _| notified.set(notified.get() + 1))
+        app.observe(&diff_renderer, move |_, _| notified.set(notified.get() + 1))
     });
     let to_top = |cx: &mut gpui::VisualTestContext| {
         set_scroll_handle_offset(&scroll, point(px(0.0), px(0.0)));
@@ -3967,7 +3970,7 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     };
     let selection_rows = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let rows = pane
                 .diff_text_anchor
                 .zip(pane.diff_text_head)
@@ -4069,7 +4072,7 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     to_top(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.clear_diff_text_selection();
                 cx.notify();
             });
@@ -4110,7 +4113,7 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     let started = Instant::now();
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.select_all_diff_text(window, cx);
                 cx.notify();
             });
@@ -4131,8 +4134,8 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     let started = Instant::now();
     let (_, copy_allocs) = crate::perf_alloc::measure_allocations(|| {
         cx.update(|_window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.copy_selected_diff_text_to_clipboard(cx)
             });
         })
@@ -4215,12 +4218,12 @@ fn a_frame_of_the_markdown_preview_checks_the_preview_surface_a_bounded_number_o
         &source,
     );
 
-    crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    crate::view::panes::diff::take_file_preview_active_checks_for_tests();
     cx.update(|window, app| {
         window.refresh();
         let _ = window.draw(app);
     });
-    let checks = crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    let checks = crate::view::panes::diff::take_file_preview_active_checks_for_tests();
     // Each check stats the previewed file; paint used to make two per row.
     assert!(
         checks <= 8,
@@ -4264,7 +4267,7 @@ fn a_reveal_of_a_row_only_the_new_side_draws_brings_that_row_into_view(
         DiffViewMode::Split,
     );
     let row = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -4280,7 +4283,7 @@ fn a_reveal_of_a_row_only_the_new_side_draws_brings_that_row_into_view(
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_scroll
                     .0
                     .borrow()
@@ -4294,7 +4297,7 @@ fn a_reveal_of_a_row_only_the_new_side_draws_brings_that_row_into_view(
     draw_frames(cx, 3);
 
     let (viewport, inserted) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.diff_scroll.0.borrow().base_handle.bounds(),
             pane.diff_text_hitbox_bounds_for_tests(row, DiffTextRegion::SplitRight),
@@ -4334,7 +4337,7 @@ fn the_budget_fallback_to_source_ends_when_another_repo_shows_the_same_path(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 cx.notify();
@@ -4367,7 +4370,7 @@ fn the_budget_fallback_to_source_ends_when_another_repo_shows_the_same_path(
     cx.update(|_window, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -4438,7 +4441,7 @@ fn split_markdown_diff_says_why_a_side_shows_nothing(cx: &mut gpui::TestAppConte
                     ),
                 )));
                 push_test_state(this, app_state_with_repo(repo, repo_id), cx);
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.rendered_preview_modes
                         .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                     pane.diff_view = DiffViewMode::Split;
@@ -4521,7 +4524,7 @@ fn opening_a_conflicted_markdown_preview_parses_off_the_render_path(cx: &mut gpu
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
                 cx.notify();
             });
@@ -4532,7 +4535,7 @@ fn opening_a_conflicted_markdown_preview_parses_off_the_render_path(cx: &mut gpu
         cx.update(|_window, app| {
             let documents = &view
                 .read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .conflict_resolver
                 .markdown_preview
@@ -4585,7 +4588,7 @@ fn a_frame_of_the_markdown_preview_installs_pointer_listeners_once_per_document(
         crate::view::rows::take_markdown_flow_texts_built_for_tests();
         cx.update(|window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |_pane, cx| cx.notify());
+                this.diff_renderer.update(cx, |_pane, cx| cx.notify());
             });
             let _ = window.draw(app);
         });
@@ -4630,12 +4633,12 @@ fn a_jump_into_a_long_markdown_preview_comes_to_rest(cx: &mut gpui::TestAppConte
     );
     let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let _subscription = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
+        let diff_renderer = view.read(app).diff_renderer.clone();
         let notified = std::rc::Rc::clone(&notified);
-        app.observe(&main_pane, move |_, _| notified.set(notified.get() + 1))
+        app.observe(&diff_renderer, move |_, _| notified.set(notified.get() + 1))
     });
     let scroll = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.worktree_preview_scroll.0.borrow().base_handle.clone()
     });
 
@@ -4682,7 +4685,7 @@ fn a_conflicted_markdown_file_in_text_mode_is_not_a_markdown_preview(
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Text;
                 cx.notify();
             });
@@ -4690,7 +4693,7 @@ fn a_conflicted_markdown_file_in_text_mode_is_not_a_markdown_preview(
     });
     draw_frames(cx, 2);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.is_conflict_resolver_active(),
             "the merge tool is showing"

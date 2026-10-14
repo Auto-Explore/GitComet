@@ -163,7 +163,7 @@ pub(super) fn model(
     // Shown only while the editor is holding unsaved text for this file, so it
     // cannot be mistaken for the "Discard changes" that reverts the file itself.
     if this
-        .main_pane
+        .diff_renderer
         .read(cx)
         .file_edits_are_unsaved_for(repo_id, path)
     {

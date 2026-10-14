@@ -21,7 +21,7 @@ fn active_search_switches_diagram_targets_to_source_on_f1_and_f4(cx: &mut gpui::
     focus_diff_search_input(cx, &view);
     for (key, destination) in [("f4", &paths[2]), ("f1", &paths[1]), ("f1", &paths[0])] {
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, _| {
+            view.read(app).diff_renderer.clone().update(app, |pane, _| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Diagram, RenderedPreviewMode::Rendered);
             });
@@ -31,7 +31,7 @@ fn active_search_switches_diagram_targets_to_source_on_f1_and_f4(cx: &mut gpui::
         wait_until_store_diff_target_path(cx, &view, destination);
         sync_store_snapshot(cx, &view);
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert!(pane.diff_search_active);
             assert_eq!(
                 pane.rendered_preview_modes
@@ -65,7 +65,7 @@ fn focus_diff_search_input(
         app.clear_key_bindings();
         crate::app::bind_text_input_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 let focus = pane.diff_search_input.read(cx).focus_handle();
                 window.focus(&focus, cx);
@@ -219,7 +219,7 @@ fn commit_message_text_input_f3_prefers_diff_search_matches(cx: &mut gpui::TestA
         app.clear_key_bindings();
         crate::app::bind_text_input_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_matches = vec![3, 5];
                 pane.diff_search_match_ix = Some(0);
@@ -239,7 +239,7 @@ fn commit_message_text_input_f3_prefers_diff_search_matches(cx: &mut gpui::TestA
     cx.update(|window, app| {
         let root = view.read(app);
         assert_eq!(
-            root.main_pane.read(app).diff_search_match_ix,
+            root.diff_renderer.read(app).diff_search_match_ix,
             Some(1),
             "expected F3 from commit-message input to advance the active diff search match"
         );
@@ -283,7 +283,7 @@ fn commit_message_text_input_f2_prefers_previous_diff_search_match(cx: &mut gpui
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_matches = vec![3, 5];
                 pane.diff_search_match_ix = Some(1);
@@ -299,7 +299,7 @@ fn commit_message_text_input_f2_prefers_previous_diff_search_match(cx: &mut gpui
     cx.update(|window, app| {
         let root = view.read(app);
         assert_eq!(
-            root.main_pane.read(app).diff_search_match_ix,
+            root.diff_renderer.read(app).diff_search_match_ix,
             Some(0),
             "expected F2 from commit-message input to move to the previous diff search match"
         );
@@ -345,7 +345,7 @@ fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext)
         app.clear_key_bindings();
         crate::app::bind_text_input_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = query.into();
                 pane.diff_search_input
@@ -363,7 +363,7 @@ fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext)
     draw_and_drain_test_window(cx);
 
     cx.update(|window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let input = pane.diff_search_input.read(app);
         assert!(
             input.focus_handle().is_focused(window),
@@ -406,7 +406,7 @@ fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppC
     cx.simulate_input("needle one");
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "needle one");
         assert_eq!(pane.diff_search_input.read(app).text(), "needle one");
     });
@@ -454,7 +454,7 @@ fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
     cx.simulate_input("needle one");
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "needle one");
         assert_eq!(pane.diff_search_input.read(app).text(), "needle one");
     });
@@ -463,7 +463,7 @@ fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(!pane.diff_search_active);
         assert_eq!(pane.diff_search_query.as_ref(), "");
         assert_eq!(pane.diff_search_input.read(app).text(), "");
@@ -510,7 +510,7 @@ fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 cx.notify();
             });
@@ -522,7 +522,7 @@ fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui
     let set_query = |cx: &mut gpui::VisualTestContext, query: &'static str| {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_search_input
                         .update(cx, |input, cx| input.set_text(query, cx));
                 });
@@ -532,7 +532,7 @@ fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui
     };
     let document = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert!(!pane.diff_search_worker_running);
             pane.diff_search_document
                 .as_ref()
@@ -544,7 +544,7 @@ fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui
     let first = document(cx).expect("the worker captured a document");
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, _| pane.diff_search_recompute_matches());
         });
     });
@@ -556,7 +556,7 @@ fn diff_search_document_survives_synchronous_recompute_until_close(cx: &mut gpui
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = match pane.diff_view {
                     DiffViewMode::Split => DiffViewMode::Inline,
                     DiffViewMode::Inline => DiffViewMode::Split,
@@ -615,12 +615,12 @@ fn split_file_diff_search_captures_only_file_rows(cx: &mut gpui::TestAppContext)
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.ensure_diff_visible_indices();
                 assert!(pane.is_file_diff_view_active());
                 let patch = pane.diff_row_provider.clone().expect("patch rows loaded");
-                let counts = |pane: &crate::view::panes::MainPaneView| {
+                let counts = |pane: &crate::view::panes::DiffRenderer| {
                     (
                         Arc::strong_count(&patch),
                         Arc::strong_count(&pane.diff_cache),
@@ -657,7 +657,7 @@ fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = " ".into();
                 pane.diff_search_matches = vec![7];
@@ -670,7 +670,7 @@ fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_matches.is_empty(),
             "expected whitespace-only queries to refresh instead of leaving stale matches behind"
@@ -714,7 +714,7 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
         app.clear_key_bindings();
         crate::app::bind_app_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 let focus = pane.diff_panel_focus_handle.clone();
@@ -771,7 +771,7 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("new", cx));
                 cx.notify();
@@ -792,7 +792,7 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
         .debug_bounds("diff_search_match_label")
         .expect("expected diff search match label bounds after entering a query");
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches.len(),
             2,
@@ -865,7 +865,7 @@ fn open_diff_search_on_two_hunk_diff(
         app.clear_key_bindings();
         crate::app::bind_app_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 let focus = pane.diff_panel_focus_handle.clone();
@@ -892,7 +892,7 @@ fn set_diff_search_text(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text(text, cx));
                 cx.notify();
@@ -909,7 +909,7 @@ fn diff_search_match_state(
     view: &gpui::Entity<super::super::super::GitCometView>,
 ) -> (usize, Option<usize>) {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (pane.diff_search_matches.len(), pane.diff_search_match_ix)
     })
 }
@@ -987,7 +987,7 @@ fn diff_search_arrow_buttons_are_disabled_without_matches(cx: &mut gpui::TestApp
     set_diff_search_text(cx, &view, "new");
     let found = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_search_matches
             .clone()
@@ -1002,7 +1002,7 @@ fn diff_search_arrow_buttons_are_disabled_without_matches(cx: &mut gpui::TestApp
         // re-rendering: a click on the arrows on screen must not reach it.
         cx.update(|window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_search_matches.clear();
                     pane.diff_search_match_ix = None;
                     cx.notify();
@@ -1016,7 +1016,7 @@ fn diff_search_arrow_buttons_are_disabled_without_matches(cx: &mut gpui::TestApp
             .unwrap_or_else(|| panic!("expected {selector} while search is open"));
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, _cx| {
+                this.diff_renderer.update(cx, |pane, _cx| {
                     pane.diff_search_matches = found.clone();
                 });
             });
@@ -1047,7 +1047,7 @@ fn diff_search_shift_enter_inserts_a_newline(cx: &mut gpui::TestAppContext) {
 
     let text = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_search_input
             .read(app)
@@ -1097,7 +1097,7 @@ fn diff_search_input_slot_grows_for_multiline_query(cx: &mut gpui::TestAppContex
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("alpha\nbeta", cx));
                 cx.notify();
@@ -1151,7 +1151,7 @@ fn diff_search_input_slot_caps_tall_multiline_query(cx: &mut gpui::TestAppContex
         .join("\n");
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text(tall_query.clone(), cx));
                 cx.notify();
@@ -1172,7 +1172,7 @@ fn diff_search_input_slot_caps_tall_multiline_query(cx: &mut gpui::TestAppContex
 
     let max_scroll_y = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_search_scroll
             .max_offset()
@@ -1214,7 +1214,7 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 pane.diff_search_input
@@ -1227,7 +1227,7 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert!(
             !pane.diff_search_worker_running,
@@ -1237,7 +1237,7 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
     wait_for_diff_search_debounce(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert_eq!(
             pane.diff_search_matches.len(),
@@ -1288,7 +1288,7 @@ fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppC
         app.clear_key_bindings();
         crate::app::bind_text_input_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 pane.diff_search_active = true;
@@ -1305,7 +1305,7 @@ fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppC
         let query = query.to_string();
         cx.update(|window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_search_input
                         .update(cx, |input, cx| input.set_text(query.clone(), cx));
                     cx.notify();
@@ -1318,14 +1318,14 @@ fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppC
 
     set_pending_query(cx, "new");
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert_eq!(pane.diff_search_matches.len(), 2);
     });
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert_eq!(pane.diff_search_matches.len(), 2);
         assert_eq!(
@@ -1339,7 +1339,7 @@ fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppC
     cx.simulate_keystrokes("f2");
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "old");
         assert_eq!(pane.diff_search_matches.len(), 2);
         assert_eq!(
@@ -1353,7 +1353,7 @@ fn diff_search_navigation_keys_follow_background_results(cx: &mut gpui::TestAppC
     cx.simulate_keystrokes("enter");
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "unchanged");
         assert_eq!(pane.diff_search_matches.len(), 1);
         assert_eq!(
@@ -1393,7 +1393,7 @@ fn diff_search_preserve_current_scrolls_when_matches_first_appear(cx: &mut gpui:
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 pane.diff_search_active = true;
@@ -1412,7 +1412,7 @@ fn diff_search_preserve_current_scrolls_when_matches_first_appear(cx: &mut gpui:
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let first_match = pane
             .diff_search_matches
             .first()
@@ -1466,7 +1466,7 @@ fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui:
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 pane.diff_search_active = true;
@@ -1498,7 +1498,7 @@ fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui:
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let last_match_ix = pane.diff_search_matches.len() - 1;
                 pane.diff_search_match_ix = Some(last_match_ix);
                 set_uniform_list_offset(&pane.diff_scroll, gpui::point(px(0.0), px(-120.0)));
@@ -1509,7 +1509,7 @@ fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui:
     });
 
     let (before_offset, expected_match_ix) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.diff_scroll.0.borrow().base_handle.offset(),
             pane.diff_search_match_ix,
@@ -1518,7 +1518,7 @@ fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui:
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_visible_cache_len = usize::MAX;
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -1527,7 +1527,7 @@ fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui:
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_match_ix, expected_match_ix,
             "expected passive visible-index refresh to preserve the active search match"
@@ -1654,7 +1654,7 @@ fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::T
     );
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
             });
         });
@@ -1758,7 +1758,7 @@ fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::Te
     cx.update(|window, app| {
         crate::app::bind_app_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = query.into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text(query.to_string(), cx));
@@ -1783,7 +1783,7 @@ fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::Te
         "expected secondary-f from commit-message input to move focus to diff search"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_input.read(app).selected_range(),
             0..query.len(),
@@ -1905,7 +1905,7 @@ fn non_text_context_menu_focus_f2_f3_use_diff_search_matches(cx: &mut gpui::Test
     bind_app_keys_for_test(cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_matches = vec![3, 5];
                 pane.diff_search_match_ix = Some(0);
@@ -1924,7 +1924,7 @@ fn non_text_context_menu_focus_f2_f3_use_diff_search_matches(cx: &mut gpui::Test
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_match_ix),
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_search_match_ix),
         Some(1),
         "expected F3 from non-text context-menu focus to advance the diff search match"
     );
@@ -1932,7 +1932,7 @@ fn non_text_context_menu_focus_f2_f3_use_diff_search_matches(cx: &mut gpui::Test
     cx.simulate_keystrokes("f2");
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_match_ix),
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_search_match_ix),
         Some(0),
         "expected F2 from non-text context-menu focus to move to the previous diff search match"
     );
@@ -1971,7 +1971,7 @@ fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::Tes
     focus_diff_search_input(cx, &view);
 
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.rebuild_diff_cache(cx);
             pane.ensure_diff_visible_indices();
@@ -1994,7 +1994,7 @@ fn background_search_keeps_latest_query_and_queued_navigation(cx: &mut gpui::Tes
     });
     draw_and_drain_test_window(cx);
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert_eq!(pane.diff_search_matches.len(), 2);
         assert_eq!(pane.diff_search_match_ix, Some(1));
@@ -2034,7 +2034,7 @@ fn diff_search_navigation_after_synchronous_recompute_is_not_lost(cx: &mut gpui:
     focus_diff_search_input(cx, &view);
 
     let navigated = cx.update(|_, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.rebuild_diff_cache(cx);
             pane.ensure_diff_visible_indices();
@@ -2056,7 +2056,7 @@ fn diff_search_navigation_after_synchronous_recompute_is_not_lost(cx: &mut gpui:
     });
     draw_and_drain_test_window(cx);
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_matches.len(), 2);
         assert_eq!(pane.diff_search_match_ix, navigated);
         assert_eq!(pane.diff_search_pending_navigation, 0);
@@ -2098,7 +2098,7 @@ fn diff_search_query_edit_keeps_previous_matches_until_the_worker_publishes(
 
     let schedule = |cx: &mut gpui::VisualTestContext, query: &'static str| {
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.clone();
+            let pane = view.read(app).diff_renderer.clone();
             pane.update(app, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
@@ -2113,7 +2113,7 @@ fn diff_search_query_edit_keeps_previous_matches_until_the_worker_publishes(
     draw_and_drain_test_window(cx);
     let published = cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_search_matches
             .clone()
@@ -2128,7 +2128,7 @@ fn diff_search_query_edit_keeps_previous_matches_until_the_worker_publishes(
     assert!(ix_while_pending.is_some());
     draw_and_drain_test_window(cx);
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "ne");
         assert!(!pane.diff_search_worker_running);
         assert_eq!(pane.diff_search_match_ix, Some(0));

@@ -11,7 +11,7 @@ use crate::view::markdown_preview::{
     MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineImage, MarkdownInlineStyle,
     MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownTextAlign,
 };
-use crate::view::panes::main::diff_search::DiffSearchMatcher;
+use crate::view::panes::diff::diff_search::DiffSearchMatcher;
 use gitcomet_state::msg::CommitSelectMode;
 use rustc_hash::FxHasher;
 

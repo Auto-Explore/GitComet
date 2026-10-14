@@ -151,7 +151,7 @@ pub(in crate::view) enum ContextMenuAction {
     },
     /// Throw away the editor's unsaved buffer for this file and reload it from
     /// disk. Handled in the view rather than dispatched: the buffer lives in
-    /// `MainPaneView`, and the store has no message for it.
+    /// `DiffRenderer`, and the store has no message for it.
     DiscardFileEdits {
         repo_id: RepoId,
         path: std::path::PathBuf,

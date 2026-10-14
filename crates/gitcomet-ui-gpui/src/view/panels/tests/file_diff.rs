@@ -2,8 +2,8 @@
 #![allow(clippy::type_complexity)]
 
 use super::*;
-use crate::view::panes::main::DiffChangeSide;
-use crate::view::panes::main::diff_cache::PatchInlineVisibleMap;
+use crate::view::panes::diff::diff_cache::PatchInlineVisibleMap;
+use crate::view::panes::diff::helpers::state::DiffChangeSide;
 use std::path::PathBuf;
 
 fn push_regular_diff_content_mode_state(
@@ -378,8 +378,8 @@ fn activate_collapsed_diff_fixture(
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_view = diff_view;
             cx.notify();
         });
@@ -426,7 +426,7 @@ fn debug_selector_bounds(
 }
 
 fn collapsed_hunk_visible_ix_for_src_ix(
-    pane: &crate::view::panes::main::MainPaneView,
+    pane: &crate::view::panes::diff::DiffRenderer,
     src_ix: usize,
 ) -> usize {
     pane.collapsed_diff_hunks
@@ -442,7 +442,7 @@ fn collapsed_hunk_visible_ix_for_src_ix(
 }
 
 fn collapsed_file_row_visible_ix(
-    pane: &crate::view::panes::main::MainPaneView,
+    pane: &crate::view::panes::diff::DiffRenderer,
     target_row_ix: usize,
 ) -> usize {
     (0..pane.diff_visible_len())
@@ -453,7 +453,7 @@ fn collapsed_file_row_visible_ix(
             };
             matches!(
                 pane.collapsed_visible_row(source_visible_ix),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { row_ix })
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::FileRow { row_ix })
                     if row_ix == target_row_ix
             )
         })
@@ -467,7 +467,7 @@ fn diff_text_hitbox_top_for_visible_ix(
     region: DiffTextRegion,
 ) -> f32 {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_text_hitboxes
             .get(&(visible_ix, region))
             .unwrap_or_else(|| {
@@ -484,7 +484,7 @@ fn diff_scroll_offset_y(
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> f32 {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_scroll.0.borrow().base_handle.offset().y.into()
     })
 }
@@ -494,7 +494,7 @@ fn diff_split_right_scroll_offset_y(
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> f32 {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_split_right_scroll
             .0
             .borrow()
@@ -511,8 +511,8 @@ fn scroll_collapsed_visible_ix_to_center(
     visible_ix: usize,
 ) {
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
         });
     });
@@ -527,7 +527,7 @@ fn reveal_collapsed_diff_hunk_side_fully(
 ) {
     loop {
         let hidden = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             if reveal_up {
                 pane.collapsed_diff_hidden_up_rows(src_ix)
             } else {
@@ -539,8 +539,8 @@ fn reveal_collapsed_diff_hunk_side_fully(
         }
 
         cx.update(|_window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 if reveal_up {
                     pane.collapsed_diff_reveal_hunk_up(src_ix, cx);
                 } else {
@@ -560,7 +560,7 @@ fn set_diff_row_selection_for_test(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_selection_anchor = Some(anchor);
                 pane.diff_selection_range = Some(range);
                 pane.clear_diff_text_selection();
@@ -578,7 +578,7 @@ fn focused_change_block_rows(
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> Vec<usize> {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (0..pane.diff_visible_len())
             .filter(|&visible_ix| pane.diff_focused_change_block_row(visible_ix).is_some())
             .collect()
@@ -667,11 +667,11 @@ fn binary_source_backed_diff_is_classified_as_not_text(cx: &mut gpui::TestAppCon
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.file_diff_cache_error,
             Some(
-                crate::view::panes::main::diff_cache::FileDiffCacheError::NotText {
+                crate::view::panes::diff::diff_cache::FileDiffCacheError::NotText {
                     old_bytes: Some(5),
                     new_bytes: Some(7),
                 }
@@ -860,7 +860,7 @@ fn lfs_payload_diff_disables_pointer_patch_actions(cx: &mut gpui::TestAppContext
             )));
             repo.diff_state.diff_file_rev = 1;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
-            assert_eq!(this.main_pane.read(cx).diff_stage_gutter_area(), None);
+            assert_eq!(this.diff_renderer.read(cx).diff_stage_gutter_area(), None);
             this.popover_host.update(cx, |host, cx| {
                 // Row four is also a valid pointer-patch hunk index. Even a
                 // stale or programmatically opened menu must not act on it.
@@ -912,12 +912,15 @@ fn lfs_collapsed_diff_keeps_payload_changes_and_expands_context(cx: &mut gpui::T
     });
     for mode in [DiffViewMode::Split, DiffViewMode::Inline] {
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.diff_content_mode = DiffContentMode::Collapsed;
-                pane.diff_view = mode;
-                pane.reset_collapsed_diff_projection(true);
-                cx.notify();
-            });
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.diff_content_mode = DiffContentMode::Collapsed;
+                    pane.diff_view = mode;
+                    pane.reset_collapsed_diff_projection(true);
+                    cx.notify();
+                });
         });
         wait_for_main_pane_condition(
             cx,
@@ -936,7 +939,7 @@ fn lfs_collapsed_diff_keeps_payload_changes_and_expands_context(cx: &mut gpui::T
         );
         let visible_ix = cx.update(|_, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .collapsed_diff_hunk_visible_indices[0]
         });
@@ -967,33 +970,36 @@ fn lfs_collapsed_diff_keeps_payload_changes_and_expands_context(cx: &mut gpui::T
             });
         }
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                assert_eq!(
-                    pane.collapsed_diff_hunks.len(),
-                    2,
-                    "two payload hunks, not one pointer hunk"
-                );
-                let headers: Vec<_> = pane
-                    .collapsed_diff_hunks
-                    .iter()
-                    .map(|hunk| {
-                        pane.collapsed_diff_hunk_header_display(hunk.src_ix)
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    assert_eq!(
+                        pane.collapsed_diff_hunks.len(),
+                        2,
+                        "two payload hunks, not one pointer hunk"
+                    );
+                    let headers: Vec<_> = pane
+                        .collapsed_diff_hunks
+                        .iter()
+                        .map(|hunk| {
+                            pane.collapsed_diff_hunk_header_display(hunk.src_ix)
+                                .unwrap()
+                                .to_string()
+                        })
+                        .collect();
+                    assert_eq!(headers, ["-5,7 +5,7", "-19,7 +19,7"]);
+                    assert_eq!(pane.collapsed_change_blocks().len(), 2);
+                    assert_eq!(pane.diff_stage_gutter_area(), None);
+                    let first = pane.collapsed_diff_hunks[0].src_ix;
+                    pane.collapsed_diff_reveal_hunk_up(first, cx);
+                    assert_eq!(
+                        pane.collapsed_diff_hunk_header_display(first)
                             .unwrap()
-                            .to_string()
-                    })
-                    .collect();
-                assert_eq!(headers, ["-5,7 +5,7", "-19,7 +19,7"]);
-                assert_eq!(pane.collapsed_change_blocks().len(), 2);
-                assert_eq!(pane.diff_stage_gutter_area(), None);
-                let first = pane.collapsed_diff_hunks[0].src_ix;
-                pane.collapsed_diff_reveal_hunk_up(first, cx);
-                assert_eq!(
-                    pane.collapsed_diff_hunk_header_display(first)
-                        .unwrap()
-                        .as_ref(),
-                    "-1,11 +1,11"
-                );
-            });
+                            .as_ref(),
+                        "-1,11 +1,11"
+                    );
+                });
         });
     }
 }

@@ -10,7 +10,7 @@ enum Control {
     Pause,
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     fn image_target(&self) -> String {
         format!(
             "{:?}:{:?}",

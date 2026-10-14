@@ -24,7 +24,7 @@ pub(in crate::view) fn worktree_preview_streamed_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     line_ix: usize,
     query: &SharedString,
-    query_options: super::super::panes::main::diff_search::DiffSearchOptions,
+    query_options: super::super::panes::diff::diff_search::DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
     query_emphasis: DiffSearchMatchEmphasis,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -61,7 +61,7 @@ pub(in crate::view) fn worktree_preview_streamed_spec(
     })
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     pub(in crate::view) fn render_worktree_preview_rows(
         this: &mut Self,
         range: Range<usize>,

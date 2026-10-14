@@ -51,9 +51,9 @@ fn view_mode_segments_render_and_switch_the_resolver_view(cx: &mut gpui::TestApp
 
     click_debug_selector(cx, "mergetool_view_three_way");
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
+        let diff_renderer = view.read(app).diff_renderer.clone();
         assert_eq!(
-            main_pane.read(app).conflict_resolver.view_mode,
+            diff_renderer.read(app).conflict_resolver.view_mode,
             ConflictResolverViewMode::ThreeWay,
         );
     });
@@ -65,9 +65,9 @@ fn view_mode_segments_render_and_switch_the_resolver_view(cx: &mut gpui::TestApp
     });
     click_debug_selector(cx, "mergetool_view_two_way");
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
+        let diff_renderer = view.read(app).diff_renderer.clone();
         assert_eq!(
-            main_pane.read(app).conflict_resolver.view_mode,
+            diff_renderer.read(app).conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff,
         );
     });
@@ -87,8 +87,8 @@ fn the_minimap_has_no_row_in_the_settings_menu(cx: &mut gpui::TestAppContext) {
 
     // Seed enough resolver state that a mode row would have been shown.
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             pane.conflict_resolver.minimap_bands =
                 vec![gitcomet_core::merge::MinimapRowKind::Unchanged; 8].into();
             pane.conflict_resolver.three_way_text.base = "alpha\nbeta\n".into();

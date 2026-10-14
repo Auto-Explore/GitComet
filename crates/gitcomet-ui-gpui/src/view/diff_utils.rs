@@ -124,7 +124,14 @@ pub(super) fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
 pub(super) fn diff_content_line_text(
     line: &AnnotatedDiffLine,
 ) -> gitcomet_core::file_diff::FileDiffLineText {
-    let content_start = match line.kind {
+    diff_content_line_slice(line.kind, &line.text)
+}
+
+pub(super) fn diff_content_line_slice(
+    kind: gitcomet_core::domain::DiffLineKind,
+    text: &gitcomet_core::domain::SharedLineText,
+) -> gitcomet_core::file_diff::FileDiffLineText {
+    let content_start = match kind {
         gitcomet_core::domain::DiffLineKind::Add
         | gitcomet_core::domain::DiffLineKind::Remove
         | gitcomet_core::domain::DiffLineKind::Context => 1,
@@ -132,9 +139,8 @@ pub(super) fn diff_content_line_text(
             0
         }
     };
-    line.text
-        .slice(content_start..line.text.len())
-        .unwrap_or_else(|| line.text.clone())
+    text.slice(content_start..text.len())
+        .unwrap_or_else(|| text.clone())
         .into()
 }
 

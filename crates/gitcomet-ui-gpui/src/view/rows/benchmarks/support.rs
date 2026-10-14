@@ -1066,11 +1066,11 @@ pub(crate) fn build_bench_file_diff_rebuild_from_text(
     old: &str,
     new: &str,
 ) -> (
-    Arc<crate::view::panes::main::diff_cache::PagedFileDiffRows>,
-    Arc<crate::view::panes::main::diff_cache::PagedFileDiffInlineRows>,
+    Arc<crate::view::panes::diff::diff_cache::PagedFileDiffRows>,
+    Arc<crate::view::panes::diff::diff_cache::PagedFileDiffInlineRows>,
 ) {
     let file = FileDiffText::new(path.into(), Some(old.to_owned()), Some(new.to_owned()));
-    let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+    let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
         &file,
         Path::new("/tmp/gitcomet-bench"),
     )

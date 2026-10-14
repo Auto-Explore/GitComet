@@ -984,7 +984,7 @@ mod tests {
         theme: AppTheme,
         base: &CachedDiffStyledText,
         query: &str,
-        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+        options: crate::view::panes::diff::diff_search::DiffSearchOptions,
     ) -> CachedDiffStyledText {
         query_overlay_for_test_with_emphasis(
             theme,
@@ -999,10 +999,10 @@ mod tests {
         theme: AppTheme,
         base: &CachedDiffStyledText,
         query: &str,
-        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+        options: crate::view::panes::diff::diff_search::DiffSearchOptions,
         emphasis: DiffSearchMatchEmphasis,
     ) -> CachedDiffStyledText {
-        let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(query, options);
+        let matcher = crate::view::panes::diff::diff_search::DiffSearchMatcher::new(query, options);
         build_cached_diff_query_overlay_styled_text(theme, base, &matcher, emphasis)
     }
 
@@ -2878,7 +2878,7 @@ mod tests {
             theme,
             &base,
             "render",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 match_case: true,
                 ..Default::default()
             },
@@ -2894,7 +2894,7 @@ mod tests {
             theme,
             &base,
             "cat",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 whole_word: true,
                 ..Default::default()
             },
@@ -2910,7 +2910,7 @@ mod tests {
             theme,
             &base,
             r"r.n.e.",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 regex: true,
                 ..Default::default()
             },
@@ -3080,9 +3080,9 @@ mod tests {
         let tab_width = 4;
 
         let theme = AppTheme::gitcomet_dark();
-        let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+        let matcher = crate::view::panes::diff::diff_search::DiffSearchMatcher::new(
             r"r.n.e.",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 regex: true,
                 ..Default::default()
             },

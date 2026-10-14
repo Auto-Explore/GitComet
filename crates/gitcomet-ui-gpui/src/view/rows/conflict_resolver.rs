@@ -5,7 +5,7 @@ use super::diff_text::*;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 
@@ -343,7 +343,7 @@ pub(in crate::view) fn resolved_output_gutter_width(
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     // ── Per-column three-way render functions ──────────────────────────
 
     pub(in super::super) fn render_conflict_three_way_base_rows(
@@ -2218,7 +2218,7 @@ impl MainPaneView {
                     // the gutter and the code read as one highlighted row.
                     .when(conflict_active && conflict_unresolved, |d| {
                         d.bg(
-                            crate::view::panes::main::resolved_output_active_conflict_background(
+                            crate::view::panes::diff::helpers::presentation::resolved_output_active_conflict_background(
                                 theme,
                             ),
                         )
@@ -2365,7 +2365,7 @@ impl MainPaneView {
                 if theme.is_dark { 0.18 } else { 0.10 },
             );
             let active_unresolved_row_bg =
-                crate::view::panes::main::resolved_output_active_conflict_background(theme);
+                crate::view::panes::diff::helpers::presentation::resolved_output_active_conflict_background(theme);
             let resolved_row_bg = with_alpha(
                 theme.colors.status.success.foreground,
                 if theme.is_dark { 0.12 } else { 0.08 },

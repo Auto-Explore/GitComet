@@ -166,7 +166,7 @@ fn wait_for_displayed_content(cx: &mut gpui::VisualTestContext, view: &View) {
             });
         });
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let Some(repo) = pane.active_repo() else {
                 return false;
             };
@@ -276,7 +276,7 @@ fn exercise_with_failure(
     store.insert_repo_for_test(REPO, backend);
     cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, _| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
             pane.auto_save_file_edits = false;
         });
         view.read(app).details_pane.clone().update(app, |pane, cx| {
@@ -326,28 +326,34 @@ fn exercise_with_failure(
     wait_for_displayed_content(cx, &view);
     if matches!(viewed, Viewed::Editor) {
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.ensure_file_editor_loaded(cx);
-            });
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.ensure_file_editor_loaded(cx);
+                });
         });
         cx.run_until_parked();
         super::shortcuts::wait_until(cx, "editor loaded before typing", |cx| {
             cx.update(|_, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 !pane.file_editor_loading()
                     && pane.file_editor_input.read(app).text() == "base\nstaged\nunstaged\n"
             })
         });
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.file_editor_input.update(cx, |input, cx| {
-                    input.replace_utf8_range(0..0, "unsaved\n", cx);
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.file_editor_input.update(cx, |input, cx| {
+                        input.replace_utf8_range(0..0, "unsaved\n", cx);
+                    });
                 });
-            });
         });
         cx.run_until_parked();
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert!(
                 pane.file_editor_is_dirty(),
                 "the edit must be dirty before staging"
@@ -489,7 +495,7 @@ fn exercise_with_failure(
                 crate::app::bind_app_keys_for_test(app);
                 crate::app::install_global_diff_shortcut_fallback_for_test(app);
                 view.read(app)
-                    .main_pane
+                    .diff_renderer
                     .read(app)
                     .diff_panel_focus_handle
                     .clone()
@@ -632,7 +638,7 @@ fn exercise_with_failure(
         assert_eq!(repo.diff_state.edit_mode, matches!(viewed, Viewed::Editor));
         if matches!(viewed, Viewed::Editor) {
             cx.update(|_, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 assert!(pane.is_file_editor_active());
                 assert!(pane.file_editor_is_dirty());
                 assert!(

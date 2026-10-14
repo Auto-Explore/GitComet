@@ -175,7 +175,7 @@ impl GitCometView {
             cx,
             self.window_handle,
             cx.weak_entity(),
-            self.main_pane.downgrade(),
+            self.diff_renderer.downgrade(),
             self.documents.downgrade(),
             self.view_mode,
             self.workspace_id,

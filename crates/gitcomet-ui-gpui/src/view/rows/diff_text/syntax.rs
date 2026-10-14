@@ -150,7 +150,7 @@ const TS_COMBINED_LAYER_MAX_RANGES: usize = 65_536;
 /// builds them. The cell is empty only when the root parse used up the whole
 /// foreground budget and the chunk build has not caught up, and a click is still
 /// an input event, so it gets the same 50 ms a cold root parse gets in
-/// `MainPaneView::file_diff_pair_syntax_document`.
+/// `DiffRenderer::file_diff_pair_syntax_document`.
 const TS_CLICK_INJECTION_BUDGET: Duration = Duration::from_millis(50);
 
 /// Context on each side of the rendered window that a combined injection is still

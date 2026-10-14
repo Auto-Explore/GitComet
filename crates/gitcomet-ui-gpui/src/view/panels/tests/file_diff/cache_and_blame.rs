@@ -95,10 +95,10 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     );
 
     let baseline_seq =
-        cx.update(|_window, app| view.read(app).main_pane.read(app).file_diff_cache_seq);
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).file_diff_cache_seq);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -111,7 +111,7 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     let (left_epoch_before, right_epoch_before, left_hash_before, right_hash_before) =
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, _cx| {
+                this.diff_renderer.update(cx, |pane, _cx| {
                     let left_row_ix =
                         file_diff_split_row_ix(pane, DiffTextRegion::SplitLeft, stable_left_line)
                             .expect(
@@ -220,7 +220,7 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
         );
 
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(
                 pane.file_diff_cache_seq, baseline_seq,
                 "identical diff payload should not trigger file-diff rebuild when diff_file_rev changes"
@@ -283,7 +283,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
     ) -> rows::DiffPaintRecord {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_selection_anchor = None;
                     pane.diff_selection_range = None;
                     pane.diff_autoscroll_pending = false;
@@ -307,7 +307,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         })
     }
 
-    fn split_visible_ix_by_old_line(pane: &MainPaneView, old_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_old_line(pane: &DiffRenderer, old_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -317,7 +317,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         })
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -328,7 +328,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
     }
 
     fn inline_visible_ix_by_line_kind(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         old_line: Option<u32>,
         new_line: Option<u32>,
         kind: gitcomet_core::domain::DiffLineKind,
@@ -384,7 +384,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
     ) {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_view = DiffViewMode::Split;
                     pane.clear_diff_text_style_caches();
                     pane.ensure_diff_visible_indices();
@@ -395,7 +395,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         draw_and_drain_test_window(cx);
 
         let (removed_ix, modified_ix, added_ix) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (
                 split_visible_ix_by_old_line(pane, 2)
                     .expect("expected split visible row for removed old line 2"),
@@ -426,7 +426,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
 
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_view = DiffViewMode::Inline;
                     pane.clear_diff_text_style_caches();
                     pane.ensure_diff_visible_indices();
@@ -437,7 +437,7 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         draw_and_drain_test_window(cx);
 
         let (removed_inline_ix, added_inline_ix) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (
                 inline_visible_ix_by_line_kind(
                     pane,
@@ -555,12 +555,12 @@ index 1111111..2222222 100644
         [(1, 2, 2), (2, 3, 3)].into_iter().enumerate()
     {
         let seq_before_refresh =
-            cx.update(|_window, app| view.read(app).main_pane.read(app).file_diff_cache_seq);
+            cx.update(|_window, app| view.read(app).diff_renderer.read(app).file_diff_cache_seq);
 
         push_state(cx, previous_patch_rev, next_file_rev - 1, false, false);
         draw_and_drain_test_window(cx);
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(
                 pane.file_diff_cache_seq, seq_before_refresh,
                 "cycle {cycle_ix}: same-target loading should keep the existing cache alive"
@@ -577,7 +577,7 @@ index 1111111..2222222 100644
             seq_before_refresh,
         );
         let file_only_seq =
-            cx.update(|_window, app| view.read(app).main_pane.read(app).file_diff_cache_seq);
+            cx.update(|_window, app| view.read(app).diff_renderer.read(app).file_diff_cache_seq);
 
         push_state(cx, next_patch_rev, next_file_rev, true, true);
         wait_for_file_diff_seq_after(
@@ -623,8 +623,12 @@ fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payloa
     );
     wait_for_file_image_diff_cache(cx, &view, "initial image diff cache build", |_| true);
 
-    let baseline_seq =
-        cx.update(|_window, app| view.read(app).main_pane.read(app).file_image_diff_cache_seq);
+    let baseline_seq = cx.update(|_window, app| {
+        view.read(app)
+            .diff_renderer
+            .read(app)
+            .file_image_diff_cache_seq
+    });
 
     for rev in 2..=6 {
         seed_file_image_diff_state_with_rev(
@@ -640,7 +644,7 @@ fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payloa
         draw_and_drain_test_window(cx);
 
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(
                 pane.file_image_diff_cache_seq, baseline_seq,
                 "identical image diff payload should not trigger cache rebuild when diff_file_rev changes"
@@ -697,7 +701,7 @@ fn replacing_file_image_diff_cache_releases_old_sprite_atlas_tiles(cx: &mut gpui
     let first_image = cx.update(|window, app| {
         let image = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .file_image_diff_cache_old
             .as_ref()
@@ -728,7 +732,7 @@ fn replacing_file_image_diff_cache_releases_old_sprite_atlas_tiles(cx: &mut gpui
         assert!(!window.has_image_atlas_entry(&first_image));
         let replacement = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .file_image_diff_cache_old
             .as_ref()
@@ -771,8 +775,12 @@ fn file_image_diff_cache_keeps_valid_svg_on_render_fast_path_across_rev_refreshe
             && pane.file_image_diff_cache_new_svg_path.is_none()
     });
 
-    let baseline_seq =
-        cx.update(|_window, app| view.read(app).main_pane.read(app).file_image_diff_cache_seq);
+    let baseline_seq = cx.update(|_window, app| {
+        view.read(app)
+            .diff_renderer
+            .read(app)
+            .file_image_diff_cache_seq
+    });
 
     for rev in 2..=6 {
         seed_file_image_diff_state_with_rev(
@@ -788,7 +796,7 @@ fn file_image_diff_cache_keeps_valid_svg_on_render_fast_path_across_rev_refreshe
         draw_and_drain_test_window(cx);
 
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(
                 pane.file_image_diff_cache_seq, baseline_seq,
                 "identical svg image diff payload should not trigger cache rebuild when diff_file_rev changes"
@@ -859,7 +867,7 @@ fn file_image_diff_cache_keeps_distinct_valid_svg_sides_on_render_fast_path(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let old = pane
             .file_image_diff_cache_old
             .as_ref()
@@ -914,7 +922,7 @@ fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_image_diff_cache_old_svg_path
                 .as_ref()
@@ -960,7 +968,7 @@ fn failed_raster_image_diff_cache_is_terminal_instead_of_processing_forever(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.file_image_diff_cache_inflight.is_none());
         assert!(pane.file_image_diff_cache_failed);
         assert!(pane.is_file_image_diff_view_active());
@@ -1013,7 +1021,7 @@ fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui:
             let next_state = app_state_with_repo(repo, repo_id);
             push_test_state(this, next_state, cx);
 
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_content_mode = DiffContentMode::Collapsed;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Svg, RenderedPreviewMode::Source);
@@ -1023,7 +1031,7 @@ fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui:
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.is_file_preview_active(),
             "an SVG is classified as an image, so it must not take the text-file preview path"
@@ -1132,7 +1140,7 @@ fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1188,7 +1196,7 @@ fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1337,7 +1345,7 @@ fn html_file_diff_renders_injected_attribute_syntax_from_real_documents(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1394,7 +1402,7 @@ fn html_file_diff_renders_injected_attribute_syntax_from_real_documents(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1539,7 +1547,7 @@ fn xml_file_diff_renders_syntax_highlights_from_real_documents(cx: &mut gpui::Te
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1585,7 +1593,7 @@ fn xml_file_diff_renders_syntax_highlights_from_real_documents(cx: &mut gpui::Te
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1648,7 +1656,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     use gitcomet_core::file_diff::FileDiffRowKind;
 
     fn split_right_row_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -1657,7 +1665,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -1671,14 +1679,14 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((text, styled))
     }
 
-    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
     fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
@@ -1691,7 +1699,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn force_file_diff_fallback_mode(pane: &mut MainPaneView) {
+    fn force_file_diff_fallback_mode(pane: &mut DiffRenderer) {
         pane.file_diff_syntax_generation = pane.file_diff_syntax_generation.wrapping_add(1);
         for view_mode in [
             PreparedSyntaxViewMode::FileDiffSplitLeft,
@@ -1764,7 +1772,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn split_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -1790,7 +1798,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn inline_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -1815,7 +1823,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
             .collect()
     }
 
-    fn split_kind_debug(pane: &MainPaneView, lines: &[u32]) -> Vec<(u32, Option<FileDiffRowKind>)> {
+    fn split_kind_debug(pane: &DiffRenderer, lines: &[u32]) -> Vec<(u32, Option<FileDiffRowKind>)> {
         lines
             .iter()
             .copied()
@@ -1828,7 +1836,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
             .collect()
     }
 
-    fn inline_kind_debug(pane: &MainPaneView, lines: &[u32]) -> Vec<(u32, Option<DiffLineKind>)> {
+    fn inline_kind_debug(pane: &DiffRenderer, lines: &[u32]) -> Vec<(u32, Option<DiffLineKind>)> {
         lines
             .iter()
             .copied()
@@ -1856,7 +1864,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         expects_add_bg: bool,
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -1866,7 +1874,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         })
     }
 
-    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn inline_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -1876,7 +1884,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         })
     }
 
-    fn split_draw_rows_for_lines(pane: &MainPaneView, lines: &[u32]) -> Vec<ExpectedPaintRow> {
+    fn split_draw_rows_for_lines(pane: &DiffRenderer, lines: &[u32]) -> Vec<ExpectedPaintRow> {
         lines
             .iter()
             .copied()
@@ -1894,7 +1902,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
             .collect()
     }
 
-    fn inline_draw_rows_for_lines(pane: &MainPaneView, lines: &[u32]) -> Vec<ExpectedPaintRow> {
+    fn inline_draw_rows_for_lines(pane: &DiffRenderer, lines: &[u32]) -> Vec<ExpectedPaintRow> {
         lines
             .iter()
             .copied()
@@ -1920,7 +1928,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     ) -> rows::DiffPaintRecord {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_selection_anchor = None;
                     pane.diff_selection_range = None;
                     pane.diff_autoscroll_pending = false;
@@ -1961,7 +1969,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
                 DiffTextRegion::SplitRight,
             );
             let (text, highlights) = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 let (text, styled) = split_right_cached_styled_by_new_line(pane, expected.line_no)
                     .unwrap_or_else(|| {
                         panic!(
@@ -2034,7 +2042,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
                 DiffTextRegion::Inline,
             );
             let (text, highlights) = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 let (text, styled) = inline_cached_styled_by_new_line(pane, expected.line_no)
                     .unwrap_or_else(|| {
                         panic!(
@@ -2118,7 +2126,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -2163,7 +2171,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 // Other YAML tests can warm the shared prepared-syntax cache before this
                 // test runs. Clear the local prepared documents and invalidate any in-flight
                 // background parse so the next draw deterministically exercises fallback mode.
@@ -2213,7 +2221,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -2225,7 +2233,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let (baseline_path_text, baseline_path_styled) =
             split_right_cached_styled_by_new_line(pane, baseline_path_line)
                 .expect("fallback split draw should cache the baseline YAML path row");
@@ -2284,14 +2292,14 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     });
 
     let fallback_split_draw_rows = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         split_draw_rows_for_lines(pane, &render_lines)
     });
     assert_split_rows_match_render_cache(cx, &view, "fallback split", fallback_split_draw_rows);
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
                 pane.clear_diff_text_style_caches();
@@ -2304,7 +2312,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let (baseline_path_text, baseline_path_styled) =
             inline_cached_styled_by_new_line(pane, baseline_path_line)
                 .expect("fallback inline draw should cache the baseline YAML path row");
@@ -2363,14 +2371,14 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     });
 
     let fallback_inline_draw_rows = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         inline_draw_rows_for_lines(pane, &render_lines)
     });
     assert_inline_rows_match_render_cache(cx, &view, "fallback inline", fallback_inline_draw_rows);
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(50),
                 });
@@ -2452,7 +2460,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -2462,7 +2470,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
@@ -2569,14 +2577,14 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     );
 
     let prepared_split_draw_rows = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         split_draw_rows_for_lines(pane, &render_lines)
     });
     assert_split_rows_match_render_cache(cx, &view, "prepared split", prepared_split_draw_rows);
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
                 pane.clear_diff_text_style_caches();
@@ -2682,7 +2690,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     );
 
     let prepared_inline_draw_rows = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         inline_draw_rows_for_lines(pane, &render_lines)
     });
     assert_inline_rows_match_render_cache(cx, &view, "prepared inline", prepared_inline_draw_rows);
@@ -2697,7 +2705,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     use std::collections::BTreeMap;
 
     fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -2712,7 +2720,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     }
 
     fn split_right_row_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -2721,7 +2729,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     }
 
     fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
@@ -2734,13 +2742,13 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -2750,7 +2758,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         })
     }
 
-    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn inline_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -2768,7 +2776,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         for &visible_ix in visible_indices {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                         cx.notify();
                     });
@@ -2815,7 +2823,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     ) -> rows::DiffPaintRecord {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_selection_anchor = None;
                     pane.diff_selection_range = None;
                     pane.diff_autoscroll_pending = false;
@@ -2843,7 +2851,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let theme = cx.update(|_window, app| view.read(app).diff_renderer.read(app).theme);
 
     let repo_id = gitcomet_state::model::RepoId(180);
     let workdir = std::env::temp_dir().join(format!(
@@ -2923,7 +2931,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -2968,7 +2976,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -2980,7 +2988,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for line_no in new_lines {
             let actual = split_right_cached_styled_by_new_line(pane, line_no)
                 .map(cached_snapshot)
@@ -2999,7 +3007,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     });
 
     let split_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         new_lines
             .iter()
             .copied()
@@ -3016,7 +3024,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         let record =
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitRight);
         let (text, styled, kind) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let (text, styled) = split_right_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!(
@@ -3052,7 +3060,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -3064,7 +3072,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     });
 
     let inline_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         new_lines
             .iter()
             .copied()
@@ -3078,7 +3086,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     draw_rows_for_visible_indices(cx, &view, inline_visible_indices.as_slice());
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for line_no in new_lines {
             let actual = inline_cached_styled_by_new_line(pane, line_no)
                 .map(cached_snapshot)
@@ -3100,7 +3108,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         let record =
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::Inline);
         let (text, styled, kind) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let (text, styled) =
                 inline_cached_styled_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!("expected cached inline styled text for deployment-ci line {line_no}")
@@ -3145,7 +3153,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     use gitcomet_core::file_diff::FileDiffRowKind;
 
     fn split_right_row_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -3154,7 +3162,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     }
 
     fn split_left_row_by_old_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         old_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -3163,7 +3171,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     }
 
     fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -3178,7 +3186,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     }
 
     fn split_left_cached_styled_by_old_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         old_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -3192,14 +3200,14 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
         Some((text, styled))
     }
 
-    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
     fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
@@ -3294,7 +3302,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     }
 
     fn split_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -3320,7 +3328,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     }
 
     fn inline_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -3345,7 +3353,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
             .collect()
     }
 
-    fn split_kind_debug(pane: &MainPaneView, lines: &[u32]) -> Vec<(u32, Option<FileDiffRowKind>)> {
+    fn split_kind_debug(pane: &DiffRenderer, lines: &[u32]) -> Vec<(u32, Option<FileDiffRowKind>)> {
         lines
             .iter()
             .copied()
@@ -3358,7 +3366,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
             .collect()
     }
 
-    fn inline_kind_debug(pane: &MainPaneView, lines: &[u32]) -> Vec<(u32, Option<DiffLineKind>)> {
+    fn inline_kind_debug(pane: &DiffRenderer, lines: &[u32]) -> Vec<(u32, Option<DiffLineKind>)> {
         lines
             .iter()
             .copied()
@@ -3370,7 +3378,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let theme = cx.update(|_window, app| view.read(app).diff_renderer.read(app).theme);
 
     let repo_id = gitcomet_state::model::RepoId(84);
     let workdir = std::env::temp_dir().join(format!(
@@ -3394,7 +3402,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(50),
                 });
@@ -3445,7 +3453,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -3524,7 +3532,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let mut old_lines = Vec::new();
         old_lines.push(old_baseline_secret_key_line);
         old_lines.extend(old_affected_secret_key_lines);
@@ -3554,7 +3562,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -3640,7 +3648,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     use std::collections::BTreeMap;
 
     fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -3655,7 +3663,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     }
 
     fn split_left_cached_styled_by_old_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         old_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -3670,7 +3678,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     }
 
     fn split_right_row_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -3679,7 +3687,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     }
 
     fn split_left_row_by_old_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         old_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -3688,7 +3696,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     }
 
     fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
@@ -3701,13 +3709,13 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -3717,7 +3725,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         })
     }
 
-    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn inline_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -3735,7 +3743,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         for &visible_ix in visible_indices {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                         cx.notify();
                     });
@@ -3782,7 +3790,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     ) -> rows::DiffPaintRecord {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_selection_anchor = None;
                     pane.diff_selection_range = None;
                     pane.diff_autoscroll_pending = false;
@@ -3810,7 +3818,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let theme = cx.update(|_window, app| view.read(app).diff_renderer.read(app).theme);
 
     let repo_id = gitcomet_state::model::RepoId(184);
     let workdir = std::env::temp_dir().join(format!(
@@ -3888,7 +3896,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_secs(1),
                 });
@@ -3939,7 +3947,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -3951,7 +3959,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for line_no in old_lines {
             let actual = split_left_cached_styled_by_old_line(pane, line_no)
                 .map(cached_snapshot)
@@ -3986,7 +3994,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     });
 
     let split_left_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         old_lines
             .iter()
             .copied()
@@ -4008,7 +4016,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
             .collect::<Vec<_>>()
     });
     let split_right_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         new_lines
             .iter()
             .copied()
@@ -4026,7 +4034,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         let record =
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitLeft);
         let (text, styled, kind) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let (text, styled) = split_left_cached_styled_by_old_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected cached split-left styled text for build-release old line {line_no}")
@@ -4058,7 +4066,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         let record =
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitRight);
         let (text, styled, kind) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let (text, styled) = split_right_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected cached split-right styled text for build-release new line {line_no}")
@@ -4088,7 +4096,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -4100,7 +4108,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     });
 
     let inline_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         new_lines
             .iter()
             .copied()
@@ -4114,7 +4122,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     draw_rows_for_visible_indices(cx, &view, inline_visible_indices.as_slice());
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for line_no in new_lines {
             let actual = inline_cached_styled_by_new_line(pane, line_no)
                 .map(cached_snapshot)
@@ -4136,7 +4144,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         let record =
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::Inline);
         let (text, styled, kind) = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let (text, styled) =
                 inline_cached_styled_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!(
@@ -4178,7 +4186,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     use std::collections::BTreeMap;
 
     fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -4193,7 +4201,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     }
 
     fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
@@ -4206,7 +4214,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -4216,7 +4224,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         })
     }
 
-    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn inline_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -4234,7 +4242,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         for &visible_ix in visible_indices {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                         cx.notify();
                     });
@@ -4280,7 +4288,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     ) -> rows::DiffPaintRecord {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_selection_anchor = None;
                     pane.diff_selection_range = None;
                     pane.diff_autoscroll_pending = false;
@@ -4305,7 +4313,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     }
 
     fn split_mismatch_lines(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         baselines: &BTreeMap<u32, LineSyntaxSnapshot>,
         lines: &[u32],
     ) -> Vec<u32> {
@@ -4326,7 +4334,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     }
 
     fn inline_mismatch_lines(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         baselines: &BTreeMap<u32, LineSyntaxSnapshot>,
         lines: &[u32],
     ) -> Vec<u32> {
@@ -4351,7 +4359,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let theme = cx.update(|_window, app| view.read(app).diff_renderer.read(app).theme);
     let repo_id = gitcomet_state::model::RepoId(87);
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_yaml_same_content_rev_refresh",
@@ -4417,7 +4425,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -4429,7 +4437,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -4500,7 +4508,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     );
 
     let split_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         affected_lines
             .iter()
             .copied()
@@ -4514,7 +4522,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     draw_rows_for_visible_indices(cx, &view, split_visible_indices.as_slice());
 
     let (epoch_before, right_doc_ready_before, heuristic_mismatches) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
             pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
@@ -4531,7 +4539,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(500),
                 });
@@ -4636,7 +4644,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.clear_diff_text_style_caches();
                 cx.notify();
             });
@@ -4648,7 +4656,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         let record =
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitRight);
         let cached = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             split_right_cached_styled_by_new_line(pane, line_no).map(cached_snapshot)
         });
         let expected = baseline_new_by_line
@@ -4666,7 +4674,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         );
 
         let expects_row_bg = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (0..pane.file_diff_split_row_len()).any(|row_ix| {
                 pane.file_diff_split_row(row_ix).is_some_and(|row| {
                     row.new_line == Some(line_no)
@@ -4687,7 +4695,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -4696,7 +4704,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     });
 
     let inline_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         affected_lines
             .iter()
             .copied()
@@ -4742,7 +4750,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         );
 
         let expects_row_bg = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (0..pane.file_diff_inline_row_len()).any(|inline_ix| {
                 pane.file_diff_inline_row(inline_ix).is_some_and(|line| {
                     line.new_line == Some(line_no)
@@ -4852,7 +4860,7 @@ fn blame_toggle_keeps_split_view(cx: &mut gpui::TestAppContext) {
     click_blame_toggle(cx);
     cx.update(|_window, app| {
         let root = view.read(app);
-        let pane = root.main_pane.read(app);
+        let pane = root.diff_renderer.read(app);
         assert!(pane.annotate_enabled, "clicking blame should enable it");
         assert_eq!(
             pane.diff_view,
@@ -4865,7 +4873,7 @@ fn blame_toggle_keeps_split_view(cx: &mut gpui::TestAppContext) {
     click_blame_toggle(cx);
     cx.update(|_window, app| {
         let root = view.read(app);
-        let pane = root.main_pane.read(app);
+        let pane = root.diff_renderer.read(app);
         assert!(!pane.annotate_enabled);
         assert_eq!(
             pane.diff_view,
@@ -4895,7 +4903,7 @@ fn blame_toggle_keeps_inline_view(cx: &mut gpui::TestAppContext) {
     click_blame_toggle(cx);
     cx.update(|_window, app| {
         let root = view.read(app);
-        let pane = root.main_pane.read(app);
+        let pane = root.diff_renderer.read(app);
         assert!(pane.annotate_enabled);
         assert_eq!(pane.diff_view, DiffViewMode::Inline);
         assert_eq!(root.diff_view_mode, DiffViewMode::Inline);
@@ -4922,15 +4930,15 @@ fn split_annotate_reserves_the_annotation_column(cx: &mut gpui::TestAppContext) 
     );
 
     let (_, split_without_blame) = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| pane.diff_wrap_columns(window, cx))
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| pane.diff_wrap_columns(window, cx))
     });
 
     click_blame_toggle(cx);
 
     let (_, split_with_blame) = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             assert!(
                 pane.annotation_active(),
                 "an unstaged working-tree diff supports blame, so the column is active"
@@ -4971,8 +4979,8 @@ fn toggle_diff_view_command_clears_styled_segment_caches(cx: &mut gpui::TestAppC
     // depends on syntax availability and streaming heuristics, and the contract
     // under test is only that a mode change drops whatever is cached.
     let cached = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             for key in 0..3 {
                 pane.diff_text_segments_cache_set(
                     key,
@@ -5007,7 +5015,7 @@ fn toggle_diff_view_command_clears_styled_segment_caches(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         let root = view.read(app);
-        let pane = root.main_pane.read(app);
+        let pane = root.diff_renderer.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Split);
         assert_eq!(
             pane.diff_text_segments_cache.iter().flatten().count(),
@@ -5071,8 +5079,8 @@ fn assert_diff_search_scrolls_sideways(
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_view = DiffViewMode::Inline;
             pane.diff_search_active = true;
             pane.diff_search_query = "needle tail".into();
@@ -5090,7 +5098,7 @@ fn assert_diff_search_scrolls_sideways(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches.len(),
             1,
@@ -5153,13 +5161,16 @@ fn review_split_search_retries_when_one_column_has_stale_scroll_geometry(
         |pane| (pane.file_diff_cache_rev, pane.diff_visible_len()),
     );
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.diff_view = DiffViewMode::Split;
-            cx.notify();
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                cx.notify();
+            })
     });
     draw_and_drain_test_window(cx);
-    fn assert_pending_reveal(pane: &mut crate::view::panes::MainPaneView, window: &mut Window) {
+    fn assert_pending_reveal(pane: &mut crate::view::panes::DiffRenderer, window: &mut Window) {
         let ix = pane
             .diff_text_hitboxes
             .keys()
@@ -5195,7 +5206,7 @@ fn review_split_search_retries_when_one_column_has_stale_scroll_geometry(
     // Run the reveal during layout, as production does: retrying schedules a
     // frame for the current rendered view.
     struct RevealProbe {
-        pane: Entity<crate::view::panes::MainPaneView>,
+        pane: Entity<crate::view::panes::DiffRenderer>,
     }
     impl gpui::Render for RevealProbe {
         fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -5212,7 +5223,7 @@ fn review_split_search_retries_when_one_column_has_stale_scroll_geometry(
         }
     }
     cx.update(|window, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         window.replace_root(app, |_, _| RevealProbe { pane });
     });
     cx.update(|window, app| {
@@ -5249,7 +5260,7 @@ fn image_preview_controls_and_wheel_take_precedence_over_window_zoom(
     assert!(cx.debug_bounds("image_format_strip").is_some());
     let bounds = cx.debug_bounds("image_viewport").expect("image viewport");
     let before = cx.update(|_, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.image_zoom(crate::view::image_preview::Zoom::Scale(1.0), cx)
         });
@@ -5267,7 +5278,7 @@ fn image_preview_controls_and_wheel_take_precedence_over_window_zoom(
     });
     cx.update(|_, app| {
         assert_eq!(crate::ui_scale::current(app).percent, before);
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.image_preview_group.read(app).zoom_label(), "125%");
     });
     cx.simulate_event(gpui::ScrollWheelEvent {
@@ -5305,7 +5316,7 @@ fn image_preview_lifecycle_invalid_svg_path_keeps_the_unavailable_placeholder(
         pane.file_image_diff_cache_complete
     });
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_image_diff_cache_new_svg_path.is_some(),
             "exercise the legacy SVG path renderer"

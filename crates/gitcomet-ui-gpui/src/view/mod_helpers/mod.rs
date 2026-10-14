@@ -1053,6 +1053,7 @@ pub struct GitCometView {
     pub(super) theme: AppTheme,
     pub(super) title_bar: Entity<TitleBarView>,
     pub(super) sidebar_pane: Entity<SidebarPaneView>,
+    pub(super) diff_renderer: Entity<DiffRenderer>,
     pub(super) main_pane: Entity<MainPaneView>,
     pub(super) details_pane: Entity<DetailsPaneView>,
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,

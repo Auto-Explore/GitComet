@@ -353,7 +353,7 @@ impl DocumentPicker {
                         .borderless()
                         .on_click(theme, cx, |this, _, _, cx| {
                             let _ = this.root.update(cx, |root, cx| {
-                                root.main_pane
+                                root.diff_renderer
                                     .update(cx, |pane, cx| pane.save_all_file_edits(cx));
                                 root.documents.update(cx, |docs, cx| docs.save_all(cx));
                             });

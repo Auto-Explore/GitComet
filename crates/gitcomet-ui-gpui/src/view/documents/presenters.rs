@@ -1,6 +1,6 @@
 use super::DocumentsView;
 use super::buffers::{DocumentBuffer, DocumentOwner};
-use crate::view::panes::MainPaneView;
+use crate::view::panes::DiffRenderer;
 use gitcomet_core::filesystem::{DiskVersion, OperationId, PathChange};
 use gitcomet_state::model::RepoId;
 use gpui::{App, EntityId, WeakEntity};
@@ -9,12 +9,12 @@ use std::path::PathBuf;
 
 #[derive(Debug, Default)]
 pub(super) struct DocumentPresenters {
-    repositories: BTreeMap<EntityId, WeakEntity<MainPaneView>>,
+    repositories: BTreeMap<EntityId, WeakEntity<DiffRenderer>>,
     documents: Vec<WeakEntity<DocumentsView>>,
 }
 
 impl DocumentOwner {
-    pub fn register_repository(&self, presenter: WeakEntity<MainPaneView>) {
+    pub fn register_repository(&self, presenter: WeakEntity<DiffRenderer>) {
         self.presenters
             .borrow_mut()
             .repositories
@@ -25,7 +25,7 @@ impl DocumentOwner {
         self.presenters.borrow_mut().documents.push(presenter);
     }
 
-    fn repositories(&self) -> Vec<WeakEntity<MainPaneView>> {
+    fn repositories(&self) -> Vec<WeakEntity<DiffRenderer>> {
         let mut presenters = self.presenters.borrow_mut();
         presenters
             .repositories

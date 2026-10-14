@@ -47,8 +47,8 @@ fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Resu
         return Ok(Input::default());
     };
     let preview = match source.svg() {
-        Some(tree) => panes::main::diff_cache::render_svg_image_diff_preview(tree),
-        None => panes::main::diff_cache::render_raster_image_diff_preview(format, bytes),
+        Some(tree) => panes::diff::diff_cache::render_svg_image_diff_preview(tree),
+        None => panes::diff::diff_cache::render_raster_image_diff_preview(format, bytes),
     };
     Ok(Input {
         source: Some(source),
@@ -97,10 +97,13 @@ impl StandaloneBuffer {
             group.clone()
         } else {
             // Documents share the main pane's tiles; one of them shows at a time.
-            let owner = self
-                .root
-                .upgrade()
-                .map(|root| root.read(cx).main_pane.read(cx).image_preview_group.clone());
+            let owner = self.root.upgrade().map(|root| {
+                root.read(cx)
+                    .diff_renderer
+                    .read(cx)
+                    .image_preview_group
+                    .clone()
+            });
             let group = cx.new(|cx| match owner {
                 Some(owner) => Group::shared(&owner, cx),
                 None => Group::new(cx),
@@ -114,7 +117,7 @@ impl StandaloneBuffer {
             self.image_animation.frame_started_at = None;
             None
         } else {
-            MainPaneView::advance_file_image_preview_side(
+            DiffRenderer::advance_file_image_preview_side(
                 &mut self.image_animation,
                 self.image_input.preview.as_ref(),
                 std::time::Instant::now(),

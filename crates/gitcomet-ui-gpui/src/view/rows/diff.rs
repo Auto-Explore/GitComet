@@ -3,14 +3,13 @@ use super::diff_text::*;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
-use crate::view::panes::main::{
-    CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
-    DiffHorizontalScrollColumn,
-};
-use crate::view::panes::main::{
-    VersionedCachedDiffStyledText, versioned_query_cached_diff_styled_text_is_current,
-};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind;
+use crate::view::panes::diff::helpers::state::CollapsedDiffHunk;
+use crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow;
+use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
+use crate::view::panes::diff::helpers::state::VersionedCachedDiffStyledText;
+use crate::view::panes::diff::helpers::state::versioned_query_cached_diff_styled_text_is_current;
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
 
@@ -55,11 +54,17 @@ struct CollapsedHunkRevealClick {
 }
 
 fn diff_file_header_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_file_header_height_for_ui_scale(theme, ui_scale_percent)
+    crate::view::panes::diff::helpers::presentation::diff_file_header_height_for_ui_scale(
+        theme,
+        ui_scale_percent,
+    )
 }
 
 fn diff_hunk_header_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_hunk_header_height_for_ui_scale(theme, ui_scale_percent)
+    crate::view::panes::diff::helpers::presentation::diff_hunk_header_height_for_ui_scale(
+        theme,
+        ui_scale_percent,
+    )
 }
 
 fn collapsed_hunk_header_row_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
@@ -191,7 +196,7 @@ fn collapsed_hunk_reveal_button(
     tooltip: &'static str,
     icon_color: gpui::Rgba,
     click: CollapsedHunkRevealClick,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let ui_scale_percent = crate::ui_scale::current(cx).percent;
     let size = collapsed_hunk_reveal_button_size(theme, ui_scale_percent);
@@ -869,7 +874,7 @@ fn build_row_blame_paint_tracked(
     })
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// Test-only reader for the blame lines behind that context.
     ///
     /// `blame_render_ctx` needs `&mut self` to memoize its time range, which a
@@ -2448,7 +2453,7 @@ fn diff_row(
     click_kind: DiffClickKind,
     line: &AnnotatedDiffLine,
     decor: DiffRowDecor<'_>,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let DiffRowStyle {
         tab_width,
@@ -2762,7 +2767,7 @@ fn collapsed_inline_header_row(
     src_ix: usize,
     expansion_kind: CollapsedDiffExpansionKind,
     hidden_rows: usize,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     match click_kind {
         DiffClickKind::FileHeader => {
@@ -3043,7 +3048,7 @@ fn patch_split_column_row(
     stage_area: Option<DiffArea>,
     stage_hover: Option<diff_canvas::DiffStageHover>,
     tint: Option<gpui::Rgba>,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
         (PatchSplitColumn::Left, FileDiffRowKind::Remove | FileDiffRowKind::Modify) => {
@@ -3128,7 +3133,7 @@ fn patch_split_header_row(
     header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
     context_menu_active: bool,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
         if this.consume_suppress_click_after_drag() {
@@ -3298,7 +3303,7 @@ fn collapsed_split_header_row(
     src_ix: usize,
     expansion_kind: CollapsedDiffExpansionKind,
     hidden_rows: usize,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let region = match column {
         PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
@@ -3606,7 +3611,7 @@ fn patch_split_meta_row(
     visible_ix: usize,
     selected: bool,
     line: &AnnotatedDiffLine,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
         if this.consume_suppress_click_after_drag() {

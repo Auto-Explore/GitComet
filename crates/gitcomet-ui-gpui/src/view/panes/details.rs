@@ -61,12 +61,12 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) show_timezone: bool,
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
-    _history_find_subscription: Option<gpui::Subscription>,
+    _history_find_subscription: gpui::Subscription,
     /// The history find bar's query, highlighted in the commit details. It
     /// lives on the history view, so this copy is what repaints the pane.
     pub(in super::super) history_find_query: Option<HistoryFindQuery>,
     root_view: WeakEntity<GitCometView>,
-    main_pane: WeakEntity<MainPaneView>,
+    diff_renderer: WeakEntity<DiffRenderer>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
@@ -177,7 +177,8 @@ pub(in super::super) struct DetailsPaneView {
 pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) theme: AppTheme,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
-    pub(in super::super) main_pane: WeakEntity<MainPaneView>,
+    pub(in super::super) diff_renderer: WeakEntity<DiffRenderer>,
+    pub(in super::super) history_view: Entity<HistoryView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
 
@@ -334,7 +335,8 @@ impl DetailsPaneView {
         let DetailsPaneInit {
             theme,
             root_view,
-            main_pane,
+            diff_renderer,
+            history_view,
             tooltip_host,
         } = init;
         let preferences = ui_model.read(cx).preferences.clone();
@@ -452,20 +454,13 @@ impl DetailsPaneView {
                 this.commit_message_user_edited = true;
             }
         });
-        let history_view = main_pane
-            .upgrade()
-            .map(|main_pane| main_pane.read(cx).history_view.clone());
-        let history_find_query = history_view
-            .as_ref()
-            .and_then(|history| history.read(cx).history_find_query().cloned());
-        let history_find_subscription = history_view.map(|history_view| {
-            cx.observe(&history_view, |this, history, cx| {
-                let query = history.read(cx).history_find_query();
-                if this.history_find_query.as_ref() != query {
-                    this.history_find_query = query.cloned();
-                    cx.notify();
-                }
-            })
+        let history_find_query = history_view.read(cx).history_find_query().cloned();
+        let history_find_subscription = cx.observe(&history_view, |this, history, cx| {
+            let query = history.read(cx).history_find_query();
+            if this.history_find_query.as_ref() != query {
+                this.history_find_query = query.cloned();
+                cx.notify();
+            }
         });
         let mut pane = Self {
             store,
@@ -482,7 +477,7 @@ impl DetailsPaneView {
             _history_find_subscription: history_find_subscription,
             history_find_query,
             root_view,
-            main_pane,
+            diff_renderer,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
@@ -1502,9 +1497,9 @@ impl DetailsPaneView {
     /// The cached main pane reads this projection to render commit-diff file
     /// navigation, so local sort/filter changes must invalidate it explicitly.
     fn notify_commit_file_projection_dependents(&self, cx: &mut gpui::Context<Self>) {
-        let main_pane = self.main_pane.clone();
+        let diff_renderer = self.diff_renderer.clone();
         cx.defer(move |cx| {
-            let _ = main_pane.update(cx, |_pane, cx| cx.notify());
+            let _ = diff_renderer.update(cx, |_pane, cx| cx.notify());
         });
     }
 
@@ -2870,7 +2865,7 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let details_pane = cx.weak_entity();
-        let main_pane = self.main_pane.clone();
+        let diff_renderer = self.diff_renderer.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_, window, cx| {
@@ -2886,7 +2881,7 @@ impl DetailsPaneView {
                 if !still_selected {
                     return;
                 }
-                let _ = main_pane.update(cx, |pane, cx| {
+                let _ = diff_renderer.update(cx, |pane, cx| {
                     if pane.active_repo().is_some_and(|repo| {
                         repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
                     }) && pane.toggle_stage_shown_file(window, cx)
@@ -2937,7 +2932,7 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
-            let handle = root.main_pane.read(cx).diff_panel_focus_handle.clone();
+            let handle = root.diff_renderer.read(cx).diff_panel_focus_handle.clone();
             window.focus(&handle, cx);
         });
     }

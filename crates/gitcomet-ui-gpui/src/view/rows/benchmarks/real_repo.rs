@@ -435,7 +435,7 @@ impl RealRepoFixture {
 
         let old_text = file.old.as_deref().unwrap_or("");
         let new_text = file.new.as_deref().unwrap_or("");
-        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
             &file,
             self._repo_root.path(),
         )
@@ -830,8 +830,8 @@ fn conflict_session_bytes(session: &ConflictSession) -> usize {
 }
 
 fn hash_file_diff_window(
-    split: &crate::view::panes::main::diff_cache::PagedFileDiffRows,
-    inline: &crate::view::panes::main::diff_cache::PagedFileDiffInlineRows,
+    split: &crate::view::panes::diff::diff_cache::PagedFileDiffRows,
+    inline: &crate::view::panes::diff::diff_cache::PagedFileDiffInlineRows,
     window: usize,
     hasher: &mut FxHasher,
 ) {

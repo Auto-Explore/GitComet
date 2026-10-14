@@ -3237,7 +3237,7 @@ impl SidebarPaneView {
 
     pub(in super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
-            root.main_pane.update(cx, |pane, cx| {
+            root.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 cx.notify();
             });
@@ -3513,7 +3513,7 @@ fn unsaved_file_row(
                     move |this, _e, _window, cx| {
                         let path = Arc::clone(&path);
                         let _ = this.root_view.update(cx, move |root, cx| {
-                            root.main_pane.update(cx, |pane, cx| {
+                            root.diff_renderer.update(cx, |pane, cx| {
                                 pane.discard_file_edits_for(repo_id, path.as_path(), cx);
                             });
                         });

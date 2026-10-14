@@ -262,6 +262,7 @@ mod image_preview;
 pub use diagram_preview::benchmarks::MermaidPreviewFixture;
 #[cfg(feature = "benchmarks")]
 pub use image_preview::benchmarks::ImageInspectionFixture;
+mod diff_commands;
 pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
@@ -395,11 +396,11 @@ use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
     action_bar_density, action_bar_height, bottom_status_bar_height,
 };
-pub(crate) use panes::MainPaneView;
+pub(crate) use panes::DiffRenderer;
 use panes::{
-    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryPrimarySelection,
-    HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
-    history_primary_selection,
+    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, DiffRendererInit,
+    HistoryPrimarySelection, HistoryView, MainPaneView, ReflogPaneInit, ReflogPaneView,
+    SidebarPaneView, history_primary_selection,
 };
 pub(crate) use settings_window::{
     SettingsWindowView, open_settings_window, open_settings_window_to_workspace,

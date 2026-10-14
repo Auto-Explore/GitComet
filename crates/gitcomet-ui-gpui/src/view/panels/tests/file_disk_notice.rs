@@ -2,7 +2,7 @@
 //! external write to the file they show, and never swap content unasked.
 
 use super::*;
-use crate::view::panes::main::DiskSurface;
+use crate::view::panes::diff::DiskSurface;
 
 fn unique_workdir(label: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -69,7 +69,7 @@ impl Harness {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 push_test_state(this, Arc::clone(&state), cx);
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     if edit {
                         pane.ensure_file_editor_loaded(cx);
                     } else {
@@ -123,7 +123,7 @@ impl Harness {
         cx.update(|_window, app| {
             self.view.update(app, |this, cx| {
                 push_test_state(this, next, cx);
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     if edit {
                         pane.ensure_file_editor_loaded(cx);
                     } else {
@@ -151,10 +151,10 @@ impl Harness {
     fn with_pane<R>(
         &self,
         cx: &mut gpui::VisualTestContext,
-        f: impl FnOnce(&MainPaneView, &gpui::App) -> R,
+        f: impl FnOnce(&DiffRenderer, &gpui::App) -> R,
     ) -> R {
         cx.update(|_window, app| {
-            let pane = self.view.read(app).main_pane.read(app);
+            let pane = self.view.read(app).diff_renderer.read(app);
             f(pane, app)
         })
     }
@@ -162,11 +162,11 @@ impl Harness {
     fn update_pane(
         &self,
         cx: &mut gpui::VisualTestContext,
-        f: impl FnOnce(&mut MainPaneView, &mut gpui::Context<MainPaneView>),
+        f: impl FnOnce(&mut DiffRenderer, &mut gpui::Context<DiffRenderer>),
     ) {
         cx.update(|_window, app| {
             self.view.update(app, |this, cx| {
-                this.main_pane.update(cx, f);
+                this.diff_renderer.update(cx, f);
             });
         });
         cx.run_until_parked();
@@ -192,9 +192,9 @@ impl Harness {
         for _ in 0..200 {
             cx.run_until_parked();
             let drained = cx.update(|_, app| {
-                let main = self.view.read(app).main_pane.clone();
+                let main = self.view.read(app).diff_renderer.clone();
                 let owner = self.view.read(app).ui_model.read(app).documents.clone();
-                let snapshot = main.read(app).store.snapshot();
+                let snapshot = main.read(app).store.snapshot().expect("window store");
                 owner.finish_saves(&snapshot, app);
                 main.read(app).editor_documents.pending().is_empty()
             });
@@ -794,7 +794,7 @@ async fn review_regression_auto_saved_repo_move_keeps_stashed_edits_for_explicit
                 .expect("a stashed conflict needs explicit resolution before moving");
             assert_eq!(prompt.files, vec![SharedString::from("main.rs")]);
             assert!(this.pending_unsaved_file_edits_flush.is_none());
-            let pane = this.main_pane.read(cx);
+            let pane = this.diff_renderer.read(cx);
             let key = pane
                 .document_identity(repo_id, &h.file_rel)
                 .expect("open repository");
@@ -839,7 +839,7 @@ async fn review_regression_auto_saved_repo_move_waits_for_a_nonconflicting_write
             );
             assert!(
                 !this
-                    .main_pane
+                    .diff_renderer
                     .read(cx)
                     .editor_documents
                     .pending()
@@ -1043,7 +1043,7 @@ async fn edits_made_while_a_reload_reads_are_kept(cx: &mut gpui::TestAppContext)
     // Reload starts a read; a keystroke lands before it does.
     cx.update(|_window, app| {
         h.view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.reload_file_from_disk_notice(cx);
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "// typed\n", cx);
@@ -1070,9 +1070,9 @@ async fn a_check_in_flight_does_not_bring_back_a_dismissed_notice(cx: &mut gpui:
 
     cx.update(|_window, app| {
         h.view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.spawn_file_disk_check(
-                    crate::view::panes::main::DiskCheckCause::WorktreeChanged,
+                    crate::view::panes::diff::DiskCheckCause::WorktreeChanged,
                     cx,
                 );
                 pane.dismiss_file_disk_notice(cx);

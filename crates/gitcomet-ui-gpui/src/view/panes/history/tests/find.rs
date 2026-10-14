@@ -466,7 +466,7 @@ fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
         "opening the find bar must focus its input"
     );
     assert!(
-        !cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_active),
+        !cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_search_active),
         "the history find bar is not the diff search"
     );
     assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
@@ -496,7 +496,7 @@ fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
     cx.update(|window, app| {
         let focus = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();
@@ -509,7 +509,7 @@ fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
     draw_and_park(cx);
 
     cx.update(|window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_active,
             "secondary-f with a diff visible must still open the diff search"

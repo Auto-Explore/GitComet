@@ -1,4 +1,4 @@
-//! Conflict resolver rendering for [`MainPaneView`].
+//! Conflict resolver rendering for [`DiffRenderer`].
 //!
 //! Extracted from `diff_view.rs`: the kdiff3-style three-way resolver pane,
 //! its toolbar control clusters, and the rendered (SVG/Markdown) conflict
@@ -35,7 +35,7 @@ fn conflict_output_post_layout_scroll_y(gutter_y: Pixels, editor_max_y: Pixels) 
     gutter_y.clamp(-editor_max_y.max(px(0.0)), px(0.0))
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
     /// decision-only): resolved counts. File navigation is in the bottom bar.
     pub(super) fn conflict_toolbar_simple_controls(

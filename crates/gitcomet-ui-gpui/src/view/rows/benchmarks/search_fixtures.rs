@@ -580,7 +580,7 @@ impl FilePreviewTextSearchFixture {
             .sum::<usize>()
             .saturating_add(preview_lines.len().saturating_sub(1));
         let (source_text, line_starts) =
-            crate::view::panes::main::preview_source_text_and_line_starts_from_lines(
+            crate::view::panes::diff::helpers::line_index::preview_source_text_and_line_starts_from_lines(
                 &preview_lines,
                 source_len,
             );

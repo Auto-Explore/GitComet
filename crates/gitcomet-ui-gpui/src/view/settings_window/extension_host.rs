@@ -21,6 +21,8 @@ struct SettingsHost {
     open: Cell<bool>,
     theme: Cell<AppTheme>,
     notifier: HostNotifier,
+    diff_environment: crate::view::hosted::environment::DiffPaneEnvironment,
+    _tooltip: Entity<TooltipHost>,
 }
 
 impl SettingsExtensions {
@@ -54,6 +56,22 @@ impl SettingsExtensions {
             }
         });
         let window = window.window_handle();
+        let tooltip = cx.new(|_| TooltipHost::new(theme));
+        let diff_environment = crate::view::hosted::environment::DiffPaneEnvironment {
+            services: crate::view::panes::diff::services::DiffServices {
+                store: crate::view::pane_store::PaneStore::read_only(),
+                commands: Default::default(),
+                documents: crate::view::documents::buffers::DocumentOwner::new(
+                    std::sync::Weak::new(),
+                    cx,
+                ),
+                tooltip: tooltip.downgrade(),
+            },
+            preferences: crate::view::hosted::environment::DiffPreferences::Fixed(
+                Default::default(),
+            ),
+            window,
+        };
         let host = Rc::new_cyclic(|weak| SettingsHost {
             weak: weak.clone(),
             view: cx.weak_entity(),
@@ -61,6 +79,8 @@ impl SettingsExtensions {
             open: Cell::new(true),
             theme: Cell::new(theme),
             notifier,
+            diff_environment,
+            _tooltip: tooltip,
         });
         let instances: Rc<RefCell<Vec<Box<dyn WindowExtension>>>> = Rc::default();
         let opening_host = Rc::downgrade(&host);
@@ -238,7 +258,13 @@ impl WindowHostImpl for SettingsHost {
     ) -> Result<DiffPane, HostError> {
         let host = self.handle()?;
         let entity = cx.new(|cx| {
-            crate::view::hosted::diff_pane::DiffPaneView::snapshot(host, snapshot, options, cx)
+            crate::view::hosted::diff_pane::DiffPaneView::snapshot(
+                host,
+                self.diff_environment.clone(),
+                snapshot,
+                options,
+                cx,
+            )
         });
         Ok(DiffPane::new(Rc::new(
             crate::view::hosted::diff_pane::HostedDiffPane { entity },

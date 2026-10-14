@@ -126,7 +126,7 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
         },
     );
     let (syntax_generation_before, old_rows_document) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.file_diff_syntax_generation,
             pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
@@ -160,7 +160,7 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
     // Draw without draining, so the rebuild is still in flight.
     crate::view::test_support::redraw(cx);
     let (inflight, has_rows, syntax_generation_during) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.file_diff_cache_inflight.is_some(),
             pane.file_diff_cache_content_signature.is_some(),
@@ -178,7 +178,7 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let replacement_key = pane
                     .file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffSplitRight)
                     .expect("in-flight replacement key");
@@ -190,7 +190,7 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
 
     draw_and_drain_test_window(cx);
     let (has_content, syntax_generation_after, replacement_document) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.file_diff_cache_content_signature.is_some(),
             pane.file_diff_syntax_generation,
@@ -223,15 +223,15 @@ fn diff_content_mode_main_pane_persist_path_does_not_reenter_main_pane_updates(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cx.update(|_window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.set_diff_content_mode_and_persist(DiffContentMode::Collapsed, cx);
             });
         });
     }));
     assert!(
         result.is_ok(),
-        "main-pane diff content mode persistence should not re-enter MainPaneView updates"
+        "main-pane diff content mode persistence should not re-enter DiffRenderer updates"
     );
 
     cx.run_until_parked();
@@ -242,7 +242,7 @@ fn diff_content_mode_main_pane_persist_path_does_not_reenter_main_pane_updates(
             DiffContentMode::Collapsed,
         );
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_content_mode,
+            view.read(app).diff_renderer.read(app).diff_content_mode,
             DiffContentMode::Collapsed,
         );
     });
@@ -282,7 +282,7 @@ index 1111111..2222222 100644
             this.set_diff_content_mode(DiffContentMode::Full, cx);
             this.set_diff_word_wrap(false, cx);
             this.set_diff_reveal_whitespace_chars(true, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 cx.notify();
             });
@@ -314,7 +314,7 @@ index 1111111..2222222 100644
     );
 
     let visible_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (0..pane.diff_visible_len())
             .find(|&visible_ix| {
                 let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
@@ -330,7 +330,7 @@ index 1111111..2222222 100644
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
@@ -617,8 +617,8 @@ fn diff_content_mode_inline_submodule_persist_path_does_not_panic(cx: &mut gpui:
 
     let changed_lines_click = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cx.update(|_window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.set_diff_content_mode_and_persist(DiffContentMode::Collapsed, cx);
             });
         });
@@ -658,8 +658,8 @@ fn diff_content_mode_inline_submodule_persist_path_does_not_panic(cx: &mut gpui:
 
     let content_click = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cx.update(|_window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.set_diff_content_mode_and_persist(DiffContentMode::Full, cx);
             });
         });
@@ -734,13 +734,13 @@ fn collapsed_diff_inline_hunk_header_stays_pinned_during_horizontal_scroll(
         .debug_bounds("collapsed_diff_inline_hunk_shell")
         .expect("expected collapsed inline hunk shell bounds before scroll");
     let (file_visible_ix, row_before_x) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk_visible_ix = pane.collapsed_diff_hunk_visible_indices[0];
         let file_visible_ix = hunk_visible_ix + 1;
         assert!(
             matches!(
                 pane.collapsed_visible_row(file_visible_ix),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { .. })
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::FileRow { .. })
             ),
             "expected the row after the collapsed hunk header to be file content"
         );
@@ -756,8 +756,8 @@ fn collapsed_diff_inline_hunk_header_stays_pinned_during_horizontal_scroll(
     let shell_before_x: f32 = shell_before.left().into();
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             let handle = pane.diff_scroll.0.borrow().base_handle.clone();
             let max_offset = handle.max_offset();
             handle.set_offset(point(-max_offset.x.min(px(600.0)), px(0.0)));
@@ -769,7 +769,7 @@ fn collapsed_diff_inline_hunk_header_stays_pinned_during_horizontal_scroll(
         .debug_bounds("collapsed_diff_inline_hunk_shell")
         .expect("expected collapsed inline hunk shell bounds after scroll");
     let (row_after_x, offset_after_x) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let row_x: f32 = pane
             .diff_text_hitboxes
             .get(&(file_visible_ix, DiffTextRegion::Inline))
@@ -856,13 +856,13 @@ fn collapsed_diff_split_hunk_headers_stay_pinned_during_horizontal_scroll(
         .debug_bounds("collapsed_diff_split_right_hunk_shell")
         .expect("expected collapsed split right hunk shell bounds before scroll");
     let (file_visible_ix, left_row_before_x, right_row_before_x) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk_visible_ix = pane.collapsed_diff_hunk_visible_indices[0];
         let file_visible_ix = hunk_visible_ix + 1;
         assert!(
             matches!(
                 pane.collapsed_visible_row(file_visible_ix),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { .. })
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::FileRow { .. })
             ),
             "expected the row after the collapsed hunk header to be file content"
         );
@@ -886,8 +886,8 @@ fn collapsed_diff_split_hunk_headers_stay_pinned_during_horizontal_scroll(
     let right_shell_before_x: f32 = right_shell_before.left().into();
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
             let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
             let left_max = left_handle.max_offset();
@@ -906,7 +906,7 @@ fn collapsed_diff_split_hunk_headers_stay_pinned_during_horizontal_scroll(
         .expect("expected collapsed split right hunk shell bounds after scroll");
     let (left_row_after_x, right_row_after_x, left_offset_after_x, right_offset_after_x) = cx
         .update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let left_row_x: f32 = pane
                 .diff_text_hitboxes
                 .get(&(file_visible_ix, DiffTextRegion::SplitLeft))
@@ -1019,8 +1019,8 @@ fn assert_collapsed_diff_window_resize_preserves_horizontal_scroll(
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
             let left_offset = left_handle.offset();
             let left_max = left_handle.max_offset();
@@ -1037,7 +1037,7 @@ fn assert_collapsed_diff_window_resize_preserves_horizontal_scroll(
     draw_and_drain_test_window(cx);
 
     let (left_before_x, right_before_x) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
         let right_x: f32 = pane
             .diff_split_right_scroll
@@ -1099,7 +1099,7 @@ fn assert_collapsed_diff_window_resize_preserves_horizontal_scroll(
     );
 
     let (left_after_x, right_after_x) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
         let right_x: f32 = pane
             .diff_split_right_scroll
@@ -1190,8 +1190,8 @@ fn collapsed_diff_inline_resize_back_restores_horizontal_scroll(cx: &mut gpui::T
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             let handle = pane.diff_scroll.0.borrow().base_handle.clone();
             let offset = handle.offset();
             let max = handle.max_offset();
@@ -1201,7 +1201,7 @@ fn collapsed_diff_inline_resize_back_restores_horizontal_scroll(cx: &mut gpui::T
     draw_and_drain_test_window(cx);
 
     let before_x = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let offset_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
         assert!(
             offset_x < 0.0,
@@ -1230,7 +1230,7 @@ fn collapsed_diff_inline_resize_back_restores_horizontal_scroll(cx: &mut gpui::T
     );
 
     let after_x: f32 = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_scroll.0.borrow().base_handle.offset().x.into()
     });
     assert!(
@@ -1275,8 +1275,8 @@ fn collapsed_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_rest
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             let handle = pane.diff_scroll.0.borrow().base_handle.clone();
             let offset = handle.offset();
             let max = handle.max_offset();
@@ -1286,7 +1286,7 @@ fn collapsed_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_rest
     draw_and_drain_test_window(cx);
 
     let before_x = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let offset_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
         assert!(
             offset_x < 0.0,
@@ -1296,8 +1296,8 @@ fn collapsed_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_rest
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.invalidate_font_metrics(cx);
             let mut state = pane.diff_scroll.0.borrow_mut();
             state.last_item_size = None;
@@ -1310,7 +1310,7 @@ fn collapsed_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_rest
     draw_and_drain_test_window(cx);
 
     let after_x: f32 = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_scroll.0.borrow().base_handle.offset().x.into()
     });
     assert!(
@@ -1356,7 +1356,7 @@ fn collapsed_diff_inline_unscrolled_unmeasured_render_keeps_horizontal_scroll_ra
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_scroll.0.borrow().base_handle.offset().x,
             px(0.0),
@@ -1365,8 +1365,8 @@ fn collapsed_diff_inline_unscrolled_unmeasured_render_keeps_horizontal_scroll_ra
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.invalidate_font_metrics(cx);
             pane.diff_scroll.0.borrow_mut().last_item_size = None;
         });
@@ -1374,9 +1374,9 @@ fn collapsed_diff_inline_unscrolled_unmeasured_render_keeps_horizontal_scroll_ra
     draw_and_drain_test_window(cx);
 
     let max_hint = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_horizontal_scroll_max_offset_for_viewport(
-            crate::view::panes::main::DiffHorizontalScrollColumn::Primary,
+            crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn::Primary,
             px(900.0),
         )
     });
@@ -1386,7 +1386,7 @@ fn collapsed_diff_inline_unscrolled_unmeasured_render_keeps_horizontal_scroll_ra
     );
 
     let hscrollbar_bounds = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_scroll.0.borrow().base_handle.bounds()
     });
     simulate_counted_click(
@@ -1400,7 +1400,7 @@ fn collapsed_diff_inline_unscrolled_unmeasured_render_keeps_horizontal_scroll_ra
     draw_and_drain_test_window(cx);
 
     let after_click_x: f32 = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_scroll.0.borrow().base_handle.offset().x.into()
     });
     assert!(

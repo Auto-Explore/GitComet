@@ -159,6 +159,7 @@ impl PopoverHost {
             root_view,
             root_view_mode,
             tooltip_host,
+            diff_renderer,
             main_pane,
             details_pane,
             reflog_pane,
@@ -211,7 +212,7 @@ impl PopoverHost {
                     this.context_menu_selected_ix
                         .and_then(|ix| context_menu::selection_key(&model, ix))
                 });
-            let next_state = this.store.project(Arc::clone(&model.read(cx).state));
+            let next_state = Arc::clone(&model.read(cx).state);
             let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
                 next_state
                     .repos
@@ -287,7 +288,8 @@ impl PopoverHost {
                 return;
             };
 
-            let next_fingerprint = fingerprint::notify_fingerprint(&this.state, popover);
+            let next_fingerprint =
+                fingerprint::notify_fingerprint(&this.state, popover, this.store.binding);
             if next_fingerprint != this.notify_fingerprint {
                 this.notify_fingerprint = next_fingerprint;
                 cx.notify();
@@ -819,7 +821,8 @@ impl PopoverHost {
         Self {
             history_store: store.clone().into(),
             store: store.into(),
-            history_pane: main_pane.clone(),
+            primary_diff_renderer: diff_renderer.clone(),
+            main_pane,
             extension_dialog: None,
             state,
             theme,
@@ -854,7 +857,7 @@ impl PopoverHost {
             root_view_mode,
             extension_editor_available: false,
             tooltip_host,
-            main_pane,
+            diff_renderer,
             details_pane,
             reflog_pane,
             sidebar_pane,
@@ -1320,17 +1323,21 @@ impl PopoverHost {
         }
     }
 
-    pub(in crate::view) fn bind_diff_pane(&mut self, pane: Entity<MainPaneView>, cx: &App) {
+    pub(in crate::view) fn bind_diff_pane(&mut self, pane: Entity<DiffRenderer>, cx: &App) {
         self.store = pane.read(cx).store.clone();
-        self.state = self.store.snapshot();
-        self.main_pane = pane;
+        if let Some(state) = self.store.snapshot() {
+            self.state = state;
+        }
+        self.diff_renderer = pane;
     }
 
     pub(in crate::view) fn restore_history_binding(&mut self) {
-        if self.store.binding.is_some() {
+        if self.diff_renderer.entity_id() != self.primary_diff_renderer.entity_id() {
             self.store = self.history_store.clone();
-            self.main_pane = self.history_pane.clone();
-            self.state = self.store.snapshot();
+            self.diff_renderer = self.primary_diff_renderer.clone();
+            if let Some(state) = self.store.snapshot() {
+                self.state = state;
+            }
         }
     }
 
@@ -1373,7 +1380,7 @@ impl PopoverHost {
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
         self.popover = None;
         self.popover_anchor = None;
-        if self.store.binding.is_some() {
+        if self.diff_renderer.entity_id() != self.primary_diff_renderer.entity_id() {
             let pane = cx.weak_entity();
             cx.defer(move |cx| {
                 let _ = pane.update(cx, |this, _| {
@@ -1462,7 +1469,7 @@ impl PopoverHost {
         if let Some(focus) = focus_return {
             window.focus(&focus, cx);
         } else if restore_diff_panel_focus {
-            let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+            let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
             window.focus(&focus, cx);
         } else if let Some(focus) = menu_invoker_focus {
             window.focus(&focus, cx);
@@ -1641,7 +1648,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         self.close_popover(cx);
-        let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus, cx);
         cx.notify();
     }
@@ -1822,7 +1829,7 @@ impl PopoverHost {
         // The diff panel takes focus on any left press inside it, so its focus
         // state at open time is a faithful record of where the click landed.
         self.popover_opened_from_diff_panel = self
-            .main_pane
+            .diff_renderer
             .read(cx)
             .diff_panel_focus_handle
             .is_focused(window);
@@ -2413,19 +2420,33 @@ impl PopoverHost {
             self.popover = Some(kind);
         }
         if let Some(popover) = self.popover.as_ref() {
-            self.notify_fingerprint = fingerprint::notify_fingerprint(&self.state, popover);
+            self.notify_fingerprint =
+                fingerprint::notify_fingerprint(&self.state, popover, self.store.binding);
         }
         self.sync_titlebar_app_menu_state(cx);
         cx.notify();
     }
 
     pub(super) fn active_repo_id(&self) -> Option<RepoId> {
-        self.state.active_repo
+        self.active_repo().map(|repo| repo.id)
     }
 
     pub(super) fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
+        if let Some(binding) = self.store.binding {
+            return binding.repository(&self.state);
+        }
+        let repo_id = self.state.active_repo?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(super) fn bound_diff_state<'a>(
+        &self,
+        repo: &'a RepoState,
+    ) -> Option<&'a gitcomet_state::model::DiffState> {
+        match self.store.binding {
+            Some(binding) => binding.diff(repo),
+            None => Some(&repo.diff_state),
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

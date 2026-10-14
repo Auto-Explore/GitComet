@@ -109,7 +109,7 @@ fn markdown_diff_preview_draws_rows_that_carry_inline_pictures(cx: &mut gpui::Te
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 pane.diff_view = DiffViewMode::Split;
@@ -126,7 +126,7 @@ fn markdown_diff_preview_draws_rows_that_carry_inline_pictures(cx: &mut gpui::Te
     }
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_markdown_preview_active());
     });
 
@@ -293,8 +293,8 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
                 cx,
@@ -349,8 +349,8 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
     cx.simulate_click(retry.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             assert_eq!(pane.remote_markdown_images.approved_urls.len(), 1);
             assert!(
                 pane.remote_markdown_images
@@ -403,7 +403,7 @@ fn markdown_image_access_snapshots_share_approved_url_storage(cx: &mut gpui::Tes
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let first = pane.markdown_remote_image_access(None);
         let second = pane.markdown_remote_image_access(None);
         assert!(
@@ -422,8 +422,8 @@ fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
                 cx,
@@ -438,14 +438,14 @@ fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui
         "markdown_remote_image_summary_cache",
         "![remote](https://example.invalid/tracking.png)\n",
     );
-    crate::view::panes::main::reset_remote_markdown_image_row_visits_for_tests();
+    crate::view::panes::diff::reset_remote_markdown_image_row_visits_for_tests();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.has_blocked_remote_markdown_images());
-        let after_first = crate::view::panes::main::remote_markdown_image_row_visits_for_tests();
+        let after_first = crate::view::panes::diff::remote_markdown_image_row_visits_for_tests();
         assert!(pane.has_blocked_remote_markdown_images());
-        let after_second = crate::view::panes::main::remote_markdown_image_row_visits_for_tests();
+        let after_second = crate::view::panes::diff::remote_markdown_image_row_visits_for_tests();
         assert_eq!(
             after_second, after_first,
             "an unchanged render must reuse the blocked-image summary"
@@ -491,7 +491,7 @@ fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestApp
         .debug_bounds("diff_text_empty_space_Inline")
         .expect("image-only document below-EOF surface");
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_text_hitboxes.is_empty(),
             "a block image must not need a synthetic painted-text hitbox"
@@ -558,7 +558,7 @@ fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::Tes
         "the EOF surface must begin after the complete picture block; picture={picture:?} surface={empty_space:?}"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.worktree_preview_scroll
                 .0
@@ -582,7 +582,7 @@ fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::Tes
         Modifiers::default(),
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let last_row_ix = fixture
             .document
             .rows
@@ -669,7 +669,7 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.worktree_markdown.image_waits.is_empty(),
             "a picture that has not decoded yet needs something waiting to repaint the pane"
@@ -679,7 +679,7 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.worktree_markdown.image_waits.is_empty(),
             "and the wait is released once the picture has been decided one way or the other"
@@ -695,7 +695,7 @@ fn diff_scroll_offset_y(
 ) -> Pixels {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_scroll
             .0
@@ -740,7 +740,7 @@ fn change_navigation_reaches_an_added_picture_or_rule(cx: &mut gpui::TestAppCont
         );
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_scroll
                         .0
                         .borrow()
@@ -758,7 +758,7 @@ fn change_navigation_reaches_an_added_picture_or_rule(cx: &mut gpui::TestAppCont
             draw_and_drain_test_window(cx);
         }
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(
                 pane.markdown_interaction.reveal.pending(),
                 None,
@@ -793,7 +793,7 @@ fn searching_a_picture_description_finds_it_once(cx: &mut gpui::TestAppContext) 
     draw_frames(cx, 1);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = "unique project logo".into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("unique project logo", cx));
@@ -804,7 +804,7 @@ fn searching_a_picture_description_finds_it_once(cx: &mut gpui::TestAppContext) 
     });
     let matches = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_search_matches
             .clone()
@@ -848,7 +848,7 @@ fn a_frame_of_a_picture_heavy_preview_checks_only_the_pictures_it_draws(
     crate::view::rows::take_markdown_image_stats_for_tests();
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |_pane, cx| cx.notify());
+            this.diff_renderer.update(cx, |_pane, cx| cx.notify());
         });
         let _ = window.draw(app);
     });
@@ -896,7 +896,7 @@ fn the_merge_tool_preview_draws_tables_and_local_pictures_like_the_file_preview(
         ["# Base\n", ours, "# Remote\n"],
     );
     let (table_row, picture_row) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(document) =
             &pane.conflict_resolver.markdown_preview.documents.ours
         else {
@@ -1449,7 +1449,7 @@ fn table_picture_selection_copies_descriptions_once(cx: &mut gpui::TestAppContex
     cx.simulate_keystrokes("secondary-f");
     draw_frames(cx, 1);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.diff_search_query = "café".into();
             pane.diff_search_input
@@ -1476,7 +1476,7 @@ fn remote_table_images_keep_approval_controls_in_their_cells(cx: &mut gpui::Test
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
@@ -1536,7 +1536,7 @@ fn html_table_pictures_render_in_inline_and_split_diffs(cx: &mut gpui::TestAppCo
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.set_remote_markdown_image_policy(
                 crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
@@ -1564,7 +1564,7 @@ fn html_table_pictures_render_in_inline_and_split_diffs(cx: &mut gpui::TestAppCo
             mode,
         );
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview
             else {
                 panic!("preview ready")

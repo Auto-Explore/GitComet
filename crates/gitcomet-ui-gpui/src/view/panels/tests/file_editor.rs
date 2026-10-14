@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::panes::main::{
+use crate::view::panes::diff::{
     apply_file_editor_pair_highlights, file_editor_blame_line_for_editor_line,
     file_editor_provider_binding_key,
 };
@@ -88,7 +88,7 @@ fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_conten
     let second = Path::new("second.txt");
     std::fs::write(workdir.join(first), "original A").unwrap();
     std::fs::write(workdir.join(second), second_contents).unwrap();
-    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             push_test_state(view, editor_state(repo_id, &workdir, first), cx);
@@ -226,7 +226,7 @@ fn renaming_the_active_editor_refreshes_its_language_without_replacing_edits(
         "fn original() { let value = 42; }\n",
     )
     .unwrap();
-    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             push_test_state(view, editor_state(repo_id, &workdir, &relative), cx);
@@ -384,41 +384,44 @@ fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overla
     });
     let other_pause = OperationId::allocate();
     let initial_sequence = cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.auto_save_file_edits = false;
-            pane.ensure_file_editor_loaded(cx);
-            assert!(pane.file_editor_loading());
-            let sequence = pane.file_editor_reread_seq();
-            let request = Request::new(Operation::Rename {
-                source: if parent {
-                    original.parent().unwrap().to_path_buf()
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.auto_save_file_edits = false;
+                pane.ensure_file_editor_loaded(cx);
+                assert!(pane.file_editor_loading());
+                let sequence = pane.file_editor_reread_seq();
+                let request = Request::new(Operation::Rename {
+                    source: if parent {
+                        original.parent().unwrap().to_path_buf()
+                    } else {
+                        original.clone()
+                    },
+                    name: if parent { "after" } else { "renamed.rs" }.into(),
+                });
+                pane.filesystem_pause(request.id, cx);
+                if overlapping {
+                    pane.filesystem_pause(other_pause, cx);
+                }
+                let result = Filesystem::default().execute(request, |_| {});
+                assert!(result.succeeded(), "{:?}", result.items);
+                // Make the obsolete read succeed with different contents. Its result
+                // must never replace the restarted read from the renamed identity.
+                std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+                std::fs::write(&original, "obsolete path contents\n").unwrap();
+                pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
+                assert_eq!(
+                    pane.file_editor_key(),
+                    Some(DocumentIdentity(renamed.clone()))
+                );
+                if overlapping {
+                    assert_eq!(pane.file_editor_reread_seq(), sequence);
                 } else {
-                    original.clone()
-                },
-                name: if parent { "after" } else { "renamed.rs" }.into(),
-            });
-            pane.filesystem_pause(request.id, cx);
-            if overlapping {
-                pane.filesystem_pause(other_pause, cx);
-            }
-            let result = Filesystem::default().execute(request, |_| {});
-            assert!(result.succeeded(), "{:?}", result.items);
-            // Make the obsolete read succeed with different contents. Its result
-            // must never replace the restarted read from the renamed identity.
-            std::fs::create_dir_all(original.parent().unwrap()).unwrap();
-            std::fs::write(&original, "obsolete path contents\n").unwrap();
-            pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
-            assert_eq!(
-                pane.file_editor_key(),
-                Some(DocumentIdentity(renamed.clone()))
-            );
-            if overlapping {
-                assert_eq!(pane.file_editor_reread_seq(), sequence);
-            } else {
-                assert!(pane.file_editor_reread_seq() > sequence);
-            }
-            sequence
-        })
+                    assert!(pane.file_editor_reread_seq() > sequence);
+                }
+                sequence
+            })
     });
     cx.update(|_, app| {
         view.update(app, |view, cx| {
@@ -428,36 +431,42 @@ fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overla
     cx.run_until_parked();
     if overlapping {
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                assert!(pane.file_editor_loading());
-                assert!(pane.file_editor_input.read(cx).text().is_empty());
-                pane.ensure_file_editor_loaded(cx);
-                assert_eq!(pane.file_editor_reread_seq(), initial_sequence);
-                pane.filesystem_finish(other_pause, &[], &Default::default(), cx);
-                assert!(pane.file_editor_reread_seq() > initial_sequence);
-            })
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    assert!(pane.file_editor_loading());
+                    assert!(pane.file_editor_input.read(cx).text().is_empty());
+                    pane.ensure_file_editor_loaded(cx);
+                    assert_eq!(pane.file_editor_reread_seq(), initial_sequence);
+                    pane.filesystem_finish(other_pause, &[], &Default::default(), cx);
+                    assert!(pane.file_editor_reread_seq() > initial_sequence);
+                })
         });
         cx.run_until_parked();
     }
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.ensure_file_editor_loaded(cx);
-            assert!(!pane.file_editor_loading());
-            assert!(pane.file_editor_error().is_none());
-            assert!(!pane.file_editor_dirty());
-            assert_eq!(
-                pane.file_editor_input.read(cx).text(),
-                "fn renamed_file() {}\n"
-            );
-            pane.file_editor_input.update(cx, |input, cx| {
-                input.replace_utf8_range(0..0, "// edit\n", cx)
-            });
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.ensure_file_editor_loaded(cx);
+                assert!(!pane.file_editor_loading());
+                assert!(pane.file_editor_error().is_none());
+                assert!(!pane.file_editor_dirty());
+                assert_eq!(
+                    pane.file_editor_input.read(cx).text(),
+                    "fn renamed_file() {}\n"
+                );
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "// edit\n", cx)
+                });
+            })
     });
     cx.run_until_parked();
     cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .clone()
             .update(app, |pane, cx| pane.save_file_editor_buffer(cx))
     });
@@ -506,7 +515,7 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
         cx.update(|_, app| {
             view.update(app, |view, cx| {
                 push_test_state(view, editor_state(repo_id, &workdir, Path::new(name)), cx);
-                view.main_pane.update(cx, |pane, cx| {
+                view.diff_renderer.update(cx, |pane, cx| {
                     pane.auto_save_file_edits = false;
                     pane.ensure_file_editor_loaded(cx);
                 });
@@ -515,11 +524,14 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
         cx.run_until_parked();
         if name == "a.txt" || dirty_destination {
             cx.update(|_, app| {
-                view.read(app).main_pane.clone().update(app, |pane, cx| {
-                    pane.file_editor_input.update(cx, |input, cx| {
-                        input.replace_utf8_range(0..0, "unsaved ", cx);
-                    });
-                })
+                view.read(app)
+                    .diff_renderer
+                    .clone()
+                    .update(app, |pane, cx| {
+                        pane.file_editor_input.update(cx, |input, cx| {
+                            input.replace_utf8_range(0..0, "unsaved ", cx);
+                        });
+                    })
             });
             cx.run_until_parked();
         }
@@ -536,31 +548,37 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
         },
     );
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.filesystem_pause(request.id, cx);
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.filesystem_pause(request.id, cx);
+            })
     });
     let result = Filesystem::default().execute(request, |_| {});
     assert!(result.succeeded(), "{:?}", result.items);
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
-            assert_eq!(pane.file_editor_dirty(), dirty_destination);
-            assert_eq!(
-                pane.file_editor_input.read(cx).text(),
-                if dirty_destination {
-                    "unsaved destination\n"
-                } else {
-                    "destination\n"
-                }
-            );
-            assert_eq!(
-                pane.file_editor_disk_versions()
-                    .get(&DocumentIdentity(destination.clone())),
-                Some(&destination_version),
-                "the active destination must keep its own baseline"
-            );
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
+                assert_eq!(pane.file_editor_dirty(), dirty_destination);
+                assert_eq!(
+                    pane.file_editor_input.read(cx).text(),
+                    if dirty_destination {
+                        "unsaved destination\n"
+                    } else {
+                        "destination\n"
+                    }
+                );
+                assert_eq!(
+                    pane.file_editor_disk_versions()
+                        .get(&DocumentIdentity(destination.clone())),
+                    Some(&destination_version),
+                    "the active destination must keep its own baseline"
+                );
+            })
     });
     cx.run_until_parked();
     cx.update(|_, app| {
@@ -593,7 +611,7 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
             "the recovered source must use its moved disk baseline"
         );
         assert_eq!(
-            view.read(app).main_pane.read(app).file_editor_dirty(),
+            view.read(app).diff_renderer.read(app).file_editor_dirty(),
             dirty_destination
         );
     });
@@ -629,7 +647,7 @@ fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::
                 ),
                 cx,
             );
-            view.main_pane.update(cx, |pane, cx| {
+            view.diff_renderer.update(cx, |pane, cx| {
                 pane.auto_save_file_edits = false;
                 pane.ensure_file_editor_loaded(cx);
             });
@@ -637,25 +655,28 @@ fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::
     });
     cx.run_until_parked();
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert_eq!(
-                pane.file_editor_input.read(cx).text(),
-                "external contents\n"
-            );
-            pane.file_editor_input
-                .update(cx, |input, cx| input.replace_utf8_range(0..0, "edit ", cx));
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert_eq!(
+                    pane.file_editor_input.read(cx).text(),
+                    "external contents\n"
+                );
+                pane.file_editor_input
+                    .update(cx, |input, cx| input.replace_utf8_range(0..0, "edit ", cx));
+            })
     });
     cx.run_until_parked();
     cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .clone()
             .update(app, |pane, cx| pane.save_file_editor_buffer(cx))
     });
     finish_editor_saves(&view, cx);
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.file_editor_dirty());
         assert!(pane.file_editor_error().is_some());
         assert_eq!(
@@ -686,7 +707,7 @@ async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui:
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -694,7 +715,7 @@ async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui:
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_file_editor_active());
         assert_eq!(
             pane.file_editor_input.read(app).text(),
@@ -728,18 +749,21 @@ fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             push_test_state(view, editor_state(repo_id, directory.path(), &relative), cx);
-            view.main_pane
+            view.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         })
     });
     cx.run_until_parked();
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.auto_save_file_edits = true;
-            pane.file_editor_input.update(cx, |input, cx| {
-                input.replace_utf8_range(0..input.text().len(), "unsaved edits", cx);
-            });
-        })
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.auto_save_file_edits = true;
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..input.text().len(), "unsaved edits", cx);
+                });
+            })
     });
     cx.run_until_parked();
     // A directory at the save path fails even for privileged test users.
@@ -747,22 +771,22 @@ fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
     std::fs::create_dir(&path).unwrap();
     cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .clone()
             .update(app, |pane, cx| pane.save_file_editor_buffer(cx))
     });
     finish_editor_saves(&view, cx);
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            assert!(view.main_pane.read(cx).file_editor_is_dirty());
-            assert!(view.main_pane.read(cx).file_editor_error().is_some());
+            assert!(view.diff_renderer.read(cx).file_editor_is_dirty());
+            assert!(view.diff_renderer.read(cx).file_editor_error().is_some());
             assert!(view.request_unsaved_file_edits_prompt(UnsavedFileEditsAction::QuitApp, cx));
             assert!(
                 view.pending_unsaved_file_edits_prompt.is_some(),
                 "a failed autosave must allow Save/Discard"
             );
             assert!(
-                view.main_pane
+                view.diff_renderer
                     .read(cx)
                     .editor_documents
                     .pending()
@@ -770,7 +794,11 @@ fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
                 "closing must not silently retry the failed write"
             );
             assert_eq!(
-                view.main_pane.read(cx).file_editor_input.read(cx).text(),
+                view.diff_renderer
+                    .read(cx)
+                    .file_editor_input
+                    .read(cx)
+                    .text(),
                 "unsaved edits"
             );
         })
@@ -812,7 +840,7 @@ fn discarding_an_inactive_pending_save_never_restores_empty_edits(cx: &mut gpui:
     for path in [first, second] {
         std::fs::write(workdir.join(path), "original").unwrap();
     }
-    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             push_test_state(view, editor_state(repo, &workdir, first), cx)
@@ -884,7 +912,7 @@ fn a_save_receipt_before_the_discard_read_cannot_turn_the_placeholder_into_an_ed
     let workdir = directory.path().canonicalize().unwrap();
     let path = Path::new("file.txt");
     std::fs::write(workdir.join(path), "original").unwrap();
-    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             push_test_state(view, editor_state(RepoId(1944), &workdir, path), cx)
@@ -913,7 +941,7 @@ fn a_save_receipt_before_the_discard_read_cannot_turn_the_placeholder_into_an_ed
                 .operation;
             pane.discard_file_editor_buffer(cx);
             let generation = pane.file_editor_reread_seq();
-            let mut state = (*pane.store.snapshot()).clone();
+            let mut state = (*pane.store.snapshot().expect("window store")).clone();
             state.filesystem.completed.push_back(OperationResult {
                 id: operation,
                 saved_version: None,
@@ -967,7 +995,7 @@ fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: boo
     for relative in [&first, &second] {
         std::fs::write(workdir.join(relative), "original").unwrap();
     }
-    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
     let pauses = [
         gitcomet_core::filesystem::OperationId::allocate(),
         gitcomet_core::filesystem::OperationId::allocate(),
@@ -1102,13 +1130,13 @@ fn oversized_repository_editor_files_fail_without_capturing_a_baseline(
                 ),
                 cx,
             );
-            view.main_pane
+            view.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         })
     });
     cx.run_until_parked();
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_error()
                 .as_ref()
@@ -1135,7 +1163,7 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -1143,7 +1171,7 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(!pane.file_editor_is_dirty());
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "// header\n", cx);
@@ -1154,7 +1182,7 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.file_editor_is_dirty(), "typing marks the buffer dirty");
         assert_eq!(
             pane.unsaved_file_edit_labels(),
@@ -1165,14 +1193,14 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.save_file_editor_buffer(cx));
         });
     });
 
     finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.file_editor_is_dirty(),
             "a confirmed save settles the buffer"
@@ -1205,7 +1233,7 @@ async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui:
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &first), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -1214,7 +1242,7 @@ async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui:
     // Edit the first file without saving...
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "// edited\n", cx);
                 });
@@ -1227,14 +1255,14 @@ async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui:
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &second), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "fn second() {}\n");
         assert_eq!(
             pane.unsaved_file_edit_labels(),
@@ -1247,14 +1275,14 @@ async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui:
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &first), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.file_editor_input.read(app).text(),
             "// edited\nfn first() {}\n",
@@ -1288,14 +1316,14 @@ async fn file_editor_refuses_a_binary_file(cx: &mut gpui::TestAppContext) {
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_error().is_some(),
             "a binary file must surface an error instead of an empty buffer"
@@ -1522,11 +1550,11 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     let file_rel = std::path::PathBuf::from("main.rs");
     std::fs::write(workdir.join(&file_rel), "fn main() {}\n").expect("write fixture");
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     let press = |cx: &mut gpui::VisualTestContext, chord: &str| -> bool {
         let keystroke = gpui::Keystroke::parse(chord).expect("valid chord");
         cx.update(|window, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 pane.handle_diff_shortcut(&keystroke, window, cx)
             })
         })
@@ -1535,7 +1563,7 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -1555,20 +1583,20 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     // Ctrl/Cmd+S only saves while the buffer has focus; with the editor
     // unfocused it stays out of the way of the staging shortcut.
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             let handle = pane.file_editor_input.read(cx).focus_handle().clone();
             window.focus(&handle, cx);
         });
     });
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// edited\n", cx);
             });
         });
     });
     cx.run_until_parked();
-    assert!(cx.update(|_window, app| main_pane.read(app).file_editor_is_dirty()));
+    assert!(cx.update(|_window, app| diff_renderer.read(app).file_editor_is_dirty()));
 
     assert!(
         press(cx, "secondary-s"),
@@ -1576,7 +1604,7 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     );
     finish_editor_saves(&view, cx);
     assert!(
-        cx.update(|_window, app| !main_pane.read(app).file_editor_is_dirty()),
+        cx.update(|_window, app| !diff_renderer.read(app).file_editor_is_dirty()),
         "the buffer settles once saved"
     );
     cx.update(|_window, app| {
@@ -1586,7 +1614,7 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     });
     cx.run_until_parked();
     assert!(
-        cx.update(|_window, app| !main_pane.read(app).is_file_editor_active()),
+        cx.update(|_window, app| !diff_renderer.read(app).is_file_editor_active()),
         "saving from the editor returns to the view that opened it"
     );
 
@@ -1615,7 +1643,7 @@ async fn typing_and_undoing_returns_the_buffer_to_clean(cx: &mut gpui::TestAppCo
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -1625,7 +1653,7 @@ async fn typing_and_undoing_returns_the_buffer_to_clean(cx: &mut gpui::TestAppCo
     let middle = contents.len() / 2;
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(middle..middle, "xyz", cx);
                 });
@@ -1634,13 +1662,17 @@ async fn typing_and_undoing_returns_the_buffer_to_clean(cx: &mut gpui::TestAppCo
     });
     cx.run_until_parked();
     assert!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).file_editor_is_dirty()),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .file_editor_is_dirty()),
         "the inserted text must read as modified"
     );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(middle..middle + 3, "", cx);
                 });
@@ -1650,7 +1682,7 @@ async fn typing_and_undoing_returns_the_buffer_to_clean(cx: &mut gpui::TestAppCo
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), contents);
         assert!(
             !pane.file_editor_is_dirty(),
@@ -1686,17 +1718,17 @@ async fn a_pending_read_does_not_land_in_another_repos_buffer(cx: &mut gpui::Tes
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_a, &workdir_a, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
             push_test_state(this, editor_state(repo_b, &workdir_b, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.file_editor_input.read(app).text(),
             "fn from_b() {}\n",
@@ -1734,7 +1766,7 @@ async fn returning_to_a_stashed_buffer_measures_it_against_its_own_file(
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 push_test_state(this, editor_state(repo_id, &workdir, path), cx);
-                this.main_pane
+                this.diff_renderer
                     .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
             });
         });
@@ -1744,7 +1776,7 @@ async fn returning_to_a_stashed_buffer_measures_it_against_its_own_file(
     open(cx, &first);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "// edited\n", cx);
                 });
@@ -1759,7 +1791,7 @@ async fn returning_to_a_stashed_buffer_measures_it_against_its_own_file(
     // Undoing the edit by hand must return the restored buffer to clean.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..10, "", cx);
                 });
@@ -1769,7 +1801,7 @@ async fn returning_to_a_stashed_buffer_measures_it_against_its_own_file(
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_input.read(app).text(), "fn first() {}\n");
         assert!(
             !pane.file_editor_is_dirty(),
@@ -1805,14 +1837,14 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.is_markdown_preview_active(),
             "the editor is not a rendered preview, whatever the toggle said before"
@@ -1893,7 +1925,7 @@ async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpu
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -1903,9 +1935,9 @@ async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpu
     let target_start = contents
         .find(target)
         .expect("actual syntax.rs should retain the allocator funnel");
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             assert!(
                 pane.file_editor_live_syntax.is_some(),
                 "the large Rust file should have a live syntax tree"
@@ -1918,7 +1950,7 @@ async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpu
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(
             pane.file_editor_occurrences.iter().any(
                 |range| range.start == target_start && range.end == target_start + target.len()
@@ -1984,7 +2016,7 @@ fn open_annotated_editor(
             repo.diff_state.blame =
                 gitcomet_state::model::Loadable::Ready(std::sync::Arc::new(editor_blame_lines()));
             push_test_state(this, state, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.set_annotate_enabled(true, cx);
                 pane.ensure_file_editor_loaded(cx);
             });
@@ -2012,7 +2044,7 @@ async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppCon
     open_annotated_editor(cx, &view, repo_id, &workdir, &file_rel);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_file_editor_active());
         assert!(
             pane.annotation_active(),
@@ -2093,7 +2125,7 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
 
     let offset = editor_annotate_handle_offset(cx);
     let column_width = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.annotate_column_width_px(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
     });
     assert!(
@@ -2105,7 +2137,7 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
     drag_annotate_handle(cx, 60.0);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.annotate_column_width, 360.0,
             "dragging 60px right at 100% ui scale must widen the column by 60"
@@ -2127,7 +2159,7 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
     drag_annotate_handle(cx, 1_000.0);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).annotate_column_width,
+            view.read(app).diff_renderer.read(app).annotate_column_width,
             crate::view::rows::DIFF_ANNOTATION_MAX_WIDTH_PX,
             "the drag must clamp at the maximum column width"
         );
@@ -2137,7 +2169,7 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
     drag_annotate_handle(cx, -1_000.0);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).annotate_column_width,
+            view.read(app).diff_renderer.read(app).annotate_column_width,
             crate::view::rows::DIFF_ANNOTATION_MIN_WIDTH_PX,
             "the drag must clamp at the minimum column width"
         );
@@ -2167,7 +2199,7 @@ async fn annotate_resize_handle_waits_for_the_column_it_resizes(cx: &mut gpui::T
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.set_annotate_enabled(true, cx);
                 pane.ensure_file_editor_loaded(cx);
             });
@@ -2177,7 +2209,7 @@ async fn annotate_resize_handle_waits_for_the_column_it_resizes(cx: &mut gpui::T
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.annotation_active(),
             "the toggle is on and the target is blameable"
@@ -2221,7 +2253,7 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -2229,16 +2261,16 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
 
     // Driven on the pane directly: `set_diff_word_wrap` reaches back into the
     // root view, which cannot be updated from inside its own update.
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.set_diff_word_wrap(true, cx);
         });
         let _ = window.draw(app);
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_input.read(app).soft_wrap(),
             "the word-wrap preference has to reach the buffer, not just the diff"
@@ -2247,7 +2279,7 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
 
     // Turning it off puts the buffer back on content-width layout.
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.set_diff_word_wrap(false, cx);
         });
         let _ = window.draw(app);
@@ -2256,7 +2288,7 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
         assert!(
             !view
                 .read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .file_editor_input
                 .read(app)
@@ -2287,7 +2319,7 @@ async fn file_editor_mounts_a_vertical_scrollbar(cx: &mut gpui::TestAppContext) 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -2301,7 +2333,7 @@ async fn file_editor_mounts_a_vertical_scrollbar(cx: &mut gpui::TestAppContext) 
         "edit mode should mount its vertical scrollbar beside the scroll surface"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_scroll.max_offset().y > px(0.0),
             "the long editor fixture should expose a vertical scroll range"
@@ -2331,7 +2363,7 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
     std::fs::write(workdir.join(&file_rel), contents).expect("write fixture");
     let absolute = workdir.join(&file_rel);
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut state = editor_state(repo_id, &workdir, &file_rel);
@@ -2342,7 +2374,7 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
     });
 
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, _cx| {
+        diff_renderer.update(app, |pane, _cx| {
             assert!(
                 pane.content_preview_is_picture(&absolute),
                 "rendered is the default for an SVG, and rendered means the picture"
@@ -2364,14 +2396,14 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
             let mut state = editor_state(repo_id, &workdir, &file_rel);
             Arc::make_mut(&mut state).repos[0].diff_state.edit_mode = true;
             push_test_state(this, state, cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_file_editor_active());
         assert_eq!(pane.file_editor_input.read(app).text(), contents);
         assert_eq!(
@@ -2385,7 +2417,7 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
 
 #[test]
 fn a_wrapped_line_owns_its_gutter_rows_and_numbers_only_the_first() {
-    use crate::view::panes::main::file_editor_line_for_visual_row;
+    use crate::view::panes::diff::file_editor_line_for_visual_row;
 
     // Line 0 wraps to 3 rows, line 1 to 1, line 2 to 2 — so the gutter rows are
     // [0,0,0, 1, 2,2] and the number goes on the first row of each block.
@@ -2437,15 +2469,15 @@ async fn the_gutter_projects_through_wrap_so_numbers_track_their_lines(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.set_diff_word_wrap(true, cx);
         });
         let _ = window.draw(app);
@@ -2459,7 +2491,7 @@ async fn the_gutter_projects_through_wrap_so_numbers_track_their_lines(
     });
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         let starts = &pane.file_editor_wrap_row_starts;
         if starts.is_empty() {
             // The headless text system reports every glyph identically, so the
@@ -2527,15 +2559,15 @@ async fn the_load_placeholder_is_never_saved_over_the_file(cx: &mut gpui::TestAp
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             // Exactly the mid-load state: the key names this file, the buffer is
             // the blank placeholder, and a stale dirty flag says it is unsaved.
             pane.file_editor_input.update(cx, |input, cx| {
@@ -2588,15 +2620,15 @@ async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// header\n", cx);
                 input.set_cursor_offset(5, cx);
@@ -2609,7 +2641,7 @@ async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext
     // was never re-seated — and therefore that the undo stack, which lives on
     // the widget and is cleared by a re-seat, survived too.
     let model_id_before = cx.update(|_window, app| {
-        main_pane
+        diff_renderer
             .read(app)
             .file_editor_input
             .read(app)
@@ -2618,18 +2650,18 @@ async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext
     });
 
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| pane.save_file_editor_buffer(cx));
+        diff_renderer.update(app, |pane, cx| pane.save_file_editor_buffer(cx));
     });
     finish_editor_saves(&view, cx);
     // Let the save land and the follow-up re-read run to completion.
     cx.run_until_parked();
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        diff_renderer.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx));
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert_eq!(
             pane.file_editor_input.read(app).cursor_offset(),
             5,
@@ -2668,15 +2700,15 @@ async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// edited\n", cx);
             });
@@ -2686,11 +2718,14 @@ async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
 
     // Leaving the file stashes the edit, then the repo tab closes under it.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| pane.stash_current_file_editor_buffer(cx));
+        diff_renderer.update(app, |pane, cx| pane.stash_current_file_editor_buffer(cx));
     });
     cx.update(|_window, app| {
         assert!(
-            !main_pane.read(app).unsaved_file_edit_labels().is_empty(),
+            !diff_renderer
+                .read(app)
+                .unsaved_file_edit_labels()
+                .is_empty(),
             "the stashed edit is unsaved while its repo is still open"
         );
         view.update(app, |this, cx| {
@@ -2702,7 +2737,7 @@ async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(
             pane.unsaved_file_edit_labels().is_empty(),
             "a buffer with no repo left to save it into must not block the quit dialog"
@@ -2746,7 +2781,7 @@ async fn review_regression_moving_a_repository_prompts_before_detaching_dirty_ed
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &first), cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.auto_save_file_edits = false;
                 pane.ensure_file_editor_loaded(cx);
             });
@@ -2754,9 +2789,9 @@ async fn review_regression_moving_a_repository_prompts_before_detaching_dirty_ed
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// unsaved a\n", cx);
             });
@@ -2766,13 +2801,13 @@ async fn review_regression_moving_a_repository_prompts_before_detaching_dirty_ed
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &second), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// unsaved b\n", cx);
             });
@@ -2817,7 +2852,7 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file), cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.auto_save_file_edits = false;
                 pane.ensure_file_editor_loaded(cx);
             });
@@ -2826,9 +2861,9 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// must survive\n", cx);
             });
@@ -2845,7 +2880,7 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
                 "a move within the same workspace must not offer to discard edits"
             );
             assert_eq!(
-                this.main_pane
+                this.diff_renderer
                     .read(cx)
                     .unsaved_file_edit_labels_for_repo(repo_id),
                 vec![SharedString::from("main.rs")],
@@ -2887,16 +2922,16 @@ async fn review_regression_followup_saving_before_a_move_only_writes_the_moved_r
                 ),
                 cx,
             );
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.auto_save_file_edits = false;
                 pane.ensure_file_editor_loaded(cx);
             });
         });
     });
     cx.run_until_parked();
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// unsaved A\n", cx);
             });
@@ -2915,13 +2950,13 @@ async fn review_regression_followup_saving_before_a_move_only_writes_the_moved_r
                 ),
                 cx,
             );
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// unsaved B\n", cx);
             });
@@ -2938,14 +2973,14 @@ async fn review_regression_followup_saving_before_a_move_only_writes_the_moved_r
         };
         view.update(app, |this, cx| {
             assert_eq!(
-                this.main_pane
+                this.diff_renderer
                     .read(cx)
                     .unsaved_file_edit_labels_for_repo(first_id)
                     .len(),
                 1
             );
             assert_eq!(
-                this.main_pane
+                this.diff_renderer
                     .read(cx)
                     .unsaved_file_edit_labels_for_repo(second_id)
                     .len(),
@@ -2954,7 +2989,7 @@ async fn review_regression_followup_saving_before_a_move_only_writes_the_moved_r
             this.resolve_unsaved_file_edits(action, true, cx);
             assert!(
                 !this
-                    .main_pane
+                    .diff_renderer
                     .read(cx)
                     .unsaved_file_edit_labels_for_repo(second_id)
                     .is_empty(),
@@ -2978,7 +3013,7 @@ fn request_action_with_dirty_auto_saved_buffer(
     let window_id = cx.update(|window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, state, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.auto_save_file_edits = true;
                 pane.ensure_file_editor_loaded(cx);
             });
@@ -2987,9 +3022,9 @@ fn request_action_with_dirty_auto_saved_buffer(
         window.window_handle().window_id()
     });
     cx.run_until_parked();
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// edited\n", cx);
             });
@@ -3005,7 +3040,7 @@ fn request_action_with_dirty_auto_saved_buffer(
             );
             assert!(
                 !this
-                    .main_pane
+                    .diff_renderer
                     .read(cx)
                     .editor_documents
                     .pending()
@@ -3121,7 +3156,7 @@ fn check_move_waits_for_existing_saves(
         cx.update(|_, app| {
             view.update(app, |view, cx| {
                 push_test_state(view, editor_state(repo_id, &workdir, path), cx);
-                view.main_pane
+                view.diff_renderer
                     .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
             })
         });
@@ -3131,14 +3166,14 @@ fn check_move_waits_for_existing_saves(
         std::fs::write(workdir.join(path), "original\n").unwrap();
         cx.update(|_, app| {
             view.update(app, |view, cx| {
-                view.main_pane
+                view.diff_renderer
                     .update(cx, |pane, _| pane.auto_save_file_edits = false);
             })
         });
         open(cx, path);
         cx.update(|_, app| {
             view.update(app, |view, cx| {
-                view.main_pane.update(cx, |pane, cx| {
+                view.diff_renderer.update(cx, |pane, cx| {
                     pane.file_editor_input.update(cx, |input, cx| {
                         input.replace_utf8_range(0..0, "edited\n", cx);
                     });
@@ -3154,7 +3189,7 @@ fn check_move_waits_for_existing_saves(
     let dispatch = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_, app| {
             view.update(app, |view, cx| {
-                view.main_pane.update(cx, |pane, cx| {
+                view.diff_renderer.update(cx, |pane, cx| {
                     if auto_save {
                         pane.auto_save_file_edits = true;
                         assert!(pane.flush_file_editor_buffer(cx));
@@ -3171,7 +3206,7 @@ fn check_move_waits_for_existing_saves(
         dispatch(cx);
     }
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.editor_documents.pending().len(), 2);
         assert_eq!(
             pane.unsaved_file_edit_keys().len(),
@@ -3214,7 +3249,7 @@ fn check_move_waits_for_existing_saves(
         assert_eq!(owners.len(), 1);
         assert_eq!(owners[0] == window_id, !succeeds);
         if !succeeds {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert!(pane.file_editor_dirty());
             assert_eq!(
                 pane.file_editor_input.read(app).text(),
@@ -3369,10 +3404,15 @@ fn check_discard_after_save_timeout(
         host.update(app, |host, cx| {
             view.update(cx, |view, cx| {
                 view.resolve_unsaved_file_edits(action.clone(), false, cx);
-                assert!(view.main_pane.read(cx).unsaved_file_edit_keys().is_empty());
+                assert!(
+                    view.diff_renderer
+                        .read(cx)
+                        .unsaved_file_edit_keys()
+                        .is_empty()
+                );
                 assert!(
                     !view
-                        .main_pane
+                        .diff_renderer
                         .read(cx)
                         .editor_documents
                         .pending()
@@ -3528,7 +3568,7 @@ async fn review_regression_confirmed_failed_save_aborts_repository_move(
         crate::app::install_app_shortcuts_for_test(app, Arc::clone(&backend));
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file), cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.auto_save_file_edits = false;
                 pane.ensure_file_editor_loaded(cx);
             });
@@ -3538,9 +3578,9 @@ async fn review_regression_confirmed_failed_save_aborts_repository_move(
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// unsaved\n", cx);
             });
@@ -3578,7 +3618,7 @@ async fn review_regression_confirmed_failed_save_aborts_repository_move(
     );
     cx.update(|_window, app| {
         assert!(
-            !main_pane
+            !diff_renderer
                 .read(app)
                 .unsaved_file_edit_labels_for_repo(repo_id)
                 .is_empty(),
@@ -3658,16 +3698,16 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
         assert_eq!(
-            main_pane.read(app).file_editor_first_dirty_line(),
+            diff_renderer.read(app).file_editor_first_dirty_line(),
             None,
             "a buffer that matches disk has no watermark"
         );
@@ -3676,7 +3716,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     // Type into line index 2 ("three").
     let at = contents.find("three").expect("fixture line");
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(at..at, "// ", cx);
             });
@@ -3685,7 +3725,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(pane.file_editor_is_dirty());
         assert_eq!(
             pane.file_editor_first_dirty_line(),
@@ -3696,7 +3736,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
 
     // An edit further down must not move the watermark back up...
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             let end = pane.file_editor_input.read(cx).text().len();
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(end..end, "six\n", cx);
@@ -3706,7 +3746,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            main_pane.read(app).file_editor_first_dirty_line(),
+            diff_renderer.read(app).file_editor_first_dirty_line(),
             Some(2),
             "a later edit must not raise the watermark"
         );
@@ -3714,7 +3754,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
 
     // ...but an edit above it must lower it.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// header\n", cx);
             });
@@ -3723,7 +3763,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            main_pane.read(app).file_editor_first_dirty_line(),
+            diff_renderer.read(app).file_editor_first_dirty_line(),
             Some(0),
             "an earlier edit lowers the watermark"
         );
@@ -3731,11 +3771,11 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
 
     // Saving makes every line attributable again.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| pane.save_file_editor_buffer(cx));
+        diff_renderer.update(app, |pane, cx| pane.save_file_editor_buffer(cx));
     });
     finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(!pane.file_editor_is_dirty());
         assert_eq!(pane.file_editor_first_dirty_line(), None);
     });
@@ -3760,16 +3800,16 @@ async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestApp
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     let at = contents.find("three").expect("fixture line");
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(at..at, "// ", cx);
             });
@@ -3780,7 +3820,7 @@ async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestApp
     // Leave the file and come back: the watermark must not be rebuilt from
     // nothing, or the restored buffer would blank its whole annotation column.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.stash_current_file_editor_buffer(cx);
             pane.editor_documents.deactivate();
             pane.ensure_file_editor_loaded(cx);
@@ -3789,7 +3829,7 @@ async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestApp
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(pane.file_editor_is_dirty(), "the stashed edit came back");
         assert_eq!(
             pane.file_editor_first_dirty_line(),
@@ -3819,16 +3859,16 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &first), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
         assert!(
-            main_pane
+            diff_renderer
                 .read(app)
                 .unsaved_file_edit_paths(repo_id)
                 .is_empty(),
@@ -3838,7 +3878,7 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
 
     // Edit `a.rs`, then move to `b.rs` so the first buffer goes to the stash.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// a\n", cx);
             });
@@ -3848,7 +3888,7 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &second), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -3856,7 +3896,7 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
 
     // Now edit `b.rs` too: one stashed dirty buffer and one on screen.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// b\n", cx);
             });
@@ -3865,7 +3905,7 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert_eq!(
             pane.unsaved_file_edit_paths(repo_id),
             vec![first.clone(), second.clone()],
@@ -3881,13 +3921,13 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
 
     // Discarding the *stashed* one must work without it being on screen.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.discard_file_edits_for(repo_id, &first, cx);
         });
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert_eq!(
             pane.unsaved_file_edit_paths(repo_id),
             vec![second.clone()],
@@ -3902,13 +3942,13 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
 
     // And discarding the on-screen one re-reads it from disk.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.discard_file_edits_for(repo_id, &second, cx);
         });
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(pane.unsaved_file_edit_paths(repo_id).is_empty());
         assert!(!pane.file_editor_is_dirty());
         assert_eq!(
@@ -3947,15 +3987,15 @@ fn assert_editor_renders_the_engines_highlights(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert_eq!(
             pane.file_editor_input.read(app).text(),
             contents,
@@ -3980,7 +4020,7 @@ fn assert_editor_renders_the_engines_highlights(
             expected.len()
         );
 
-        let rendered = main_pane.update(app, |pane, cx| {
+        let rendered = diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, _| {
                 input.debug_effective_highlights_for_range(0..contents.len())
             })
@@ -4096,15 +4136,15 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// scratch\n", cx);
             });
@@ -4112,11 +4152,11 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        assert!(main_pane.read(app).file_editor_is_dirty());
+        assert!(diff_renderer.read(app).file_editor_is_dirty());
     });
 
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.discard_file_editor_buffer_and_exit(window, cx);
         });
     });
@@ -4131,7 +4171,7 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(
             !pane.file_editor_is_dirty(),
             "the buffer is thrown away, not stashed"
@@ -4176,15 +4216,15 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
                     workdir.clone(),
                 )),
             );
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// saved\n", cx);
             });
@@ -4193,7 +4233,7 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
     cx.run_until_parked();
 
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.save_file_editor_buffer_and_exit(window, cx);
         });
     });
@@ -4208,7 +4248,7 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(!pane.file_editor_is_dirty());
         assert!(
             !pane.is_file_editor_active(),
@@ -4270,9 +4310,9 @@ async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(cx: &mut gpu
     .repeat(8);
     std::fs::write(workdir.join(&second), &second_contents).expect("write second");
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, _cx| {
+        diff_renderer.update(app, |pane, _cx| {
             pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                 foreground_parse: std::time::Duration::ZERO,
             });
@@ -4284,7 +4324,7 @@ async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(cx: &mut gpu
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 push_test_state(this, editor_state(repo_id, &workdir, path), cx);
-                this.main_pane
+                this.diff_renderer
                     .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
             });
         });
@@ -4292,13 +4332,13 @@ async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(cx: &mut gpu
     }
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert_eq!(
             pane.file_editor_input.read(app).text(),
             second_contents,
             "the second file must be the one in the buffer"
         );
-        let rendered = main_pane.update(app, |pane, cx| {
+        let rendered = diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, _| {
                 input.debug_effective_highlights_for_range(0..second_contents.len())
             })
@@ -4337,28 +4377,28 @@ async fn switching_files_mid_load_never_stashes_the_blank_placeholder(
     std::fs::write(workdir.join(&first), "fn first() {}\n").expect("write first");
     std::fs::write(workdir.join(&second), "fn second() {}\n").expect("write second");
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
 
     // Open the first file, then switch away *without* letting the read land, so
     // the flush sees the blanked buffer.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &first), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &second), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(
             pane.unsaved_file_edit_paths(repo_id).is_empty(),
             "nothing was edited, so nothing may be reported unsaved: {:?}",
@@ -4370,7 +4410,7 @@ async fn switching_files_mid_load_never_stashes_the_blank_placeholder(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &first), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -4378,7 +4418,7 @@ async fn switching_files_mid_load_never_stashes_the_blank_placeholder(
 
     cx.update(|_window, app| {
         assert_eq!(
-            main_pane.read(app).file_editor_input.read(app).text(),
+            diff_renderer.read(app).file_editor_input.read(app).text(),
             "fn first() {}\n",
             "returning to the file must show the file, not a stashed blank"
         );
@@ -4403,7 +4443,7 @@ fn seed_editor(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -4430,7 +4470,7 @@ fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
     let below_eof = point(viewport.center().x, viewport.bottom() - px(24.0));
     let target = point(viewport.left() + px(28.0), viewport.top() + px(10.0));
     let target_offset = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let input = pane.file_editor_input.read(app);
         assert_eq!(input.offset_for_position(below_eof), contents.len());
         input.offset_for_position(target)
@@ -4453,7 +4493,7 @@ fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
     );
 
     cx.update(|window, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.set_selected_range(0..2, false, window, cx)
@@ -4471,7 +4511,7 @@ fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
         "right-clicking below EOF should open the normal text-input menu"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.file_editor_scroll.max_offset().y,
             px(0.0),
@@ -4491,7 +4531,7 @@ fn search_the_editor_for(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(
                     pane.open_search_for_active_view(window, cx),
                     "the editor is showing a working-tree file, so search must open over it"
@@ -4505,7 +4545,7 @@ fn search_the_editor_for(
     // Typing schedules a debounced recompute; run it now rather than on a timer.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_search_recompute_matches_and_scroll_to_first();
             });
         });
@@ -4519,7 +4559,7 @@ fn editor_search_matches(
 ) -> Vec<std::ops::Range<usize>> {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .file_editor_search_matches
             .clone()
@@ -4531,8 +4571,8 @@ fn editor_selected_range(
     cx: &mut gpui::VisualTestContext,
 ) -> std::ops::Range<usize> {
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input
                 .update(cx, |input, _| input.selected_range())
         })
@@ -4546,7 +4586,7 @@ fn set_editor_text(
 ) {
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input
                     .update(cx, |input, cx| input.set_text(text, cx));
             });
@@ -4582,7 +4622,7 @@ async fn file_editor_search_counts_every_occurrence_in_the_live_buffer(
         assert_eq!(&contents[range.clone()], "needle");
     }
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches,
             vec![0, 0, 0, 2],
@@ -4662,15 +4702,15 @@ async fn file_editor_search_selects_the_current_match_and_washes_the_rest(
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let wash = main_pane
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let wash = diff_renderer
             .read(app)
             .theme
             .colors
             .editor
             .search_match_background
             .into_color();
-        let highlights = main_pane.update(app, |pane, cx| {
+        let highlights = diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, _| {
                 input.debug_effective_highlights_for_range(0..contents.len())
             })
@@ -4719,7 +4759,7 @@ async fn file_editor_search_next_match_steps_within_a_line(cx: &mut gpui::TestAp
         walked.push(editor_selected_range(&view, cx));
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane
+                this.diff_renderer
                     .update(cx, |pane, _cx| pane.diff_search_next_match());
             });
         });
@@ -4770,7 +4810,7 @@ async fn file_editor_search_keeps_navigation_relative_to_the_match_before_edits(
     .enumerate()
     {
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.clone();
+            let pane = view.read(app).diff_renderer.clone();
             pane.update(app, |pane, cx| {
                 pane.diff_search_match_ix = Some(current);
                 for edit in 0..edits {
@@ -4790,7 +4830,7 @@ async fn file_editor_search_keeps_navigation_relative_to_the_match_before_edits(
         });
         draw_and_drain_test_window(cx);
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_eq!(pane.diff_search_matches, vec![0, 1, 2]);
             assert_eq!(pane.diff_search_match_ix, Some(expected), "case {case}");
             assert!(!pane.diff_search_worker_running);
@@ -4820,7 +4860,7 @@ async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::Tes
     let workdir = seed_editor(&view, cx, 985, "file_editor_search_scroll", &contents);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_scroll.max_offset().y > px(0.0),
             "the fixture must be taller than the viewport for this to mean anything"
@@ -4834,7 +4874,7 @@ async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::Tes
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_search_matches.len(), 1);
         // Asserting movement, not a pixel value: `#[gpui::test]` measures every
         // glyph identically, so exact offsets say nothing about the real app.
@@ -4873,7 +4913,7 @@ async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 // Wrapping would fold the long line into the pane and leave
                 // nothing to scroll sideways to.
                 pane.diff_word_wrap = false;
@@ -4884,7 +4924,7 @@ async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_editor_scroll.max_offset().x > px(0.0),
             "the fixture must overflow sideways for this to mean anything; max={:?}",
@@ -4899,7 +4939,7 @@ async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.file_editor_search_matches.len(), 1);
         assert!(
             pane.file_editor_scroll.offset().x < px(0.0),
@@ -4935,7 +4975,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
     cx.update(|window, app| {
         crate::app::bind_app_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let focus = pane.file_editor_input.read(cx).focus_handle();
                 window.focus(&focus, cx);
             });
@@ -4947,7 +4987,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
     draw_and_drain_test_window(cx);
 
     cx.update(|window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_active,
             "ctrl+f must open the search even with the buffer focused"
@@ -4965,7 +5005,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_search_recompute_matches_and_scroll_to_first();
             });
         });
@@ -4977,7 +5017,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
     cx.update(|_window, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .file_editor_input
                 .read(app)
@@ -4991,7 +5031,7 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
     draw_and_drain_test_window(cx);
 
     cx.update(|window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(!pane.diff_search_active, "escape closes the search");
         assert!(
             pane.file_editor_search_matches.is_empty(),
@@ -5033,7 +5073,7 @@ async fn recent_repository_shortcut_does_not_select_the_file_editor(cx: &mut gpu
         crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
         crate::app::bind_text_input_keys_for_test(app);
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.set_caret(6, cx);
                     let focus = input.focus_handle();
@@ -5093,30 +5133,30 @@ async fn file_editor_occurrences_do_not_depend_on_the_direction_of_approach(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
     cx.run_until_parked();
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
         assert!(
-            main_pane.read(app).file_editor_live_syntax.is_some(),
+            diff_renderer.read(app).file_editor_live_syntax.is_some(),
             "the Perl fixture should have a live syntax tree"
         );
     });
 
     let set_cursor = |cx: &mut gpui::VisualTestContext, offset: usize| {
         cx.update(|_window, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.set_cursor_offset(offset, cx);
                 });
             });
         });
         cx.run_until_parked();
-        cx.update(|_window, app| main_pane.read(app).file_editor_occurrences.clone())
+        cx.update(|_window, app| diff_renderer.read(app).file_editor_occurrences.clone())
     };
 
     let foo: Vec<std::ops::Range<usize>> = vec![6..10, 22..26];
@@ -5174,7 +5214,7 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
                 editor_state(repo_id, &workdir, Path::new("before.rs")),
                 cx,
             );
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });
     });
@@ -5184,7 +5224,7 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
         name: "after.rs".into(),
     });
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.clone();
+        let pane = view.read(app).diff_renderer.clone();
         pane.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// retained edit\n", cx);
@@ -5193,12 +5233,15 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
     });
     cx.run_until_parked();
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            assert!(pane.file_editor_dirty());
-            pane.filesystem_pause(request.id, cx);
-            pane.save_file_editor_buffer(cx);
-            assert!(pane.editor_documents.pending().is_empty());
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                assert!(pane.file_editor_dirty());
+                pane.filesystem_pause(request.id, cx);
+                pane.save_file_editor_buffer(cx);
+                assert!(pane.editor_documents.pending().is_empty());
+            });
     });
     let result = Filesystem::default().execute(request, |_| {});
     assert!(result.succeeded(), "{:?}", result.items);
@@ -5209,7 +5252,7 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
     );
     cx.update(|_, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
                 assert_eq!(
                     pane.file_editor_key(),
@@ -5231,7 +5274,7 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
     cx.run_until_parked();
     cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .clone()
             .update(app, |pane, cx| pane.save_file_editor_buffer(cx));
     });
@@ -5265,16 +5308,16 @@ async fn closing_a_repository_tab_prompts_for_its_unsaved_edits(cx: &mut gpui::T
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file), cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.auto_save_file_edits = false;
                 pane.ensure_file_editor_loaded(cx);
             });
         });
     });
     cx.run_until_parked();
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "// unsaved\n", cx);
             });
@@ -5315,7 +5358,7 @@ fn syntax_builds_coalesce_edits_and_file_switch_discards_obsolete_completion(
     cx.update(|_, app| {
         view.update(app, |view, cx| {
             push_test_state(view, editor_state(repo_id, &workdir, first), cx);
-            view.main_pane.update(cx, |pane, cx| {
+            view.diff_renderer.update(cx, |pane, cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -5326,7 +5369,7 @@ fn syntax_builds_coalesce_edits_and_file_switch_discards_obsolete_completion(
         });
     });
     cx.run_until_parked();
-    let pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let pane = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
     cx.run_until_parked();
     for _ in 0..3 {

@@ -29,7 +29,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.security.remote_markdown_images = next;
         });
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.set_remote_markdown_image_policy(next, cx);
         });
         self.schedule_ui_settings_persist(cx);
@@ -142,9 +142,16 @@ impl GitCometView {
         self.details_pane.update(cx, |pane, cx| {
             pane.apply_ui_scale_percent(previous_percent, percent, change_tracking_view, cx);
         });
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.apply_ui_scale_percent(previous_percent, percent, cx);
         });
+        self.main_pane
+            .read(cx)
+            .history_view
+            .clone()
+            .update(cx, |history, cx| {
+                history.apply_ui_scale_percent(previous_percent, percent, cx);
+            });
         self.reflog_pane.update(cx, |pane, cx| {
             pane.set_ui_scale_percent(percent, cx);
         });
@@ -216,8 +223,12 @@ impl GitCometView {
         let format = self.date_time_format;
         let timezone = self.timezone;
         let show_timezone = self.show_timezone;
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.set_date_time_format(format, cx);
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.history_view
+                .update(cx, |history, cx| history.set_date_time_format(format, cx));
             pane.set_timezone(timezone, cx);
             pane.set_show_timezone(show_timezone, cx);
         });
@@ -389,7 +400,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.diff.scroll_sync = next;
         });
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
@@ -407,7 +418,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.diff.view_mode = next;
         });
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
@@ -429,7 +440,7 @@ impl GitCometView {
         // column in Split (see `rows::diff`, `annotation_active() && is_left`)
         // just as it does in Inline, and the wrap widths already account for it
         // in both. Toggling it must leave the selected mode alone.
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_annotate_enabled(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
@@ -453,9 +464,9 @@ impl GitCometView {
         true
     }
 
-    // MainPaneView sometimes owns the active GPUI update when the diff-header
+    // DiffRenderer sometimes owns the active GPUI update when the diff-header
     // toggle is clicked, so syncing the root preference must not call back into
-    // `main_pane.update(...)`.
+    // `diff_renderer.update(...)`.
     pub(in crate::view) fn sync_diff_content_mode_from_pane(
         &mut self,
         next: DiffContentMode,
@@ -473,7 +484,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_content_mode(next, cx));
     }
 
@@ -513,7 +524,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
     }
 
@@ -554,7 +565,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane.update(cx, |pane, cx| {
+        self.diff_renderer.update(cx, |pane, cx| {
             pane.set_diff_reveal_whitespace_chars(next, cx)
         });
     }
@@ -591,7 +602,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_word_wrap(next, cx));
     }
 
@@ -606,7 +617,7 @@ impl GitCometView {
             preferences.diff.tab_size = next;
         });
         self.schedule_ui_settings_persist(cx);
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_default_tab_size(next, cx));
     }
 
@@ -646,7 +657,7 @@ impl GitCometView {
             return;
         }
 
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_diff_show_line_numbers(next, cx));
     }
 
@@ -680,7 +691,7 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.file_editing.auto_save = next;
         });
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_auto_save_file_edits(next, cx));
     }
 
@@ -794,7 +805,7 @@ impl GitCometView {
         });
         if show_tags
             && auto_fetch_tags_on_repo_activation
-            && let Some(repo) = self.main_pane.read(cx).active_repo()
+            && let Some(repo) = self.diff_renderer.read(cx).active_repo()
         {
             if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
                 self.store.dispatch(Msg::LoadTags { repo_id: repo.id });

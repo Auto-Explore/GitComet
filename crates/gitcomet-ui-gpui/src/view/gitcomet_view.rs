@@ -176,7 +176,7 @@ impl GitCometView {
         let restore_focus = window
             .focused(cx)
             .or_else(|| self.pre_palette_focus.clone());
-        let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        let fallback_focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
         let context = self.command_palette_context(cx);
         self.command_palette.update(cx, |palette, cx| {
             palette.open(restore_focus, fallback_focus, context, window, cx);
@@ -263,7 +263,7 @@ impl GitCometView {
         let restore_focus = window
             .focused(cx)
             .or_else(|| self.pre_palette_focus.clone());
-        let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        let fallback_focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
         let repo_id = self.active_repo_id();
         self.reveal_commit_dialog.update(cx, |dialog, cx| {
             dialog.open(restore_focus, fallback_focus, repo_id, window, cx);
@@ -1051,6 +1051,7 @@ impl GitCometView {
         self.active_context_menu_invoker = next.clone();
 
         let sidebar_pane = self.sidebar_pane.clone();
+        let diff_renderer = self.diff_renderer.clone();
         let main_pane = self.main_pane.clone();
         let details_pane = self.details_pane.clone();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
@@ -1059,6 +1060,9 @@ impl GitCometView {
 
         cx.defer(move |cx| {
             sidebar_pane.update(cx, |pane, cx| {
+                pane.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            diff_renderer.update(cx, |pane, cx| {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
             });
             main_pane.update(cx, |pane, cx| {
@@ -1365,11 +1369,31 @@ impl GitCometView {
         }
 
         let initial_state = store.snapshot();
+        let ui_model = cx.new(|cx| {
+            AppUiModel::new_with_preferences(
+                Arc::clone(&initial_state),
+                ui_preferences.clone(),
+                Arc::downgrade(&store),
+                cx,
+            )
+        });
+        let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
+        let diff_environment = super::hosted::environment::DiffPaneEnvironment {
+            services: super::panes::diff::services::DiffServices {
+                store: store.clone().into(),
+                commands: super::diff_commands::for_window(cx.weak_entity()),
+                documents: ui_model.read(cx).documents.clone(),
+                tooltip: tooltip_host.downgrade(),
+            },
+            preferences: super::hosted::environment::DiffPreferences::Window(ui_model.downgrade()),
+            window: window.window_handle(),
+        };
         let extension_window = super::extension_host::ExtensionWindow::new(
             window,
             &store,
             Arc::clone(&initial_state),
             initial_theme,
+            diff_environment.clone(),
             if view_mode == GitCometViewMode::FocusedMergetool {
                 gitcomet_core::identity::WindowKind::FocusedMergetool
             } else if view_mode == GitCometViewMode::FocusedDiff {
@@ -1412,14 +1436,6 @@ impl GitCometView {
         if !initial_state.repos.is_empty() {
             startup_repo_bootstrap_pending = false;
         }
-        let ui_model = cx.new(|cx| {
-            AppUiModel::new_with_preferences(
-                Arc::clone(&initial_state),
-                ui_preferences.clone(),
-                Arc::downgrade(&store),
-                cx,
-            )
-        });
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
@@ -1446,7 +1462,6 @@ impl GitCometView {
                 cx,
             )
         });
-        let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
         let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let history_refs_hover_host =
             cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
@@ -1490,24 +1505,34 @@ impl GitCometView {
             pane.set_expanded_branches_visible(!restored_sidebar_collapsed, cx);
             pane
         });
-        let main_pane = cx.new(|cx| {
-            MainPaneView::new(
-                Arc::clone(&store),
-                ui_model.clone(),
-                MainPaneInit {
+        let diff_renderer = cx.new(|cx| {
+            DiffRenderer::new(
+                super::panes::diff::input::DiffPaneInput::selected(initial_state.clone()),
+                &ui_preferences,
+                diff_environment.services.clone(),
+                DiffRendererInit {
                     theme: initial_theme,
                     view_mode,
                     focused_mergetool_labels,
                     focused_mergetool_exit_code: focused_mergetool_exit_code.clone(),
-                    root_view: weak_view.clone(),
-                    tooltip_host: tooltip_host.downgrade(),
                 },
                 window,
                 cx,
             )
         });
+        let main_pane = cx.new(|cx| {
+            MainPaneView::new(
+                store.clone(),
+                ui_model.clone(),
+                diff_renderer.clone(),
+                weak_view.clone(),
+                tooltip_host.downgrade(),
+                window,
+                cx,
+            )
+        });
         window
-            .observe_release(&main_pane, cx, |pane, window, cx| {
+            .observe_release(&diff_renderer, cx, |pane, window, cx| {
                 if let Some(cancel) = pane.conflict_image_preview_cancel.take() {
                     cancel.store(true, std::sync::atomic::Ordering::Release);
                 }
@@ -1547,7 +1572,8 @@ impl GitCometView {
                 DetailsPaneInit {
                     theme: initial_theme,
                     root_view: weak_view.clone(),
-                    main_pane: main_pane.downgrade(),
+                    diff_renderer: diff_renderer.downgrade(),
+                    history_view: main_pane.read(cx).history_view.clone(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
                 window,
@@ -1576,6 +1602,7 @@ impl GitCometView {
                     root_view: weak_view.clone(),
                     root_view_mode: view_mode,
                     tooltip_host: tooltip_host.downgrade(),
+                    diff_renderer: diff_renderer.clone(),
                     main_pane: main_pane.clone(),
                     details_pane: details_pane.clone(),
                     reflog_pane: reflog_pane.clone(),
@@ -1617,7 +1644,7 @@ impl GitCometView {
                 // mean more than "after a pause": the pending timer would
                 // otherwise fire against a window the user has already left,
                 // and an external edit to the same file could land first.
-                this.main_pane
+                this.diff_renderer
                     .update(cx, |pane, cx| pane.flush_file_editor_buffer(cx));
                 // Capture the focused element before our blur policy clears it.
                 // This is the restore target when opening the palette via a global hotkey while
@@ -1891,6 +1918,7 @@ impl GitCometView {
             theme: initial_theme,
             title_bar,
             sidebar_pane,
+            diff_renderer,
             main_pane,
             details_pane,
             repo_tabs_bar,
@@ -2095,6 +2123,8 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
+        self.diff_renderer
+            .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.main_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.details_pane
@@ -2158,7 +2188,7 @@ impl GitCometView {
         }
         self.title_bar.update(cx, |_bar, cx| cx.notify());
         self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.invalidate_font_metrics(cx));
         self.details_pane.update(cx, |_pane, cx| cx.notify());
         self.reflog_pane.update(cx, |_pane, cx| cx.notify());
@@ -2188,10 +2218,10 @@ impl GitCometView {
     }
 
     pub(super) fn refresh_main_pane_after_panel_animation(&mut self, cx: &mut gpui::Context<Self>) {
-        let main_pane = self.main_pane.clone();
+        let diff_renderer = self.diff_renderer.clone();
         cx.defer(move |cx| {
-            main_pane.update(cx, |pane, cx| {
-                pane.sync_root_layout_snapshot(cx);
+            diff_renderer.update(cx, |pane, cx| {
+                pane.sync_layout_snapshot(cx);
                 cx.notify();
             });
         });
@@ -3108,18 +3138,54 @@ impl GitCometView {
         &self,
         window: &Window,
         cx: &App,
-    ) -> Option<Entity<MainPaneView>> {
+    ) -> Option<Entity<DiffRenderer>> {
         let extension_view_selected = self
             .repository_views
             .as_ref()
             .zip(self.active_repo())
             .is_some_and(|(router, repo)| router.selected(repo).is_some());
         if !extension_view_selected || self.documents_active {
-            return Some(self.main_pane.clone());
+            return Some(self.diff_renderer.clone());
         }
         self.extension_window
             .as_ref()?
             .diff_pane_for_keys(&self.repository_view_focus, window, cx)
+    }
+
+    pub(super) fn defer_search_match_navigation(
+        &self,
+        forward: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let view = cx.weak_entity();
+        let window_handle = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let Ok((Some(target), main, primary)) = view.read_with(cx, |view, cx| {
+                    (
+                        view.diff_shortcut_target(window, cx),
+                        view.main_pane.clone(),
+                        view.diff_renderer.entity_id(),
+                    )
+                }) else {
+                    return;
+                };
+                let handled = if target.entity_id() == primary {
+                    main.update(cx, |main, cx| main.navigate_search_match(forward, cx))
+                } else {
+                    target.update(cx, |pane, cx| {
+                        if forward {
+                            pane.navigate_next_search_match_or_diff_change(cx)
+                        } else {
+                            pane.navigate_prev_search_match_or_diff_change(cx)
+                        }
+                    })
+                };
+                if handled {
+                    window.refresh();
+                }
+            });
+        });
     }
 
     pub(super) fn defer_text_input_main_pane_action<F>(
@@ -3127,7 +3193,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
         action: F,
     ) where
-        F: FnOnce(&mut MainPaneView, &mut Window, &mut gpui::Context<MainPaneView>) -> bool
+        F: FnOnce(&mut DiffRenderer, &mut Window, &mut gpui::Context<DiffRenderer>) -> bool
             + 'static,
     {
         let view = cx.weak_entity();
@@ -3205,7 +3271,7 @@ impl GitCometView {
         if self.route_extension_navigation(forward, cx) {
             return;
         }
-        let Some(repo_id) = self.main_pane.read(cx).active_repo_id() else {
+        let Some(repo_id) = self.diff_renderer.read(cx).active_repo_id() else {
             return;
         };
         let msg = if forward {

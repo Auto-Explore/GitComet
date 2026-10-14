@@ -11,10 +11,30 @@ pub(crate) struct DiffBinding {
     pub view: DiffViewId,
 }
 
+impl DiffBinding {
+    pub(in crate::view) fn repository(self, state: &AppState) -> Option<&RepoState> {
+        state.repos.iter().find(|repo| {
+            repo.id == self.repo_id
+                && repo.lifetime() == self.lifetime
+                && repo.diff_sessions.contains_key(&self.view)
+        })
+    }
+
+    pub(in crate::view) fn diff(
+        self,
+        repo: &RepoState,
+    ) -> Option<&gitcomet_state::model::DiffState> {
+        if repo.id != self.repo_id || repo.lifetime() != self.lifetime {
+            return None;
+        }
+        Some(&repo.diff_sessions.get(&self.view)?.diff_state)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct PaneStore {
     store: std::sync::Weak<AppStore>,
-    snapshot: Option<std::rc::Rc<std::cell::RefCell<Arc<AppState>>>>,
+    read_only: bool,
     pub binding: Option<DiffBinding>,
     /// What the pane lets the user do now: the owner's policy, with staging
     /// and editing off while it shows a linked worktree. Set it with
@@ -28,7 +48,7 @@ impl From<Arc<AppStore>> for PaneStore {
     fn from(store: Arc<AppStore>) -> Self {
         Self {
             store: Arc::downgrade(&store),
-            snapshot: None,
+            read_only: false,
             binding: None,
             policy: DiffPanePolicy::default(),
             owner_policy: DiffPanePolicy::default(),
@@ -50,28 +70,18 @@ fn bound_worktree(state: &AppState, binding: DiffBinding) -> Option<std::path::P
 }
 
 impl PaneStore {
-    pub fn bind_snapshot(
-        &mut self,
-        state: Arc<AppState>,
-        view: DiffViewId,
-        policy: DiffPanePolicy,
-    ) {
-        let repo = &state.repos[0];
-        self.bind(
-            DiffBinding {
-                repo_id: repo.id,
-                lifetime: repo.lifetime(),
-                view,
-            },
-            policy,
-        );
-        self.snapshot = Some(std::rc::Rc::new(std::cell::RefCell::new(state)));
-    }
-
-    pub fn replace_snapshot(&self, state: Arc<AppState>) {
-        if let Some(snapshot) = &self.snapshot {
-            *snapshot.borrow_mut() = state;
+    pub fn read_only() -> Self {
+        Self {
+            store: std::sync::Weak::new(),
+            read_only: true,
+            binding: None,
+            policy: DiffPanePolicy::read_only(),
+            owner_policy: DiffPanePolicy::read_only(),
+            linked: false,
         }
+    }
+    pub fn disable_commands(&mut self) {
+        self.read_only = true;
     }
     #[cfg(test)]
     pub(crate) fn store_for_test(&self) -> Arc<AppStore> {
@@ -113,7 +123,7 @@ impl PaneStore {
         repo_id: RepoId,
         lifetime: u64,
     ) -> Option<SaveOrigin> {
-        if self.snapshot.is_some() || !self.policy.allow_edit {
+        if self.read_only || !self.policy.allow_edit {
             return None;
         }
         let session = if let Some(binding) = self.binding {
@@ -131,58 +141,12 @@ impl PaneStore {
         })
     }
 
-    pub fn snapshot(&self) -> Arc<AppState> {
-        if let Some(snapshot) = &self.snapshot {
-            return snapshot.borrow().clone();
-        }
-        let state = self
-            .store
-            .upgrade()
-            .map(|store| store.snapshot())
-            .unwrap_or_default();
-        self.project(state)
-    }
-
-    pub fn project(&self, state: Arc<AppState>) -> Arc<AppState> {
-        if let Some(snapshot) = &self.snapshot {
-            return snapshot.borrow().clone();
-        }
-        let Some(binding) = self.binding else {
-            return state;
-        };
-        let mut projected = (*state).clone();
-        let repo = state
-            .repos
-            .iter()
-            .find(|repo| repo.id == binding.repo_id && repo.lifetime() == binding.lifetime);
-        projected.repos = repo
-            .map(|repo| {
-                let mut repo = repo.clone();
-                repo.diff_state = repo
-                    .diff_sessions
-                    .get(&binding.view)
-                    .map(|session| session.diff_state.clone())
-                    .unwrap_or_default();
-                // A linked worktree's file: reads resolve against its checkout,
-                // and nothing is judged by the main checkout's status.
-                if let Some(worktree) = bound_worktree(&state, binding) {
-                    repo.spec.workdir = worktree;
-                    repo.status = Loadable::NotLoaded;
-                    repo.worktree_status = Loadable::NotLoaded;
-                    repo.staged_status = Loadable::NotLoaded;
-                }
-                // A bound pane never enters History's interactive editors or foreign diff.
-                repo.interactive_rebase_setup = None;
-                repo.interactive_cherry_pick_setup = None;
-                vec![repo]
-            })
-            .unwrap_or_default();
-        projected.active_repo = repo.map(|repo| repo.id);
-        Arc::new(projected)
+    pub fn snapshot(&self) -> Option<Arc<AppState>> {
+        self.store.upgrade().map(|store| store.snapshot())
     }
 
     pub fn dispatch(&self, msg: Msg) {
-        if self.snapshot.is_some() {
+        if self.read_only {
             return;
         }
         let Some(store) = self.store.upgrade() else {

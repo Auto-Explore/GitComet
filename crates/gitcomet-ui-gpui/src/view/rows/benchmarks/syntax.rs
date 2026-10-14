@@ -14,7 +14,7 @@ use crate::view::markdown_preview::{
     MarkdownPreviewDiff, MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
     MarkdownPreviewRowStyledTextCache, markdown_document_blocks,
 };
-use crate::view::panes::main::diff_cache::render_svg_image_diff_preview;
+use crate::view::panes::diff::diff_cache::render_svg_image_diff_preview;
 pub struct FileDiffSyntaxPrepareSource {
     text: SharedString,
     line_starts: Arc<[usize]>,
@@ -468,7 +468,9 @@ fn shared_source_text_and_line_starts(lines: &[String]) -> (SharedString, Arc<[u
     } else {
         lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1)
     };
-    crate::view::panes::main::preview_source_text_and_line_starts_from_lines(lines, source_len)
+    crate::view::panes::diff::helpers::line_index::preview_source_text_and_line_starts_from_lines(
+        lines, source_len,
+    )
 }
 
 pub struct FileDiffSyntaxReparseFixture {

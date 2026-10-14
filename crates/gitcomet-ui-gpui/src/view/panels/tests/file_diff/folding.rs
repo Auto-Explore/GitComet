@@ -69,8 +69,8 @@ fn assert_collapsed_diff_loading_does_not_render_patch_rows(
     diff_view: DiffViewMode,
 ) {
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_content_mode = DiffContentMode::Collapsed;
             pane.diff_view = diff_view;
             cx.notify();
@@ -91,7 +91,7 @@ fn assert_collapsed_diff_loading_does_not_render_patch_rows(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_content_mode, DiffContentMode::Collapsed);
         assert!(
             !pane.is_collapsed_diff_projection_active(),
@@ -130,8 +130,8 @@ fn assert_collapsed_diff_loading_does_not_render_patch_rows(
         },
     );
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             let hunk_visible_ix = pane.collapsed_diff_hunk_visible_indices[0];
             pane.scroll_diff_to_item_strict(hunk_visible_ix, gpui::ScrollStrategy::Top);
             cx.notify();
@@ -190,7 +190,7 @@ fn collapsed_diff_split_loading_does_not_render_patch_rows(cx: &mut gpui::TestAp
     );
 }
 
-fn collapsed_diff_cache_rebuild_snapshot(pane: &crate::view::panes::main::MainPaneView) -> String {
+fn collapsed_diff_cache_rebuild_snapshot(pane: &crate::view::panes::diff::DiffRenderer) -> String {
     let active = pane.active_repo();
     format!(
         "mode={:?} rev={} active_rev={:?} target={:?} active_target={:?} signature={:?} file_rev={} active_file_rev={:?} file_target={:?} file_path={:?} collapsed_active={} hunks={:?}",
@@ -229,7 +229,7 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
     );
 
     let hunk_src_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.collapsed_diff_hunks
             .first()
             .map(|hunk| hunk.src_ix)
@@ -239,7 +239,7 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
     reveal_collapsed_diff_hunk_side_fully(cx, view, hunk_src_ix, true);
 
     let hidden_down_after_up = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hidden_up_rows(hunk_src_ix),
             0,
@@ -253,7 +253,7 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
         assert!(
             matches!(
                 pane.collapsed_visible_row(anchor_visible_ix),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { .. })
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::FileRow { .. })
             ),
             "once the upper gap is fully consumed, the hunk anchor should move to the first visible file row"
         );
@@ -270,12 +270,12 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
         "fixture should still keep hidden rows below the hunk after revealing only upward context"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             matches!(
                 pane.collapsed_visible_row(pane.diff_visible_len().saturating_sub(1)),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::HunkHeader {
-                    expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::HunkHeader {
+                    expansion_kind: crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind::Down,
                     display_src_ix: None,
                     ..
                 })
@@ -287,7 +287,7 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
     reveal_collapsed_diff_hunk_side_fully(cx, view, hunk_src_ix, false);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.collapsed_diff_hidden_up_rows(hunk_src_ix), 0);
         assert_eq!(pane.collapsed_diff_hidden_down_rows(hunk_src_ix), 0);
 
@@ -299,7 +299,7 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
         assert!(
             matches!(
                 pane.collapsed_visible_row(anchor_visible_ix),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { .. })
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::FileRow { .. })
             ),
             "fully revealed collapsed hunks should anchor to the first file row instead of a synthetic header"
         );
@@ -311,12 +311,12 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !matches!(
                 pane.collapsed_visible_row(pane.diff_visible_len().saturating_sub(1)),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::HunkHeader {
-                    expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::HunkHeader {
+                    expansion_kind: crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind::Down,
                     display_src_ix: None,
                     ..
                 })
@@ -347,7 +347,7 @@ fn collapsed_diff_reveal_state_survives_projection_reset(cx: &mut gpui::TestAppC
     );
 
     let (hunk_src_ix, hidden_down_before) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -364,15 +364,15 @@ fn collapsed_diff_reveal_state_survives_projection_reset(cx: &mut gpui::TestAppC
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     let hidden_down_after_reveal = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.collapsed_diff_hidden_down_rows(hunk_src_ix)
     });
     assert!(
@@ -381,15 +381,15 @@ fn collapsed_diff_reveal_state_survives_projection_reset(cx: &mut gpui::TestAppC
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             pane.reset_collapsed_diff_projection(false);
             pane.ensure_diff_visible_indices();
         });
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hidden_down_rows(hunk_src_ix),
             hidden_down_after_reveal,
@@ -398,15 +398,15 @@ fn collapsed_diff_reveal_state_survives_projection_reset(cx: &mut gpui::TestAppC
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             pane.reset_collapsed_diff_projection(true);
             pane.ensure_diff_visible_indices();
         });
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hidden_down_rows(hunk_src_ix),
             hidden_down_before,
@@ -436,7 +436,7 @@ fn collapsed_diff_reveal_state_survives_window_resize(cx: &mut gpui::TestAppCont
     );
 
     let (hunk_src_ix, hidden_down_before) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -449,15 +449,15 @@ fn collapsed_diff_reveal_state_survives_window_resize(cx: &mut gpui::TestAppCont
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     let (hidden_down_after_reveal, visible_len_after_reveal) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.collapsed_diff_hidden_down_rows(hunk_src_ix),
             pane.diff_visible_len(),
@@ -472,7 +472,7 @@ fn collapsed_diff_reveal_state_survives_window_resize(cx: &mut gpui::TestAppCont
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hidden_down_rows(hunk_src_ix),
             hidden_down_after_reveal,
@@ -509,7 +509,7 @@ fn collapsed_diff_reveal_state_survives_same_content_diff_cache_rebuild(
     );
 
     let (hunk_src_ix, hidden_down_before) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -522,15 +522,15 @@ fn collapsed_diff_reveal_state_survives_same_content_diff_cache_rebuild(
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     let hidden_down_after_reveal = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.collapsed_diff_hidden_down_rows(hunk_src_ix)
     });
     assert!(
@@ -565,7 +565,7 @@ fn collapsed_diff_reveal_state_survives_same_content_diff_cache_rebuild(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hidden_down_rows(hunk_src_ix),
             hidden_down_after_reveal,
@@ -595,7 +595,7 @@ fn collapsed_diff_reveal_state_resets_when_diff_content_changes(cx: &mut gpui::T
     );
 
     let (hunk_src_ix, hidden_down_before) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -608,15 +608,15 @@ fn collapsed_diff_reveal_state_resets_when_diff_content_changes(cx: &mut gpui::T
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     let hidden_down_after_reveal = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.collapsed_diff_hidden_down_rows(hunk_src_ix)
     });
     assert!(
@@ -653,7 +653,7 @@ fn collapsed_diff_reveal_state_resets_when_diff_content_changes(cx: &mut gpui::T
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hidden_down_rows(hunk_src_ix),
             hidden_down_before,
@@ -682,7 +682,7 @@ fn assert_collapsed_diff_file_switch_resets_expanded_context(
     );
 
     let (hunk_src_ix, hidden_up_before, hidden_down_before) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -697,8 +697,8 @@ fn assert_collapsed_diff_file_switch_resets_expanded_context(
     assert!(hidden_up_before >= 20 && hidden_down_before >= 20);
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_up(hunk_src_ix, cx);
             pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
         });
@@ -706,7 +706,7 @@ fn assert_collapsed_diff_file_switch_resets_expanded_context(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.collapsed_diff_reveals.is_empty(),
             "fixture should have persisted expanded collapsed-diff context before switching files"
@@ -756,7 +756,7 @@ fn assert_collapsed_diff_file_switch_resets_expanded_context(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -840,7 +840,7 @@ fn collapsed_diff_split_bar_shows_stats_without_column_headers(cx: &mut gpui::Te
     assert!(cx.debug_bounds("diff_split_columns_header").is_none());
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hunk_visible_indices.first().copied(),
             Some(0),
@@ -873,7 +873,7 @@ fn collapsed_diff_revealed_hunk_header_hides_context_and_updates_ranges(
 
     let repo_id = gitcomet_state::model::RepoId(289);
     let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
-    let unified = unified.replace("@@ -32,7 +32,7 @@", "@@ -32,7 +32,7 @@ impl MainPaneView {");
+    let unified = unified.replace("@@ -32,7 +32,7 @@", "@@ -32,7 +32,7 @@ impl DiffRenderer {");
     activate_collapsed_diff_fixture(
         cx,
         &view,
@@ -886,7 +886,7 @@ fn collapsed_diff_revealed_hunk_header_hides_context_and_updates_ranges(
     );
 
     let (hunk_src_ix, hunk_visible_ix, header_before) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -898,18 +898,18 @@ fn collapsed_diff_revealed_hunk_header_hides_context_and_updates_ranges(
             .to_string();
         (hunk.src_ix, visible_ix, header)
     });
-    assert_eq!(header_before, "-32,7 +32,7  impl MainPaneView {");
+    assert_eq!(header_before, "-32,7 +32,7  impl DiffRenderer {");
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_up(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_text_line_for_region(hunk_visible_ix, DiffTextRegion::Inline)
                 .as_ref(),
@@ -919,15 +919,15 @@ fn collapsed_diff_revealed_hunk_header_hides_context_and_updates_ranges(
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_text_line_for_region(hunk_visible_ix, DiffTextRegion::Inline)
                 .as_ref(),
@@ -967,8 +967,8 @@ fn collapsed_diff_first_open_keeps_hunk_header_visible_after_scrolled_file(
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             let last = pane.diff_visible_len().saturating_sub(1);
             pane.scroll_diff_to_item_strict(last, gpui::ScrollStrategy::Top);
         });
@@ -1075,7 +1075,7 @@ fn collapsed_diff_reveal_controls_expand_visible_context(cx: &mut gpui::TestAppC
 
     let (hunk_src_ix, visible_before, hidden_up_before, hidden_down_before) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let hunk = pane
                 .collapsed_diff_hunks
                 .first()
@@ -1095,15 +1095,15 @@ fn collapsed_diff_reveal_controls_expand_visible_context(cx: &mut gpui::TestAppC
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_up(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_visible_len(),
             visible_before + 20,
@@ -1117,15 +1117,15 @@ fn collapsed_diff_reveal_controls_expand_visible_context(cx: &mut gpui::TestAppC
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_visible_len(),
             visible_before + 40,
@@ -1194,7 +1194,7 @@ fn collapsed_diff_long_gap_exposes_up_both_and_trailing_down_expansions(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hunks.len(),
             2,
@@ -1205,8 +1205,8 @@ fn collapsed_diff_long_gap_exposes_up_both_and_trailing_down_expansions(
         assert!(
             matches!(
                 pane.collapsed_visible_row(first_anchor),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::HunkHeader {
-                    expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Up,
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::HunkHeader {
+                    expansion_kind: crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind::Up,
                     ..
                 })
             ),
@@ -1215,8 +1215,8 @@ fn collapsed_diff_long_gap_exposes_up_both_and_trailing_down_expansions(
         assert!(
             matches!(
                 pane.collapsed_visible_row(second_anchor),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::HunkHeader {
-                    expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Both,
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::HunkHeader {
+                    expansion_kind: crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind::Both,
                     ..
                 })
             ),
@@ -1225,8 +1225,8 @@ fn collapsed_diff_long_gap_exposes_up_both_and_trailing_down_expansions(
         assert!(
             matches!(
                 pane.collapsed_visible_row(pane.diff_visible_len().saturating_sub(1)),
-                Some(crate::view::panes::main::CollapsedDiffVisibleRow::HunkHeader {
-                    expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
+                Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::HunkHeader {
+                    expansion_kind: crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind::Down,
                     display_src_ix: None,
                     ..
                 })
@@ -1259,7 +1259,7 @@ fn collapsed_diff_short_gap_uses_single_expand_all_and_merges_sections(
     );
 
     let second_src_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hunks.len(),
             2,
@@ -1270,8 +1270,8 @@ fn collapsed_diff_short_gap_uses_single_expand_all_and_merges_sections(
             matches!(
                 pane.collapsed_visible_row(second_anchor),
                 Some(
-                    crate::view::panes::main::CollapsedDiffVisibleRow::HunkHeader {
-                        expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Short,
+                    crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::HunkHeader {
+                        expansion_kind: crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind::Short,
                         ..
                     }
                 )
@@ -1288,15 +1288,15 @@ fn collapsed_diff_short_gap_uses_single_expand_all_and_merges_sections(
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.collapsed_diff_reveal_hunk_short(second_src_ix, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hunks.len(),
             1,
@@ -1315,15 +1315,15 @@ fn collapsed_diff_short_gap_uses_single_expand_all_and_merges_sections(
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             pane.reset_collapsed_diff_projection(false);
             pane.ensure_diff_visible_indices();
         });
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.collapsed_diff_hunks.len(),
             1,
