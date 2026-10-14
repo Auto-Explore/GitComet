@@ -313,9 +313,8 @@ impl SparseLineIndex {
     }
 
     #[cfg(all(test, feature = "benchmarks"))]
-    pub(super) fn metadata_byte_size(&self) -> usize {
-        self.checkpoints.len() * std::mem::size_of::<u32>()
-            + std::mem::size_of_val(&self.ascii_trigram_bloom)
+    pub(super) fn heap_byte_size(&self) -> usize {
+        self.checkpoints.capacity() * std::mem::size_of::<u32>()
     }
 }
 
@@ -1459,5 +1458,25 @@ impl TwoWaySplitProjection {
         } else {
             0
         }
+    }
+}
+
+#[cfg(all(test, feature = "benchmarks"))]
+mod tests {
+    use super::SparseLineIndex;
+
+    #[test]
+    fn sparse_checkpoint_heap_bytes_include_reserved_capacity() {
+        let mut checkpoints = Vec::with_capacity(16);
+        checkpoints.extend([0, 256]);
+        let initialized_bytes = std::mem::size_of_val(checkpoints.as_slice());
+        let spare_bytes = std::mem::size_of_val(checkpoints.spare_capacity_mut());
+        assert!(spare_bytes > initialized_bytes);
+        let line_index = SparseLineIndex {
+            checkpoints,
+            ..SparseLineIndex::default()
+        };
+
+        assert_eq!(line_index.heap_byte_size(), initialized_bytes + spare_bytes);
     }
 }

@@ -1422,6 +1422,51 @@ fn resolved_output_projection_keeps_large_fragment_line_access() {
 }
 
 #[test]
+fn resolved_output_projection_clone_retains_sparse_output_after_original_drop() {
+    let trailing: String = (0..(LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 96))
+        .map(|line_ix| format!("tail-{line_ix}\n"))
+        .collect();
+    let segments = vec![
+        ConflictSegment::Text("head\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: Some("base\n".into()),
+            ours: "ours".into(),
+            theirs: "-theirs\n".into(),
+            choice: ConflictChoice::Both,
+            resolved: true,
+            whitespace_only: false,
+        }),
+        ConflictSegment::Text(trailing.into()),
+    ];
+    let original = ResolvedOutputProjection::from_segments(&segments);
+    let cloned = original.clone();
+    drop(original);
+    let expected: Vec<String> = generate_resolved_text(&segments)
+        .split('\n')
+        .map(str::to_string)
+        .collect();
+
+    assert_eq!(
+        resolved_output_projection_lines(&cloned, &segments),
+        expected
+    );
+    let start = expected.len() - 192;
+    let end = expected.len() - 32;
+    let mut walked = Vec::new();
+    cloned.for_each_line_text_in_range(&segments, start..end, |line_ix, line| {
+        walked.push((line_ix, line.to_owned()));
+    });
+    assert_eq!(
+        walked,
+        expected[start..end]
+            .iter()
+            .enumerate()
+            .map(|(offset, line)| (start + offset, line.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn resolved_output_projection_range_walk_matches_point_lookups() {
     let segments = vec![
         ConflictSegment::Text("head\nprefix ".into()),

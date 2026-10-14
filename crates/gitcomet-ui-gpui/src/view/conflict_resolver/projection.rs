@@ -8,7 +8,7 @@ pub(in crate::view) const RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE: usize = 256;
 pub(super) enum ResolvedOutputFragmentLineIndex {
     SingleLine,
     Dense(Arc<[usize]>),
-    Sparse(SparseLineIndex),
+    Sparse(Box<SparseLineIndex>),
 }
 
 impl ResolvedOutputFragmentLineIndex {
@@ -59,7 +59,9 @@ impl ResolvedOutputFragmentLineIndex {
         match self {
             Self::SingleLine => 0,
             Self::Dense(line_starts) => line_starts.len() * std::mem::size_of::<usize>(),
-            Self::Sparse(line_index) => line_index.metadata_byte_size(),
+            Self::Sparse(line_index) => {
+                std::mem::size_of::<SparseLineIndex>() + line_index.heap_byte_size()
+            }
         }
     }
 }
@@ -282,7 +284,7 @@ impl ResolvedOutputProjection {
                     let (widest_line_ix, widest_line_len) =
                         line_index.widest_line().unwrap_or((0, 0));
                     (
-                        ResolvedOutputFragmentLineIndex::Sparse(line_index),
+                        ResolvedOutputFragmentLineIndex::Sparse(Box::new(line_index)),
                         line_count,
                         widest_line_ix,
                         widest_line_len,
@@ -858,6 +860,8 @@ impl ResolvedOutputProjection {
 
     /// Approximate heap bytes used by projection metadata, excluding the
     /// underlying segment texts which are shared with the resolver state.
+    /// Sparse payloads include reserved checkpoint storage; the enclosing vectors
+    /// count initialized entries.
     #[cfg(all(test, feature = "benchmarks"))]
     pub fn metadata_byte_size(&self) -> usize {
         let fragments = self.fragments.len() * std::mem::size_of::<ResolvedOutputFragment>()
@@ -1012,5 +1016,23 @@ impl ResolvedOutputProjection {
                 Some(std::borrow::Cow::Borrowed(text.as_str()))
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "benchmarks"))]
+mod tests {
+    use super::{ResolvedOutputFragment, ResolvedOutputFragmentLineIndex, SparseLineIndex};
+
+    #[test]
+    fn sparse_fragment_metadata_counts_boxed_payload_once() {
+        let line_index = ResolvedOutputFragmentLineIndex::Sparse(Box::default());
+
+        assert_eq!(
+            line_index.metadata_byte_size(),
+            std::mem::size_of::<SparseLineIndex>(),
+            "line index={}B; fragment={}B",
+            std::mem::size_of::<ResolvedOutputFragmentLineIndex>(),
+            std::mem::size_of::<ResolvedOutputFragment>(),
+        );
     }
 }
