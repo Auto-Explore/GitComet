@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::domain::{LogPage, WorktreeDirtySummary};
 use gitcomet_core::services::{CancellationToken, HistoryReadRequest, HistoryReadResult};
 
-fn mount(
+pub(super) fn mount(
     cx: &mut gpui::TestAppContext,
     page: Arc<LogPage>,
 ) -> (
@@ -425,7 +425,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     }
 }
 
-fn indexed_fixture(
+pub(super) fn indexed_fixture(
     count: usize,
 ) -> (
     gitcomet_core::history_index::HistoryIndexHandle,
@@ -683,6 +683,7 @@ fn indexed_regression_unanchored_worktree_arrow_preserves_selection_and_viewport
                         !history.history_select_adjacent_commit(direction, cx),
                         "no visible worktree row to step from"
                     );
+                    assert!(!history.history_select_page(direction, cx));
                     assert_eq!(
                         history
                             .scroll_interaction

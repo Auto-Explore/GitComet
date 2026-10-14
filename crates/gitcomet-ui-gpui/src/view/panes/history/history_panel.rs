@@ -237,6 +237,12 @@ impl HistoryView {
                     && match key {
                         "up" => this.history_select_adjacent_commit(-1, cx),
                         "down" => this.history_select_adjacent_commit(1, cx),
+                        "pageup" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_page(-1, cx)
+                        }
+                        "pagedown" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_page(1, cx)
+                        }
                         "enter" => this.history_open_selected_worktree(window, cx),
                         "escape" if this.history_find_is_open() => {
                             this.close_history_find(window, cx);
@@ -295,11 +301,54 @@ impl HistoryView {
     pub(in crate::view) fn history_select_adjacent_commit(
         &mut self,
         direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.history_select_by_rows(direction, 1, false, cx)
+    }
+
+    pub(in crate::view) fn history_select_page(
+        &mut self,
+        direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let rows = self.history_page_rows();
+        self.history_select_by_rows(direction, rows, true, cx)
+    }
+
+    pub(super) fn history_page_rows(&self) -> usize {
+        let interaction = self.scroll_interaction.borrow();
+        let metrics = if self.indexed.presentation.is_some() {
+            interaction
+                .logical
+                .as_ref()
+                .map(|logical| (logical.viewport, logical.height))
+        } else {
+            self.history_scroll.0.borrow().last_item_size.map(|size| {
+                (
+                    f64::from(f32::from(size.item.height)),
+                    interaction.row_height(crate::view::rows::history_row_height(self.ui_scale())),
+                )
+            })
+        };
+        metrics
+            .filter(|(viewport, height)| {
+                viewport.is_finite() && height.is_finite() && *height > 0.0
+            })
+            .map_or(1, |(viewport, height)| {
+                (viewport / height).floor().max(1.0) as usize
+            })
+    }
+
+    fn history_select_by_rows(
+        &mut self,
+        direction: i8,
+        rows: usize,
+        paging: bool,
         _cx: &mut gpui::Context<Self>,
     ) -> bool {
         self.cancel_history_find_navigation();
         if self.indexed.presentation.is_some() {
-            return self.select_adjacent_indexed(direction, _cx);
+            return self.select_indexed_by_rows(direction, rows, paging, _cx);
         }
         let Some(repo_id) = self.active_repo_id() else {
             return false;
@@ -393,15 +442,12 @@ impl HistoryView {
         }
 
         let next_list_ix = match (current_list_ix, direction.is_negative()) {
-            (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
+            (Some(current_list_ix), true) => current_list_ix.saturating_sub(rows),
             (Some(current_list_ix), false) => {
-                let next = current_list_ix + 1;
-                if next < list_len {
-                    next
-                } else {
-                    current_list_ix
-                }
+                current_list_ix.saturating_add(rows).min(list_len - 1)
             }
+            // A page key enters the list at its first row, as in indexed history.
+            (None, _) if paging => offset,
             (None, true) => list_len.saturating_sub(1),
             (None, false) => offset,
         };
@@ -804,7 +850,7 @@ impl HistoryView {
                             e.position.x,
                             available_width,
                             drag_layout,
-                            this.ui_scale_percent,
+                            this.ui_scale(),
                         ));
                         cx.notify();
                     }),
@@ -991,6 +1037,7 @@ impl HistoryView {
             .when(show_author, |header| {
                 header.child(
                     div()
+                        .debug_selector(|| "history_author_header_cell".to_string())
                         .w(col_author)
                         .flex_none()
                         .flex()

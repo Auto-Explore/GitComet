@@ -9,6 +9,7 @@ enum Removal {
     Empty,
     HostClear,
     RemoveSignature,
+    HideGraph,
 }
 
 fn tooltip_is_retracted_after_row_removal(
@@ -87,6 +88,12 @@ fn tooltip_is_retracted_after_row_removal(
     }
     let hover = hover.expect("requested tooltip cell should be hoverable");
     assert!(crate::view::test_support::tooltip_text(cx, &view).is_some());
+    if area == HistoryRowHoverArea::Author {
+        assert_eq!(
+            crate::view::test_support::tooltip_text(cx, &view).as_deref(),
+            Some("a")
+        );
+    }
     if matches!(removal, Removal::HostClear) {
         cx.update(|_, app| {
             let host = history.read(app).tooltip_host.upgrade().unwrap();
@@ -105,6 +112,11 @@ fn tooltip_is_retracted_after_row_removal(
     }
     match removal {
         Removal::HostClear => unreachable!(),
+        Removal::HideGraph => cx.update(|_, app| {
+            history.update(app, |history, cx| {
+                history.set_history_column_preferences(false, true, true, true, cx);
+            });
+        }),
         Removal::RemoveSignature => {
             let mut next = (*state).clone();
             next.repos[0].history_state.commit_signatures = Arc::default();
@@ -181,6 +193,16 @@ fn tooltip_is_retracted_after_row_removal(
 #[gpui::test]
 fn cached_history_canvas_tooltip_clears_after_scroll(cx: &mut gpui::TestAppContext) {
     tooltip_is_retracted_after_row_removal(cx, HistoryRowHoverArea::Date, Removal::CachedWheel);
+}
+
+#[gpui::test]
+fn author_node_tooltip_clears_after_cached_scroll(cx: &mut gpui::TestAppContext) {
+    tooltip_is_retracted_after_row_removal(cx, HistoryRowHoverArea::Author, Removal::CachedWheel);
+}
+
+#[gpui::test]
+fn author_node_tooltip_clears_when_the_graph_is_hidden(cx: &mut gpui::TestAppContext) {
+    tooltip_is_retracted_after_row_removal(cx, HistoryRowHoverArea::Author, Removal::HideGraph);
 }
 
 #[gpui::test]
