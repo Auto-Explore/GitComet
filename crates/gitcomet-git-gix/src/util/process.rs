@@ -48,33 +48,10 @@ pub(crate) fn credentials_without_prompts(cmd: &mut Command) {
     cmd.env("GCM_INTERACTIVE", "Never");
 }
 
-pub(crate) fn install_test_git_command_environment(env: TestGitCommandEnvironment) {
-    if let Some(existing) = TEST_GIT_COMMAND_ENVIRONMENT.get() {
-        assert_eq!(
-            existing, &env,
-            "test git command environment already initialized"
-        );
-        return;
-    }
-    let _ = TEST_GIT_COMMAND_ENVIRONMENT.set(env);
-}
-
-pub(super) fn apply_test_git_command_environment(cmd: &mut Command) {
-    let Some(env) = TEST_GIT_COMMAND_ENVIRONMENT.get() else {
-        return;
-    };
-
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
-    cmd.env("HOME", &env.home_dir);
-    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
-    cmd.env("GNUPGHOME", &env.gnupg_home);
-    cmd.arg("-c").arg("protocol.file.allow=always");
-}
-
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
-    apply_test_git_command_environment(&mut cmd);
+    #[cfg(any(test, feature = "test-support"))]
+    crate::test_support::apply_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd
 }

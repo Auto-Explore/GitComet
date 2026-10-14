@@ -87,13 +87,16 @@ def build(args):
             if not source_path.exists() or source_path.read_bytes() != source:
                 source_path.write_bytes(source)
             manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+            backend_manifest = tomllib.loads((root / "crates/gitcomet-git-gix/Cargo.toml").read_text(encoding="utf-8"))
             # The driver has no benchmarks feature enabled, so diagnostic-only
             # imports are compiled out even on older revisions without them.
             text = '[package]\nname = "gitcomet-local-probe"\nversion = "0.0.0"\nedition = "2024"\n'
             text += '[workspace]\n[features]\nbenchmarks = []\n[[bin]]\nname = "gitcomet-local-probe"\npath = "main.rs"\n'
             text += '[dependencies]\n'
             for package in ("gitcomet-core", "gitcomet-git-gix"):
-                features = ["benchmarks", "test-support"] if package == "gitcomet-core" else ["benchmarks"]
+                features = ["benchmarks"]
+                if package == "gitcomet-core" or "test-support" in backend_manifest["features"]:
+                    features.append("test-support")
                 text += f'{package} = {{ path = {json.dumps((root / "crates" / package).as_posix())}, features = {json.dumps(features)} }}\n'
             for package in ("tempfile", "serde_json"):
                 text += f'{package} = {json.dumps(manifest["workspace"]["dependencies"][package])}\n'

@@ -629,6 +629,7 @@ impl GixRepo {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     mergetool::allow_test_repo_local_mergetool_command(workdir, tool_name);
 }

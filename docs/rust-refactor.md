@@ -33,7 +33,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [ ] Extract a root-independent DiffRenderer after document ownership; preserve MainPaneView composition.
 - [ ] Migrate normal/hosted/settings/pop-out diff contexts, removing fake repository snapshots, projected AppState clones and duplicate rendering/search.
 - [x] Remove deprecated launch wrappers replaced by UiLaunch.
-- [ ] Gate backend test overrides behind test-support and enable only test/probe configurations.
+- [x] Gate backend test overrides behind test-support and enable only test/probe configurations.
 - [ ] Narrow internal visibility/imports in refactored modules and update architecture/build/migration documentation.
 - [ ] Complete targeted and workspace validation and independent review.
 
@@ -97,8 +97,23 @@ the implementation. The work is on the existing `refactor` branch.
 The backend now groups history cache construction and object-store invalidation
 in a private `HistoryCache` owner. Its six independent locks, cache keys and
 bounds, range-reader recycling and shared history-store behavior remain unchanged.
+Backend test environment and mergetool-consent overrides require the `test-support`
+feature; default tests enable it through dev dependencies, while normal app
+dependencies exclude it. The unchanged integration inventory passed 1,968
+core/backend tests, and the strict LFS/annex supplement passed 98 tests without
+runtime prerequisite skips. Normal and opt-in Clippy checks passed, including
+the operation probe.
 
 ## Migration notes
+
+External test harnesses using `install_test_git_command_environment` or
+`allow_test_repo_local_mergetool_command` must enable
+`gitcomet-git-gix/test-support`. In-tree tests need no additional flags. Direct
+`operation-context-probe` builds enable `benchmarks,test-support`; the profiling
+helpers select those features automatically and retain support for older baseline
+manifests. Build the production app separately from probes to keep test overrides
+and benchmark instrumentation out of its dependency features. Repository service
+signatures are unchanged in the cache and test-support commits.
 
 Ordinary load queries and transitions now take `LoadKind`, for example
 `LoadKind::HeadBranch`, instead of `RepoLoadsInFlight` bit constants. Logs,

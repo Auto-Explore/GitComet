@@ -104,6 +104,11 @@ Full headless test suite (CI mode):
 cargo test --workspace --no-default-features --features gix
 ```
 
+The backend's `test-support` feature exposes test Git environments and mergetool
+consent overrides. In-tree tests enable it through dev dependencies; external test
+harnesses must opt in. Normal app builds leave it disabled. See the
+[profiling guide](scripts/profiling/README.md#backend-measurements) for probe builds.
+
 Clippy (CI mode):
 
 ```bash

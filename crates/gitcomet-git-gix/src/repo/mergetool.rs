@@ -12,11 +12,13 @@ use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
+#[cfg(any(test, feature = "test-support"))]
 use rustc_hash::FxHashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 #[cfg(any(not(windows), test))]
 use std::process::Command;
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::{Mutex, OnceLock};
 
 impl GixRepo {
@@ -519,6 +521,7 @@ fn untrusted_repo_local_mergetool_config_error(
 fn repo_local_mergetool_command_allowed(repo: &gix::Repository, tool_name: &str) -> Result<bool> {
     let consent_key =
         repo_local_mergetool_command_consent_key(repo_workdir_for_mergetool(repo), tool_name);
+    #[cfg(any(test, feature = "test-support"))]
     if test_repo_local_mergetool_command_allowed(&consent_key) {
         return Ok(true);
     }
@@ -537,9 +540,11 @@ fn repo_local_mergetool_command_consent_key(workdir: &Path, tool_name: &str) -> 
     format!("gitcomet.mergetool.allowrepolocalcmd-{repo_tool_fingerprint}")
 }
 
+#[cfg(any(test, feature = "test-support"))]
 static TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS: OnceLock<Mutex<FxHashSet<String>>> =
     OnceLock::new();
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
     let allowed =
@@ -550,6 +555,7 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
         .insert(consent_key);
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn test_repo_local_mergetool_command_allowed(consent_key: &str) -> bool {
     let Some(allowed) = TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS.get() else {
         return false;
