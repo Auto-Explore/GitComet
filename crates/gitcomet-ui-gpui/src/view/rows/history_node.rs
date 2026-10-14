@@ -9,8 +9,7 @@ const RING_PX: f32 = 1.5;
 /// Quads round strokes half toward zero, which would thin the 1.5px ring to
 /// 1px at 1x; round half up to whole device pixels instead.
 pub(super) fn ring_width(scale: ui_scale::UiScale, scale_factor: f32) -> Pixels {
-    let _ = scale_factor;
-    scale.px(RING_PX)
+    px((scale.scale_f32(RING_PX) * scale_factor).round().max(1.0) / scale_factor)
 }
 
 fn extra_inset(appearance: crate::appearance::Appearance) -> f32 {
