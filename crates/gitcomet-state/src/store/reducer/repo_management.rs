@@ -673,15 +673,9 @@ fn remove_repo(
         .commit_signatures_cancellation
         .cancel();
     let closed_workdir = closed_repo.spec.workdir.clone();
-    let closed_lifetime = closed_repo.lifetime_id();
     let persist_closed_recent = !closed_repo.is_provisional_external_drop_open();
     state.repos.remove(removed_repo_ix);
     repos.remove(&repo_id);
-    // The worktree scan's cached handles are pruned only by that repo's own scan,
-    // and a closed repo never scans again. This is the one place that knows the
-    // repo is gone rather than merely idle -- `CancelRepoLoads` also fires on tab
-    // switches and reloads, where the handles are still worth keeping.
-    crate::store::effects::release_worktree_scan_handles(closed_lifetime);
     if record_recent && persist_closed_recent {
         effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
     }
@@ -766,9 +760,6 @@ pub(super) fn close_repos(
             ));
         }
         repos.remove(&repo_id);
-        if let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) {
-            crate::store::effects::release_worktree_scan_handles(repo.lifetime_id());
-        }
     }
 
     state.repos.retain(|repo| {

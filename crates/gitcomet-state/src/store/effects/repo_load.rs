@@ -827,7 +827,7 @@ pub(super) fn schedule_load_worktree_dirty(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    lifetime: RepoLifetime,
+    cache_lease: super::WorktreeCacheLease,
     own_workdir: PathBuf,
     scope: WorktreeDirtyScope,
     files_for: Option<PathBuf>,
@@ -842,6 +842,7 @@ pub(super) fn schedule_load_worktree_dirty(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
+            let lifetime = cache_lease.lifetime();
             let own_workdir = canonicalize_or_original(own_workdir);
             let read = WorktreeListRead::from_dirty_scan();
             // gix can panic if a checkout is removed between classifying its
@@ -893,7 +894,7 @@ pub(super) fn schedule_load_worktree_dirty(
                             let Some(handle) = worktree_scan_handle(
                                 worktree_scan_handles(),
                                 &*backend,
-                                lifetime,
+                                &cache_lease,
                                 &worktree.path,
                             ) else {
                                 continue;
@@ -1110,12 +1111,16 @@ fn lock_worktree_scan_handles(
 fn worktree_scan_handle(
     handles: &Mutex<WorktreeScanHandles>,
     backend: &dyn GitBackend,
-    owner: RepoLifetime,
+    lease: &super::WorktreeCacheLease,
     path: &Path,
 ) -> Option<Arc<dyn GitRepository>> {
     let key = canonicalize_or_original(path.to_path_buf());
+    let owner = lease.lifetime();
     {
         let mut handles = lock_worktree_scan_handles(handles);
+        if !lease.is_open() {
+            return None;
+        }
         let now = handles.tick();
         if let Some(entry) = handles.entries.get_mut(&key) {
             entry.last_used = now;
@@ -1129,6 +1134,11 @@ fn worktree_scan_handle(
     // stall every other repo's scan behind it.
     let handle = backend.open(path).ok()?;
     let mut handles = lock_worktree_scan_handles(handles);
+    // Closing can revoke the lease while discovery runs. Check under the same
+    // lock used for ownership release so a late open cannot restore that owner.
+    if !lease.is_open() {
+        return None;
+    }
     // A diff load and the scanner can open the same checkout concurrently.
     let now = handles.tick();
     if let Some(entry) = handles.entries.get_mut(&key) {
@@ -1153,7 +1163,7 @@ fn worktree_scan_handle(
 /// Errors when `path` is not one of `repo`'s linked worktrees.
 pub(super) fn linked_worktree_handle(
     backend: &dyn GitBackend,
-    owner: RepoLifetime,
+    lease: &super::WorktreeCacheLease,
     repo: &dyn GitRepository,
     path: &Path,
 ) -> Result<Arc<dyn GitRepository>, Error> {
@@ -1175,7 +1185,7 @@ pub(super) fn linked_worktree_handle(
             path.display()
         ))));
     }
-    worktree_scan_handle(worktree_scan_handles(), backend, owner, &path).ok_or_else(|| {
+    worktree_scan_handle(worktree_scan_handles(), backend, lease, &path).ok_or_else(|| {
         Error::new(ErrorKind::Backend(format!(
             "Could not open the worktree at {}",
             path.display()
@@ -2552,6 +2562,7 @@ mod worktree_dirty_tests {
 #[cfg(test)]
 mod worktree_scan_handle_tests {
     use super::*;
+    use crate::store::repository_runtime::RepositoryRuntime;
 
     use crate::store::tests::DummyRepo;
 
@@ -2605,16 +2616,23 @@ mod worktree_scan_handle_tests {
                 workdir: PathBuf::from("/second-window"),
             },
         );
+        let first_runtime = RepositoryRuntime::new(first.lifetime_id());
+        let second_runtime = RepositoryRuntime::new(second.lifetime_id());
         assert_eq!(first.id, second.id);
         assert_ne!(first.lifetime(), second.lifetime());
-        let initial = worktree_scan_handle(&handles, &backend, first.lifetime_id(), &path).unwrap();
-        let shared = worktree_scan_handle(&handles, &backend, second.lifetime_id(), &path).unwrap();
+        let initial =
+            worktree_scan_handle(&handles, &backend, &first_runtime.worktree_cache(), &path)
+                .unwrap();
+        let shared =
+            worktree_scan_handle(&handles, &backend, &second_runtime.worktree_cache(), &path)
+                .unwrap();
         assert!(Arc::ptr_eq(&initial, &shared));
 
         retain_worktree_scan_handles(&handles, first.lifetime_id(), &[]);
 
         let retained =
-            worktree_scan_handle(&handles, &backend, second.lifetime_id(), &path).unwrap();
+            worktree_scan_handle(&handles, &backend, &second_runtime.worktree_cache(), &path)
+                .unwrap();
         assert!(Arc::ptr_eq(&initial, &retained));
         assert_eq!(backend.opens(), 1);
         retain_worktree_scan_handles(&handles, second.lifetime_id(), &[]);
@@ -2622,22 +2640,62 @@ mod worktree_scan_handle_tests {
     }
 
     #[test]
+    fn closed_lease_cannot_acquire_another_owners_cached_handle() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let path = PathBuf::from("/wt/shared-with-closed-owner");
+        let live = RepositoryRuntime::new(RepoLifetime::allocate());
+        let closed = RepositoryRuntime::new(RepoLifetime::allocate());
+        let closed_lease = closed.worktree_cache();
+        let initial =
+            worktree_scan_handle(&handles, &backend, &live.worktree_cache(), &path).unwrap();
+        drop(closed);
+
+        assert!(worktree_scan_handle(&handles, &backend, &closed_lease, &path).is_none());
+        let retained =
+            worktree_scan_handle(&handles, &backend, &live.worktree_cache(), &path).unwrap();
+        assert!(Arc::ptr_eq(&initial, &retained));
+        assert_eq!(backend.opens(), 1);
+        assert!(
+            !lock_worktree_scan_handles(&handles).entries[&path]
+                .owners
+                .contains(&closed_lease.lifetime()),
+            "a stale task must not restore cache ownership after its runtime closes"
+        );
+    }
+
+    #[test]
     fn twenty_worktrees_stay_warm_across_linked_tabs() {
         let handles = handles();
         let backend = CountingBackend::new();
         let first_owner = RepoLifetime::allocate();
+        let first_owner_runtime = RepositoryRuntime::new(first_owner);
         let second_owner = RepoLifetime::allocate();
+        let second_owner_runtime = RepositoryRuntime::new(second_owner);
         let paths: Vec<_> = (0..20)
             .map(|ix| PathBuf::from(format!("/wt/shared-warm-{ix}")))
             .collect();
         let mut first_handles = Vec::new();
         for path in &paths {
-            first_handles
-                .push(worktree_scan_handle(&handles, &backend, first_owner, path).unwrap());
+            first_handles.push(
+                worktree_scan_handle(
+                    &handles,
+                    &backend,
+                    &first_owner_runtime.worktree_cache(),
+                    path,
+                )
+                .unwrap(),
+            );
         }
-        for repo_id in [second_owner, first_owner, second_owner] {
+        for runtime in [
+            &second_owner_runtime,
+            &first_owner_runtime,
+            &second_owner_runtime,
+        ] {
             for (path, first) in paths.iter().zip(&first_handles) {
-                let reused = worktree_scan_handle(&handles, &backend, repo_id, path).unwrap();
+                let reused =
+                    worktree_scan_handle(&handles, &backend, &runtime.worktree_cache(), path)
+                        .unwrap();
                 assert!(
                     Arc::ptr_eq(first, &reused),
                     "the checkout keeps its warmed status state"
@@ -2677,9 +2735,23 @@ mod worktree_scan_handle_tests {
         let handles = handles();
         let backend = CountingBackend::new();
         let first_owner = RepoLifetime::allocate();
+        let first_owner_runtime = RepositoryRuntime::new(first_owner);
         let second_owner = RepoLifetime::allocate();
-        let first = worktree_scan_handle(&handles, &backend, first_owner, &checkout).unwrap();
-        let second = worktree_scan_handle(&handles, &backend, second_owner, &alias).unwrap();
+        let second_owner_runtime = RepositoryRuntime::new(second_owner);
+        let first = worktree_scan_handle(
+            &handles,
+            &backend,
+            &first_owner_runtime.worktree_cache(),
+            &checkout,
+        )
+        .unwrap();
+        let second = worktree_scan_handle(
+            &handles,
+            &backend,
+            &second_owner_runtime.worktree_cache(),
+            &alias,
+        )
+        .unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(backend.opens(), 1);
         retain_worktree_scan_handles(&handles, first_owner, &[]);
@@ -2696,6 +2768,7 @@ mod worktree_scan_handle_tests {
         let handles = handles();
         let backend = CountingBackend::new();
         let repo_id = RepoLifetime::allocate();
+        let repo_id_runtime = RepositoryRuntime::new(repo_id);
         let hot = PathBuf::from("/wt/hot-4001");
         let paths: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
             .map(|ix| PathBuf::from(format!("/wt/cold-4001-{ix}")))
@@ -2705,14 +2778,18 @@ mod worktree_scan_handle_tests {
         // takes the entry the scan has just finished with, which is always the
         // cold one -- touching `hot` again immediately afterwards makes it the
         // most recent, but by then the slot has already been taken.
-        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, &repo_id_runtime.worktree_cache(), &hot)
+            .expect("stub backend opens");
         for path in &paths {
-            worktree_scan_handle(&handles, &backend, repo_id, path).expect("stub backend opens");
-            worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
+            worktree_scan_handle(&handles, &backend, &repo_id_runtime.worktree_cache(), path)
+                .expect("stub backend opens");
+            worktree_scan_handle(&handles, &backend, &repo_id_runtime.worktree_cache(), &hot)
+                .expect("stub backend opens");
         }
 
         let opens_before = backend.opens();
-        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, &repo_id_runtime.worktree_cache(), &hot)
+            .expect("stub backend opens");
         assert_eq!(
             backend.opens(),
             opens_before,
@@ -2730,6 +2807,7 @@ mod worktree_scan_handle_tests {
         let handles = handles();
         let backend = CountingBackend::new();
         let repo_id = RepoLifetime::allocate();
+        let repo_id_runtime = RepositoryRuntime::new(repo_id);
         let worktrees: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
             .map(|ix| PathBuf::from(format!("/wt/seq-4005-{ix}")))
             .collect();
@@ -2737,7 +2815,7 @@ mod worktree_scan_handle_tests {
         let scan = || {
             let before = backend.opens();
             for path in &worktrees {
-                worktree_scan_handle(&handles, &backend, repo_id, path)
+                worktree_scan_handle(&handles, &backend, &repo_id_runtime.worktree_cache(), path)
                     .expect("stub backend opens");
             }
             assert!(
@@ -2775,22 +2853,37 @@ mod worktree_scan_handle_tests {
         let handles = handles();
         let backend = CountingBackend::new();
         let repo_id = RepoLifetime::allocate();
+        let repo_id_runtime = RepositoryRuntime::new(repo_id);
         let kept = PathBuf::from("/wt/kept-4002");
         let removed = PathBuf::from("/wt/removed-4002");
 
-        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
-        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, &repo_id_runtime.worktree_cache(), &kept)
+            .expect("stub backend opens");
+        worktree_scan_handle(
+            &handles,
+            &backend,
+            &repo_id_runtime.worktree_cache(),
+            &removed,
+        )
+        .expect("stub backend opens");
         assert_eq!(backend.opens(), 2);
 
         retain_worktree_scan_handles(&handles, repo_id, std::slice::from_ref(&kept));
 
-        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, &repo_id_runtime.worktree_cache(), &kept)
+            .expect("stub backend opens");
         assert_eq!(
             backend.opens(),
             2,
             "the worktree still in the list keeps its handle"
         );
-        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
+        worktree_scan_handle(
+            &handles,
+            &backend,
+            &repo_id_runtime.worktree_cache(),
+            &removed,
+        )
+        .expect("stub backend opens");
         assert_eq!(
             backend.opens(),
             3,
@@ -2804,16 +2897,21 @@ mod worktree_scan_handle_tests {
         let handles = handles();
         let backend = CountingBackend::new();
         let mine = RepoLifetime::allocate();
+        let mine_runtime = RepositoryRuntime::new(mine);
         let theirs = RepoLifetime::allocate();
+        let theirs_runtime = RepositoryRuntime::new(theirs);
         let path = PathBuf::from("/wt/shared-4003");
 
-        worktree_scan_handle(&handles, &backend, mine, &path).expect("stub backend opens");
-        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, &mine_runtime.worktree_cache(), &path)
+            .expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, &theirs_runtime.worktree_cache(), &path)
+            .expect("stub backend opens");
         assert_eq!(backend.opens(), 1, "tabs share a single checkout handle");
 
         retain_worktree_scan_handles(&handles, mine, &[]);
 
-        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, &theirs_runtime.worktree_cache(), &path)
+            .expect("stub backend opens");
         assert_eq!(
             backend.opens(),
             1,
@@ -2830,7 +2928,9 @@ mod worktree_scan_handle_tests {
         let handles = handles();
         let backend = CountingBackend::new();
         let first = RepoLifetime::allocate();
+        let first_runtime = RepositoryRuntime::new(first);
         let second = RepoLifetime::allocate();
+        let second_runtime = RepositoryRuntime::new(second);
         let paths = |repo: RepoLifetime| -> Vec<PathBuf> {
             (0..WORKTREE_SCAN_HANDLE_LIMIT)
                 .map(|ix| PathBuf::from(format!("/wt/share-{}-{ix}", repo.get())))
@@ -2842,7 +2942,8 @@ mod worktree_scan_handle_tests {
         // The first repo fills two thirds of the map, then the second arrives.
         let first_share = WORKTREE_SCAN_HANDLE_LIMIT * 2 / 3;
         for path in &first_paths[..first_share] {
-            worktree_scan_handle(&handles, &backend, first, path).expect("stub backend opens");
+            worktree_scan_handle(&handles, &backend, &first_runtime.worktree_cache(), path)
+                .expect("stub backend opens");
         }
 
         let held = |repo_id: RepoLifetime| {
@@ -2857,7 +2958,8 @@ mod worktree_scan_handle_tests {
         // the entry it had just used and never grew past the leftovers.
         for _ in 0..3 {
             for path in &second_paths {
-                worktree_scan_handle(&handles, &backend, second, path).expect("stub backend opens");
+                worktree_scan_handle(&handles, &backend, &second_runtime.worktree_cache(), path)
+                    .expect("stub backend opens");
             }
         }
 
@@ -2880,22 +2982,25 @@ mod worktree_scan_handle_tests {
     fn closing_a_repo_releases_every_handle_it_held() {
         let backend = CountingBackend::new();
         let closed = RepoLifetime::allocate();
+        let closed_runtime = RepositoryRuntime::new(closed);
         let other = RepoLifetime::allocate();
+        let other_runtime = RepositoryRuntime::new(other);
         let paths = [
             PathBuf::from("/wt/closing-4006-a"),
             PathBuf::from("/wt/closing-4006-b"),
         ];
 
-        // The release hook reaches the static directly -- it is called from the
-        // reducer, which has no map to hand it -- so this one test uses it, and
-        // cleans up after itself by releasing both repos.
+        // Runtime disposal reaches the shared cache. Each owner has a unique
+        // lifetime, and both runtimes are dropped before this test returns.
         let shared = worktree_scan_handles();
         for path in &paths {
-            worktree_scan_handle(shared, &backend, closed, path).expect("stub backend opens");
+            worktree_scan_handle(shared, &backend, &closed_runtime.worktree_cache(), path)
+                .expect("stub backend opens");
         }
-        worktree_scan_handle(shared, &backend, other, &paths[0]).expect("stub backend opens");
+        worktree_scan_handle(shared, &backend, &other_runtime.worktree_cache(), &paths[0])
+            .expect("stub backend opens");
 
-        release_worktree_scan_handles(closed);
+        drop(closed_runtime);
 
         let held = |repo_id: RepoLifetime| {
             lock_worktree_scan_handles(shared)
@@ -2907,13 +3012,14 @@ mod worktree_scan_handle_tests {
         assert_eq!(held(closed), 0, "the closed repo must hold nothing");
         assert_eq!(held(other), 1, "and must not have taken anyone else's");
 
-        release_worktree_scan_handles(other);
+        drop(other_runtime);
     }
 }
 
 #[cfg(test)]
 mod worktree_dirty_files_tests {
     use super::*;
+    use crate::store::repository_runtime::RepositoryRuntime;
     use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
 
     #[test]
@@ -2931,7 +3037,7 @@ mod worktree_dirty_files_tests {
                 &repos,
                 StoreWorkerSender::for_test_msg_sender(tx),
                 repo_id,
-                worker.lifetime,
+                worker.runtime.worktree_cache(),
                 own.clone(),
                 WorktreeDirtyScope::All,
                 None,
@@ -2960,7 +3066,7 @@ mod worktree_dirty_files_tests {
 
     struct ScanTestWorker {
         executor: TaskExecutor,
-        lifetime: RepoLifetime,
+        runtime: RepositoryRuntime,
         publisher: WorktreeListPublisher,
     }
 
@@ -2968,7 +3074,7 @@ mod worktree_dirty_files_tests {
         fn new() -> Self {
             Self {
                 executor: TaskExecutor::new(1),
-                lifetime: RepoLifetime::allocate(),
+                runtime: RepositoryRuntime::new(RepoLifetime::allocate()),
                 publisher: WorktreeListPublisher::default(),
             }
         }
@@ -2976,10 +3082,9 @@ mod worktree_dirty_files_tests {
 
     impl Drop for ScanTestWorker {
         fn drop(&mut self) {
-            // Finish writes to the shared cache before releasing ownership,
+            // Finish workers before the runtime field releases cache ownership,
             // including when a test assertion unwinds.
             self.executor.join_workers();
-            release_worktree_scan_handles(self.lifetime);
         }
     }
 
@@ -3027,7 +3132,7 @@ mod worktree_dirty_files_tests {
                 &repos,
                 StoreWorkerSender::for_test_msg_sender(tx),
                 repo_id,
-                worker.lifetime,
+                worker.runtime.worktree_cache(),
                 "/unavailable".into(),
                 scope,
                 None,
@@ -3083,7 +3188,7 @@ mod worktree_dirty_files_tests {
             &worktree_scan_handle(
                 worktree_scan_handles(),
                 &gitcomet_git_gix::GixBackend,
-                worker.lifetime,
+                &worker.runtime.worktree_cache(),
                 &cached_path,
             )
             .unwrap(),
@@ -3130,7 +3235,7 @@ mod worktree_dirty_files_tests {
                 &repos,
                 StoreWorkerSender::for_test_msg_sender(tx),
                 repo_id,
-                worker.lifetime,
+                worker.runtime.worktree_cache(),
                 own.clone(),
                 WorktreeDirtyScope::All,
                 Some(linked.clone()),
@@ -3261,7 +3366,7 @@ mod worktree_dirty_files_tests {
             &repos,
             StoreWorkerSender::for_test_msg_sender(tx),
             repo_id,
-            worker.lifetime,
+            worker.runtime.worktree_cache(),
             own,
             WorktreeDirtyScope::All,
             None,
@@ -3356,7 +3461,7 @@ mod worktree_dirty_files_tests {
                 &repos,
                 StoreWorkerSender::for_test_msg_sender(tx),
                 repo_id,
-                worker.lifetime,
+                worker.runtime.worktree_cache(),
                 own.clone(),
                 scope.clone(),
                 files_for,

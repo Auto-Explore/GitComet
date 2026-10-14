@@ -48,6 +48,7 @@ fn selecting_a_new_diff_cancels_only_the_previous_diff() {
 /// so they must not index every repo's selection.
 #[test]
 fn messages_without_selected_diff_work_skip_the_selection_index() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     use super::super::{RepoMonitorManager, WorkerLoopContext, selection_index_builds_for_test};
     use crate::model::RepoState;
     use gitcomet_core::domain::{DiffArea, RepoSpec};
@@ -92,6 +93,7 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
     let mut repos = FxHashMap::default();
     let id_alloc = std::sync::atomic::AtomicU64::new(1);
     let mut ctx = WorkerLoopContext {
+        repo_runtimes: &mut repo_runtimes,
         commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
         thread_state: &thread_state,
         active_repo_id: &active_repo_id,

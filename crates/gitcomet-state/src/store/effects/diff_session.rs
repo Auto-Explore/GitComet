@@ -12,7 +12,7 @@ pub(super) fn schedule(
     repos: &util::RepoMap,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
-    repo_lifetime: crate::model::RepoLifetime,
+    cache_lease: WorktreeCacheLease,
     work: DiffSessionEffect,
     parent: CancellationToken,
 ) {
@@ -28,7 +28,7 @@ pub(super) fn schedule(
                 None => repo,
                 Some(path) => match repo_load::linked_worktree_handle(
                     backend.as_ref(),
-                    repo_lifetime,
+                    &cache_lease,
                     repo.as_ref(),
                     path,
                 ) {
@@ -182,6 +182,9 @@ mod tests {
     fn a_cancelled_load_answers_every_requested_part() {
         let executor = super::super::super::executor::TaskExecutor::new(1);
         let repo_id = RepoId(1);
+        let runtime = crate::store::repository_runtime::RepositoryRuntime::new(
+            crate::model::RepoLifetime::allocate(),
+        );
         let mut repos: util::RepoMap = Default::default();
         repos.insert(
             repo_id,
@@ -213,7 +216,7 @@ mod tests {
             &repos,
             Arc::new(crate::store::tests::FailingBackend),
             msg_tx,
-            crate::model::RepoLifetime::allocate(),
+            runtime.worktree_cache(),
             work,
             parent,
         );
@@ -252,6 +255,9 @@ mod tests {
     fn work_outside_the_linked_worktrees_answers_every_part_with_an_error() {
         let executor = super::super::super::executor::TaskExecutor::new(1);
         let repo_id = RepoId(1);
+        let runtime = crate::store::repository_runtime::RepositoryRuntime::new(
+            crate::model::RepoLifetime::allocate(),
+        );
         let mut repos: util::RepoMap = Default::default();
         repos.insert(
             repo_id,
@@ -294,7 +300,7 @@ mod tests {
                 &repos,
                 Arc::new(crate::store::tests::FailingBackend),
                 msg_tx.clone(),
-                crate::model::RepoLifetime::allocate(),
+                runtime.worktree_cache(),
                 work,
                 CancellationToken::new(),
             );

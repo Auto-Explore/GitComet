@@ -5,6 +5,7 @@ use crate::msg::{ControlEffect, ReferenceEffect, StatusEffect};
 
 #[test]
 fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     for cancel_repo_loads in [false, true] {
         let primary = super::super::executor::TaskExecutor::new(1);
         let signatures = super::super::executor::TaskExecutor::new(1);
@@ -54,6 +55,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
             &backend,
             &repos,
             &mut tokens,
+            &mut repo_runtimes,
             sender.clone(),
             Effect::VerifyCommitSignatures {
                 repo_id,
@@ -71,6 +73,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
                 &backend,
                 &repos,
                 &mut tokens,
+                &mut repo_runtimes,
                 sender.clone(),
                 Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }),
             );
@@ -84,6 +87,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
                 &backend,
                 &repos,
                 &mut tokens,
+                &mut repo_runtimes,
                 sender,
                 Effect::Control(ControlEffect::CancelRepoLoads {
                     repo_id,
@@ -308,6 +312,7 @@ fn delete_branches_effect_stops_batch_and_preserves_cancellation() {
 
 #[test]
 fn open_repo_effect_suppresses_result_after_cancellation() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     use std::sync::{Condvar, Mutex};
 
     struct Backend {
@@ -379,6 +384,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx.clone(),
         Effect::OpenRepo {
             repo_id,
@@ -407,6 +413,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx,
         Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id,
@@ -428,6 +435,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
 
 #[test]
 fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     let repo_a = RepoId(520);
     let repo_b = RepoId(521);
     let release = Arc::new((Mutex::new(false), Condvar::new()));
@@ -510,6 +518,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx.clone(),
         Effect::LoadSelectedDiff {
             repo_id: repo_a,
@@ -533,6 +542,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx.clone(),
         Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id: repo_a,
@@ -545,6 +555,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx,
         Effect::LoadSelectedDiff {
             repo_id: repo_b,
@@ -570,6 +581,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
 /// will use.
 #[test]
 fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     let snapshot = Arc::new(RepoStatus {
         staged: Default::default(),
         unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
@@ -654,6 +666,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx.clone(),
         Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id: repo_a,
@@ -675,6 +688,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx.clone(),
         Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id: repo_a,
@@ -687,6 +701,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx,
         Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id: repo_b,

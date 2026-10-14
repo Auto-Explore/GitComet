@@ -20,6 +20,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [ ] Establish baseline tests and representative performance evidence.
 - [x] Fix ConfiguredBackend object-store release delegation with a regression test.
 - [x] Fix worktree-cache ownership collisions between stores using process-unique repository lifetimes.
+- [x] Reject late cache insertions after repository close and release cache leases on shutdown.
 - [ ] Canonicalize repository API families: cancellation-aware reads; encoded text/conflict reads; fetch/pull pruning; remote/submodule policies.
 - [ ] Preserve error causes and operation/path context while retaining classifications and cloning.
 - [x] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
@@ -103,6 +104,16 @@ dependencies exclude it. The unchanged integration inventory passed 1,968
 core/backend tests, and the strict LFS/annex supplement passed 98 tests without
 runtime prerequisite skips. Normal and opt-in Clippy checks passed, including
 the operation probe.
+
+The state worker now owns revocable linked-worktree cache leases. Accepted
+repository removal releases them outside the AppState write lock, and shutdown
+revokes them before joining workers. Cache hits and backend-open completions check
+liveness under the cache mutex, so a delayed open cannot restore closed ownership.
+Refresh cancellation preserves a live lease. The close regression observes handle
+destruction while the store remains alive; shutdown and shared-cache-hit regressions
+cover the other release paths. Independent review accepted this fix after all
+1,315 state tests passed, with six existing skips, and strict Clippy passed.
+Backend/task-token consolidation and prepared reducer inputs remain in progress.
 
 ## Migration notes
 

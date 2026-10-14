@@ -13,6 +13,7 @@ fn schedule_effect_with_state_for_test(
     msg_tx: std::sync::mpsc::Sender<Msg>,
     effect: Effect,
 ) {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
     let mut repo_task_tokens = FxHashMap::default();
@@ -36,6 +37,7 @@ fn schedule_effect_with_state_for_test(
         backend,
         repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx,
         effect,
     );

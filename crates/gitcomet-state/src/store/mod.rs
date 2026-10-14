@@ -18,6 +18,7 @@ mod reducer_diagnostics;
 mod repo_load_trace;
 mod repo_monitor;
 mod repository_preferences;
+mod repository_runtime;
 mod send_diagnostics;
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;
@@ -37,6 +38,7 @@ use reducer::{
     reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
+use repository_runtime::RepositoryRuntimes;
 use send_diagnostics::try_send_state_changed_or_log;
 use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
@@ -217,6 +219,7 @@ struct WorkerLoopContext<'a> {
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
     repo_task_tokens: &'a mut FxHashMap<RepoId, RepoTaskToken>,
+    repo_runtimes: &'a mut RepositoryRuntimes,
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
     repo_load_executor: &'a TaskExecutor,
@@ -272,6 +275,10 @@ impl WorkerLoopContext<'_> {
             gitcomet_core::op_trace::duration_ns(reduce_duration),
             publication,
         );
+        // Reducers also close repositories indirectly (for example, after
+        // removing a worktree). Reconcile the accepted handle removals here,
+        // outside the state lock and before any replacement work is scheduled.
+        self.repo_runtimes.retain_open(repos);
         // Cancel changed/cleared selections before dispatching their effects,
         // outside the state write lock. Index selections once, including absent
         // repos as cleared selections, instead of scanning all repos per token.
@@ -460,6 +467,7 @@ impl WorkerLoopContext<'_> {
                 self.backend,
                 repos,
                 self.repo_task_tokens,
+                self.repo_runtimes,
                 self.thread_msg_tx.clone(),
                 effect,
             );
@@ -675,6 +683,7 @@ impl AppStore {
                 });
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
+            let mut repo_runtimes = RepositoryRuntimes::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
@@ -828,6 +837,7 @@ impl AppStore {
                     event_tx: &event_tx,
                     repo_monitors: &mut repo_monitors,
                     repo_task_tokens: &mut repo_task_tokens,
+                    repo_runtimes: &mut repo_runtimes,
                     thread_msg_tx: &thread_msg_tx,
                     executor: &executor,
                     repo_load_executor: &repo_load_executor,
@@ -988,6 +998,7 @@ impl AppStore {
             for token in repo_task_tokens.values() {
                 token.cancel();
             }
+            repo_runtimes.clear();
             for repo in &thread_state.read().unwrap_or_else(|e| e.into_inner()).repos {
                 repo.history_state.commit_signatures_cancellation.cancel();
             }

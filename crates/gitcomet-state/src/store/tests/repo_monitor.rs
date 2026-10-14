@@ -522,6 +522,7 @@ fn repo_monitor_stop_does_not_wait_for_monitor_thread_to_exit() {
 
 #[test]
 fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     let old_repo_id = RepoId(10);
     let new_repo_id = RepoId(11);
     let mut old_repo = RepoState::new_opening(
@@ -563,6 +564,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
 
     let started = std::time::Instant::now();
     super::super::WorkerLoopContext {
+        repo_runtimes: &mut repo_runtimes,
         commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
         thread_state: &thread_state,
         active_repo_id: &active_repo_id,
@@ -714,6 +716,7 @@ fn watch_leases_count_and_leave_with_their_repository() {
 /// monitor stops once the lease is gone.
 #[test]
 fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     let active = RepoId(1);
     let leased = RepoId(2);
     let dir = tempfile::tempdir().expect("tempdir");
@@ -757,6 +760,7 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
 
     let mut handle = |repo_monitors: &mut monitor_impl::RepoMonitorManager| {
         super::super::WorkerLoopContext {
+            repo_runtimes: &mut repo_runtimes,
             commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
             thread_state: &thread_state,
             active_repo_id: &active_repo_id,

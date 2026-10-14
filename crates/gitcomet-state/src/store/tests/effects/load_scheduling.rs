@@ -1233,6 +1233,7 @@ fn open_repo_effect_emits_repo_opened_err() {
 
 #[test]
 fn open_repo_effects_are_bounded_by_repo_load_executor() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     struct Backend {
         started_tx: std::sync::mpsc::Sender<PathBuf>,
         release: Arc<(Mutex<bool>, Condvar)>,
@@ -1291,6 +1292,7 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx.clone(),
         Effect::OpenRepo {
             repo_id: repo_a,
@@ -1310,6 +1312,7 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         &backend,
         &repos,
         &mut repo_task_tokens,
+        &mut repo_runtimes,
         msg_tx,
         Effect::OpenRepo {
             repo_id: repo_b,
@@ -1574,6 +1577,7 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
 
 #[test]
 fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     for (load, expected) in [
         (
             Effect::References(ReferenceEffect::LoadRemoteTags {
@@ -1672,6 +1676,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             &backend,
             &repos,
             &mut repo_task_tokens,
+            &mut repo_runtimes,
             msg_tx.clone(),
             load,
         );
@@ -1688,6 +1693,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             &backend,
             &repos,
             &mut repo_task_tokens,
+            &mut repo_runtimes,
             msg_tx,
             Effect::References(ReferenceEffect::LoadTags { repo_id: repo_b }),
         );
@@ -1703,6 +1709,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
 
 #[test]
 fn schedule_effect_dispatches_many_variants_with_repo_present() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     struct Backend;
     impl GitBackend for Backend {
         fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
@@ -2430,6 +2437,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             &backend,
             &repos,
             &mut FxHashMap::default(),
+            &mut repo_runtimes,
             super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx),
             effect,
         );
@@ -2463,6 +2471,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
 /// Drive the real effect router and backend, not just two executor instances.
 #[test]
 fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
+    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     use crate::store::{effects::EffectExecutors, executor::TaskExecutor};
     let (_dir, workdir, _linked) =
         crate::store::tests::worktree_redirect::repo_with_linked_worktree();
@@ -2520,6 +2529,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
             &backend,
             &repos,
             &mut tokens,
+            &mut repo_runtimes,
             tx.clone(),
             effect,
         );
@@ -2570,6 +2580,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         &backend,
         &repos,
         &mut tokens,
+        &mut repo_runtimes,
         tx.clone(),
         Effect::LoadWorktreeDirty {
             repo_id,
@@ -2602,6 +2613,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         &backend,
         &repos,
         &mut tokens,
+        &mut repo_runtimes,
         tx,
         Effect::LoadWorktreeDirty {
             repo_id,

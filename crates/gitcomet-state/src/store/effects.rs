@@ -17,8 +17,7 @@ mod unavailable;
 mod util;
 mod worktree_list;
 
-/// Called by the reducer as it drops a repo's handle, so the worktree scan's
-/// cached repository handles go with it. See [`repo_load`].
+/// Releases one runtime's ownership without disturbing other stores or tabs.
 pub(super) use repo_load::release_worktree_scan_handles;
 
 pub(super) use load_tokens::RepoTaskToken;
@@ -33,6 +32,7 @@ use std::sync::{Arc, RwLock};
 
 use super::RepoId;
 use super::executor::TaskExecutor;
+use super::repository_runtime::{RepositoryRuntimes, WorktreeCacheLease};
 use super::worker_channel::StoreWorkerSender;
 
 /// Ceiling on how often a running filesystem operation may publish progress.
@@ -73,17 +73,19 @@ fn selected_diff_target(
         })
 }
 
-fn repo_lifetime(
+fn repo_worktree_cache(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
+    runtimes: &mut RepositoryRuntimes,
     repo_id: RepoId,
-) -> Option<crate::model::RepoLifetime> {
-    thread_state
+) -> Option<WorktreeCacheLease> {
+    let lifetime = thread_state
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .map(|repo| repo.lifetime_id())
+        .map(|repo| repo.lifetime_id())?;
+    Some(runtimes.worktree_cache(repo_id, lifetime))
 }
 
 fn selected_conflict_file_path(
@@ -123,6 +125,7 @@ pub(super) fn schedule_effect(
     backend: &Arc<dyn GitBackend>,
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
+    repo_runtimes: &mut RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     effect: Effect,
 ) {
@@ -247,7 +250,8 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::DiffSession(work) => {
-            if let Some(lifetime) = repo_lifetime(thread_state, work.repo_id)
+            if let Some(cache_lease) =
+                repo_worktree_cache(thread_state, repo_runtimes, work.repo_id)
                 && let Some((msg_tx, cancellation)) =
                     repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
             {
@@ -256,7 +260,7 @@ pub(super) fn schedule_effect(
                     repos,
                     Arc::clone(backend),
                     msg_tx,
-                    lifetime,
+                    cache_lease,
                     work,
                     cancellation,
                 );
@@ -399,7 +403,7 @@ pub(super) fn schedule_effect(
             scope,
             files_for,
         } => {
-            if let Some(lifetime) = repo_lifetime(thread_state, repo_id)
+            if let Some(cache_lease) = repo_worktree_cache(thread_state, repo_runtimes, repo_id)
                 && let Some((msg_tx, cancellation, publisher)) =
                     load_tokens::worktree_list_load_context(
                         thread_state,
@@ -414,7 +418,7 @@ pub(super) fn schedule_effect(
                     repos,
                     msg_tx,
                     repo_id,
-                    lifetime,
+                    cache_lease,
                     workdir,
                     scope,
                     files_for,
