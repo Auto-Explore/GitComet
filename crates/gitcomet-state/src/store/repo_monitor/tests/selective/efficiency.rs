@@ -232,7 +232,7 @@ fn null_device_global_config_keeps_coverage_healthy() {
             module_path!(),
             "::null_device_global_config_keeps_coverage_healthy"
         );
-        let output = Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", name.split_once("::").unwrap().1, "--nocapture"])
             .env(CHILD, "1")
             .env("GIT_CONFIG_GLOBAL", "NUL")

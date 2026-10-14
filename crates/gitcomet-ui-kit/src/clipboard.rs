@@ -470,9 +470,11 @@ fn write_text_to_x11(_text: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::PasteReceipt;
     use super::{
-        ClipboardBackend, PasteReceipt, clipboard_backend, copy_diagnostics_enabled,
-        replace_clipboard_owner, select_clipboard_backend,
+        ClipboardBackend, clipboard_backend, copy_diagnostics_enabled, replace_clipboard_owner,
+        select_clipboard_backend,
     };
     use crate::ui_runtime::{UiRuntime, with_override};
 
