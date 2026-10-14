@@ -1,5 +1,6 @@
 use super::*;
-use crate::model::{RepoLoadsInFlight, RepoState};
+use crate::model::LoadKind;
+use crate::model::RepoState;
 use crate::msg::RepoCommandKind;
 use gitcomet_core::domain::{RepoSpec, RepoStatus};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -28,7 +29,7 @@ fn snapshot() -> RepoStatus {
     }
 }
 
-fn stats_job(effects: &[Effect]) -> (u64, Arc<RepoStatus>) {
+fn stats_job(effects: &[Effect]) -> (crate::model::LineStatsGeneration, Arc<RepoStatus>) {
     let jobs: Vec<_> = effects
         .iter()
         .filter_map(|effect| match effect {
@@ -73,11 +74,7 @@ fn initial_refresh_publishes_status_before_counts_and_reuses_its_arcs() {
         assert_eq!(supplied.as_ref(), &status);
         assert!(Arc::ptr_eq(&supplied.unstaged, &status.unstaged));
         assert!(matches!(state.repos[0].worktree_status, Loadable::Ready(_)));
-        assert!(
-            state.repos[0]
-                .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
-        );
+        assert!(state.repos[0].loads_in_flight.line_stats_in_flight());
         assert!(
             effects::uncommitted_line_stats_loaded(
                 &mut state,
@@ -88,11 +85,7 @@ fn initial_refresh_publishes_status_before_counts_and_reuses_its_arcs() {
             )
             .is_empty()
         );
-        assert!(
-            !state.repos[0]
-                .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
-        );
+        assert!(!state.repos[0].loads_in_flight.line_stats_in_flight());
     }
 }
 
@@ -307,11 +300,10 @@ fn already_up_to_date_pull_still_refreshes_once_and_counts_settle_after_status()
         Ok(Default::default()),
         None,
     );
-    assert!(!state.repos[0].loads_in_flight.is_in_flight(
-        RepoLoadsInFlight::WORKTREE_STATUS
-            | RepoLoadsInFlight::STAGED_STATUS
-            | RepoLoadsInFlight::UNCOMMITTED_LINE_STATS
-    ));
+    let loads = &state.repos[0].loads_in_flight;
+    assert!(!loads.is_in_flight(LoadKind::WorktreeStatus));
+    assert!(!loads.is_in_flight(LoadKind::StagedStatus));
+    assert!(!loads.line_stats_in_flight());
 }
 
 fn lfs_support() -> gitcomet_core::large_files::LargeFileSupport {

@@ -1,7 +1,7 @@
+use crate::model::LoadKind;
 use crate::model::{
     AppNotification, AppNotificationKind, AppState, CommandLogEntry, ConflictFileLoadMode,
-    DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoLoadsInFlight,
-    RepoState,
+    DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 #[cfg(test)]
@@ -766,12 +766,8 @@ pub(super) fn append_requested_status_refresh_effects(
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let load_worktree = repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREE_STATUS);
-    let load_staged = repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STAGED_STATUS);
+    let load_worktree = repo_state.loads_in_flight.request(LoadKind::WorktreeStatus);
+    let load_staged = repo_state.loads_in_flight.request(LoadKind::StagedStatus);
 
     match (load_worktree, load_staged) {
         (true, true) => effects.push_effect(Effect::LoadStatus { repo_id }),
@@ -827,12 +823,10 @@ fn append_requested_rebase_and_merge_refresh_effects(
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let load_rebase = repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REBASE_STATE);
+    let load_rebase = repo_state.loads_in_flight.request(LoadKind::RebaseState);
     let load_merge_commit_message = repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE);
+        .request(LoadKind::MergeCommitMessage);
 
     match (load_rebase, load_merge_commit_message) {
         (true, true) => push_rebase_and_merge_refresh_effect(effects, repo_id),
@@ -930,15 +924,12 @@ pub(super) fn append_refresh_primary_effects(
         return;
     }
 
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::HEAD_BRANCH)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::HeadBranch) {
         effects.push_effect(Effect::LoadHeadBranch { repo_id });
     }
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+        .request(LoadKind::UpstreamDivergence)
     {
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
@@ -978,15 +969,12 @@ pub(super) fn append_refresh_full_effects(
 
     // Prioritize UI-critical loads (status + log) early. The executor is a FIFO queue, so this
     // ordering can materially impact perceived responsiveness when switching repositories.
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::HEAD_BRANCH)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::HeadBranch) {
         effects.push_effect(Effect::LoadHeadBranch { repo_id });
     }
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+        .request(LoadKind::UpstreamDivergence)
     {
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
@@ -996,22 +984,13 @@ pub(super) fn append_refresh_full_effects(
         repo_state.set_log_loading_more(false);
         effects.push_effect(effect);
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::BRANCHES)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::Branches) {
         effects.push_effect(Effect::LoadBranches { repo_id });
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REMOTES)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::Remotes) {
         effects.push_effect(Effect::LoadRemotes { repo_id });
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
         effects.push_effect(Effect::LoadRemoteBranches { repo_id });
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
@@ -1030,7 +1009,7 @@ pub(super) fn append_auto_background_metadata_effects(
     if should_auto_fetch_history_tags(git_log_settings) {
         if matches!(repo_state.tags, Loadable::NotLoaded | Loadable::Error(_)) {
             repo_state.set_tags(Loadable::Loading);
-            if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            if repo_state.loads_in_flight.request(LoadKind::Tags) {
                 effects.push_effect(Effect::LoadTags { repo_id });
             }
         }
@@ -1040,10 +1019,7 @@ pub(super) fn append_auto_background_metadata_effects(
             Loadable::NotLoaded | Loadable::Error(_)
         ) {
             repo_state.set_remote_tags(Loadable::Loading);
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::REMOTE_TAGS)
-            {
+            if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
                 effects.push_effect(Effect::LoadRemoteTags { repo_id });
             }
         }
@@ -1054,10 +1030,7 @@ pub(super) fn append_auto_background_metadata_effects(
         Loadable::NotLoaded | Loadable::Error(_)
     ) {
         repo_state.set_submodules(Loadable::Loading);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::SUBMODULES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::Submodules) {
             effects.push_effect(Effect::LoadSubmodules { repo_id });
         }
     }

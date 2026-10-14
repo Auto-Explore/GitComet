@@ -309,7 +309,11 @@ fn guarded_effect_sender_wraps_repository_load_messages() {
         StoreInstanceId::next(),
         crate::store::repository_preferences::PreferenceHub::new(None),
     );
-    let guarded = sender.with_repo_load_guard(repo_id, 3, CancellationToken::new());
+    let guarded = sender.with_repo_load_guard(
+        repo_id,
+        crate::model::RepoLoadEpoch(3),
+        CancellationToken::new(),
+    );
 
     guarded.send_effect_or_log(
         Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
@@ -328,7 +332,7 @@ fn guarded_effect_sender_wraps_repository_load_messages() {
                 message,
             }) => {
                 assert_eq!(got_repo_id, repo_id);
-                assert_eq!(load_epoch, 3);
+                assert_eq!(load_epoch, crate::model::RepoLoadEpoch(3));
                 assert!(matches!(
                     *message,
                     crate::msg::InternalMsg::TagsLoaded {

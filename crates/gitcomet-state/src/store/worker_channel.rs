@@ -79,7 +79,7 @@ pub(super) struct StoreWorkerSender {
 #[derive(Clone)]
 struct RepoLoadGuard {
     repo_id: RepoId,
-    load_epoch: u64,
+    load_epoch: crate::model::RepoLoadEpoch,
 }
 
 impl StoreWorkerSender {
@@ -193,7 +193,7 @@ impl StoreWorkerSender {
     pub(super) fn with_repo_load_guard(
         &self,
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
         cancellation: CancellationToken,
     ) -> Self {
         let mut guarded = self.clone();

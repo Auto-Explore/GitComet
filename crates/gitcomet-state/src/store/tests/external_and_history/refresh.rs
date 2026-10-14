@@ -4,7 +4,7 @@ use rustc_hash::FxHashSet;
 
 fn reply(
     state: &mut AppState,
-    seq: u64,
+    seq: crate::model::LogLoadSeq,
     cursor: Option<LogCursor>,
     result: Result<HistoryReadResult>,
 ) -> Vec<Effect> {

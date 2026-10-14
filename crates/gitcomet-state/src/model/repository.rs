@@ -3,7 +3,7 @@
 use super::LargeFileSettings;
 use super::{
     CommandLogEntry, ConflictState, DiffState, FileBrowserState, GitHookOperation, HistoryState,
-    InteractiveCherryPickSetup, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight,
+    InteractiveCherryPickSetup, InteractiveRebaseSetup, LoadKind, Loadable, RepoLoadsInFlight,
     RepoNavigationState, RepoPendingState, Shared, SubmoduleAddProgressState, TagPushPreviewState,
 };
 use crate::session;
@@ -221,7 +221,7 @@ pub struct RepoState {
 
     pub feedback: RepoFeedbackState,
     pub pending: RepoPendingState,
-    pub load_epoch: u64,
+    pub load_epoch: crate::model::RepoLoadEpoch,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -378,7 +378,7 @@ impl RepoState {
             left_mid_refresh: false,
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
-            load_epoch: 0,
+            load_epoch: crate::model::RepoLoadEpoch(0),
         }
     }
 
@@ -579,12 +579,8 @@ impl RepoState {
         // pending so its result schedules a refetch; otherwise that stale map
         // lands as `Ready` and, since callers only refetch on
         // `NotLoaded | Error`, it would never be corrected.
-        if self
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::REF_METADATA)
-        {
-            self.loads_in_flight
-                .request(RepoLoadsInFlight::REF_METADATA);
+        if self.loads_in_flight.is_in_flight(LoadKind::RefMetadata) {
+            self.loads_in_flight.request(LoadKind::RefMetadata);
         }
         if matches!(self.ref_metadata, Loadable::NotLoaded) {
             return;
@@ -1081,9 +1077,9 @@ impl RepoState {
             || self.commit_in_flight > 0
     }
 
-    pub(crate) fn bump_load_epoch(&mut self) -> u64 {
+    pub(crate) fn bump_load_epoch(&mut self) -> super::RepoLoadEpoch {
         let previous = self.load_epoch;
-        self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.load_epoch = self.load_epoch.next();
         self.history_state.indexed.cancel();
         self.history_state.authors.cancellation.cancel();
         self.history_state.find.interrupt();

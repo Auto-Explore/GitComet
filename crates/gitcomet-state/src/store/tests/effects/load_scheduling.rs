@@ -1405,7 +1405,7 @@ fn load_log_effect_uses_history_mode_api() {
         msg_tx,
         Effect::LoadLog {
             repo_id,
-            seq: 1,
+            seq: crate::model::LogLoadSeq(1),
             scope: LogScope::NoMerges,
             author: None,
             limit: 20,
@@ -1425,7 +1425,11 @@ fn load_log_effect_uses_history_mode_api() {
             result: Ok(gitcomet_core::services::HistoryReadResult::Page { page, .. }),
         }) => {
             assert_eq!(got_repo_id, repo_id);
-            assert_eq!(seq, 1, "the reply carries the sequence of its request");
+            assert_eq!(
+                seq,
+                crate::model::LogLoadSeq(1),
+                "the reply carries the sequence of its request"
+            );
             assert_eq!(scope, LogScope::NoMerges);
             assert_eq!(got_cursor, Some(cursor));
             assert!(page.commits.is_empty());
@@ -1482,7 +1486,7 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
             tx,
             Effect::LoadLog {
                 repo_id,
-                seq: 1,
+                seq: crate::model::LogLoadSeq(1),
                 scope: LogScope::NoMerges,
                 author: Some("alice".into()),
                 limit: 800,
@@ -1748,7 +1752,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::LoadLog {
                 repo_id,
-                seq: 1,
+                seq: crate::model::LogLoadSeq(1),
                 scope: LogScope::CurrentBranch,
                 author: None,
                 limit: 20,
@@ -1759,7 +1763,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::LoadLog {
                 repo_id,
-                seq: 2,
+                seq: crate::model::LogLoadSeq(2),
                 scope: LogScope::AllBranches,
                 author: None,
                 limit: 20,
@@ -2559,7 +2563,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     // list was cached. Reload may have cleared the view in the meantime.
     {
         let mut state = thread_state.write().unwrap();
-        Arc::make_mut(&mut state).repos[0].load_epoch += 1;
+        Arc::make_mut(&mut state).repos[0].bump_load_epoch();
     }
     crate::store::effects::schedule_effect(
         executors,

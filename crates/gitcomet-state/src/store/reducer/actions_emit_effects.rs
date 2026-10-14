@@ -6,8 +6,8 @@ use super::util::{
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{
-    AppState, InteractiveCherryPickSetup, InteractiveRebaseSetup, Loadable, RepoId,
-    RepoLoadsInFlight, RepoState,
+    AppState, InteractiveCherryPickSetup, InteractiveRebaseSetup, LoadKind, Loadable, RepoId,
+    RepoState,
 };
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
@@ -1561,30 +1561,24 @@ pub(super) fn repo_command_finished(
     }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::SUBMODULES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::Submodules) {
             extra_effects.push(Effect::LoadSubmodules { repo_id });
         }
     }
     if refresh_tags {
         repo_state.set_tags(Loadable::NotLoaded);
-        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+        if repo_state.loads_in_flight.request(LoadKind::Tags) {
             extra_effects.push(Effect::LoadTags { repo_id });
         }
     } else if refresh_synced_tag_metadata && !matches!(repo_state.tags, Loadable::NotLoaded) {
         repo_state.set_tags(Loadable::Loading);
-        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+        if repo_state.loads_in_flight.request(LoadKind::Tags) {
             extra_effects.push(Effect::LoadTags { repo_id });
         }
     }
     if refresh_remote_tag_metadata && !matches!(repo_state.remote_tags, Loadable::NotLoaded) {
         repo_state.set_remote_tags(Loadable::Loading);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_TAGS)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
             extra_effects.push(Effect::LoadRemoteTags { repo_id });
         }
     }

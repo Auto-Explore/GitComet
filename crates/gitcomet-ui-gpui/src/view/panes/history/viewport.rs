@@ -11,7 +11,7 @@ pub(super) struct PresentedHistory {
     plan: HistoryListPlan,
     worktree_paths: Vec<PathBuf>,
     worktree_dirty_rev: u64,
-    load_epoch: u64,
+    load_epoch: gitcomet_state::model::RepoLoadEpoch,
     ready: bool,
     height: Pixels,
 }

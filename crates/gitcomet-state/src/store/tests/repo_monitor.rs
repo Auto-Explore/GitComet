@@ -358,8 +358,8 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
             limit: 200,
             cursor: None,
         });
-        loads_in_flight.request(crate::model::RepoLoadsInFlight::BRANCHES);
-        loads_in_flight.request(crate::model::RepoLoadsInFlight::REMOTE_BRANCHES);
+        loads_in_flight.request(crate::model::LoadKind::Branches);
+        loads_in_flight.request(crate::model::LoadKind::RemoteBranches);
         state
     };
     let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));

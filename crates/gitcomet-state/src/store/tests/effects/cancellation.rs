@@ -86,7 +86,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
                 sender,
                 Effect::CancelRepoLoads {
                     repo_id,
-                    load_epoch: 0,
+                    load_epoch: crate::model::RepoLoadEpoch(0),
                 },
             );
         }
@@ -409,7 +409,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         msg_tx,
         Effect::CancelRepoLoads {
             repo_id,
-            load_epoch: 0,
+            load_epoch: crate::model::RepoLoadEpoch(0),
         },
     );
     {
@@ -535,7 +535,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         msg_tx.clone(),
         Effect::CancelRepoLoads {
             repo_id: repo_a,
-            load_epoch: 0,
+            load_epoch: crate::model::RepoLoadEpoch(0),
         },
     );
     super::super::effects::schedule_effect(
@@ -656,7 +656,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         msg_tx.clone(),
         Effect::LoadUncommittedLineStats {
             repo_id: repo_a,
-            generation: 1,
+            generation: crate::model::LineStatsGeneration(1),
             status: Arc::clone(&snapshot),
             large_files: false,
         },
@@ -677,7 +677,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         msg_tx.clone(),
         Effect::CancelRepoLoads {
             repo_id: repo_a,
-            load_epoch: 0,
+            load_epoch: crate::model::RepoLoadEpoch(0),
         },
     );
     super::super::effects::schedule_effect(
@@ -689,7 +689,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         msg_tx,
         Effect::LoadUncommittedLineStats {
             repo_id: repo_b,
-            generation: 1,
+            generation: crate::model::LineStatsGeneration(1),
             status: snapshot,
             large_files: false,
         },

@@ -4,8 +4,8 @@ use super::util::{
 };
 use crate::model::{
     AppNotificationKind, AppState, CommitMultiSelection, ConflictFileLoadMode, DiagnosticKind,
-    FileBrowserSettings, ForeignDiffOrigin, Loadable, PendingFileBrowserReopen, RangeSelection,
-    RepoId, RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode, WorktreeDirtyScope,
+    FileBrowserSettings, ForeignDiffOrigin, LoadKind, Loadable, PendingFileBrowserReopen,
+    RangeSelection, RepoId, RepoState, SidebarDataRequest, SidebarMode, WorktreeDirtyScope,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect, WorktreeListRead};
 use gitcomet_core::conflict_session::{
@@ -590,11 +590,7 @@ pub(super) fn worktrees_loaded(
         }
         // A scan observation cannot finish a concurrent explicit list load.
         // A stale explicit reply still has to release its own lane.
-        if read.completes_load
-            && repo_state
-                .loads_in_flight
-                .finish(RepoLoadsInFlight::WORKTREES)
-        {
+        if read.completes_load && repo_state.loads_in_flight.finish(LoadKind::Worktrees) {
             effects.push(Effect::LoadWorktrees { repo_id });
         }
     }
@@ -843,10 +839,7 @@ pub(super) fn ref_metadata_loaded(
             Err(e) => Loadable::Error(e.to_string()),
         };
         repo_state.set_ref_metadata(ref_metadata);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REF_METADATA)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::RefMetadata) {
             effects.push(Effect::LoadRefMetadata { repo_id });
         }
     }
@@ -872,10 +865,7 @@ pub(super) fn submodules_loaded(
             }
         };
         repo_state.set_submodules(submodules);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::SUBMODULES)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::Submodules) {
             effects.push(Effect::LoadSubmodules { repo_id });
         }
     }
@@ -1441,20 +1431,14 @@ pub(super) fn append_ensure_sidebar_data_effects(
 
     if request.submodules && matches!(repo_state.submodules, Loadable::NotLoaded) {
         repo_state.set_submodules(Loadable::Loading);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::SUBMODULES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::Submodules) {
             effects.push_effect(Effect::LoadSubmodules { repo_id });
         }
     }
 
     if request.stashes && matches!(repo_state.stashes, Loadable::NotLoaded) {
         repo_state.set_stashes(Loadable::Loading);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::STASHES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::Stashes) {
             effects.push_effect(Effect::LoadStashes { repo_id, limit: 50 });
         }
     }
@@ -1483,10 +1467,7 @@ pub(super) fn load_stashes(state: &mut AppState, repo_id: RepoId) -> Vec<Effect>
         return Vec::new();
     }
     repo_state.set_stashes(Loadable::Loading);
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STASHES)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::Stashes) {
         vec![Effect::LoadStashes { repo_id, limit: 50 }]
     } else {
         Vec::new()
@@ -1498,10 +1479,7 @@ pub(super) fn refresh_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
         return Vec::new();
     };
 
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::BRANCHES)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::Branches) {
         vec![Effect::LoadBranches { repo_id }]
     } else {
         Vec::new()
@@ -1516,7 +1494,7 @@ pub(super) fn load_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
         return Vec::new();
     }
     repo_state.set_tags(Loadable::Loading);
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+    if repo_state.loads_in_flight.request(LoadKind::Tags) {
         vec![Effect::LoadTags { repo_id }]
     } else {
         Vec::new()
@@ -1531,10 +1509,7 @@ pub(super) fn load_remote_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
         return Vec::new();
     }
     repo_state.set_remote_tags(Loadable::Loading);
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REMOTE_TAGS)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
         vec![Effect::LoadRemoteTags { repo_id }]
     } else {
         Vec::new()
@@ -1565,10 +1540,7 @@ pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> 
         return Vec::new();
     };
     repo_state.set_reflog(Loadable::Loading);
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REFLOG)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::Reflog) {
         vec![Effect::LoadReflog {
             repo_id,
             limit: 200,
@@ -1744,7 +1716,7 @@ pub(super) fn request_worktrees_effect(repo_state: &mut RepoState) -> Option<Eff
     }
     repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREES)
+        .request(LoadKind::Worktrees)
         .then_some(Effect::LoadWorktrees {
             repo_id: repo_state.id,
         })
@@ -1802,9 +1774,7 @@ pub(super) fn request_worktree_dirty_path_effect(
         return None;
     }
     let scope = if !matches!(repo_state.worktree_dirty, Loadable::Ready(_))
-        && !repo_state
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREE_DIRTY)
+        && !repo_state.loads_in_flight.worktree_dirty_in_flight()
     {
         WorktreeDirtyScope::All
     } else {
@@ -1838,10 +1808,7 @@ pub(super) fn load_ref_metadata(state: &mut AppState, repo_id: RepoId) -> Vec<Ef
         return Vec::new();
     }
     repo_state.set_ref_metadata(Loadable::Loading);
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REF_METADATA)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::RefMetadata) {
         vec![Effect::LoadRefMetadata { repo_id }]
     } else {
         Vec::new()
@@ -1856,10 +1823,7 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
         return Vec::new();
     }
     repo_state.set_submodules(Loadable::Loading);
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::SUBMODULES)
-    {
+    if repo_state.loads_in_flight.request(LoadKind::Submodules) {
         vec![Effect::LoadSubmodules { repo_id }]
     } else {
         Vec::new()
@@ -2101,7 +2065,7 @@ pub(super) fn request_file_browser_load(repo_state: &mut RepoState) -> Option<Ef
     }
     repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::FILE_BROWSER)
+        .request(LoadKind::FileBrowser)
         .then(|| Effect::LoadFileBrowser {
             repo_id: repo_state.id,
             source: repo_state.file_browser.source.clone(),
@@ -2354,9 +2318,7 @@ pub(super) fn file_browser_loaded(
         // Release the lane before the stale-source guard: a reply for a source the
         // user has already navigated away from still ends the walk that was running,
         // and the request queued behind it is the one that matters now.
-        let has_pending = repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::FILE_BROWSER);
+        let has_pending = repo_state.loads_in_flight.finish(LoadKind::FileBrowser);
 
         let mut reopen = None;
         if repo_state.file_browser.source == source {
@@ -2434,10 +2396,7 @@ pub(super) fn branches_loaded(
             }
         };
         repo_state.set_branches(branches);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::BRANCHES)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::Branches) {
             effects.push(Effect::LoadBranches { repo_id });
         }
     }
@@ -2459,10 +2418,7 @@ pub(super) fn remotes_loaded(
             }
         };
         repo_state.set_remotes(remotes);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REMOTES)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::Remotes) {
             effects.push(Effect::LoadRemotes { repo_id });
         }
     }
@@ -2476,9 +2432,7 @@ pub(super) fn remote_branches_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let refresh_pending = repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REMOTE_BRANCHES);
+        let refresh_pending = repo_state.loads_in_flight.finish(LoadKind::RemoteBranches);
         let remote_mutation_in_flight =
             repo_state.pull_in_flight > 0 || repo_state.push_in_flight > 0;
 
@@ -2524,18 +2478,8 @@ pub(super) fn status_loaded(
                 repo_state.set_status(Loadable::Error(e.to_string()));
             }
         }
-        finish_status_lane_replay(
-            repo_state,
-            RepoLoadsInFlight::WORKTREE_STATUS,
-            Effect::LoadWorktreeStatus { repo_id },
-            &mut effects,
-        );
-        finish_status_lane_replay(
-            repo_state,
-            RepoLoadsInFlight::STAGED_STATUS,
-            Effect::LoadStagedStatus { repo_id },
-            &mut effects,
-        );
+        StatusLane::Worktree.finish(repo_state, &mut effects);
+        StatusLane::Staged.finish(repo_state, &mut effects);
     }
     effects
 }
@@ -2560,12 +2504,7 @@ pub(super) fn worktree_status_loaded(
                 repo_state.set_worktree_status(Loadable::Error(e.to_string()));
             }
         }
-        finish_status_lane_replay(
-            repo_state,
-            RepoLoadsInFlight::WORKTREE_STATUS,
-            Effect::LoadWorktreeStatus { repo_id },
-            &mut effects,
-        );
+        StatusLane::Worktree.finish(repo_state, &mut effects);
     }
     effects
 }
@@ -2639,7 +2578,7 @@ pub(super) fn large_file_support_loaded(
     }
     let replay = repo_state
         .loads_in_flight
-        .finish(RepoLoadsInFlight::LARGE_FILE_SUPPORT);
+        .finish(LoadKind::LargeFileSupport);
     if replay {
         effects.push(Effect::LoadLargeFileSupport { repo_id });
     }
@@ -2689,7 +2628,7 @@ pub(super) fn request_lfs_locks_effect(repo_state: &mut RepoState) -> Option<Eff
     }
     repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::LFS_LOCKS)
+        .request(LoadKind::LfsLocks)
         .then_some(Effect::LoadLfsLocks {
             repo_id: repo_state.id,
         })
@@ -2710,10 +2649,7 @@ pub(super) fn lfs_locks_loaded(
         // Many LFS servers have no lock API; say so on the rows, no banner.
         Err(e) => repo_state.set_lfs_locks(Loadable::Error(e.to_string())),
     }
-    if repo_state
-        .loads_in_flight
-        .finish(RepoLoadsInFlight::LFS_LOCKS)
-    {
+    if repo_state.loads_in_flight.finish(LoadKind::LfsLocks) {
         effects.push(Effect::LoadLfsLocks { repo_id });
     }
     effects
@@ -2724,7 +2660,7 @@ pub(super) fn request_annex_unused_effect(repo_state: &mut RepoState) -> Option<
     repo_state.set_annex_unused(Loadable::Loading);
     repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::ANNEX_UNUSED)
+        .request(LoadKind::AnnexUnused)
         .then_some(Effect::LoadAnnexUnused {
             repo_id: repo_state.id,
         })
@@ -2739,10 +2675,7 @@ pub(super) fn annex_unused_loaded(
         return Vec::new();
     };
     // A queued rescan supersedes this result; stay Loading until it lands.
-    if repo_state
-        .loads_in_flight
-        .finish(RepoLoadsInFlight::ANNEX_UNUSED)
-    {
+    if repo_state.loads_in_flight.finish(LoadKind::AnnexUnused) {
         return vec![Effect::LoadAnnexUnused { repo_id }];
     }
     repo_state.set_annex_unused(match result {
@@ -2756,7 +2689,7 @@ pub(super) fn annex_unused_loaded(
 pub(super) fn request_large_file_support_effect(repo_state: &mut RepoState) -> Option<Effect> {
     repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::LARGE_FILE_SUPPORT)
+        .request(LoadKind::LargeFileSupport)
         .then_some(Effect::LoadLargeFileSupport {
             repo_id: repo_state.id,
         })
@@ -2781,37 +2714,42 @@ pub(super) fn staged_status_loaded(
                 repo_state.set_staged_status(Loadable::Error(e.to_string()));
             }
         }
-        finish_status_lane_replay(
-            repo_state,
-            RepoLoadsInFlight::STAGED_STATUS,
-            Effect::LoadStagedStatus { repo_id },
-            &mut effects,
-        );
+        StatusLane::Staged.finish(repo_state, &mut effects);
     }
     effects
 }
 
-fn finish_status_lane_replay(
-    repo_state: &mut crate::model::RepoState,
-    flag: u32,
-    replay_effect: Effect,
-    effects: &mut Vec<Effect>,
-) {
-    // A pending request means a refresh was coalesced while this load was in flight — a genuine
-    // external change or a just-completed action. Always replay it, even when the loaded payload
-    // matches what is currently displayed: the in-flight load may have read the working tree or
-    // index just *before* the change landed, so the coalesced refresh is the only chance to
-    // observe it. Suppressing it on an unchanged payload (as a previous revision did) drops real
-    // external changes and leaves stale entries in the uncommitted view.
-    //
-    // This cannot self-sustain a refresh loop: status reads are read-only (the gix backend's
-    // `maybe_persist_*` helpers never rewrite `.git/index`, and worktree reads emit only ignored
-    // `Access` events), so a completed status load never manufactures the filesystem event that
-    // would set `pending` again.
-    if repo_state.loads_in_flight.finish(flag) {
-        effects.push(replay_effect);
+enum StatusLane {
+    Worktree,
+    Staged,
+}
+
+impl StatusLane {
+    fn finish(self, repo_state: &mut RepoState, effects: &mut Vec<Effect>) {
+        let kind = match self {
+            Self::Worktree => LoadKind::WorktreeStatus,
+            Self::Staged => LoadKind::StagedStatus,
+        };
+        // A pending request means a refresh was coalesced while this load was in flight — a genuine
+        // external change or a just-completed action. Always replay it, even when the loaded payload
+        // matches what is currently displayed: the in-flight load may have read the working tree or
+        // index just *before* the change landed, so the coalesced refresh is the only chance to
+        // observe it. Suppressing it on an unchanged payload (as a previous revision did) drops real
+        // external changes and leaves stale entries in the uncommitted view.
+        //
+        // This cannot self-sustain a refresh loop: status reads are read-only (the gix backend's
+        // `maybe_persist_*` helpers never rewrite `.git/index`, and worktree reads emit only ignored
+        // `Access` events), so a completed status load never manufactures the filesystem event that
+        // would set `pending` again.
+        if repo_state.loads_in_flight.finish(kind) {
+            let repo_id = repo_state.id;
+            effects.push(match self {
+                Self::Worktree => Effect::LoadWorktreeStatus { repo_id },
+                Self::Staged => Effect::LoadStagedStatus { repo_id },
+            });
+        }
+        super::util::append_ready_line_stats_effect(repo_state, effects);
     }
-    super::util::append_ready_line_stats_effect(repo_state, effects);
 }
 
 /// Clear conflict-file/session state when the tracked conflict path is no longer
@@ -2874,10 +2812,7 @@ pub(super) fn head_branch_loaded(
             (Loadable::Ready(before), Loadable::Ready(after)) if before != after
         );
         repo_state.set_head_branch(head_branch);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::HEAD_BRANCH)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::HeadBranch) {
             effects.push(Effect::LoadHeadBranch { repo_id });
         }
         if moved && let Some(effect) = request_large_file_support_effect(repo_state) {
@@ -2904,7 +2839,7 @@ pub(super) fn upstream_divergence_loaded(
         repo_state.set_upstream_divergence(value);
         if repo_state
             .loads_in_flight
-            .finish(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+            .finish(LoadKind::UpstreamDivergence)
         {
             effects.push(Effect::LoadUpstreamDivergence { repo_id });
         }
@@ -2933,7 +2868,7 @@ pub(super) fn tags_loaded(
             }
         };
         repo_state.set_tags(tags);
-        if repo_state.loads_in_flight.finish(RepoLoadsInFlight::TAGS) {
+        if repo_state.loads_in_flight.finish(LoadKind::Tags) {
             effects.push(Effect::LoadTags { repo_id });
         }
     }
@@ -2961,10 +2896,7 @@ pub(super) fn remote_tags_loaded(
             }
         };
         repo_state.set_remote_tags(remote_tags);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REMOTE_TAGS)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::RemoteTags) {
             effects.push(Effect::LoadRemoteTags { repo_id });
         }
     }
@@ -2986,10 +2918,7 @@ pub(super) fn stashes_loaded(
             }
         };
         repo_state.set_stashes(stashes);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::STASHES)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::Stashes) {
             effects.push(Effect::LoadStashes { repo_id, limit: 50 });
         }
     }
@@ -3011,7 +2940,7 @@ pub(super) fn reflog_loaded(
             }
         };
         repo_state.set_reflog(next);
-        if repo_state.loads_in_flight.finish(RepoLoadsInFlight::REFLOG) {
+        if repo_state.loads_in_flight.finish(LoadKind::Reflog) {
             effects.push(Effect::LoadReflog {
                 repo_id,
                 limit: 200,

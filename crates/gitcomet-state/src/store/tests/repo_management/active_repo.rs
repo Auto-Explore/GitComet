@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LoadKind;
 
 #[test]
 fn set_active_repo_waits_for_repo_open_before_refreshing() {
@@ -89,7 +90,7 @@ fn switching_away_from_opening_repo_cancels_loading_and_restarts_on_return() {
         .iter()
         .find(|repo| repo.id == repo2)
         .expect("repo2 exists");
-    assert_eq!(repo2_state.load_epoch, old_epoch.wrapping_add(1));
+    assert_eq!(repo2_state.load_epoch, old_epoch.next());
     assert!(matches!(repo2_state.open, Loadable::NotLoaded));
     assert!(has_cancel_repo_loads_effect(&effects, repo2, old_epoch));
 
@@ -140,7 +141,7 @@ fn opening_another_repo_cancels_previous_active_repo_loads() {
         .find(|repo| repo.id == repo1)
         .expect("repo1 exists");
     assert!(matches!(repo1_state.open, Loadable::NotLoaded));
-    assert_eq!(repo1_state.load_epoch, old_epoch.wrapping_add(1));
+    assert_eq!(repo1_state.load_epoch, old_epoch.next());
     assert!(has_cancel_repo_loads_effect(&effects, repo1, old_epoch));
     assert_eq!(state.active_repo, Some(RepoId(2)));
 }
@@ -161,21 +162,13 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
         repo1_state.set_branches(Loadable::Loading);
         repo1_state.set_status(Loadable::Loading);
         repo1_state.set_log(Loadable::Loading);
+        assert!(repo1_state.loads_in_flight.request(LoadKind::Branches));
         assert!(
             repo1_state
                 .loads_in_flight
-                .request(RepoLoadsInFlight::BRANCHES)
+                .request(LoadKind::WorktreeStatus)
         );
-        assert!(
-            repo1_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::WORKTREE_STATUS)
-        );
-        assert!(
-            repo1_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::STAGED_STATUS)
-        );
+        assert!(repo1_state.loads_in_flight.request(LoadKind::StagedStatus));
         let log_request = crate::model::PendingLogLoad {
             scope: repo1_state.history_state.history_scope,
             author: None,
@@ -288,7 +281,7 @@ fn stale_load_result_after_cancel_is_ignored() {
     assert!(
         repo1_state
             .loads_in_flight
-            .request(RepoLoadsInFlight::WORKTREE_STATUS)
+            .request(LoadKind::WorktreeStatus)
     );
     let old_epoch = repo1_state.load_epoch;
 
@@ -521,7 +514,7 @@ fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
 
     let effects = reduce(
@@ -849,7 +842,7 @@ fn pre_open_stash_lazy_load_can_retry_after_repo_opened() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::STASHES)
+            .is_in_flight(LoadKind::Stashes)
     );
 
     let effects = reduce(
@@ -2040,11 +2033,7 @@ fn stale_status_result_after_repo_action_finished_is_dropped() {
         .find(|repo| repo.id == repo_id)
         .expect("repo exists");
     repo_state.set_status(Loadable::Loading);
-    assert!(
-        repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::WORKTREE_STATUS)
-    );
+    assert!(repo_state.loads_in_flight.request(LoadKind::WorktreeStatus));
     let old_epoch = repo_state.load_epoch;
 
     // The action completes and bumps the epoch, invalidating the in-flight status load.
@@ -2087,7 +2076,7 @@ fn stale_status_result_after_repo_action_finished_is_dropped() {
     assert!(
         repo_state
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS)
+            .is_in_flight(LoadKind::WorktreeStatus)
     );
 }
 
@@ -2368,10 +2357,7 @@ fn a_tab_left_mid_refresh_refreshes_when_it_comes_back() {
         if diff_reload {
             repo.diff_state.diff_reload_in_flight = true;
         } else {
-            assert!(
-                repo.loads_in_flight
-                    .request(RepoLoadsInFlight::WORKTREE_STATUS)
-            );
+            assert!(repo.loads_in_flight.request(LoadKind::WorktreeStatus));
         }
 
         // Leaving cancels the refresh but keeps the values it was replacing, so

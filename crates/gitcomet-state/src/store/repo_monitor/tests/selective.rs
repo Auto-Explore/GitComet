@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LoadKind;
 mod efficiency;
 mod native_lifecycle;
 mod path_identities;
@@ -357,7 +358,7 @@ fn lfs_cache_events_never_keep_loads_in_flight() {
     let mut loads = RepoLoadsInFlight::default();
     let mut debounce = DebouncedChange::new(Duration::from_millis(250), Duration::from_secs(2));
     let start = Instant::now();
-    let flag = RepoLoadsInFlight::WORKTREE_STATUS;
+    let flag = LoadKind::WorktreeStatus;
     assert!(loads.request(flag));
     for index in 0..100 {
         let event =

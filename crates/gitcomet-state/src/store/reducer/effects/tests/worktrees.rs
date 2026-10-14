@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LoadKind;
 
 fn listing(branch: &str) -> Arc<Vec<Worktree>> {
     Arc::new(vec![Worktree {
@@ -55,7 +56,7 @@ fn worktree_observations_preserve_explicit_load_bookkeeping_and_newer_data() {
     assert!(
         state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
     let revision = state.repos[0].worktrees_rev;
     let sidebar_revision = state.repos[0].branch_sidebar_rev;
@@ -80,7 +81,7 @@ fn worktree_observations_preserve_explicit_load_bookkeeping_and_newer_data() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
     assert!(worktrees_loaded(&mut state, repo_id, older_scan, Ok(listing("old"))).is_empty());
     assert!(
@@ -144,7 +145,7 @@ fn worktree_refresh_errors_retain_rows_and_recover_without_stuck_loads() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
     assert_eq!(
         state.repos[0].worktrees.ready().unwrap()[0]
@@ -247,7 +248,7 @@ fn expanded_worktrees_load_independently_of_full_scans() {
         assert!(
             state.repos[0]
                 .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::WORKTREES)
+                .is_in_flight(LoadKind::Worktrees)
         );
         assert!(
             worktrees_loaded(
@@ -262,7 +263,7 @@ fn expanded_worktrees_load_independently_of_full_scans() {
         assert!(
             !state.repos[0]
                 .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::WORKTREES)
+                .is_in_flight(LoadKind::Worktrees)
         );
         assert!(state.repos[0].feedback.diagnostics.is_empty());
     }
@@ -283,6 +284,6 @@ fn fixture_observations_do_not_finish_an_explicit_load() {
     assert!(
         state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
 }

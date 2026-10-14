@@ -106,7 +106,7 @@ pub enum Effect {
     },
     CancelRepoLoads {
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
     },
     CancelGitOperation {
         repo_id: RepoId,

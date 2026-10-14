@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn selecting_a_new_diff_cancels_only_the_previous_diff() {
-    let mut token = RepoTaskToken::new(1);
+    let mut token = RepoTaskToken::new(crate::model::RepoLoadEpoch(1));
     let a = DiffTarget::working_tree("a".into(), gitcomet_core::domain::DiffArea::Unstaged);
     let b = DiffTarget::working_tree("b".into(), gitcomet_core::domain::DiffArea::Unstaged);
     let first = token.selected_diff_cancellation(&a, 1);
@@ -84,8 +84,10 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
     let executor = TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(NoBackend);
     let mut repo_monitors = RepoMonitorManager::new();
-    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> =
-        ids.iter().map(|&id| (id, RepoTaskToken::new(0))).collect();
+    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = ids
+        .iter()
+        .map(|&id| (id, RepoTaskToken::new(crate::model::RepoLoadEpoch(0))))
+        .collect();
     let mut repos = FxHashMap::default();
     let id_alloc = std::sync::atomic::AtomicU64::new(1);
     let mut ctx = WorkerLoopContext {

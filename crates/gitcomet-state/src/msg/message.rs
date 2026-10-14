@@ -1335,7 +1335,7 @@ pub enum InternalMsg {
     },
     RepoLoadFinished {
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {

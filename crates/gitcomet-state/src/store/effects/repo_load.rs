@@ -343,7 +343,11 @@ mod selected_diff_guard_tests {
         }
         schedule(repo_id, &msg_tx, 2, load(true, false, false, false));
         let cancelled = CancellationToken::new();
-        let cancelled_tx = msg_tx.with_repo_load_guard(repo_id, 0, cancelled.clone());
+        let cancelled_tx = msg_tx.with_repo_load_guard(
+            repo_id,
+            crate::model::RepoLoadEpoch::default(),
+            cancelled.clone(),
+        );
         schedule(repo_id, &cancelled_tx, 2, load(false, false, true, false));
         cancelled.cancel();
         schedule(RepoId(2), &msg_tx, 2, load(false, false, false, true));
@@ -3464,7 +3468,7 @@ mod worktree_dirty_files_tests {
 
     #[test]
     fn panicking_worktree_scan_finishes_and_replays_pending_refresh() {
-        use crate::model::{Loadable, RepoLoadsInFlight, RepoState};
+        use crate::model::{Loadable, RepoState};
         use crate::msg::{Effect, InternalMsg};
         use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
         use std::time::Duration;
@@ -3597,11 +3601,7 @@ mod worktree_dirty_files_tests {
                         assert!(output.status.success(), "{output:?}");
                     } else {
                         assert!(effects.is_empty(), "{effects:?}");
-                        assert!(
-                            !state.repos[0]
-                                .loads_in_flight
-                                .is_in_flight(RepoLoadsInFlight::WORKTREE_DIRTY)
-                        );
+                        assert!(!state.repos[0].loads_in_flight.worktree_dirty_in_flight());
                     }
                     break;
                 }

@@ -1,8 +1,8 @@
 use super::*;
 use crate::model::{
     AppNotificationKind, CommitMultiSelection, ForeignDiffOrigin, GitLogSettings,
-    GitLogTagFetchMode, InlineSubmoduleDiffState, RangeSelection, RepoLoadsInFlight,
-    SidebarDataRequest, SidebarMode, ViewNavDir,
+    GitLogTagFetchMode, InlineSubmoduleDiffState, RangeSelection, SidebarDataRequest, SidebarMode,
+    ViewNavDir,
 };
 use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -52,7 +52,11 @@ fn assert_independent_worktree_list_load(effects: &[Effect], repo_id: RepoId) {
     );
 }
 
-fn has_cancel_repo_loads_effect(effects: &[Effect], repo_id: RepoId, load_epoch: u64) -> bool {
+fn has_cancel_repo_loads_effect(
+    effects: &[Effect],
+    repo_id: RepoId,
+    load_epoch: crate::model::RepoLoadEpoch,
+) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,

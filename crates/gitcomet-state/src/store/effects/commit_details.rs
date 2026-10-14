@@ -165,7 +165,7 @@ mod tests {
             let cancellation = CancellationToken::new();
             let tx = StoreWorkerSender::for_test_msg_sender(sender).with_repo_load_guard(
                 id,
-                0,
+                crate::model::RepoLoadEpoch::default(),
                 cancellation.clone(),
             );
             let calls = Arc::new(AtomicUsize::new(0));

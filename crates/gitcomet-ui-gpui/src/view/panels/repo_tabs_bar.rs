@@ -351,9 +351,7 @@ impl RepoTabsBarView {
 
     fn is_repo_busy(repo: &RepoState) -> bool {
         matches!(repo.open, Loadable::Loading)
-            || repo
-                .loads_in_flight
-                .is_in_flight(!gitcomet_state::model::RepoLoadsInFlight::WORKTREE_DIRTY)
+            || repo.loads_in_flight.any_foreground_in_flight()
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0

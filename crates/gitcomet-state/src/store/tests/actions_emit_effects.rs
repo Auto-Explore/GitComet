@@ -1017,7 +1017,7 @@ fn worktree_commands_keep_sidebar_rows_until_refresh_finishes() {
         assert!(
             state.repos[0]
                 .loads_in_flight
-                .is_in_flight(crate::model::RepoLoadsInFlight::WORKTREES),
+                .is_in_flight(crate::model::LoadKind::Worktrees),
             "a worktree command must register the list load it starts"
         );
         let repeated = reduce(
@@ -1102,7 +1102,7 @@ fn worktree_command_coalesces_with_an_existing_list_load() {
     assert!(
         state.repos[0]
             .loads_in_flight
-            .is_in_flight(crate::model::RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(crate::model::LoadKind::Worktrees)
     );
 }
 
@@ -1198,7 +1198,7 @@ fn submodule_commands_reload_submodules_on_success() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .finish(crate::model::RepoLoadsInFlight::SUBMODULES)
+            .finish(crate::model::LoadKind::Submodules)
     );
 
     state.repos[0].set_submodules(Loadable::Ready(Vec::new()));
@@ -1226,7 +1226,7 @@ fn submodule_commands_reload_submodules_on_success() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .finish(crate::model::RepoLoadsInFlight::SUBMODULES)
+            .finish(crate::model::LoadKind::Submodules)
     );
 
     state.repos[0].set_submodules(Loadable::Ready(Vec::new()));

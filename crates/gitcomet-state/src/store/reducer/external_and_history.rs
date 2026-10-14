@@ -12,8 +12,8 @@ use super::util::{
 };
 use super::{diff_selection, repo_management};
 use crate::model::{
-    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoId,
-    RepoLoadsInFlight, SidebarMode,
+    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, LoadKind, Loadable,
+    RepoId, SidebarMode,
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
@@ -226,16 +226,10 @@ pub(super) fn repo_externally_changed(
         // push command validates the branch and HEAD again before pushing.
         repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::BRANCHES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::Branches) {
             effects.push(Effect::LoadBranches { repo_id });
         }
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
             effects.push(Effect::LoadRemoteBranches { repo_id });
         }
         if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
@@ -253,10 +247,7 @@ pub(super) fn repo_externally_changed(
             append_requested_status_refresh_effects(repo_state, &mut effects);
         } else if change.worktree {
             repo_state.loads_in_flight.invalidate_line_stats();
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::WORKTREE_STATUS)
-            {
+            if repo_state.loads_in_flight.request(LoadKind::WorktreeStatus) {
                 effects.push(Effect::LoadWorktreeStatus { repo_id });
             }
         }
@@ -280,7 +271,7 @@ pub(super) fn repo_externally_changed(
     // which other lanes the event touched. The loaded list stays until the
     // reload lands: every activation sets the flag, and a reset showed no tags
     // in history for that window and rebuilt its decorations twice.
-    if change.tags && repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+    if change.tags && repo_state.loads_in_flight.request(LoadKind::Tags) {
         effects.push(Effect::LoadTags { repo_id });
     }
 
@@ -464,11 +455,7 @@ pub(super) fn load_more_history(
         return Vec::new();
     };
 
-    if repo_state.history_state.log_loading_more
-        || repo_state
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::LOG)
-    {
+    if repo_state.history_state.log_loading_more || repo_state.loads_in_flight.log_in_flight() {
         return Vec::new();
     }
 
@@ -509,10 +496,7 @@ pub(super) fn rebase_state_loaded(
         };
         repo_state.set_sequencer_state(sequencer_value);
         repo_state.set_rebase_in_progress(rebase_value);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REBASE_STATE)
-        {
+        if repo_state.loads_in_flight.finish(LoadKind::RebaseState) {
             effects.push(Effect::LoadRebaseState { repo_id });
         }
     }
@@ -637,7 +621,7 @@ pub(super) fn merge_commit_message_loaded(
         repo_state.set_merge_commit_message(value);
         if repo_state
             .loads_in_flight
-            .finish(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
+            .finish(LoadKind::MergeCommitMessage)
         {
             effects.push(Effect::LoadMergeCommitMessage { repo_id });
         }
@@ -714,7 +698,7 @@ pub(super) fn log_loaded(
             // A cancelled walk is not a failure: the request that replaced it
             // owns the state now, so leave everything as the newer load found it.
             Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Unchanged) => {
                 // A failed checkout may have changed the optimistic detached
@@ -722,12 +706,12 @@ pub(super) fn log_loaded(
                 reconcile_detached_head_from_log(repo_state, scope);
                 // Activation and watcher checks can leave history unchanged.
                 // Keep its badges and ongoing verification until a page reloads.
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
                 let request = super::util::refresh_log_request(repo_state);
                 repo_state.loads_in_flight.request_log(request);
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
@@ -762,7 +746,7 @@ pub(super) fn log_loaded(
                 if !matches!(repo_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(Loadable::Error(e.to_string()));
                 }
-                return finish_log_load(repo_state);
+                return finish_log_load(repo_state, seq);
             }
         }
 
@@ -844,7 +828,7 @@ pub(super) fn log_loaded(
             ));
         }
 
-        effects.extend(finish_log_load(repo_state));
+        effects.extend(finish_log_load(repo_state, seq));
     }
     effects
 }
@@ -858,10 +842,13 @@ fn reconcile_detached_head_from_log(repo_state: &mut crate::model::RepoState, sc
     }
 }
 
-fn finish_log_load(repo_state: &mut crate::model::RepoState) -> Vec<Effect> {
+fn finish_log_load(
+    repo_state: &mut crate::model::RepoState,
+    seq: crate::model::LogLoadSeq,
+) -> Vec<Effect> {
     repo_state.set_log_loading_more(false);
     let refresh_limit = super::util::refresh_log_limit(repo_state);
-    if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(|next| {
+    if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(seq, |next| {
         if next.cursor.is_none() {
             next.limit = refresh_limit;
         }
@@ -964,16 +951,10 @@ fn finish_repo_action(
     if is_active {
         // Re-issue branch lists when one was in flight before (refresh_primary_effects does not
         // cover them); request() returns true now that the flag was cleared.
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::BRANCHES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::Branches) {
             effects.push(Effect::LoadBranches { repo_id });
         }
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
             effects.push(Effect::LoadRemoteBranches { repo_id });
         }
 

@@ -268,7 +268,11 @@ fn selecting_third_restored_repo_while_second_is_opening_cancels_second_open() {
         Msg::SetActiveRepo { repo_id: repo2 },
     );
     assert_eq!(state.active_repo, Some(repo2));
-    assert!(has_cancel_repo_loads_effect(&effects, repo1, 0));
+    assert!(has_cancel_repo_loads_effect(
+        &effects,
+        repo1,
+        crate::model::RepoLoadEpoch::default()
+    ));
     assert!(effects.iter().any(|effect| matches!(
         effect,
         Effect::OpenRepo { repo_id, .. } if *repo_id == repo2

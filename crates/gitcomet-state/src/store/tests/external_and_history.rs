@@ -67,12 +67,8 @@ fn checkout_and_rename_start_one_worktree_scan_after_cancelling_old_loads() {
                     .iter()
                     .any(|effect| matches!(effect, Effect::LoadWorktrees { .. }))
             );
-            assert!(state.repos[0].load_epoch > old_epoch);
-            assert!(
-                state.repos[0]
-                    .loads_in_flight
-                    .is_in_flight(crate::model::RepoLoadsInFlight::WORKTREE_DIRTY)
-            );
+            assert!(state.repos[0].load_epoch == old_epoch.next());
+            assert!(state.repos[0].loads_in_flight.worktree_dirty_in_flight());
         }
     }
 }
@@ -1069,7 +1065,7 @@ fn external_worktree_refresh_replays_coalesced_change_then_settles() {
     assert!(
         state.repos[0]
             .loads_in_flight
-            .is_in_flight(crate::model::RepoLoadsInFlight::WORKTREE_STATUS),
+            .is_in_flight(crate::model::LoadKind::WorktreeStatus),
         "the replayed load should re-arm the worktree status lane"
     );
 
@@ -1664,7 +1660,7 @@ fn paginated_repo_state(commits: &[Commit]) -> AppState {
     state
 }
 
-fn log_effect(effects: &[Effect]) -> (u64, usize, Option<LogCursor>) {
+fn log_effect(effects: &[Effect]) -> (crate::model::LogLoadSeq, usize, Option<LogCursor>) {
     effects
         .iter()
         .find_map(|effect| match effect {
@@ -4409,7 +4405,6 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
-    let flag = crate::model::RepoLoadsInFlight::UNCOMMITTED_LINE_STATS;
     state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
     state.repos[0].loads_in_flight.invalidate_line_stats();
     let mut generation = state.repos[0]
@@ -4438,7 +4433,7 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
             expected_replays
         );
         assert_eq!(
-            state.repos[0].loads_in_flight.is_in_flight(flag),
+            state.repos[0].loads_in_flight.line_stats_in_flight(),
             expected_replays == 1
         );
         if let Some(Effect::LoadUncommittedLineStats {

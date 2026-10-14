@@ -1,6 +1,6 @@
 //! Targeted linked-checkout refreshes must preserve the rest of the snapshot.
 use super::*;
-use crate::model::{RepoLoadsInFlight, WorktreeDirtyScope};
+use crate::model::WorktreeDirtyScope;
 use crate::msg::InternalMsg;
 use gitcomet_core::domain::{FileStatus, FileStatusKind, WorktreeDirtySummary};
 
@@ -225,11 +225,7 @@ fn queued_watch_paths_are_merged_and_latest_selection_gets_its_files() {
         loaded(&["/wt/c", "/wt/b"], Ok(vec![summary("/wt/b", 2)])),
     );
     assert!(effects.is_empty());
-    assert!(
-        !state.repos[0]
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREE_DIRTY)
-    );
+    assert!(!state.repos[0].loads_in_flight.worktree_dirty_in_flight());
 }
 
 #[test]

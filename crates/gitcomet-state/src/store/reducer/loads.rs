@@ -67,7 +67,7 @@ pub(super) fn repo_load_finished(
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,
-    load_epoch: u64,
+    load_epoch: crate::model::RepoLoadEpoch,
     message: Box<InternalMsg>,
 ) -> Vec<Effect> {
     let current_load_epoch = state

@@ -1747,11 +1747,13 @@ fn wait_for_sidebar_loads_to_settle(
             repo.sidebar_data_request.worktrees
                 && !matches!(repo.worktrees, Loadable::Loading | Loadable::NotLoaded)
                 && !matches!(repo.branches, Loadable::Loading | Loadable::NotLoaded)
-                && !repo.loads_in_flight.is_in_flight(
-                    gitcomet_state::model::RepoLoadsInFlight::WORKTREES
-                        | gitcomet_state::model::RepoLoadsInFlight::WORKTREE_DIRTY
-                        | gitcomet_state::model::RepoLoadsInFlight::BRANCHES,
-                )
+                && !repo
+                    .loads_in_flight
+                    .is_in_flight(gitcomet_state::model::LoadKind::Worktrees)
+                && !repo.loads_in_flight.worktree_dirty_in_flight()
+                && !repo
+                    .loads_in_flight
+                    .is_in_flight(gitcomet_state::model::LoadKind::Branches)
         });
         if settled {
             return;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LoadKind;
 
 #[test]
 fn pr530_observed_open_failures_are_released_without_losing_newer_failures() {
@@ -111,16 +112,8 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.rebase_in_progress.is_loading());
     assert!(repo_state.merge_commit_message.is_loading());
     assert!(repo_state.worktrees.is_loading());
-    assert!(
-        repo_state
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREE_DIRTY)
-    );
-    assert!(
-        repo_state
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
-    );
+    assert!(repo_state.loads_in_flight.worktree_dirty_in_flight());
+    assert!(repo_state.loads_in_flight.is_in_flight(LoadKind::Worktrees));
     assert!(repo_state.submodules.is_loading());
     assert!(matches!(
         repo_state.history_state.file_history,
@@ -740,10 +733,10 @@ fn repo_action_finished_bumps_load_epoch_and_forces_fresh_status_load_when_stale
 
     state.repos[0]
         .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+        .request(LoadKind::WorktreeStatus);
     state.repos[0]
         .loads_in_flight
-        .request(RepoLoadsInFlight::STAGED_STATUS);
+        .request(LoadKind::StagedStatus);
     let old_epoch = state.repos[0].load_epoch;
 
     let effects = reduce(
@@ -758,7 +751,7 @@ fn repo_action_finished_bumps_load_epoch_and_forces_fresh_status_load_when_stale
     );
 
     assert!(
-        state.repos[0].load_epoch > old_epoch,
+        state.repos[0].load_epoch == old_epoch.next(),
         "load_epoch should be bumped to invalidate stale load results"
     );
     assert!(
@@ -789,16 +782,12 @@ fn repo_action_finished_reissues_inflight_non_status_loads() {
     // bump invalidates all of them, so they must be re-issued, not left stuck in `in_flight`.
     state.repos[0]
         .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+        .request(LoadKind::WorktreeStatus);
     state.repos[0]
         .loads_in_flight
-        .request(RepoLoadsInFlight::STAGED_STATUS);
-    state.repos[0]
-        .loads_in_flight
-        .request(RepoLoadsInFlight::HEAD_BRANCH);
-    state.repos[0]
-        .loads_in_flight
-        .request(RepoLoadsInFlight::BRANCHES);
+        .request(LoadKind::StagedStatus);
+    state.repos[0].loads_in_flight.request(LoadKind::HeadBranch);
+    state.repos[0].loads_in_flight.request(LoadKind::Branches);
     state.repos[0].branches = Loadable::Loading;
     let old_epoch = state.repos[0].load_epoch;
 
@@ -813,7 +802,7 @@ fn repo_action_finished_reissues_inflight_non_status_loads() {
         }),
     );
 
-    assert!(state.repos[0].load_epoch > old_epoch);
+    assert!(state.repos[0].load_epoch == old_epoch.next());
     assert!(has_cancel_repo_loads_effect(&effects, repo_id, old_epoch));
     assert!(
         effects
@@ -851,19 +840,13 @@ fn repo_action_finished_reissues_inflight_sidebar_data_loads() {
         stashes: true,
     });
 
-    state.repos[0]
-        .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREES);
+    state.repos[0].loads_in_flight.request(LoadKind::Worktrees);
     state.repos[0].worktrees = Loadable::Loading;
 
-    state.repos[0]
-        .loads_in_flight
-        .request(RepoLoadsInFlight::SUBMODULES);
+    state.repos[0].loads_in_flight.request(LoadKind::Submodules);
     state.repos[0].submodules = Loadable::Loading;
 
-    state.repos[0]
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STASHES);
+    state.repos[0].loads_in_flight.request(LoadKind::Stashes);
     state.repos[0].stashes = Loadable::Loading;
 
     let effects = reduce(
@@ -1014,9 +997,7 @@ fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_re
     state.active_repo = Some(active);
 
     // The background repo had a branch load and a blame load in flight when its action completed.
-    state.repos[0]
-        .loads_in_flight
-        .request(RepoLoadsInFlight::BRANCHES);
+    state.repos[0].loads_in_flight.request(LoadKind::Branches);
     state.repos[0].branches = Loadable::Loading;
     state.repos[0].diff_state.blame_path = Some(PathBuf::from("src/main.rs"));
     state.repos[0].diff_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
@@ -1037,7 +1018,7 @@ fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_re
     );
 
     // The background repo's stale loads are still invalidated, so nothing is left stranded ...
-    assert!(state.repos[0].load_epoch > old_epoch);
+    assert!(state.repos[0].load_epoch == old_epoch.next());
     assert!(has_cancel_repo_loads_effect(
         &effects, background, old_epoch
     ));

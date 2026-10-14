@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LoadKind;
 use crate::model::{
     ConflictFile, PendingFileBrowserReopen, RepoState, SidebarDataRequest, SidebarMode,
 };
@@ -129,7 +130,7 @@ fn mark_repo_open_ready(state: &mut AppState, repo_id: RepoId) {
     repo_mut(state, repo_id).set_open(Loadable::Ready(()));
 }
 
-fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: u32) {
+fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: LoadKind) {
     let repo = repo_mut(state, repo_id);
     assert!(repo.loads_in_flight.request(flag));
     assert!(!repo.loads_in_flight.request(flag));
@@ -898,7 +899,7 @@ fn pre_open_worktree_and_submodule_loads_are_noops() {
     assert!(
         !repo_mut(&mut state, repo_id)
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
 
     assert!(load_submodules(&mut state, repo_id).is_empty());
@@ -1443,7 +1444,7 @@ fn loaded_handlers_reschedule_when_pending() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::BRANCHES);
+    mark_pending(&mut state, repo_id, LoadKind::Branches);
     let effects = branches_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1455,7 +1456,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTES);
+    mark_pending(&mut state, repo_id, LoadKind::Remotes);
     let effects = remotes_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1467,7 +1468,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTE_BRANCHES);
+    mark_pending(&mut state, repo_id, LoadKind::RemoteBranches);
     let effects = remote_branches_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1487,7 +1488,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREES);
+    mark_pending(&mut state, repo_id, LoadKind::Worktrees);
     let effects = worktrees_loaded(
         &mut state,
         repo_id,
@@ -1504,7 +1505,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::HEAD_BRANCH);
+    mark_pending(&mut state, repo_id, LoadKind::HeadBranch);
     let effects = head_branch_loaded(&mut state, repo_id, Ok("main".to_string()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1516,7 +1517,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::UPSTREAM_DIVERGENCE);
+    mark_pending(&mut state, repo_id, LoadKind::UpstreamDivergence);
     let effects = upstream_divergence_loaded(
         &mut state,
         repo_id,
@@ -1535,7 +1536,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::STASHES);
+    mark_pending(&mut state, repo_id, LoadKind::Stashes);
     let effects = stashes_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1550,7 +1551,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REFLOG);
+    mark_pending(&mut state, repo_id, LoadKind::Reflog);
     let effects = reflog_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1565,7 +1566,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::TAGS);
+    mark_pending(&mut state, repo_id, LoadKind::Tags);
     let effects = tags_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1577,7 +1578,7 @@ fn loaded_handlers_reschedule_when_pending() {
         Loadable::Ready(_)
     ));
 
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTE_TAGS);
+    mark_pending(&mut state, repo_id, LoadKind::RemoteTags);
     let effects = remote_tags_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1603,7 +1604,7 @@ fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
     // re-arms the lane.
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
+    mark_pending(&mut state, repo_id, LoadKind::WorktreeStatus);
     let effects = status_loaded(&mut state, repo_id, Ok(RepoStatus::default()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1613,14 +1614,14 @@ fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
     assert!(
         repo_mut(&mut state, repo_id)
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS),
+            .is_in_flight(LoadKind::WorktreeStatus),
         "the replayed load should re-arm the lane"
     );
 
     // Worktree-only lane.
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_worktree_status(Loadable::Ready(Vec::new()));
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
+    mark_pending(&mut state, repo_id, LoadKind::WorktreeStatus);
     let effects = worktree_status_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1631,7 +1632,7 @@ fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
     // Staged-only lane.
     let mut state = new_state_with_repo(repo_id);
     repo_mut(&mut state, repo_id).set_staged_status(Loadable::Ready(Vec::new()));
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::STAGED_STATUS);
+    mark_pending(&mut state, repo_id, LoadKind::StagedStatus);
     let effects = staged_status_loaded(&mut state, repo_id, Ok(Vec::new()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -1732,7 +1733,7 @@ fn superseded_remote_branch_load_keeps_the_last_complete_snapshot() {
     };
     repo_mut(&mut state, repo_id).set_remote_branches(Loadable::Ready(vec![previous.clone()]));
     let previous_rev = repo_mut(&mut state, repo_id).remote_branches_rev;
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTE_BRANCHES);
+    mark_pending(&mut state, repo_id, LoadKind::RemoteBranches);
 
     let effects = remote_branches_loaded(&mut state, repo_id, Ok(Vec::new()));
 
@@ -1777,10 +1778,7 @@ fn remote_branch_load_during_pull_keeps_the_last_complete_snapshot() {
     let repo = repo_mut(&mut state, repo_id);
     repo.set_remote_branches(Loadable::Ready(vec![previous.clone()]));
     repo.pull_in_flight = 1;
-    assert!(
-        repo.loads_in_flight
-            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-    );
+    assert!(repo.loads_in_flight.request(LoadKind::RemoteBranches));
 
     assert!(remote_branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
     let repo = repo_mut(&mut state, repo_id);
@@ -1788,11 +1786,7 @@ fn remote_branch_load_during_pull_keeps_the_last_complete_snapshot() {
         &repo.remote_branches,
         Loadable::Ready(branches) if branches.as_slice() == [previous]
     ));
-    assert!(
-        !repo
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::REMOTE_BRANCHES)
-    );
+    assert!(!repo.loads_in_flight.is_in_flight(LoadKind::RemoteBranches));
 }
 
 #[test]
@@ -1901,7 +1895,7 @@ fn status_loaded_clears_resolved_conflicts_and_preserves_unresolved_ones() {
         )));
         repo.set_conflict_hide_resolved(true);
     }
-    mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
+    mark_pending(&mut state, repo_id, LoadKind::WorktreeStatus);
     let effects = status_loaded(&mut state, repo_id, Ok(RepoStatus::default()));
     assert_eq!(effects.len(), 1);
     assert!(matches!(
@@ -2824,7 +2818,7 @@ fn set_sidebar_mode_waits_for_the_repo_to_be_ready_before_claiming_the_lane() {
     assert!(
         !repo_mut(&mut state, repo_id)
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::FILE_BROWSER)
+            .is_in_flight(LoadKind::FileBrowser)
     );
 }
 

@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Clone)]
 pub(in crate::store) struct RepoTaskToken {
-    pub(in crate::store) load_epoch: u64,
+    pub(in crate::store) load_epoch: crate::model::RepoLoadEpoch,
     pub(in crate::store) cancellation: CancellationToken,
     /// Cancellation for the *current* log walk alone. An author-filtered walk
     /// on a large repository runs for tens of seconds and the repo-load pool
@@ -35,7 +35,7 @@ pub(in crate::store) struct RepoTaskToken {
 }
 
 impl RepoTaskToken {
-    pub(super) fn new(load_epoch: u64) -> Self {
+    pub(super) fn new(load_epoch: crate::model::RepoLoadEpoch) -> Self {
         Self {
             load_epoch,
             cancellation: CancellationToken::new(),
@@ -133,7 +133,7 @@ impl RepoTaskToken {
 fn current_repo_load_epoch(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     repo_id: RepoId,
-) -> Option<u64> {
+) -> Option<crate::model::RepoLoadEpoch> {
     let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
     state
         .repos
@@ -147,7 +147,7 @@ fn ensure_repo_task_token(
     repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
     repo_id: RepoId,
 ) -> Option<RepoTaskToken> {
-    let load_epoch = current_repo_load_epoch(thread_state, repo_id).unwrap_or(0);
+    let load_epoch = current_repo_load_epoch(thread_state, repo_id).unwrap_or_default();
     if let Some(existing) = repo_task_tokens.get(&repo_id)
         && existing.load_epoch == load_epoch
         && !existing.cancellation.is_cancelled()
@@ -244,7 +244,7 @@ pub(super) fn file_browser_load_context(
 pub(super) fn cancel_repo_loads(
     repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
     repo_id: RepoId,
-    load_epoch: u64,
+    load_epoch: crate::model::RepoLoadEpoch,
 ) {
     let matched_token = repo_task_tokens
         .get(&repo_id)

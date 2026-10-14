@@ -10,8 +10,8 @@ use super::util::{
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
-    CloneProgressStage, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoLoadsInFlight,
-    RepoState, SidebarMode,
+    CloneProgressStage, DiagnosticKind, GitLogSettings, LoadKind, Loadable, RepoId, RepoState,
+    SidebarMode,
 };
 use crate::msg::Effect;
 use crate::session;
@@ -1048,12 +1048,7 @@ fn fill_set_active_repo_inline_impl(
         } else {
             append_refresh_primary_effects(repo_state, effects);
         }
-        if changed
-            && !use_full_refresh
-            && repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::BRANCHES)
-        {
+        if changed && !use_full_refresh && repo_state.loads_in_flight.request(LoadKind::Branches) {
             effects.push(Effect::LoadBranches { repo_id });
         }
         if changed {

@@ -22,8 +22,8 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [x] Fix worktree-cache ownership collisions between stores using process-unique repository lifetimes.
 - [ ] Canonicalize repository API families: cancellation-aware reads; encoded text/conflict reads; fetch/pull pruning; remote/submodule policies.
 - [ ] Preserve error causes and operation/path context while retaining classifications and cloning.
-- [ ] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
-- [ ] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
+- [x] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
+- [x] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
 - [ ] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
 - [ ] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
 - [ ] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
@@ -95,6 +95,18 @@ native history-selection driver passed. Matched performance comparisons follow
 the implementation. The work is on the existing `refactor` branch.
 
 ## Migration notes
+
+Ordinary load queries and transitions now take `LoadKind`, for example
+`LoadKind::HeadBranch`, instead of `RepoLoadsInFlight` bit constants. Logs,
+line statistics and linked-worktree dirty scans use their dedicated methods.
+Use `any_foreground_in_flight()` for an active-tab spinner; linked-worktree scans
+alone do not keep that spinner running.
+
+Keep the issued `LogLoadSeq`, `RepoLoadEpoch` and `LineStatsGeneration` values
+when forwarding requests and completions. Their tuple constructors are internal.
+`finish_log` takes its request identity and rejects stale completions itself.
+`RepoState::lifetime_id()` provides a process-unique `RepoLifetime`; the existing
+scalar `lifetime()` accessor remains available to consumers that only compare it.
 
 `Error::kind()` retains its existing classifications. Use `Error::from(io_error)`
 to keep an I/O cause, then `with_context(operation, path)` to identify the failed
