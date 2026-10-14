@@ -990,6 +990,7 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
     amend: bool,
+    handled_by_auth_prompt: bool,
 ) -> Vec<Effect> {
     let label = if amend { "Amend" } else { "Commit" };
     let mut succeeded = false;
@@ -1021,12 +1022,22 @@ pub(super) fn commit_finished(
                 label.to_string(),
                 format!("{label}: Completed"),
                 None,
+                false,
             );
         }
         Err(e) => {
             let summary = format_failure_summary(label, &e);
-            repo_state.feedback.last_error = Some(summary.clone());
-            push_action_log(repo_state, false, label.to_string(), summary, Some(&e));
+            if !handled_by_auth_prompt {
+                repo_state.feedback.last_error = Some(summary.clone());
+            }
+            push_action_log(
+                repo_state,
+                false,
+                label.to_string(),
+                summary,
+                Some(&e),
+                handled_by_auth_prompt,
+            );
         }
     }
     if succeeded {
@@ -1047,6 +1058,7 @@ pub(super) fn safe_push_after_commit_finished(
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,
     result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
+    handled_by_auth_prompt: bool,
 ) -> Vec<Effect> {
     match result {
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
@@ -1075,6 +1087,7 @@ pub(super) fn safe_push_after_commit_finished(
                 "Push after commit".to_string(),
                 full_summary,
                 None,
+                false,
             );
             refresh_full_effects(repo_state, git_log_settings)
         }
@@ -1085,13 +1098,16 @@ pub(super) fn safe_push_after_commit_finished(
             };
             repo_state.pending.force_push_lease = None;
             let summary = format_failure_summary("Push after commit", &e);
-            repo_state.feedback.last_error = Some(summary.clone());
+            if !handled_by_auth_prompt {
+                repo_state.feedback.last_error = Some(summary.clone());
+            }
             push_action_log(
                 repo_state,
                 false,
                 "Push after commit".to_string(),
                 summary,
                 Some(&e),
+                handled_by_auth_prompt,
             );
             refresh_full_effects(repo_state, git_log_settings)
         }
@@ -1308,6 +1324,7 @@ pub(super) fn repo_command_finished(
     repo_id: RepoId,
     command: RepoCommandKind,
     result: std::result::Result<CommandOutput, Error>,
+    handled_by_auth_prompt: bool,
 ) -> Vec<Effect> {
     let refresh_worktrees = matches!(
         &command,
@@ -1462,7 +1479,7 @@ pub(super) fn repo_command_finished(
                 repo_state.history_state.squash_preview_pending = None;
                 repo_state.set_squash_preview(Loadable::NotLoaded);
             }
-            push_command_log(repo_state, true, &command, &output, None);
+            push_command_log(repo_state, true, &command, &output, None, false);
         }
         Err(e) => {
             push_command_log(
@@ -1471,12 +1488,15 @@ pub(super) fn repo_command_finished(
                 &command,
                 &CommandOutput::default(),
                 Some(&e),
+                handled_by_auth_prompt,
             );
-            repo_state.feedback.last_error = repo_state
-                .feedback
-                .command_log
-                .last()
-                .map(|entry| entry.summary.clone());
+            if !handled_by_auth_prompt {
+                repo_state.feedback.last_error = repo_state
+                    .feedback
+                    .command_log
+                    .last()
+                    .map(|entry| entry.summary.clone());
+            }
         }
     }
     if command_succeeded && sync_conflict_session_after_resolution_command(repo_state, &command) {

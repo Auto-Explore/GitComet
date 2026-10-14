@@ -6,13 +6,13 @@ use super::{
     repo_file_stamp, with_object_cache,
 };
 use crate::refs::files::{cached_commit_id, try_collect_loose_local_branches_fast};
+use crate::util::GitOutput;
 use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
 use gitcomet_core::domain::{Branch, RefMetadata, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
-use std::process::Output;
 
 const LOCAL_BRANCH_PREFIX: &[u8] = b"refs/heads/";
 
@@ -435,7 +435,7 @@ fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
     Ok(branches)
 }
 
-fn probe_failure_reason(label: &str, output: &Output) -> String {
+fn probe_failure_reason(label: &str, output: &GitOutput) -> String {
     if output.status.success() {
         return format!("{label} returned empty stdout");
     }

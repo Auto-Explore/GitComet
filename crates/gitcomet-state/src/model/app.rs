@@ -145,6 +145,11 @@ pub struct AppState {
     pub clone: Option<CloneOpState>,
     pub notifications: Vec<AppNotification>,
     pub auth_prompt: Option<AuthPromptState>,
+    /// Every new authentication request has a distinct identity, including
+    /// repeated requests for the same key and operation.
+    pub auth_prompt_generation: u64,
+    /// Cancels local key validation; submitted secrets live only in its effect.
+    pub auth_validation_cancellation: Option<gitcomet_core::services::CancellationToken>,
     pub branch_exists_prompt: Option<BranchExistsPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     /// A submodule trust check is running in the background. Set the moment the
@@ -263,9 +268,19 @@ pub enum AuthRetryOperation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthPromptState {
+    pub generation: u64,
+    pub challenge: Option<gitcomet_core::auth::AuthChallenge>,
+    pub status: AuthPromptStatus,
     pub kind: AuthPromptKind,
     pub reason: String,
     pub operation: AuthRetryOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthPromptStatus {
+    AwaitingInput,
+    Validating,
+    Rejected,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

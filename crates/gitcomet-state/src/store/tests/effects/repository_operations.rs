@@ -555,6 +555,7 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
     };
     let auth = gitcomet_core::auth::StagedGitAuth {
+        challenge: None,
         kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
         secret: "token".to_string(),

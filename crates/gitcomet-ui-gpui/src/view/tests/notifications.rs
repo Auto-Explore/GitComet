@@ -496,6 +496,8 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
             stdout: "".into(),
             stderr: "fatal: test".into(),
             announce_success: true,
+            handled_by_auth_prompt: false,
+            failure_id: None,
             hook_operation_id: None,
         });
     next.active_repo = Some(repo_id);
@@ -520,6 +522,444 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
         });
     });
     assert_eq!(error_toasts(cx, &view).len(), 1);
+}
+
+const WINDOWS_SSH_PASSPHRASE_CHALLENGE: &str = "git@github.com: Permission denied (publickey).\n\
+fatal: Could not read from remote repository.\n\
+Please make sure you have the correct access rights\n\
+and the repository exists.\n\
+SSH key passphrase prompt:\n\
+Enter passphrase for key 'C:\\Users\\sampo/.ssh/id_ed25519':";
+
+fn auth_pull_attempt() -> gitcomet_state::model::CommandLogEntry {
+    gitcomet_state::model::CommandLogEntry {
+        time: std::time::SystemTime::UNIX_EPOCH,
+        ok: false,
+        command: "git pull --prune".into(),
+        summary: format!("Pull failed:\n\n{WINDOWS_SSH_PASSPHRASE_CHALLENGE}"),
+        stdout: "".into(),
+        stderr: WINDOWS_SSH_PASSPHRASE_CHALLENGE.into(),
+        announce_success: true,
+        handled_by_auth_prompt: true,
+        failure_id: None,
+        hook_operation_id: None,
+    }
+}
+
+fn auth_pull_state() -> AppState {
+    let mut repo = open_repo_state_with_workdir("/tmp/auth-pull-notifications");
+    repo.feedback.command_log.push(auth_pull_attempt());
+    AppState {
+        active_repo: Some(repo.id),
+        auth_prompt: Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: AuthPromptStatus::AwaitingInput,
+            kind: AuthPromptKind::Passphrase,
+            reason: WINDOWS_SSH_PASSPHRASE_CHALLENGE.into(),
+            operation: AuthRetryOperation::RepoCommand {
+                repo_id: repo.id,
+                command: gitcomet_state::msg::RepoCommandKind::Pull {
+                    mode: PullMode::Default,
+                },
+            },
+        }),
+        repos: vec![repo],
+        ..AppState::test_default()
+    }
+}
+
+fn successful_pull_attempt() -> gitcomet_state::model::CommandLogEntry {
+    gitcomet_state::model::CommandLogEntry {
+        time: std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+        ok: true,
+        summary: "Pull: Fast-forwarded".into(),
+        stdout: "Updating 1111111..2222222\nFast-forward\n".into(),
+        stderr: "".into(),
+        handled_by_auth_prompt: false,
+        ..auth_pull_attempt()
+    }
+}
+
+fn apply_notification_snapshot(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+    state: &AppState,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::new(state.clone()), cx);
+        });
+    });
+}
+
+fn all_toasts(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+) -> Vec<(components::ToastKind, String)> {
+    cx.update(|_window, app| view.read(app).toast_host.read(app).toasts_for_tests(app))
+}
+
+#[gpui::test]
+fn windows_ssh_pull_authentication_announces_only_the_successful_retry(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    assert!(all_toasts(cx, &view).is_empty());
+
+    let mut state = auth_pull_state();
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(
+        all_toasts(cx, &view).is_empty(),
+        "the challenge is recoverable"
+    );
+
+    state.auth_prompt = None;
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(
+        all_toasts(cx, &view).is_empty(),
+        "submitting must not reveal an old error"
+    );
+
+    state.repos[0]
+        .feedback
+        .command_log
+        .push(successful_pull_attempt());
+    apply_notification_snapshot(cx, &view, &state);
+    apply_notification_snapshot(cx, &view, &state);
+    assert_eq!(
+        all_toasts(cx, &view),
+        vec![(
+            components::ToastKind::Success,
+            "Pull: Fast-forwarded".into()
+        )]
+    );
+    assert!(error_toasts(cx, &view).is_empty());
+    cx.update(|_window, app| {
+        let state = &view.read(app).state;
+        assert_eq!(state.repos[0].feedback.command_log.len(), 2);
+        assert_eq!(
+            state.repos[0].feedback.command_log[0].stderr.as_ref(),
+            WINDOWS_SSH_PASSPHRASE_CHALLENGE
+        );
+        assert!(
+            !state.repos[0].feedback.command_log[0].ok,
+            "keep the real exit result in the log"
+        );
+    });
+}
+
+#[gpui::test]
+fn coalesced_authentication_and_success_snapshots_do_not_revive_the_challenge(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state();
+    state.auth_prompt = None;
+    state.repos[0]
+        .feedback
+        .command_log
+        .push(successful_pull_attempt());
+
+    // The UI never received the prompt or retry-in-flight snapshots.
+    apply_notification_snapshot(cx, &view, &state);
+    assert_eq!(
+        all_toasts(cx, &view),
+        vec![(
+            components::ToastKind::Success,
+            "Pull: Fast-forwarded".into()
+        )]
+    );
+    assert!(error_toasts(cx, &view).is_empty());
+}
+
+#[gpui::test]
+fn rejected_passphrases_and_prompt_cancellation_do_not_accumulate_error_toasts(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state();
+    apply_notification_snapshot(cx, &view, &state);
+    let prompt = state.auth_prompt.take();
+    apply_notification_snapshot(cx, &view, &state);
+
+    let mut rejected = auth_pull_attempt();
+    rejected.time += Duration::from_secs(1);
+    state.repos[0].feedback.command_log.push(rejected);
+    state.auth_prompt = prompt;
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(
+        all_toasts(cx, &view).is_empty(),
+        "rejected credentials belong in the prompt"
+    );
+
+    state.auth_prompt = None;
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(
+        all_toasts(cx, &view).is_empty(),
+        "cancelling does not expose either failed attempt"
+    );
+}
+
+#[gpui::test]
+fn authentication_validation_rejection_and_new_generation_clear_stale_input(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state();
+    apply_notification_snapshot(cx, &view, &state);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("wrong-passphrase", cx));
+            this.try_auth_prompt_submit(cx);
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            assert_eq!(this.auth_prompt_submitted_generation, Some(1));
+        });
+    });
+    state.auth_prompt.as_mut().unwrap().status = AuthPromptStatus::Validating;
+    apply_notification_snapshot(cx, &view, &state);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.try_auth_prompt_submit(cx);
+            assert!(
+                this.auth_prompt_input_error.is_none(),
+                "validation cannot be submitted twice"
+            );
+        });
+    });
+
+    let prompt = state.auth_prompt.as_mut().unwrap();
+    prompt.status = AuthPromptStatus::Rejected;
+    prompt.reason = "The passphrase was not accepted. Try again.".into();
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("auth_prompt_error").is_some());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(this.auth_prompt_submitted_generation.is_none());
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("corrected-passphrase", cx));
+            this.try_auth_prompt_submit(cx);
+            assert_eq!(this.auth_prompt_submitted_generation, Some(1));
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+        });
+    });
+
+    // The same operation and prompt text can represent another challenge.
+    state.auth_prompt.as_mut().unwrap().generation = 2;
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert_eq!(this.auth_prompt_key, Some(2));
+            assert!(this.auth_prompt_submitted_generation.is_none());
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("cancelled-secret", cx));
+            this.cancel_auth_prompt(cx);
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+        });
+    });
+    assert!(all_toasts(cx, &view).is_empty());
+}
+
+#[gpui::test]
+fn repeated_auth_rejection_reenables_input_when_validation_snapshot_is_skipped(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state();
+    let prompt = state.auth_prompt.as_mut().unwrap();
+    prompt.generation = 2;
+    prompt.status = AuthPromptStatus::Rejected;
+    prompt.reason = "The passphrase could not unlock this key. Try again.".into();
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.auth_prompt_secret_input.update(cx, |input, cx| {
+                input.set_text("another-wrong-passphrase", cx)
+            });
+            this.try_auth_prompt_submit(cx);
+            assert_eq!(this.auth_prompt_submitted_generation, Some(2));
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+        });
+    });
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app)
+                .auth_prompt_secret_input
+                .read(app)
+                .is_read_only()
+        );
+    });
+
+    // Only the attempt identity changes: the UI never receives Validating,
+    // and the repeated rejection has exactly the same reason and challenge.
+    state.auth_prompt.as_mut().unwrap().generation = 3;
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("auth_prompt_error").is_some());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert_eq!(this.auth_prompt_key, Some(3));
+            assert!(this.auth_prompt_submitted_generation.is_none());
+            assert!(!this.auth_prompt_secret_input.read(cx).is_read_only());
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("corrected-passphrase", cx));
+            this.try_auth_prompt_submit(cx);
+            assert_eq!(this.auth_prompt_submitted_generation, Some(3));
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+        });
+    });
+    assert!(all_toasts(cx, &view).is_empty());
+}
+
+#[gpui::test]
+fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state();
+    apply_notification_snapshot(cx, &view, &state);
+    state.auth_prompt = None;
+
+    for (command, summary) in [
+        ("git pull --prune", "Pull failed: Connection timed out"),
+        (
+            "git push",
+            "Push failed: ! [rejected] main -> main (fetch first)",
+        ),
+    ] {
+        state.repos[0]
+            .feedback
+            .command_log
+            .push(gitcomet_state::model::CommandLogEntry {
+                command: command.into(),
+                summary: summary.into(),
+                stderr: summary.into(),
+                handled_by_auth_prompt: false,
+                ..auth_pull_attempt()
+            });
+        apply_notification_snapshot(cx, &view, &state);
+        assert_eq!(
+            error_toasts(cx, &view)[0],
+            (Some(RepoId(1)), summary.into())
+        );
+    }
+    assert_eq!(error_toasts(cx, &view).len(), 2);
+}
+
+#[gpui::test]
+fn pull_blocked_after_authentication_has_one_actionable_failure_and_no_stale_prompt(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state();
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("auth_prompt_confirm").is_some());
+
+    state.auth_prompt = None;
+    state.repos[0]
+        .feedback
+        .command_log
+        .push(gitcomet_state::model::CommandLogEntry {
+            summary: "Pull failed".into(),
+            stderr: "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md\nAborting".into(),
+            handled_by_auth_prompt: false,
+            failure_id: Some(gitcomet_core::error::GitFailureId::WorktreeWouldBeOverwritten),
+            ..auth_pull_attempt()
+        });
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("auth_prompt_confirm").is_none());
+    cx.update(|_window, app| {
+        let notices = view.read(app).toast_host.read(app).error_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].1.text.summary, "Pull blocked by local changes");
+        assert_eq!(
+            notices[0].1.actions,
+            vec![ErrorAction::ReviewLocalChanges { repo_id: RepoId(1) }]
+        );
+    });
+}
+
+#[gpui::test]
+fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state();
+    state.auth_prompt = None;
+    let operation_id = GitOperationId(1);
+    state.repos[0].feedback.command_log[0].hook_operation_id = Some(operation_id);
+    state.repos[0].feedback.command_log[0].command = "git push".into();
+    state.repos[0].feedback.command_log[0].summary =
+        format!("Push failed:\n\n{WINDOWS_SSH_PASSPHRASE_CHALLENGE}");
+    state.repos[0]
+        .feedback
+        .hook_activity
+        .push(GitHookOperation {
+            id: operation_id,
+            label: "Push".into(),
+            context: None,
+            time: std::time::SystemTime::UNIX_EPOCH,
+            duration: Some(Duration::from_secs(1)),
+            status: GitHookOperationStatus::Failed,
+            handled_by_auth_prompt: true,
+            hooks: vec![gitcomet_state::model::GitHookRun {
+                id: gitcomet_core::git_operation::HookExecutionId {
+                    sid: "auth-test".into(),
+                    child_id: 1,
+                },
+                name: "pre-push".into(),
+                status: GitHookRunStatus::Failed,
+                exit_code: Some(1),
+                duration: Some(Duration::from_secs(1)),
+            }],
+            output: Default::default(),
+            output_bytes: 0,
+            output_truncated: false,
+            latest_line: String::new(),
+            command_started: true,
+            transfer: None,
+            progress_lane: false,
+            progress: None,
+        });
+
+    apply_notification_snapshot(cx, &view, &state);
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(
+        all_toasts(cx, &view).is_empty(),
+        "neither completion path announces an auth challenge"
+    );
 }
 
 #[gpui::test]
@@ -613,7 +1053,9 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_error_toasts(
 }
 
 #[gpui::test]
-fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::TestAppContext) {
+fn try_auth_prompt_submit_passphrase_without_secret_shows_inline_error(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -621,6 +1063,9 @@ fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::T
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "Enter passphrase".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -638,12 +1083,13 @@ fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::T
         });
     });
 
-    assert!(
-        error_toasts(cx, &view)
-            .iter()
-            .any(|(_, message)| message.contains("Passphrase is required")),
-        "an empty passphrase shows an error, visible above the auth prompt"
-    );
+    assert!(error_toasts(cx, &view).is_empty());
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).auth_prompt_input_error.as_deref(),
+            Some("Passphrase is required.")
+        );
+    });
 }
 
 #[gpui::test]
@@ -656,6 +1102,9 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "Enter passphrase".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -672,6 +1121,13 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
             this.auth_prompt_secret_input
                 .update(cx, |input, cx| input.set_text("my-passphrase", cx));
             this.try_auth_prompt_submit(cx);
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            assert_eq!(this.auth_prompt_submitted_generation, Some(1));
+            this.try_auth_prompt_submit(cx);
+            assert!(
+                this.auth_prompt_input_error.is_none(),
+                "a second submit is ignored while validation starts"
+            );
         });
     });
 
@@ -682,7 +1138,7 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
-fn try_auth_prompt_submit_username_password_empty_username_shows_error(
+fn try_auth_prompt_submit_username_password_empty_username_shows_inline_error(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -692,6 +1148,9 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -711,11 +1170,13 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
         });
     });
 
-    assert!(
-        error_toasts(cx, &view)
-            .iter()
-            .any(|(_, message)| message.contains("Username is required"))
-    );
+    assert!(error_toasts(cx, &view).is_empty());
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).auth_prompt_input_error.as_deref(),
+            Some("Username is required.")
+        );
+    });
 }
 
 #[gpui::test]
@@ -728,6 +1189,9 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Clone {

@@ -1244,6 +1244,7 @@ fn support_load_does_not_consume_credentials_staged_for_a_command() {
     let repo = init_annex_repo(dir.path());
     let opened = open(&repo);
     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".into()),
         secret: "test-token".into(),
@@ -2226,6 +2227,7 @@ fi
             assert!(detail.contains("big.bin: Transfer failed"), "{detail}");
 
             let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                challenge: None,
                 kind: GitAuthKind::Passphrase,
                 username: None,
                 secret: "annex-test-secret".into(),
@@ -2293,6 +2295,7 @@ printf '%s\n' "$sub" >> "$GITCOMET_ANNEX_TEST_ROOT/authenticated"
             ] {
                 {
                     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                        challenge: None,
                         kind: GitAuthKind::UsernamePassword,
                         username: Some("test".into()),
                         secret: "annex-test-secret".into(),

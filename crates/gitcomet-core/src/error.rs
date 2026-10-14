@@ -49,6 +49,7 @@ pub struct GitFailure {
     stderr: Vec<u8>,
     detail: Option<String>,
     apply_file_change_retry: Option<Box<crate::domain::ApplyFileChangeRetry>>,
+    auth_outcome: Option<crate::auth::AuthOutcome>,
 }
 
 impl GitFailure {
@@ -68,6 +69,7 @@ impl GitFailure {
             stderr,
             detail,
             apply_file_change_retry: None,
+            auth_outcome: None,
         }
     }
 
@@ -77,6 +79,16 @@ impl GitFailure {
 
     pub fn id(&self) -> GitFailureId {
         self.id
+    }
+
+    /// Authoritative authentication information, separate from Git's output.
+    pub fn auth_outcome(&self) -> Option<&crate::auth::AuthOutcome> {
+        self.auth_outcome.as_ref()
+    }
+
+    pub fn with_auth_outcome(mut self, outcome: crate::auth::AuthOutcome) -> Self {
+        self.auth_outcome = Some(outcome);
+        self
     }
 
     pub fn exit_code(&self) -> Option<i32> {

@@ -1784,8 +1784,7 @@ impl GitCometView {
                 let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
 
                 if escape_pressed {
-                    this.store.dispatch(Msg::CancelAuthPrompt);
-                    cx.notify();
+                    this.cancel_auth_prompt(cx);
                     return;
                 }
                 if enter_pressed {
@@ -1801,8 +1800,7 @@ impl GitCometView {
                 let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
 
                 if escape_pressed {
-                    this.store.dispatch(Msg::CancelAuthPrompt);
-                    cx.notify();
+                    this.cancel_auth_prompt(cx);
                     return;
                 }
                 if enter_pressed {
@@ -2042,6 +2040,8 @@ impl GitCometView {
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,
+            auth_prompt_submitted_generation: None,
+            auth_prompt_input_error: None,
             active_context_menu_invoker: None,
         };
 
@@ -2841,6 +2841,12 @@ impl GitCometView {
         let Some(prompt) = self.state.auth_prompt.as_ref() else {
             return;
         };
+        if prompt.status == AuthPromptStatus::Validating
+            || self.auth_prompt_submitted_generation == Some(prompt.generation)
+        {
+            return;
+        }
+        let generation = prompt.generation;
         let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
         let secret_required_message = match prompt.kind {
             AuthPromptKind::UsernamePassword => "Password is required.",
@@ -2857,26 +2863,37 @@ impl GitCometView {
         let secret = self.auth_prompt_secret_input.read(cx).text().to_string();
 
         if requires_username && username.is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                "Username is required.".to_string(),
-                cx,
-            );
+            self.auth_prompt_input_error = Some("Username is required.".to_string());
+            cx.notify();
             return;
         }
         if secret.trim().is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                secret_required_message.to_string(),
-                cx,
-            );
+            self.auth_prompt_input_error = Some(secret_required_message.to_string());
+            cx.notify();
             return;
         }
 
+        // The worker may not have published Validating yet. Latch immediately
+        // so a second click/Enter cannot submit the same challenge twice.
+        self.auth_prompt_submitted_generation = Some(generation);
+        self.auth_prompt_input_error = None;
+        self.auth_prompt_secret_input
+            .update(cx, |input, cx| input.set_text("", cx));
         self.store.dispatch(Msg::SubmitAuthPrompt {
+            generation,
             username: requires_username.then_some(username),
             secret,
         });
+        cx.notify();
+    }
+
+    pub(super) fn cancel_auth_prompt(&mut self, cx: &mut gpui::Context<Self>) {
+        self.auth_prompt_secret_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.auth_prompt_username_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.auth_prompt_input_error = None;
+        self.store.dispatch(Msg::CancelAuthPrompt);
         cx.notify();
     }
 

@@ -43,6 +43,7 @@ pub(super) fn send_unavailable_git_effect_result(
 
     match effect {
         Effect::UpdateRepositoryPreferences { .. }
+        | Effect::ValidateAuthPrompt { .. }
         | Effect::Filesystem(_)
         | Effect::PersistSession { .. }
         | Effect::PersistRecentRepo { .. }

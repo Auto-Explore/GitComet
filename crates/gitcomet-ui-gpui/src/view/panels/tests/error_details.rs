@@ -249,14 +249,17 @@ fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
-fn review_error_toasts_hide_during_authentication(cx: &mut gpui::TestAppContext) {
+fn unrelated_error_toasts_remain_visible_during_authentication(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation};
     let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
-    report(cx, &view, "authentication failed");
+    report(cx, &view, "Failed to save settings: disk full");
     let id = errors(cx, &view)[0].0;
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "authentication failed".into(),
         operation: AuthRetryOperation::Clone {
@@ -268,13 +271,20 @@ fn review_error_toasts_hide_during_authentication(cx: &mut gpui::TestAppContext)
     draw_and_drain_test_window(cx);
     assert!(
         cx.debug_bounds(selector(format!("toast_error_show_{id}")))
-            .is_none(),
-        "errors are hidden while the authentication prompt is open"
+            .is_some(),
+        "an authentication prompt must not hide unrelated errors"
     );
     assert_eq!(
         errors(cx, &view).len(),
         1,
-        "hiding must not dismiss a sticky error"
+        "the existing error stays available during authentication"
+    );
+    report(cx, &view, "Fetch failed: Connection timed out");
+    let new_id = errors(cx, &view)[0].0;
+    assert!(
+        cx.debug_bounds(selector(format!("toast_error_show_{new_id}")))
+            .is_some(),
+        "new unrelated failures must also remain visible during authentication"
     );
     super::shortcuts::apply_state(cx, &view, Arc::new(AppState::test_default()));
     draw_and_drain_test_window(cx);
@@ -282,4 +292,91 @@ fn review_error_toasts_hide_during_authentication(cx: &mut gpui::TestAppContext)
         cx.debug_bounds(selector(format!("toast_error_show_{id}")))
             .is_some()
     );
+}
+
+#[gpui::test]
+fn local_changes_blocking_pull_show_guidance_output_and_a_review_action(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::error::GitFailureId;
+    use gitcomet_state::model::CommandLogEntry;
+    let _guard = lock_visual_test();
+    let (view, cx) = open_view(cx);
+    let repo_id = RepoId(9695);
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/pull-blocked-local-changes"));
+    repo.open = Loadable::Ready(());
+    repo.history_state.selected_commit = Some(CommitId("abc123".into()));
+    let output = "From github.com:example/repo\n * branch dev -> FETCH_HEAD\n\
+error: Your local changes to the following files would be overwritten by merge:\n\
+\tREADME.md\n\tcrates/app.rs\n\
+Please commit your changes or stash them before you merge.\nAborting\n";
+    repo.feedback.command_log.push(CommandLogEntry {
+        time: std::time::SystemTime::UNIX_EPOCH,
+        ok: false,
+        command: "git pull --prune".into(),
+        summary: "Pull failed".into(),
+        stdout: "Updating abc123..def456\n".into(),
+        stderr: output.into(),
+        announce_success: true,
+        handled_by_auth_prompt: false,
+        failure_id: Some(GitFailureId::WorktreeWouldBeOverwritten),
+        hook_operation_id: None,
+    });
+    super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, repo_id));
+    draw_and_drain_test_window(cx);
+    let [(id, _, count)] = errors(cx, &view).try_into().expect("one terminal failure");
+    assert_eq!(count, 1);
+    cx.update(|_, app| {
+        let notices = view.read(app).toast_host.read(app).error_notices();
+        let notice = &notices[0].1;
+        assert_eq!(notice.text.summary, "Pull blocked by local changes");
+        assert_eq!(
+            notice.text.preview(),
+            Some("Commit or stash your changes, then pull again.")
+        );
+        assert_eq!(
+            notice.actions,
+            vec![ErrorAction::ReviewLocalChanges { repo_id }]
+        );
+        assert!(view.read(app).state.auth_prompt.is_none());
+    });
+    assert!(
+        cx.debug_bounds(selector(format!("toast_error_review_{id}")))
+            .is_some()
+    );
+
+    click(cx, format!("toast_error_show_{id}"));
+    let details = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .error_details_text_for_test(&format!("{id}_details"))
+            .expect("terminal output")
+            .read(app)
+            .text()
+            .to_string()
+    });
+    assert!(details.contains("Updating abc123..def456"));
+    assert!(details.contains(output.trim_end()));
+    assert!(cx.debug_bounds("error_details_action_0").is_some());
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| view.update(app, |this, cx| this.set_details_collapsed(true, cx)));
+
+    click(cx, format!("toast_error_review_{id}"));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_, app| {
+        let root = view.read(app);
+        let state = root.store.snapshot();
+        assert_eq!(state.active_repo, Some(repo_id));
+        assert!(state.repos[0].history_state.selected_commit.is_none());
+        assert!(!root.details_collapsed);
+        assert!(!root.documents_active);
+        assert!(state.auth_prompt.is_none());
+        assert_eq!(
+            state.repos[0].feedback.command_log.len(),
+            1,
+            "reviewing must not stash or retry"
+        );
+    });
 }

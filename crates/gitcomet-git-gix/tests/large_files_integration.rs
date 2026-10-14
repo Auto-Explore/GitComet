@@ -1685,6 +1685,7 @@ fn lfs_lock_listing_does_not_consume_credentials_staged_for_a_command() {
     git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
     let opened = GixBackend.open(&repo).unwrap();
     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".into()),
         secret: "test-token".into(),
@@ -2288,6 +2289,7 @@ esac
             let command = LargeFileCommand::LfsPull { paths };
             {
                 let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                    challenge: None,
                     kind: GitAuthKind::UsernamePassword,
                     username: Some("test".into()),
                     secret: "lfs-test-secret".into(),

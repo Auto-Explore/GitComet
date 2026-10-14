@@ -35,6 +35,7 @@ pub(super) fn started(
         time,
         duration: None,
         status: GitHookOperationStatus::Running,
+        handled_by_auth_prompt: false,
         hooks: Vec::new(),
         output: Arc::new(VecDeque::new()),
         output_bytes: 0,

@@ -446,6 +446,12 @@ fn run_action(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match action {
+        ErrorAction::ReviewLocalChanges { repo_id } => {
+            this.close_popover(cx);
+            let _ = this.root_view.update(cx, |root, cx| {
+                root.review_local_changes(repo_id, window, cx);
+            });
+        }
         ErrorAction::Hosted(action) => {
             this.close_popover_and_restore_focus(window, cx);
             action.invoke(cx);

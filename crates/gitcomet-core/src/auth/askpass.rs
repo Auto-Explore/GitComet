@@ -5,17 +5,16 @@
 //! GitComet stages the user's credentials in [`super::stage_git_auth`] and
 //! hands them to the helper through environment variables, so secrets never
 //! appear on a command line. Prompt text the helper echoes back to its log
-//! files is used to cache passphrases by prompt and to surface SSH
-//! host-verification prompts in the command's stderr.
+//! files records whether each request received a response. Independently
+//! verified key passphrases can be reused even if Git later fails locally.
 
 use super::{
-    CachedPassphraseEntry, GITCOMET_AUTH_CACHE_PROMPT_ENV_PREFIX,
+    AuthChallenge, AuthOutcome, CachedPassphraseEntry, GITCOMET_AUTH_CACHE_PROMPT_ENV_PREFIX,
     GITCOMET_AUTH_CACHE_SECRET_ENV_PREFIX, GITCOMET_AUTH_CACHE_SIZE_ENV, GITCOMET_AUTH_KIND_ENV,
     GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
     GITCOMET_AUTH_KIND_PASSPHRASE_CACHED, GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
-    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind,
-    SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, load_session_passphrases,
-    remember_passphrase_prompt_from_staged_git_auth, take_staged_git_auth,
+    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, PassphraseValidation,
+    SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, load_session_passphrases, take_staged_git_auth,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,6 +26,11 @@ pub const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
 pub const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
 pub const GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV: &str =
     "GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG";
+const RESPONSE_LOG_ENV: &str = "GITCOMET_ASKPASS_RESPONSE_LOG";
+const TARGET_PROMPT_ENV: &str = "GITCOMET_AUTH_TARGET_PROMPT";
+#[cfg(test)]
+#[path = "askpass_tests.rs"]
+mod outcome_tests;
 const GITCOMET_ASKPASS_PROMPT_INPUT_ENV: &str = "GITCOMET_ASKPASS_PROMPT_INPUT";
 
 /// A written askpass script plus its prompt log paths, cleaned up on drop.
@@ -39,6 +43,7 @@ pub struct AskPassScript {
     prompt_input_path: PathBuf,
     host_prompt_log_path: PathBuf,
     passphrase_prompt_log_path: PathBuf,
+    response_log_path: PathBuf,
 }
 
 impl AskPassScript {
@@ -101,12 +106,6 @@ impl PromptAuth {
             Self::CachedPassphrases(_) => "",
         }
     }
-
-    pub fn remember_on_success(&self, prompt: Option<&str>) {
-        if let Self::Explicit(auth) = self {
-            remember_passphrase_prompt_from_staged_git_auth(auth, prompt);
-        }
-    }
 }
 
 /// Resolves the auth an askpass-bearing command should run with: the explicit
@@ -153,31 +152,41 @@ if [ -n "${GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG:-}" ]; then
   esac
 fi
 kind="${GITCOMET_AUTH_KIND:-}"
+answer=""
 if [ "$kind" = "username_password" ]; then
   case "$lower_prompt" in
-    *username*) printf '%s\n' "${GITCOMET_AUTH_USERNAME:-}" ;;
-    *) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
+    *username*) answer="${GITCOMET_AUTH_USERNAME:-}" ;;
+    *password*) answer="${GITCOMET_AUTH_SECRET:-}" ;;
   esac
-elif [ "$kind" = "passphrase_cached" ]; then
+elif [ "$kind" = "passphrase" ]; then
+  case "$lower_prompt" in
+    *passphrase*)
+      if [ -z "${GITCOMET_AUTH_TARGET_PROMPT:-}" ] || [ "$prompt" = "$GITCOMET_AUTH_TARGET_PROMPT" ]; then
+        answer="${GITCOMET_AUTH_SECRET:-}"
+      fi ;;
+  esac
+elif [ "$kind" = "host_verification" ]; then
+  case "$lower_prompt" in
+    *continue\ connecting*|*yes/no*|*fingerprint*) answer="${GITCOMET_AUTH_SECRET:-}" ;;
+  esac
+fi
+if [ -z "$answer" ]; then
   cache_size="${GITCOMET_AUTH_CACHE_SIZE:-0}"
   i=0
   while [ "$i" -lt "$cache_size" ]; do
     cached_prompt=$(printenv "GITCOMET_AUTH_CACHE_PROMPT_$i")
     if [ "$prompt" = "$cached_prompt" ]; then
-      printenv "GITCOMET_AUTH_CACHE_SECRET_$i"
-      exit 0
+      answer=$(printenv "GITCOMET_AUTH_CACHE_SECRET_$i")
+      break
     fi
     i=$((i + 1))
   done
-  printf '\n'
-elif [ "$kind" = "host_verification" ]; then
-  case "$lower_prompt" in
-    *continue\ connecting*|*yes/no*|*fingerprint*) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
-    *) printf '\n' ;;
-  esac
-else
-  printf '%s\n' "${GITCOMET_AUTH_SECRET:-}"
 fi
+if [ -n "${GITCOMET_ASKPASS_RESPONSE_LOG:-}" ]; then
+  if [ -n "$answer" ]; then status=S; else status=M; fi
+  printf '%s:%s\n' "$status" "$prompt" >> "$GITCOMET_ASKPASS_RESPONSE_LOG"
+fi
+printf '%s\n' "$answer"
 "#;
 
 /// The Windows helper.
@@ -201,6 +210,11 @@ set "cmdcmdline="
 set "prompt=!cmdcmdline:*gitcomet-askpass.cmd =!"
 set "prompt=!prompt:*" "=!"
 set "prompt=!prompt:"=!"
+:trim_prompt
+if "!prompt:~-1!"==" " (
+  set "prompt=!prompt:~0,-1!"
+  goto trim_prompt
+)
 set "findstr=!SystemRoot!\System32\findstr.exe"
 > "!GITCOMET_ASKPASS_PROMPT_INPUT!" echo(!prompt!
 if not "!GITCOMET_ASKPASS_PROMPT_LOG!"=="" (
@@ -215,39 +229,52 @@ if not "!GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG!"=="" (
     >>"!GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG!" echo(!prompt!
   )
 )
+set "answer="
 if /I "!GITCOMET_AUTH_KIND!"=="username_password" (
   "!findstr!" /I "username" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
   if not errorlevel 1 (
-    echo(!GITCOMET_AUTH_USERNAME!
-    exit /b 0
+    set "answer=!GITCOMET_AUTH_USERNAME!"
+    goto respond
   )
-  echo(!GITCOMET_AUTH_SECRET!
-  exit /b 0
+  "!findstr!" /I "password" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
+  if not errorlevel 1 set "answer=!GITCOMET_AUTH_SECRET!"
+  goto cached
 )
-if /I "!GITCOMET_AUTH_KIND!"=="passphrase_cached" (
+if /I "!GITCOMET_AUTH_KIND!"=="passphrase" (
+  "!findstr!" /I "passphrase" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
+  if not errorlevel 1 (
+    if "!GITCOMET_AUTH_TARGET_PROMPT!"=="" set "answer=!GITCOMET_AUTH_SECRET!"
+    if "!prompt!"=="!GITCOMET_AUTH_TARGET_PROMPT!" set "answer=!GITCOMET_AUTH_SECRET!"
+  )
+)
+if /I "!GITCOMET_AUTH_KIND!"=="host_verification" (
+  "!findstr!" /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
+  if not errorlevel 1 set "answer=!GITCOMET_AUTH_SECRET!"
+)
+:cached
+if "!answer!"=="" (
   set "cache_size=!GITCOMET_AUTH_CACHE_SIZE!"
   if "!cache_size!"=="" set "cache_size=0"
   set /a cache_last=!cache_size!-1
   if !cache_last! GEQ 0 (
     for /L %%i in (0,1,!cache_last!) do (
-      call set "cached_prompt=%%GITCOMET_AUTH_CACHE_PROMPT_%%i%%"
+      set "cached_prompt=!GITCOMET_AUTH_CACHE_PROMPT_%%i!"
       if "!prompt!"=="!cached_prompt!" (
-        call set "cached_secret=%%GITCOMET_AUTH_CACHE_SECRET_%%i%%"
-        echo !cached_secret!
-        exit /b 0
+        set "answer=!GITCOMET_AUTH_CACHE_SECRET_%%i!"
+        goto respond
       )
     )
   )
-  exit /b 0
 )
-if /I "!GITCOMET_AUTH_KIND!"=="host_verification" (
-  "!findstr!" /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
-  if not errorlevel 1 (
-    echo(!GITCOMET_AUTH_SECRET!
+:respond
+if not "!GITCOMET_ASKPASS_RESPONSE_LOG!"=="" (
+  if "!answer!"=="" (
+    >>"!GITCOMET_ASKPASS_RESPONSE_LOG!" echo(M:!prompt!
+  ) else (
+    >>"!GITCOMET_ASKPASS_RESPONSE_LOG!" echo(S:!prompt!
   )
-  exit /b 0
 )
-echo(!GITCOMET_AUTH_SECRET!
+echo(!answer!
 "#;
 
 pub fn askpass_script_contents() -> &'static [u8] {
@@ -268,11 +295,13 @@ pub fn create_askpass_script() -> std::io::Result<AskPassScript> {
     let prompt_input_path = dir.path().join("gitcomet-askpass-prompt-input.txt");
     let host_prompt_log_path = dir.path().join("gitcomet-askpass-host-prompt.log");
     let passphrase_prompt_log_path = dir.path().join("gitcomet-askpass-passphrase-prompt.log");
+    let response_log_path = dir.path().join("gitcomet-askpass-responses.log");
 
     fs::write(&path, askpass_script_contents())?;
     fs::write(&prompt_input_path, b"")?;
     fs::write(&host_prompt_log_path, b"")?;
     fs::write(&passphrase_prompt_log_path, b"")?;
+    fs::write(&response_log_path, b"")?;
 
     #[cfg(unix)]
     {
@@ -289,6 +318,7 @@ pub fn create_askpass_script() -> std::io::Result<AskPassScript> {
         prompt_input_path,
         host_prompt_log_path,
         passphrase_prompt_log_path,
+        response_log_path,
     })
 }
 
@@ -300,6 +330,8 @@ pub fn configure_git_auth_prompt(
     cmd.env("GIT_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS_REQUIRE", "force");
+    cmd.env(RESPONSE_LOG_ENV, &askpass.response_log_path);
+    cmd.env_remove(TARGET_PROMPT_ENV);
     cmd.env(
         GITCOMET_ASKPASS_PROMPT_LOG_ENV,
         &askpass.host_prompt_log_path,
@@ -319,7 +351,7 @@ pub fn configure_git_auth_prompt(
     cmd.env(GITCOMET_AUTH_CACHE_SIZE_ENV, "0");
     if let Some(auth) = auth {
         match auth {
-            PromptAuth::Explicit(_) => {
+            PromptAuth::Explicit(explicit) => {
                 cmd.env(GITCOMET_AUTH_KIND_ENV, auth.kind_env());
                 if let Some(username) = auth.username() {
                     cmd.env(GITCOMET_AUTH_USERNAME_ENV, username);
@@ -327,28 +359,236 @@ pub fn configure_git_auth_prompt(
                     cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
                 }
                 cmd.env(GITCOMET_AUTH_SECRET_ENV, auth.secret());
+                if let Some(challenge) = explicit.challenge.as_ref() {
+                    cmd.env(TARGET_PROMPT_ENV, normalized_prompt(&challenge.prompt));
+                }
+                configure_cached_passphrases(cmd, &load_session_passphrases());
             }
             PromptAuth::CachedPassphrases(entries) => {
                 cmd.env(GITCOMET_AUTH_KIND_ENV, auth.kind_env());
                 cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
                 cmd.env_remove(GITCOMET_AUTH_SECRET_ENV);
-                cmd.env(GITCOMET_AUTH_CACHE_SIZE_ENV, entries.len().to_string());
-                for (idx, entry) in entries.iter().enumerate() {
-                    cmd.env(
-                        format!("{GITCOMET_AUTH_CACHE_PROMPT_ENV_PREFIX}{idx}"),
-                        &entry.prompt,
-                    );
-                    cmd.env(
-                        format!("{GITCOMET_AUTH_CACHE_SECRET_ENV_PREFIX}{idx}"),
-                        &entry.secret,
-                    );
-                }
+                configure_cached_passphrases(cmd, entries);
             }
         }
     } else {
         cmd.env_remove(GITCOMET_AUTH_KIND_ENV);
         cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
         cmd.env_remove(GITCOMET_AUTH_SECRET_ENV);
+    }
+}
+
+fn normalized_prompt(prompt: &str) -> String {
+    if cfg!(windows) {
+        prompt.trim_end().replace('"', "")
+    } else {
+        prompt.to_string()
+    }
+}
+
+fn configure_cached_passphrases(cmd: &mut Command, entries: &[CachedPassphraseEntry]) {
+    cmd.env(GITCOMET_AUTH_CACHE_SIZE_ENV, entries.len().to_string());
+    for (idx, entry) in entries.iter().enumerate() {
+        cmd.env(
+            format!("{GITCOMET_AUTH_CACHE_PROMPT_ENV_PREFIX}{idx}"),
+            normalized_prompt(&entry.prompt),
+        );
+        cmd.env(
+            format!("{GITCOMET_AUTH_CACHE_SECRET_ENV_PREFIX}{idx}"),
+            &entry.secret,
+        );
+    }
+}
+
+fn prompt_kind(prompt: &str) -> Option<GitAuthKind> {
+    let lower = prompt.to_ascii_lowercase();
+    if lower.contains("passphrase") {
+        Some(GitAuthKind::Passphrase)
+    } else if lower.contains("continue connecting")
+        || lower.contains("yes/no")
+        || lower.contains("fingerprint")
+        || lower.contains("authenticity of host")
+    {
+        Some(GitAuthKind::HostVerification)
+    } else if lower.contains("username") || lower.contains("password") {
+        Some(GitAuthKind::UsernamePassword)
+    } else {
+        None
+    }
+}
+
+fn observed_responses(askpass: &AskPassScript) -> Vec<(bool, AuthChallenge)> {
+    fs::read_to_string(&askpass.response_log_path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let (status, prompt) = line.split_once(':')?;
+            let supplied = match status {
+                "S" => true,
+                "M" => false,
+                _ => return None,
+            };
+            Some((
+                supplied,
+                AuthChallenge::from_prompt(prompt_kind(prompt)?, prompt),
+            ))
+        })
+        .collect()
+}
+
+fn response_is_verified(auth: Option<&PromptAuth>, challenge: &AuthChallenge) -> bool {
+    let explicit_secret = match auth {
+        Some(PromptAuth::Explicit(auth))
+            if auth.kind == GitAuthKind::Passphrase
+                && auth.challenge.as_ref().is_none_or(|target| {
+                    normalized_prompt(&target.prompt) == normalized_prompt(&challenge.prompt)
+                }) =>
+        {
+            Some(auth.secret.as_str())
+        }
+        _ => None,
+    };
+    super::challenge::challenge_is_verified(challenge, explicit_secret)
+}
+
+/// A historical askpass call is never evidence that the final Git failure
+/// needs another password. Only an unanswered request or explicit rejection
+/// can reopen authentication.
+pub fn resolve_auth_outcome(
+    auth: Option<&PromptAuth>,
+    askpass: &AskPassScript,
+    stderr: &[u8],
+    success: bool,
+) -> AuthOutcome {
+    let responses = observed_responses(askpass);
+    if success {
+        return if responses
+            .iter()
+            .any(|(supplied, challenge)| *supplied && response_is_verified(auth, challenge))
+        {
+            AuthOutcome::Verified
+        } else if responses.iter().any(|(supplied, _)| *supplied) {
+            AuthOutcome::Supplied
+        } else {
+            AuthOutcome::NotRequested
+        };
+    }
+    let lower = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    // A completed fetch may have tried an unused identity before Git reached
+    // a local refusal. That earlier missing/rejected answer is not the cause
+    // of this operation's final failure.
+    let local_failure = lower.contains("would be overwritten")
+        || lower.contains("automatic merge failed")
+        || lower.contains("cannot pull with rebase: you have unstaged changes")
+        || lower.contains("cannot pull with rebase: your index contains uncommitted changes")
+        || lower.contains("not possible to fast-forward")
+        || lower.contains("need to specify how to reconcile divergent branches");
+    if !local_failure && let Some((false, challenge)) = responses.last() {
+        return AuthOutcome::NeedsInput(challenge.clone());
+    }
+    let rejected_passphrase = lower.contains("incorrect passphrase")
+        || lower.contains("bad passphrase")
+        || lower.contains("bad decrypt");
+    let rejected_password = lower.contains("authentication failed")
+        || lower.contains("invalid username or password")
+        || lower.contains("http basic: access denied");
+    if !local_failure
+        && let Some((true, challenge)) = responses.last()
+        && match challenge.kind {
+            GitAuthKind::Passphrase => {
+                rejected_passphrase && !response_is_verified(auth, challenge)
+            }
+            GitAuthKind::UsernamePassword => rejected_password,
+            GitAuthKind::HostVerification => false,
+        }
+    {
+        super::challenge::forget_challenge(challenge);
+        return AuthOutcome::Rejected(challenge.clone());
+    }
+    if responses
+        .iter()
+        .any(|(supplied, challenge)| *supplied && response_is_verified(auth, challenge))
+    {
+        AuthOutcome::Verified
+    } else if responses.iter().any(|(supplied, _)| *supplied) {
+        AuthOutcome::Supplied
+    } else {
+        AuthOutcome::NotRequested
+    }
+}
+
+/// Independently unlock a known local key. The public-key output and an
+/// answered askpass invocation are both required; arbitrary tool errors do
+/// not establish that a passphrase was rejected.
+pub fn validate_passphrase(
+    challenge: &AuthChallenge,
+    auth: &StagedGitAuth,
+    cancellation: &crate::services::CancellationToken,
+) -> PassphraseValidation {
+    let Some(path) = challenge.key_path.as_ref() else {
+        return PassphraseValidation::Unknown;
+    };
+    if challenge.kind != GitAuthKind::Passphrase || auth.kind != GitAuthKind::Passphrase {
+        return PassphraseValidation::Unknown;
+    }
+    let Some(before) = super::challenge::key_fingerprint(path) else {
+        return PassphraseValidation::Unknown;
+    };
+    if challenge.key_fingerprint != Some(before) {
+        return PassphraseValidation::Unknown;
+    }
+    let Ok(askpass) = create_askpass_script() else {
+        return PassphraseValidation::Unknown;
+    };
+    let mut bound = auth.clone();
+    bound.challenge = Some(AuthChallenge::from_prompt(
+        GitAuthKind::Passphrase,
+        format!("Enter passphrase for \"{}\":", path.display()),
+    ));
+    let auth = PromptAuth::Explicit(bound);
+    let mut cmd = crate::process::background_command("ssh-keygen");
+    cmd.arg("-y").arg("-f").arg(path).env("LC_ALL", "C");
+    configure_git_auth_prompt(&mut cmd, Some(&auth), &askpass);
+    // This verifier reads exactly the key supplied with -f. Windows OpenSSH
+    // can ask only "Enter passphrase:" here, without including its path.
+    // Permit that local prompt while excluding all cached responses.
+    cmd.env_remove(TARGET_PROMPT_ENV);
+    cmd.env(GITCOMET_AUTH_CACHE_SIZE_ENV, "0");
+    let Ok(output) = crate::process::probe_output(
+        cmd,
+        git_command_timeout().min(Duration::from_secs(30)),
+        cancellation,
+    ) else {
+        return PassphraseValidation::Unknown;
+    };
+    if cancellation.is_cancelled()
+        || super::challenge::key_fingerprint(path) != Some(before)
+        || !observed_responses(&askpass)
+            .iter()
+            .any(|(supplied, _)| *supplied)
+    {
+        return PassphraseValidation::Unknown;
+    }
+    let public_key = String::from_utf8_lossy(&output.stdout);
+    let mut fields = public_key.split_whitespace();
+    let valid_public_key = fields.next().is_some_and(|kind| {
+        kind.starts_with("ssh-") || kind.starts_with("ecdsa-") || kind.starts_with("sk-")
+    }) && fields.next().is_some_and(|data| {
+        !data.is_empty()
+            && data
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"+/=".contains(&byte))
+    });
+    if output.status.success() && valid_public_key {
+        PassphraseValidation::Verified
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+        if stderr.contains("incorrect passphrase") || stderr.contains("bad passphrase") {
+            super::challenge::forget_challenge(challenge);
+            PassphraseValidation::Rejected
+        } else {
+            PassphraseValidation::Unknown
+        }
     }
 }
 
@@ -362,16 +602,9 @@ pub fn last_logged_passphrase_prompt(askpass: &AskPassScript) -> Option<String> 
         .map(ToOwned::to_owned)
 }
 
-pub fn remember_successful_prompt_auth(auth: Option<&PromptAuth>, askpass: &AskPassScript) {
-    if let Some(auth) = auth {
-        auth.remember_on_success(last_logged_passphrase_prompt(askpass).as_deref());
-    }
-}
-
 /// Appends a passphrase prompt observed by askpass to a failed command's
-/// stderr. SSH signing otherwise reports only an "incorrect passphrase"
-/// error, which is not enough to know that Git attempted an interactive
-/// prompt.
+/// stderr for diagnostics. This history is not an authentication decision;
+/// callers must attach the separately resolved [`AuthOutcome`].
 pub fn append_passphrase_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScript) {
     let Some(prompt) = last_logged_passphrase_prompt(askpass) else {
         return;
@@ -508,6 +741,7 @@ mod tests {
             kind: GitAuthKind::UsernamePassword,
             username: Some("user".to_string()),
             secret: "s3cret".to_string(),
+            challenge: None,
         });
         let mut command = Command::new(askpass.path());
         command.arg(&prompt).env("PATH", "");

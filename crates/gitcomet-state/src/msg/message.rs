@@ -302,6 +302,7 @@ pub enum Msg {
         operation_id: GitOperationId,
     },
     SubmitAuthPrompt {
+        generation: u64,
         username: Option<String>,
         secret: String,
     },
@@ -1256,6 +1257,11 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    AuthPromptValidated {
+        generation: u64,
+        result: gitcomet_core::auth::PassphraseValidation,
+        auth: StagedGitAuth,
+    },
     TagPushPreviewLoaded {
         repo_id: RepoId,
         mode: gitcomet_core::tag_push::TagPushMode,

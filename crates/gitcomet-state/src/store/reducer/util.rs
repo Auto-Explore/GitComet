@@ -1152,10 +1152,12 @@ pub(super) fn push_command_log(
     command: &RepoCommandKind,
     output: &CommandOutput,
     error: Option<&Error>,
+    handled_by_auth_prompt: bool,
 ) {
     const MAX_COMMAND_LOG: usize = 200;
 
     let (command_text, summary) = summarize_command(command, output, ok, error);
+    mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
 
     repo_state.feedback.command_log.push(CommandLogEntry {
         time: SystemTime::now(),
@@ -1171,6 +1173,11 @@ pub(super) fn push_command_log(
             command_log_text(&output.stderr)
         },
         announce_success: command_success_is_worth_announcing(command),
+        handled_by_auth_prompt,
+        failure_id: error.and_then(|error| match error.kind() {
+            ErrorKind::Git(failure) => Some(failure.id()),
+            _ => None,
+        }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     });
     if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
@@ -1185,9 +1192,11 @@ pub(super) fn push_action_log(
     command: String,
     summary: String,
     error: Option<&Error>,
+    handled_by_auth_prompt: bool,
 ) {
     const MAX_COMMAND_LOG: usize = 200;
 
+    mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
     repo_state.feedback.command_log.push(CommandLogEntry {
         time: SystemTime::now(),
         ok,
@@ -1198,11 +1207,32 @@ pub(super) fn push_action_log(
             .map(format_error_for_user)
             .map_or_else(|| Arc::from(""), |text| command_log_text(&text)),
         announce_success: true,
+        handled_by_auth_prompt,
+        failure_id: error.and_then(|error| match error.kind() {
+            ErrorKind::Git(failure) => Some(failure.id()),
+            _ => None,
+        }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     });
     if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
         repo_state.feedback.command_log.drain(0..extra);
+    }
+}
+
+/// Nested command completion already carries its exact reporting owner. Mark
+/// that attempt before the outer operation finishes, without consulting the
+/// currently visible prompt or affecting another operation's feedback.
+fn mark_auth_prompt_hook_operation(repo_state: &mut RepoState, handled_by_auth_prompt: bool) {
+    if handled_by_auth_prompt
+        && let Some(operation_id) = repo_state.feedback.command_log_operation_id
+        && let Some(operation) = repo_state
+            .feedback
+            .hook_activity
+            .iter_mut()
+            .find(|operation| operation.id == operation_id)
+    {
+        operation.handled_by_auth_prompt = true;
     }
 }
 
@@ -1402,11 +1432,16 @@ fn summarize_command(
             && let Some((git_command, details)) = try_format_git_backend_error(error)
         {
             // A pull or merge that stopped at conflicts did its job; say so.
-            let outcome = if matches!(error.kind(), ErrorKind::Git(failure) if failure.id() == GitFailureId::StoppedAtConflicts)
-            {
-                "stopped at conflicts"
-            } else {
-                "failed"
+            let outcome = match error.kind() {
+                ErrorKind::Git(failure) if failure.id() == GitFailureId::StoppedAtConflicts => {
+                    "stopped at conflicts"
+                }
+                ErrorKind::Git(failure)
+                    if failure.id() == GitFailureId::WorktreeWouldBeOverwritten =>
+                {
+                    "blocked by local changes"
+                }
+                _ => "failed",
             };
             return (git_command, format!("{label} {outcome}:\n\n{details}"));
         }
@@ -1963,6 +1998,8 @@ mod tests {
             stdout: Arc::from(""),
             stderr: Arc::from(""),
             announce_success: true,
+            handled_by_auth_prompt: false,
+            failure_id: None,
             hook_operation_id: None,
         }
     }
@@ -2250,6 +2287,7 @@ mod tests {
             &RepoCommandKind::FetchAll,
             &command_output("git fetch", "", "stderr from git"),
             None,
+            false,
         );
         assert_eq!(repo.feedback.command_log.len(), 200);
         assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
@@ -2271,6 +2309,7 @@ mod tests {
             Some(&Error::new(ErrorKind::Backend(
                 "backend failure".to_string(),
             ))),
+            false,
         );
         assert_eq!(repo.feedback.command_log.len(), 200);
         assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
@@ -3142,13 +3181,13 @@ mod tests {
             detect_auth_prompt_kind_from_message(
                 "git clone --progress git@github.com:org/repo.git C:\\git\\repo failed: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
             ),
-            Some(crate::model::AuthPromptKind::Passphrase)
+            None
         );
         assert_eq!(
             detect_auth_prompt_kind_from_message(
                 "git pull --no-rebase origin main failed: Host key verification failed.\nfatal: Could not read from remote repository."
             ),
-            Some(crate::model::AuthPromptKind::HostVerification)
+            None
         );
         assert_eq!(
             detect_auth_prompt_kind_from_message(
@@ -3174,7 +3213,7 @@ mod tests {
             detect_auth_prompt_kind_from_message(&format!(
                 "git commit failed\n{SSH_PASSPHRASE_PROMPT_MARKER}\nEnter passphrase for key"
             )),
-            Some(crate::model::AuthPromptKind::Passphrase)
+            None
         );
 
         let structured = Error::new(ErrorKind::Git(GitFailure::new(
@@ -3186,10 +3225,7 @@ mod tests {
                 .to_vec(),
             None,
         )));
-        assert_eq!(
-            detect_auth_prompt_kind(&structured),
-            Some(crate::model::AuthPromptKind::HostVerification)
-        );
+        assert_eq!(detect_auth_prompt_kind(&structured), None);
     }
 
     #[test]

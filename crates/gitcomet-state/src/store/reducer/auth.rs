@@ -5,13 +5,14 @@ use super::{
     actions_emit_effects, begin_commit_action, external_and_history, maintenance, reduce,
     refresh_selected_head_gitlink, repo_management, util,
 };
-use crate::model::AuthPromptKind;
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
+use crate::model::{AuthPromptKind, AuthPromptStatus};
 use crate::msg::{Effect, Msg, RepoCommandKind};
 #[cfg(test)]
 use gitcomet_core::auth::stage_git_auth;
 use gitcomet_core::auth::{
-    GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_staged_git_auth,
+    AuthOutcome, GitAuthKind, PassphraseValidation, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth,
+    clear_staged_git_auth,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::{
@@ -28,17 +29,12 @@ fn auth_prompt_for_repo_command(
     command: &RepoCommandKind,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = detect_auth_prompt_kind(error)?;
     let operation = AuthRetryOperation::RepoCommand {
         repo_id,
         command: command.clone(),
     };
     retry_msg_for_auth_operation(operation.clone())?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation,
-    })
+    auth_prompt_for_error(error, operation)
 }
 
 fn auth_prompt_for_safe_push_after_commit(
@@ -46,12 +42,10 @@ fn auth_prompt_for_safe_push_after_commit(
     context: SafePushAfterCommitContext,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = detect_auth_prompt_kind(error)?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation: AuthRetryOperation::SafePushAfterCommit { repo_id, context },
-    })
+    auth_prompt_for_error(
+        error,
+        AuthRetryOperation::SafePushAfterCommit { repo_id, context },
+    )
 }
 
 fn auth_prompt_for_commit(
@@ -59,18 +53,16 @@ fn auth_prompt_for_commit(
     pending: Option<PendingCommitRetry>,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = detect_auth_prompt_kind(error)?;
     let pending = pending?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation: AuthRetryOperation::Commit {
+    auth_prompt_for_error(
+        error,
+        AuthRetryOperation::Commit {
             repo_id,
             message: pending.message,
             amend: pending.amend,
             push_after_commit: pending.push_after_commit,
         },
-    })
+    )
 }
 
 fn auth_prompt_for_clone(
@@ -78,15 +70,66 @@ fn auth_prompt_for_clone(
     dest: &std::path::Path,
     error: &gitcomet_core::error::Error,
 ) -> Option<AuthPromptState> {
-    let kind = detect_auth_prompt_kind(error)?;
-    Some(AuthPromptState {
-        kind,
-        reason: util::format_error_for_user(error),
-        operation: AuthRetryOperation::Clone {
+    auth_prompt_for_error(
+        error,
+        AuthRetryOperation::Clone {
             url: url.to_string(),
             dest: dest.to_path_buf(),
         },
+    )
+}
+
+fn auth_prompt_for_error(error: &Error, operation: AuthRetryOperation) -> Option<AuthPromptState> {
+    let kind = detect_auth_prompt_kind(error)?;
+    let (challenge, status) = match error.kind() {
+        ErrorKind::Git(failure) => match failure.auth_outcome() {
+            Some(AuthOutcome::NeedsInput(challenge)) => {
+                (Some(challenge.clone()), AuthPromptStatus::AwaitingInput)
+            }
+            Some(AuthOutcome::Rejected(challenge)) => {
+                (Some(challenge.clone()), AuthPromptStatus::Rejected)
+            }
+            _ => (None, AuthPromptStatus::AwaitingInput),
+        },
+        _ => (None, AuthPromptStatus::AwaitingInput),
+    };
+    let reason = if status == AuthPromptStatus::Rejected {
+        rejected_auth_reason(kind).to_string()
+    } else {
+        challenge.as_ref().map_or_else(
+            || util::format_error_for_user(error),
+            |challenge| challenge.prompt.clone(),
+        )
+    };
+    Some(AuthPromptState {
+        generation: 0,
+        challenge,
+        status,
+        kind,
+        reason,
+        operation,
     })
+}
+
+fn rejected_auth_reason(kind: AuthPromptKind) -> &'static str {
+    match kind {
+        AuthPromptKind::Passphrase => "The passphrase could not unlock this key. Try again.",
+        AuthPromptKind::UsernamePassword => "The credentials were rejected. Enter them again.",
+        AuthPromptKind::HostVerification => "The host confirmation was not accepted.",
+    }
+}
+
+fn cancel_auth_validation(state: &mut AppState) {
+    if let Some(cancellation) = state.auth_validation_cancellation.take() {
+        cancellation.cancel();
+    }
+}
+
+fn install_auth_prompt(state: &mut AppState, mut prompt: AuthPromptState) {
+    cancel_auth_validation(state);
+    state.auth_prompt_generation = state.auth_prompt_generation.wrapping_add(1);
+    prompt.generation = state.auth_prompt_generation;
+    state.auth_prompt = Some(prompt);
 }
 
 fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
@@ -188,7 +231,7 @@ pub(super) fn annex_refusal(
         "{action} on a git-annex adjusted branch {reason}. Check out {base} to use plain Git."
     );
     repo.feedback.last_error = Some(summary.clone());
-    util::push_action_log(repo, false, action.to_string(), summary, None);
+    util::push_action_log(repo, false, action.to_string(), summary, None, false);
     Some(Vec::new())
 }
 
@@ -458,36 +501,99 @@ pub(super) fn submit_auth_prompt(
     repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     state: &mut AppState,
+    generation: u64,
     username: Option<String>,
     secret: String,
 ) -> Vec<Effect> {
-    let Some(prompt) = state.auth_prompt.take() else {
+    if state.auth_prompt.as_ref().is_none_or(|prompt| {
+        prompt.generation != generation || prompt.status == AuthPromptStatus::Validating
+    }) {
         return Vec::new();
-    };
+    }
+    let mut prompt = state
+        .auth_prompt
+        .take()
+        .expect("current authentication prompt");
 
     let username = username
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let auth = match prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
+    let mut auth = match prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
         Ok(auth) => auth,
         Err(err) => {
-            state.auth_prompt = Some(prompt);
-            return if let Some(repo_state) = state
-                .active_repo
-                .and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id))
-            {
-                util::push_diagnostic(
-                    repo_state,
-                    crate::model::DiagnosticKind::Error,
-                    util::format_error_for_user(&err),
-                );
-                Vec::new()
-            } else {
-                Vec::new()
-            };
+            prompt.status = AuthPromptStatus::Rejected;
+            prompt.reason = util::format_error_for_user(&err);
+            install_auth_prompt(state, prompt);
+            return Vec::new();
         }
     };
+    auth.challenge = prompt.challenge.clone();
+    if prompt.kind == AuthPromptKind::Passphrase
+        && let Some(challenge) = prompt
+            .challenge
+            .as_ref()
+            .filter(|challenge| challenge.key_path.is_some())
+    {
+        let cancellation = gitcomet_core::services::CancellationToken::new();
+        let effect = Effect::ValidateAuthPrompt {
+            generation,
+            challenge: challenge.clone(),
+            auth,
+            cancellation: cancellation.clone(),
+        };
+        prompt.status = AuthPromptStatus::Validating;
+        state.auth_validation_cancellation = Some(cancellation);
+        state.auth_prompt = Some(prompt);
+        return vec![effect];
+    }
+    replay_auth_prompt(repos, id_alloc, state, prompt, auth)
+}
 
+pub(super) fn auth_prompt_validated(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    generation: u64,
+    result: PassphraseValidation,
+    auth: StagedGitAuth,
+) -> Vec<Effect> {
+    if state.auth_prompt.as_ref().is_none_or(|prompt| {
+        prompt.generation != generation || prompt.status != AuthPromptStatus::Validating
+    }) {
+        return Vec::new();
+    }
+    let cancelled = state
+        .auth_validation_cancellation
+        .take()
+        .is_some_and(|token| token.is_cancelled());
+    if cancelled {
+        return cancel_auth_prompt(state);
+    }
+    let mut prompt = state
+        .auth_prompt
+        .take()
+        .expect("validated authentication prompt");
+    if result == PassphraseValidation::Rejected {
+        prompt.status = AuthPromptStatus::Rejected;
+        prompt.reason = rejected_auth_reason(prompt.kind).to_string();
+        install_auth_prompt(state, prompt);
+        return Vec::new();
+    }
+    if result == PassphraseValidation::Verified
+        && let Some(challenge) = prompt.challenge.as_ref()
+    {
+        gitcomet_core::auth::remember_verified_passphrase(challenge, &auth);
+    }
+    replay_auth_prompt(repos, id_alloc, state, prompt, auth)
+}
+
+fn replay_auth_prompt(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    prompt: AuthPromptState,
+    auth: StagedGitAuth,
+) -> Vec<Effect> {
     // A conflicting operation can defer this retry. Attach its credentials to
     // the newly queued command just as we attach them to an immediate effect.
     let queued_before = match &prompt.operation {
@@ -518,7 +624,23 @@ pub(super) fn submit_auth_prompt(
 }
 
 pub(super) fn cancel_auth_prompt(state: &mut AppState) -> Vec<Effect> {
-    state.auth_prompt = None;
+    cancel_auth_validation(state);
+    if let Some(AuthPromptState {
+        operation: AuthRetryOperation::Clone { dest, .. },
+        ..
+    }) = state.auth_prompt.take()
+        && state.clone.as_ref().is_some_and(|operation| {
+            operation.dest.as_ref() == &dest
+                && matches!(
+                    operation.status,
+                    crate::model::CloneOpStatus::WaitingForAuthentication
+                )
+        })
+    {
+        // The clone process already exited to request credentials. Dismissing
+        // that request is quiet and requires no process-abort effect.
+        state.clone = None;
+    }
     clear_staged_git_auth_env();
     Vec::new()
 }
@@ -533,10 +655,11 @@ pub(super) fn clone_repo_finished(
         .as_ref()
         .err()
         .and_then(|error| auth_prompt_for_clone(&url, &dest, error));
-    let effects = repo_management::clone_repo_finished(state, url, dest, result);
+    let effects =
+        repo_management::clone_repo_finished(state, url, dest, result, auth_prompt.is_some());
     if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
-        state.auth_prompt = Some(prompt);
+        install_auth_prompt(state, prompt);
     }
     effects
 }
@@ -596,14 +719,19 @@ pub(super) fn commit_finished(
         .as_ref()
         .err()
         .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
-    let mut effects =
-        actions_emit_effects::commit_finished(state, repo_id, result.map(|_| ()), amend);
+    let mut effects = actions_emit_effects::commit_finished(
+        state,
+        repo_id,
+        result.map(|_| ()),
+        amend,
+        auth_prompt.is_some(),
+    );
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.pending.commit_retry = None;
     }
     if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
-        state.auth_prompt = Some(prompt);
+        install_auth_prompt(state, prompt);
     }
     if push_after_commit && let Some(push) = annex_takeover(repos, state, repo_id, false) {
         effects.extend(push);
@@ -635,11 +763,17 @@ pub(super) fn safe_push_after_commit_finished(
         .as_ref()
         .err()
         .and_then(|error| auth_prompt_for_safe_push_after_commit(repo_id, context.clone(), error));
-    let effects =
-        actions_emit_effects::safe_push_after_commit_finished(repos, state, repo_id, auth, result);
+    let effects = actions_emit_effects::safe_push_after_commit_finished(
+        repos,
+        state,
+        repo_id,
+        auth,
+        result,
+        auth_prompt.is_some(),
+    );
     if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
-        state.auth_prompt = Some(prompt);
+        install_auth_prompt(state, prompt);
     }
     effects
 }
@@ -672,7 +806,13 @@ pub(super) fn repo_command_finished(
     }
 
     let maintenance_ended = matches!(command, RepoCommandKind::RunMaintenance);
-    let mut effects = actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+    let mut effects = actions_emit_effects::repo_command_finished(
+        state,
+        repo_id,
+        command,
+        result,
+        auth_prompt.is_some(),
+    );
     if maintenance_ended {
         for (deferred_repo, change) in maintenance::finished(state, repo_id) {
             effects.extend(external_and_history::repo_externally_changed(
@@ -702,7 +842,7 @@ pub(super) fn repo_command_finished(
 
     if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
-        state.auth_prompt = Some(prompt);
+        install_auth_prompt(state, prompt);
     }
 
     effects
@@ -719,13 +859,27 @@ pub(super) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
 }
 
 pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<AuthPromptKind> {
+    // These trailers describe a prompt observed earlier in the command. They
+    // do not establish why the command eventually exited unsuccessfully.
+    let message = message
+        .split(SSH_PASSPHRASE_PROMPT_MARKER)
+        .next()
+        .unwrap_or(message);
+    let message = message
+        .split("SSH host verification prompt:")
+        .next()
+        .unwrap_or(message);
     let lower = message.to_ascii_lowercase();
 
-    let host_verification = lower.contains("host key verification failed")
-        || lower.contains("the authenticity of host")
-        || lower.contains("this key is not known by any other names")
-        || (lower.contains("are you sure you want to continue connecting")
-            && lower.contains("yes/no"));
+    if lower.contains("would be overwritten")
+        || lower.contains("automatic merge failed")
+        || lower.contains("connection timed out")
+        || lower.contains("requested url returned error: 403")
+    {
+        return None;
+    }
+    let host_verification =
+        lower.contains("are you sure you want to continue connecting") && lower.contains("yes/no");
     if host_verification {
         return Some(AuthPromptKind::HostVerification);
     }
@@ -737,19 +891,13 @@ pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<Auth
         || lower.contains("read_passphrase")
         || lower.contains("passphrase for key")
         || lower.contains("incorrect passphrase supplied to decrypt private key")
-        || lower.contains(&SSH_PASSPHRASE_PROMPT_MARKER.to_ascii_lowercase())
         || (lower.contains("passphrase") && lower.contains("terminal prompts disabled"));
-    let ssh_publickey = lower.contains("permission denied (publickey")
-        || (lower.contains("could not read from remote repository") && lower.contains("publickey"));
-    if passphrase || ssh_publickey {
+    if passphrase {
         return Some(AuthPromptKind::Passphrase);
     }
 
     let user_password = lower.contains("could not read username")
         || lower.contains("could not read password")
-        || lower.contains("authentication failed")
-        || lower.contains("invalid username or password")
-        || lower.contains("http basic: access denied")
         || (lower.contains("terminal prompts disabled")
             && (lower.contains("https://")
                 || lower.contains("http://")
@@ -802,6 +950,7 @@ pub(super) fn prepare_staged_git_auth(
         },
         username: username.map(ToOwned::to_owned),
         secret: normalized_secret,
+        challenge: None,
     })
 }
 
@@ -816,6 +965,32 @@ pub(super) fn stage_git_auth_env(
 }
 
 fn detect_auth_prompt_kind_from_git_failure(failure: &GitFailure) -> Option<AuthPromptKind> {
+    if matches!(
+        failure.id(),
+        gitcomet_core::error::GitFailureId::WorktreeWouldBeOverwritten
+            | gitcomet_core::error::GitFailureId::StoppedAtConflicts
+            | gitcomet_core::error::GitFailureId::Timeout
+    ) {
+        return None;
+    }
+    if let Some(outcome) = failure.auth_outcome() {
+        return match outcome {
+            AuthOutcome::NeedsInput(challenge) | AuthOutcome::Rejected(challenge) => {
+                Some(match challenge.kind {
+                    GitAuthKind::UsernamePassword => AuthPromptKind::UsernamePassword,
+                    GitAuthKind::Passphrase => AuthPromptKind::Passphrase,
+                    GitAuthKind::HostVerification => AuthPromptKind::HostVerification,
+                })
+            }
+            AuthOutcome::NotRequested
+            | AuthOutcome::Supplied
+            | AuthOutcome::Verified
+            | AuthOutcome::Unknown => None,
+        };
+    }
+    if failure.id() != gitcomet_core::error::GitFailureId::CommandFailed {
+        return None;
+    }
     let stderr = String::from_utf8_lossy(failure.stderr());
     detect_auth_prompt_kind_from_message(&stderr)
         .or_else(|| {
