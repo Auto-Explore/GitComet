@@ -278,7 +278,9 @@ pub(super) fn schedule_clone_repo(
 
         let (askpass_script, prompt_auth) = match (|| {
             let auth = resolve_git_auth(auth);
-            let script = create_askpass_script().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let script = create_askpass_script().map_err(|e| {
+                Error::from(e).with_context("create Git authentication prompt script", None)
+            })?;
             configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
             Ok::<(AskPassScript, Option<PromptAuth>), Error>((script, auth))
         })() {
@@ -301,7 +303,8 @@ pub(super) fn schedule_clone_repo(
         let child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
-                let err = Error::new(ErrorKind::Io(e.kind()));
+                let err = Error::from(e)
+                    .with_context("start git clone", Some(Path::new(cmd.get_program())));
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
@@ -436,7 +439,7 @@ pub(super) fn schedule_clone_repo(
                     }
                 }
             }
-            Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+            Err(e) => Err(Error::from(e).with_context("wait for git clone", Some(&dest))),
         };
 
         if result.is_err() && active_clone.cancel_requested()
