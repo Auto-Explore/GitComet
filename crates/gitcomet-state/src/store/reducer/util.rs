@@ -8,7 +8,9 @@ use crate::msg::{ReferenceEffect, StatusEffect};
 use crate::store::reducer::prepared::ReducerInputs;
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
-use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
+use gitcomet_core::domain::{
+    CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, SignatureFormats,
+};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
@@ -247,79 +249,72 @@ pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
     diff_target_preview_flags(target).is_svg
 }
 
-fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
-    match target {
-        DiffTarget::WorkingTree { path, area, .. } => {
-            let Some(entries) = repo_state.status_entries_for_area(*area) else {
-                return false;
-            };
-
-            entries.iter().any(|entry| {
-                entry.path == *path
-                    && matches!(
-                        entry.kind,
-                        FileStatusKind::Untracked | FileStatusKind::Added | FileStatusKind::Deleted
-                    )
-            })
-        }
-        DiffTarget::Commit {
-            commit_id, path, ..
-        } => {
-            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
-                return false;
-            };
-            if &details.id != commit_id {
-                return false;
-            }
-
-            details.files.iter().any(|file| {
-                file.path == *path
-                    && !file.is_submodule
-                    && matches!(file.kind, FileStatusKind::Added | FileStatusKind::Deleted)
-            })
-        }
-        DiffTarget::CommitRange { .. } => false,
-    }
+enum DiffTargetClassification {
+    Submodule,
+    Ordinary(Option<gitcomet_core::domain::DiffPreviewTextSide>),
 }
 
-fn diff_target_preview_text_side(
+fn classify_diff_target(
+    inputs: &ReducerInputs,
     repo_state: &RepoState,
     target: &DiffTarget,
-) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
-    match target {
-        DiffTarget::WorkingTree { path, area, .. } => {
-            let entries = repo_state.status_entries_for_area(*area)?;
+) -> DiffTargetClassification {
+    use gitcomet_core::domain::DiffPreviewTextSide;
 
-            entries.iter().find_map(|entry| {
-                (entry.path == *path).then_some(match entry.kind {
+    let preview_text_side = match target {
+        DiffTarget::WorkingTree { path, area, .. } => {
+            let mut entries = repo_state
+                .status_entries_for_area(*area)
+                .into_iter()
+                .flatten()
+                .filter(|entry| entry.path == *path);
+            let first = entries.next();
+            let is_submodule = match worktree_submodule_source_for_entry(repo_state, path, first) {
+                WorktreeSubmoduleSource::Known(value) => value,
+                WorktreeSubmoduleSource::Marker => inputs.worktree_marker(repo_state, path),
+            };
+            if is_submodule {
+                return DiffTargetClassification::Submodule;
+            }
+            if repo_state.diff_state.content_preview {
+                return DiffTargetClassification::Ordinary(None);
+            }
+            first
+                .into_iter()
+                .chain(entries)
+                .find_map(|entry| match entry.kind {
                     FileStatusKind::Untracked | FileStatusKind::Added => {
-                        Some(gitcomet_core::domain::DiffPreviewTextSide::New)
+                        Some(DiffPreviewTextSide::New)
                     }
-                    FileStatusKind::Deleted => {
-                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
-                    }
+                    FileStatusKind::Deleted => Some(DiffPreviewTextSide::Old),
                     FileStatusKind::Modified
                     | FileStatusKind::Renamed
                     | FileStatusKind::Conflicted => None,
-                })?
-            })
+                })
         }
         DiffTarget::Commit {
             commit_id, path, ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
-                return None;
+                return DiffTargetClassification::Ordinary(None);
             };
             if &details.id != commit_id {
-                return None;
+                return DiffTargetClassification::Ordinary(None);
             }
-
+            if details
+                .files
+                .iter()
+                .any(|file| file.path == *path && file.is_submodule)
+            {
+                return DiffTargetClassification::Submodule;
+            }
+            if repo_state.diff_state.content_preview {
+                return DiffTargetClassification::Ordinary(None);
+            }
             details.files.iter().find_map(|file| {
                 (file.path == *path && !file.is_submodule).then_some(match file.kind {
-                    FileStatusKind::Added => Some(gitcomet_core::domain::DiffPreviewTextSide::New),
-                    FileStatusKind::Deleted => {
-                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
-                    }
+                    FileStatusKind::Added => Some(DiffPreviewTextSide::New),
+                    FileStatusKind::Deleted => Some(DiffPreviewTextSide::Old),
                     FileStatusKind::Modified
                     | FileStatusKind::Renamed
                     | FileStatusKind::Conflicted
@@ -328,7 +323,8 @@ fn diff_target_preview_text_side(
             })
         }
         DiffTarget::CommitRange { .. } => None,
-    }
+    };
+    DiffTargetClassification::Ordinary(preview_text_side)
 }
 
 pub(super) fn selected_diff_load_plan(
@@ -336,15 +332,18 @@ pub(super) fn selected_diff_load_plan(
     repo_state: &RepoState,
     target: &DiffTarget,
 ) -> SelectedDiffLoadPlan {
-    if diff_target_is_submodule(inputs, repo_state, target) {
-        return SelectedDiffLoadPlan {
-            load_patch_diff: false,
-            load_file_text: false,
-            preview_text_side: None,
-            load_submodule_summary: true,
-            load_file_image: false,
-        };
-    }
+    let target_preview_text_side = match classify_diff_target(inputs, repo_state, target) {
+        DiffTargetClassification::Submodule => {
+            return SelectedDiffLoadPlan {
+                load_patch_diff: false,
+                load_file_text: false,
+                preview_text_side: None,
+                load_submodule_summary: true,
+                load_file_image: false,
+            };
+        }
+        DiffTargetClassification::Ordinary(side) => side,
+    };
 
     let supports_file = matches!(
         target,
@@ -354,7 +353,7 @@ pub(super) fn selected_diff_load_plan(
     );
     let preview = diff_target_preview_flags(target);
     let content_preview = repo_state.diff_state.content_preview;
-    let preview_only = content_preview || diff_target_is_preview_only(repo_state, target);
+    let preview_only = content_preview || target_preview_text_side.is_some();
     let preview_text_side = if supports_file && (!preview.wants_image || preview.is_svg) {
         if content_preview {
             // Commit content is read from a blob temp file (New side); working-tree
@@ -363,7 +362,7 @@ pub(super) fn selected_diff_load_plan(
             matches!(target, DiffTarget::Commit { .. })
                 .then_some(gitcomet_core::domain::DiffPreviewTextSide::New)
         } else {
-            diff_target_preview_text_side(repo_state, target)
+            target_preview_text_side
         }
     } else {
         None
@@ -531,7 +530,19 @@ pub(super) fn worktree_submodule_source(
     area: DiffArea,
     path: &Path,
 ) -> WorktreeSubmoduleSource {
-    let Some(entry) = repo_state.status_entry_for_path(area, path) else {
+    worktree_submodule_source_for_entry(
+        repo_state,
+        path,
+        repo_state.status_entry_for_path(area, path),
+    )
+}
+
+pub(super) fn worktree_submodule_source_for_entry(
+    repo_state: &RepoState,
+    path: &Path,
+    entry: Option<&FileStatus>,
+) -> WorktreeSubmoduleSource {
+    let Some(entry) = entry else {
         return WorktreeSubmoduleSource::Known(false);
     };
     if entry.kind == FileStatusKind::Untracked {
@@ -546,37 +557,6 @@ pub(super) fn worktree_submodule_source(
         return WorktreeSubmoduleSource::Known(repo_state.head_gitlink_paths.contains(path));
     }
     WorktreeSubmoduleSource::Marker
-}
-
-fn diff_target_is_submodule(
-    inputs: &ReducerInputs,
-    repo_state: &RepoState,
-    target: &DiffTarget,
-) -> bool {
-    match target {
-        DiffTarget::WorkingTree { path, area, .. } => {
-            match worktree_submodule_source(repo_state, *area, path) {
-                WorktreeSubmoduleSource::Known(value) => value,
-                WorktreeSubmoduleSource::Marker => inputs.worktree_marker(repo_state, path),
-            }
-        }
-        DiffTarget::Commit {
-            commit_id, path, ..
-        } => {
-            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
-                return false;
-            };
-            if &details.id != commit_id {
-                return false;
-            }
-
-            details
-                .files
-                .iter()
-                .any(|file| file.path == *path && file.is_submodule)
-        }
-        DiffTarget::CommitRange { .. } => false,
-    }
 }
 
 pub(super) fn selected_conflict_target<'a>(
@@ -2059,6 +2039,77 @@ mod tests {
             .len(),
             0
         );
+    }
+
+    #[test]
+    fn duplicate_worktree_paths_preserve_first_submodule_and_first_eligible_preview() {
+        use gitcomet_core::domain::{DiffPreviewTextSide, FileStatus, RepoStatus};
+
+        let directory = tempfile::tempdir().unwrap();
+        for (kinds, submodule, preview_side) in [
+            (
+                vec![FileStatusKind::Modified, FileStatusKind::Added],
+                false,
+                Some(DiffPreviewTextSide::New),
+            ),
+            (
+                vec![
+                    FileStatusKind::Modified,
+                    FileStatusKind::Deleted,
+                    FileStatusKind::Added,
+                ],
+                false,
+                Some(DiffPreviewTextSide::Old),
+            ),
+            (
+                vec![FileStatusKind::Renamed, FileStatusKind::Untracked],
+                false,
+                Some(DiffPreviewTextSide::New),
+            ),
+            (
+                vec![FileStatusKind::Untracked, FileStatusKind::Deleted],
+                false,
+                Some(DiffPreviewTextSide::New),
+            ),
+            (
+                vec![FileStatusKind::Deleted, FileStatusKind::Added],
+                true,
+                None,
+            ),
+        ] {
+            let mut repo = repo_state(12);
+            repo.spec.workdir = directory.path().to_path_buf();
+            let path = PathBuf::from("selected.rs");
+            repo.head_gitlink_paths.insert(path.clone());
+            repo.set_status(Loadable::Ready(Arc::new(RepoStatus {
+                unstaged: Arc::new(
+                    kinds
+                        .iter()
+                        .map(|&kind| FileStatus {
+                            path: path.clone(),
+                            kind,
+                            conflict: None,
+                        })
+                        .collect(),
+                ),
+                staged: Arc::default(),
+            })));
+            let target = DiffTarget::working_tree(path, DiffArea::Unstaged);
+            let plan = selected_diff_load_plan(
+                &crate::store::reducer::test_inputs::for_target(&repo, &target),
+                &repo,
+                &target,
+            );
+            assert_eq!(
+                plan,
+                SelectedDiffLoadPlan {
+                    load_submodule_summary: submodule,
+                    preview_text_side: preview_side,
+                    ..SelectedDiffLoadPlan::default()
+                },
+                "status order: {kinds:?}"
+            );
+        }
     }
 
     #[test]

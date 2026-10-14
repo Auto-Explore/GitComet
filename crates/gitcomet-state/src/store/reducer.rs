@@ -80,7 +80,7 @@ fn cache_selected_deleted_gitlink(
 ///
 /// HEAD classification is prepared on the store worker before taking the
 /// state write lock. Its result is applied at the original planning point.
-/// `diff_target_is_submodule` only consults the cache for `Deleted` entries, so
+/// Submodule classification only consults the cache for `Deleted` entries, so
 /// for any other kind the lookup is pure waste — and this runs on every
 /// external git-state event, which arrive in bursts during a fetch or rebase.
 ///

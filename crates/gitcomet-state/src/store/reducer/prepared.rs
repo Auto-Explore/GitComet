@@ -6,7 +6,7 @@ use crate::model::{
 use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoCommandKind, RepoExternalChange};
 use crate::session::RepoSessionPreferences;
 use crate::store::repository_runtime::RepositoryRuntimes;
-use gitcomet_core::domain::{DiffArea, DiffTarget};
+use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::ErrorKind;
 use gitcomet_core::services::GitRepository;
 use smallvec::SmallVec;
@@ -153,16 +153,20 @@ impl InputQueries {
         if !status_will_reset && !super::head_gitlink_lookup_is_worth_it_for(repo, *area, path) {
             return;
         }
+        self.queue_head(repos, repo, path);
+    }
+
+    fn queue_head(&mut self, repos: &RepositoryRuntimes, repo: &RepoState, path: &Path) {
         if self
             .head
             .iter()
-            .any(|fact| fact.lifetime == repo.lifetime_id() && fact.path == *path)
+            .any(|fact| fact.lifetime == repo.lifetime_id() && fact.path == path)
         {
             return;
         }
         self.head.push(HeadQuery {
             lifetime: repo.lifetime_id(),
-            path: path.clone(),
+            path: path.to_path_buf(),
             repository: repos.repository(&repo.id).cloned(),
         });
     }
@@ -174,17 +178,24 @@ impl InputQueries {
         if !matches!(
             util::worktree_submodule_source(repo, *area, path),
             util::WorktreeSubmoduleSource::Marker
-        ) || self
+        ) {
+            return;
+        }
+        self.queue_marker(repo, path);
+    }
+
+    fn queue_marker(&mut self, repo: &RepoState, path: &Path) {
+        if self
             .markers
             .iter()
-            .any(|fact| fact.lifetime == repo.lifetime_id() && fact.path == *path)
+            .any(|fact| fact.lifetime == repo.lifetime_id() && fact.path == path)
         {
             return;
         }
         let value = repo.spec.workdir.join(path).join(".git");
         self.markers.push(PathFact {
             lifetime: repo.lifetime_id(),
-            path: path.clone(),
+            path: path.to_path_buf(),
             value,
         });
     }
@@ -219,13 +230,24 @@ impl InputQueries {
             return;
         }
         if let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id)
-            && let Some(target) = &repo.diff_state.diff_target
+            && let Some(target @ DiffTarget::WorkingTree { path, area, .. }) =
+                &repo.diff_state.diff_target
         {
-            self.head(repos, repo, target, false);
+            let entries = repo.status_entries_for_area(*area);
+            let entry =
+                entries.and_then(|entries| entries.iter().find(|entry| entry.path == *path));
+            if entries.is_none() || entry.is_some_and(|entry| entry.kind == FileStatusKind::Deleted)
+            {
+                self.queue_head(repos, repo, path);
+            }
             if matches!(repo.open, Loadable::Ready(()))
                 && util::selected_conflict_target(repo, target).is_none()
+                && matches!(
+                    util::worktree_submodule_source_for_entry(repo, path, entry),
+                    util::WorktreeSubmoduleSource::Marker
+                )
             {
-                self.marker(repo, target);
+                self.queue_marker(repo, path);
             }
         }
     }

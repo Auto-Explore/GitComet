@@ -333,6 +333,98 @@ fn selected_head_lookup_queries_only_deleted_and_unknown_status() {
 }
 
 #[test]
+fn activation_head_lookup_distinguishes_unavailable_absent_and_first_matching_status() {
+    let directory = tempfile::tempdir().unwrap();
+    for (status, expected_queries) in [
+        (None, 1),
+        (Some(Vec::new()), 0),
+        (Some(selected_status(FileStatusKind::Deleted)), 1),
+        (Some(selected_status(FileStatusKind::Modified)), 0),
+        (Some(selected_status(FileStatusKind::Untracked)), 0),
+        (
+            Some(
+                [
+                    selected_status(FileStatusKind::Modified),
+                    selected_status(FileStatusKind::Deleted),
+                ]
+                .concat(),
+            ),
+            0,
+        ),
+        (
+            Some(
+                [
+                    selected_status(FileStatusKind::Deleted),
+                    selected_status(FileStatusKind::Modified),
+                ]
+                .concat(),
+            ),
+            1,
+        ),
+    ] {
+        let (mut state, mut repos, target, queries) =
+            selected_fixture(directory.path(), status, Ok(true));
+        state.active_repo = None;
+        state.repos[0].diff_state.diff_target = Some(target.clone());
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(2),
+            &mut state,
+            Msg::SetActiveRepo { repo_id: RepoId(1) },
+        );
+        assert_eq!(
+            queries.try_iter().collect::<Vec<_>>(),
+            vec![target.file_path().unwrap().to_path_buf(); expected_queries]
+        );
+        assert_eq!(state.active_repo, Some(RepoId(1)));
+        assert_eq!(state.repos[0].diff_state.diff_target, Some(target));
+        assert!(!effects.is_empty());
+    }
+}
+
+#[test]
+fn activation_applies_head_answer_before_planning_a_retained_deletion() {
+    let directory = tempfile::tempdir().unwrap();
+    for (result, cached, expected_submodule) in [
+        (
+            Err(Error::new(ErrorKind::Backend("HEAD unavailable".into()))),
+            true,
+            true,
+        ),
+        (Ok(false), true, false),
+        (Ok(true), false, true),
+    ] {
+        let (mut state, mut repos, target, queries) = selected_fixture(
+            directory.path(),
+            Some(selected_status(FileStatusKind::Deleted)),
+            result,
+        );
+        let path = target.file_path().unwrap().to_path_buf();
+        state.active_repo = None;
+        state.repos[0].diff_state.diff_target = Some(target);
+        if cached {
+            state.repos[0].head_gitlink_paths.insert(path.clone());
+        }
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(2),
+            &mut state,
+            Msg::SetActiveRepo { repo_id: RepoId(1) },
+        );
+        assert_eq!(queries.try_iter().collect::<Vec<_>>(), vec![path.clone()]);
+        assert_eq!(
+            state.repos[0].head_gitlink_paths.contains(&path),
+            expected_submodule
+        );
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSelectedDiff { load_submodule_summary, .. }
+                if *load_submodule_summary == expected_submodule
+        )));
+    }
+}
+
+#[test]
 fn reload_prepares_head_using_the_post_reset_status() {
     let directory = tempfile::tempdir().unwrap();
     let (mut state, mut repos, target, queries) = selected_fixture(
