@@ -1732,7 +1732,7 @@ impl ConflictSession {
         self.auto_resolve_safe_with_options(false)
     }
 
-    /// Like [`auto_resolve_safe`] but with an optional whitespace-resolution toggle.
+    /// Like [`Self::auto_resolve_safe`] but with an optional whitespace-resolution toggle.
     /// Stage-backed regions trust their merge block's KDiff3 classification;
     /// marker-only regions fall back to strip-all comparison.
     pub fn auto_resolve_safe_with_options(&mut self, whitespace_normalize: bool) -> usize {

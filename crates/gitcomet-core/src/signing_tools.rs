@@ -9,7 +9,7 @@
 //! for Windows adds its bundled `usr\bin`, and a custom Git adds its directory.
 //! A bare program name is therefore probed *through* Git as a `!program` alias.
 //! Git executes such an alias directly, without a shell, when the name contains
-//! no shell metacharacters, which [`classify_program`] guarantees.
+//! no shell metacharacters, which `classify_program` guarantees.
 //!
 //! Verification waits for discovery. After discovery, an inconclusive probe
 //! lets Git try; a definite "not found" excludes that verifier's formats.
