@@ -272,8 +272,8 @@ fn exercise_with_failure(
     // Finish constructor settings before attaching the fixture. Tests pull
     // store snapshots explicitly because the live UI poller is disabled.
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
     cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
     cx.update(|_, app| {
         view.read(app).main_pane.clone().update(app, |pane, _| {
@@ -941,8 +941,8 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
                 GitCometView::new(store_for_view, events, None, window, cx)
             });
             crate::view::test_support::drain_store_worker(&view, cx);
-            store.insert_repo_for_test(REPO, backend);
             super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+            store.insert_repo_for_test(REPO, backend);
             cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
             cx.update(|_, app| {
                 view.update(app, |root, cx| {
@@ -1161,8 +1161,8 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
     let target = DiffTarget::working_tree("b.txt".into(), DiffArea::Unstaged);
     store.dispatch(Msg::SelectDiff {
         repo_id: REPO,
@@ -1225,8 +1225,8 @@ fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
 
     let row = format!("status_row_{}_unstaged_0", REPO.0);
     let bounds = cx.debug_bounds(Box::leak(row.into_boxed_str())).unwrap();
