@@ -400,17 +400,21 @@ fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) 
     }
 }
 
+/// Switches the active tab. `unchanged` reports that the target's file monitor
+/// kept running while it was inactive and saw no change, so its retained state
+/// is current and the refresh a switch normally starts can be skipped.
 pub(crate) fn fill_set_active_repo_inline(
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
+    unchanged: bool,
     effects: &mut SetActiveRepoEffects,
 ) {
     // The store handles tab switches on this inline path instead of calling
     // `reduce`, so bracket the mutation with the same navigation reconciliation
     // and state finalizers the ordinary reducer wrapper applies.
     reconcile_active_nav_history(state, false);
-    repo_management::fill_set_active_repo_inline(repos, state, repo_id, effects);
+    repo_management::fill_set_active_repo_inline(repos, state, repo_id, unchanged, effects);
     effects::follow_history_selection(state, effects);
     finalize_reduced_state(state, Some(false));
 }

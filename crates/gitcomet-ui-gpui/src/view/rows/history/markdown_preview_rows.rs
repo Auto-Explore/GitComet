@@ -1324,7 +1324,10 @@ pub(in crate::view) fn markdown_preview_alert_color(
     match kind {
         MarkdownAlertKind::Note => theme.colors.accent.foreground,
         MarkdownAlertKind::Tip => theme.colors.status.success.foreground,
-        MarkdownAlertKind::Important => with_alpha(theme.colors.accent.foreground, 0.85),
+        MarkdownAlertKind::Important if theme.is_dark => {
+            with_alpha(theme.colors.accent.foreground, 0.85)
+        }
+        MarkdownAlertKind::Important => theme.colors.accent.foreground,
         MarkdownAlertKind::Warning => theme.colors.status.warning.foreground,
         MarkdownAlertKind::Caution => theme.colors.status.danger.foreground,
     }

@@ -270,6 +270,7 @@ impl SidebarPaneView {
         } else {
             self.branch_filter_input.clone()
         };
+        input.update(cx, |input, cx| input.set_theme(theme, cx));
         let options = if files {
             self.file_search_options
         } else {

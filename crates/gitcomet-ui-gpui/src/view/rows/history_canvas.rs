@@ -1957,7 +1957,6 @@ pub(super) fn history_commit_row_canvas(
                                 refs_hover_bounds,
                                 Arc::clone(&ref_items),
                                 event.position,
-                                window,
                                 cx,
                             );
                         });

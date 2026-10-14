@@ -84,7 +84,6 @@ pub fn toast(
         .border_1()
         .border_color(border)
         .rounded(px(theme.radii.popover))
-        .shadow(crate::theme::shadow_popover(theme))
         .text_size(theme.ui_text(14.0))
         .text_color(theme.colors.foreground.primary)
         .child(badge)

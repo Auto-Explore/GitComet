@@ -49,6 +49,12 @@ impl FetchRefPrompt {
 
 impl Render for FetchRefPrompt {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if let Some(root) = self.root.upgrade() {
+            self.theme = root.read(cx).theme;
+        }
+        for input in [&self.remote, &self.refspec] {
+            input.update(cx, |input, cx| input.set_theme(self.theme, cx));
+        }
         div().flex().flex_col().gap_2()
             .child("Remote")
             .child(self.remote.clone())

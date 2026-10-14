@@ -22,8 +22,9 @@ pub(in crate::view) use self::file_diff::{
 };
 use self::file_diff::{file_diff_source_identity, file_diff_text_signature, line_starts_describe};
 pub(in crate::view) use self::image_cache::render_raster_conflict_preview;
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
+pub(in crate::view) use self::image_cache::{
+    render_raster_image_diff_preview, render_svg_image_diff_preview,
+};
 
 use self::patch_diff::{
     PATCH_DIFF_PAGE_SIZE, PatchSplitVisibleMeta, build_patch_split_visible_meta_from_src,

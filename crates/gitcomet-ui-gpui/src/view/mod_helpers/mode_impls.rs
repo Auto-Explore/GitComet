@@ -95,6 +95,8 @@ pub(crate) enum LocalFileLinkSource {
 /// Which status-strip chip a [`PopoverKind::TextFormatMenu`] belongs to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum TextFormatMenuSection {
+    ImageSampling,
+    ImageZoom,
     Encoding,
     LineEnding,
     TabSize,

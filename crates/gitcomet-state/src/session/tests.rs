@@ -27,6 +27,35 @@ fn unique_session_test_dir(label: &str) -> PathBuf {
 }
 
 #[test]
+fn image_sampling_settings_round_trip_and_survive_other_writers() {
+    let dir = unique_session_test_dir("image-sampling");
+    let path = dir.join("session.json");
+    assert!(load_from_path(&path).image_sampling_mode.is_none());
+    persist_ui_settings_to_path(
+        UiSettings {
+            image_sampling_mode: Some("smooth".into()),
+            image_smooth_filter: Some("hann".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let session = load_from_path(&path);
+    assert_eq!(session.image_sampling_mode.as_deref(), Some("smooth"));
+    assert_eq!(session.image_smooth_filter.as_deref(), Some("hann"));
+    assert_eq!(session.theme_mode.as_deref(), Some("dark"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn signature_verification_requires_fresh_opt_in_and_survives_other_writers() {
     let dir = unique_session_test_dir("signature-opt-in");
     let path = dir.join("session.json");
@@ -1279,6 +1308,40 @@ fn remove_recent_repo_drops_matching_entry() {
 
     let loaded = load_from_path(&path);
     assert_eq!(loaded.recent_repos, vec![repo_a]);
+}
+
+#[test]
+fn load_if_changed_rereads_only_a_written_file() {
+    let dir = unique_session_test_dir("stamp");
+    let path = dir.join("session.json");
+    let repo = dir.join("repo");
+    let _ = fs::create_dir_all(&repo);
+    let mut stamp = None;
+    assert!(
+        load_from_path_if_changed(&path, &mut stamp).is_none(),
+        "no file, nothing to read"
+    );
+
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            recent_repos: Some(vec![path_storage_key(&repo)]),
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+    let session = load_from_path_if_changed(&path, &mut stamp).expect("a new file is read");
+    assert_eq!(session.recent_repos, vec![repo]);
+    assert!(
+        load_from_path_if_changed(&path, &mut stamp).is_none(),
+        "an unchanged file is not read again"
+    );
+
+    fs::remove_file(&path).expect("remove session file");
+    let session = load_from_path_if_changed(&path, &mut stamp).expect("a removal is read");
+    assert!(session.recent_repos.is_empty());
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]

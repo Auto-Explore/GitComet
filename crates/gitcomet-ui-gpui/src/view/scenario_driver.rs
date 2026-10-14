@@ -130,6 +130,19 @@ enum Step {
         interval_ms: u64,
         #[serde(default = "default_true")]
         expect_status: bool,
+        /// Leave the last round's contents in place instead of restoring the
+        /// tree (the harness cleans up). Absolute paths may target another
+        /// open repository, e.g. an inactive tab.
+        #[serde(default)]
+        keep: bool,
+    },
+    /// Waits until the active repository's changes list does (or does not)
+    /// show `path`; fails after `timeout_ms`.
+    ExpectStatus {
+        path: PathBuf,
+        present: bool,
+        #[serde(default = "default_expect_status_timeout_ms")]
+        timeout_ms: u64,
     },
     /// Runs a command-palette command (setup, e.g. `toggle-terminal`). A
     /// witness makes the next step wait until the store has applied it.
@@ -207,6 +220,10 @@ fn default_ready_timeout_ms() -> u64 {
     120_000
 }
 
+fn default_expect_status_timeout_ms() -> u64 {
+    15_000
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum FocusTarget {
@@ -272,6 +289,9 @@ enum Baseline {
     Selection(Option<CommitId>),
     ScrollPosition(f64),
     Query(SharedString),
+    /// The diff target revision at dispatch: a loaded diff from before the
+    /// input must not satisfy the witness for the next one.
+    DiffRevision(u64),
     None,
 }
 
@@ -702,9 +722,42 @@ impl Driver {
                 rounds,
                 interval_ms,
                 expect_status,
+                keep,
             } => {
-                self.write_files(paths, contents, *rounds, *interval_ms, *expect_status, cx)
+                self.write_files(
+                    paths,
+                    contents,
+                    *rounds,
+                    *interval_ms,
+                    *expect_status,
+                    *keep,
+                    cx,
+                )
+                .await
+            }
+            Step::ExpectStatus {
+                path,
+                present,
+                timeout_ms,
+            } => {
+                let started = Instant::now();
+                let timeout = Duration::from_millis(*timeout_ms);
+                if !self
+                    .wait_for_status(std::slice::from_ref(path), *present, timeout, cx)
                     .await
+                {
+                    return Err(format!(
+                        "{} never became {} in the changes list",
+                        path.display(),
+                        if *present { "listed" } else { "unlisted" }
+                    ));
+                }
+                record(
+                    "scenario_expect_status",
+                    json!({"path": path, "present": present,
+                           "after_ms": started.elapsed().as_secs_f64() * 1000.0}),
+                );
+                Ok(())
             }
             Step::Command { id, witness } => {
                 let view = self.view.clone();
@@ -719,8 +772,10 @@ impl Driver {
                 };
                 let witness = match witness {
                     WitnessKind::RepoClosed { path } => WitnessKind::RepoClosed {
-                        path: std::fs::canonicalize(path)
-                            .map_err(|e| format!("{}: {e}", path.display()))?,
+                        path: canonical(path)?,
+                    },
+                    WitnessKind::RepoOpen { path } => WitnessKind::RepoOpen {
+                        path: canonical(path)?,
                     },
                     other => other.clone(),
                 };
@@ -740,8 +795,7 @@ impl Driver {
                 Ok(())
             }
             Step::OpenRepo { path, wait } => {
-                let path =
-                    std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let path = canonical(path)?;
                 let store = cx.update(|cx| Arc::clone(&self.view.read(cx).store));
                 let witness = WitnessKind::RepoOpen { path: path.clone() };
                 self.scheduled(1, 0, wait.then_some(witness), cx, move |_, _, _| {
@@ -1030,8 +1084,10 @@ impl Driver {
                     .scenario_repo_picker_state(cx)
                     .map(|(query, _, _)| Baseline::Query(query.into()))
                     .unwrap_or(Baseline::None),
-                WitnessKind::DiffLoaded
-                | WitnessKind::RepoOpen { .. }
+                WitnessKind::DiffLoaded => view.active_repo().map_or(Baseline::None, |repo| {
+                    Baseline::DiffRevision(repo.diff_state.diff_target_rev)
+                }),
+                WitnessKind::RepoOpen { .. }
                 | WitnessKind::RepoClosed { .. }
                 | WitnessKind::MessageHover => Baseline::None,
             }
@@ -1101,7 +1157,12 @@ impl Driver {
                 }
                 WitnessKind::DiffLoaded => {
                     let diff = &repo.diff_state;
-                    diff.diff_target.is_some()
+                    let retargeted = match baseline {
+                        Baseline::DiffRevision(before) => diff.diff_target_rev != *before,
+                        _ => true,
+                    };
+                    retargeted
+                        && diff.diff_target.is_some()
                         && !matches!(diff.diff, Loadable::Loading)
                         && !matches!(diff.diff_file, Loadable::Loading)
                         && !diff.diff_reload_in_flight
@@ -1342,6 +1403,7 @@ impl Driver {
         rounds: usize,
         interval_ms: u64,
         expect_status: bool,
+        keep: bool,
         cx: &mut AsyncApp,
     ) -> Result<(), String> {
         let workdir = cx
@@ -1411,37 +1473,17 @@ impl Driver {
             }
             // The watcher, not this op, drives the refresh: wait for the
             // status list to reflect the round before the next one.
-            let deadline = Instant::now() + DEFAULT_WITNESS_TIMEOUT;
-            loop {
-                let reflected = cx.update(|cx| {
-                    // The lane the status list renders, not the combined status.
-                    self.view.read(cx).active_repo().is_some_and(|repo| {
-                        let Some(entries) = repo.worktree_status_entries() else {
-                            return false;
-                        };
-                        paths.iter().all(|path| {
-                            let listed = entries
-                                .iter()
-                                .any(|entry| entry.path.as_path() == path.as_path());
-                            listed == dirty
-                        })
-                    })
-                });
-                if reflected {
-                    op_trace::record(Stage::Witness, op, "status_reflects_save", 1, 0);
-                    break;
-                }
-                let now = Instant::now();
-                if now > deadline {
-                    result = Err(format!("round {ix} never reached the status list"));
-                    break;
-                }
-                self.wait_for_change((deadline - now).min(WITNESS_POLL), cx)
-                    .await;
-            }
-            if result.is_err() {
+            if !self
+                .wait_for_status(paths, dirty, DEFAULT_WITNESS_TIMEOUT, cx)
+                .await
+            {
+                result = Err(format!("round {ix} never reached the status list"));
                 break;
             }
+            op_trace::record(Stage::Witness, op, "status_reflects_save", 1, 0);
+        }
+        if keep && result.is_ok() {
+            return result;
         }
         // Leave the tree as it was, whatever happened.
         let restored = cx
@@ -1450,6 +1492,46 @@ impl Driver {
             .await;
         result.and(restored)
     }
+
+    /// Waits until the active repository's changes list shows each of `paths`
+    /// exactly when `listed`; false once `timeout` passes.
+    async fn wait_for_status(
+        &self,
+        paths: &[PathBuf],
+        listed: bool,
+        timeout: Duration,
+        cx: &mut AsyncApp,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            // The lane the status list renders, not the combined status.
+            let reflected = cx.update(|cx| {
+                self.view.read(cx).active_repo().is_some_and(|repo| {
+                    repo.worktree_status_entries().is_some_and(|entries| {
+                        paths.iter().all(|path| {
+                            entries
+                                .iter()
+                                .any(|entry| entry.path.as_path() == path.as_path())
+                                == listed
+                        })
+                    })
+                })
+            });
+            if reflected {
+                return true;
+            }
+            let now = Instant::now();
+            if now > deadline {
+                return false;
+            }
+            self.wait_for_change((deadline - now).min(WITNESS_POLL), cx)
+                .await;
+        }
+    }
+}
+
+fn canonical(path: &std::path::Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn write_fixture_files(
@@ -1509,11 +1591,26 @@ mod tests {
                 {"do": "open_repo", "path": "/tmp"},
                 {"do": "minimize"},
                 {"do": "paste", "text": "component-017", "witness": {"kind": "repo_picker_filtered"}},
-                {"do": "expect_repo_picker", "query": "component-017", "matches": 1, "selected": 0}
+                {"do": "expect_repo_picker", "query": "component-017", "matches": 1, "selected": 0},
+                {"do": "write_files", "paths": ["/tmp/other/edit.txt"], "contents": "x\n",
+                 "rounds": 1, "interval_ms": 0, "expect_status": false, "keep": true},
+                {"do": "expect_status", "path": "edit.txt", "present": true}
             ]
         }))
         .expect("parse scenario");
-        assert_eq!(scenario.steps.len(), 17);
+        assert_eq!(scenario.steps.len(), 19);
+        assert!(matches!(
+            scenario.steps[17],
+            Step::WriteFiles { keep: true, .. }
+        ));
+        assert!(matches!(
+            scenario.steps[18],
+            Step::ExpectStatus {
+                present: true,
+                timeout_ms: 15_000,
+                ..
+            }
+        ));
         assert!(matches!(
             scenario.steps[4],
             Step::Keys {

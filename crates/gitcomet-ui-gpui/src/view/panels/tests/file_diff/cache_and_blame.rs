@@ -5219,3 +5219,109 @@ fn review_split_search_retries_when_one_column_has_stale_scroll_geometry(
         let _ = window.draw(app);
     });
 }
+
+#[gpui::test]
+fn image_preview_controls_and_wheel_take_precedence_over_window_zoom(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let image = image::RgbaImage::from_pixel(64, 64, image::Rgba([255, 0, 0, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(199),
+        dir.path(),
+        std::path::Path::new("image.png"),
+        1,
+        Some(bytes.get_ref()),
+        Some(bytes.get_ref()),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "image inspection cache", |pane| {
+        pane.file_image_diff_cache_complete
+    });
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("image_format_strip").is_some());
+    let bounds = cx.debug_bounds("image_viewport").expect("image viewport");
+    let before = cx.update(|_, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.image_zoom(crate::view::image_preview::Zoom::Scale(1.0), cx)
+        });
+        crate::ui_scale::current(app).percent
+    });
+    draw_and_drain_test_window(cx);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(60.0))),
+        modifiers: gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.update(|_, app| {
+        assert_eq!(crate::ui_scale::current(app).percent, before);
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.image_preview_group.read(app).zoom_label(), "125%");
+    });
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: gpui::point(px(5.0), px(5.0)),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(60.0))),
+        modifiers: gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.update(|_, app| assert!(crate::ui_scale::current(app).percent > before));
+}
+
+#[gpui::test]
+fn image_preview_lifecycle_invalid_svg_path_keeps_the_unavailable_placeholder(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let dir = tempfile::tempdir().unwrap();
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(200),
+        dir.path(),
+        std::path::Path::new("invalid.svg"),
+        1,
+        None,
+        Some(b"<svg xmlns=\"http://www.w3.org/2000/svg\"><broken"),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "invalid SVG cache", |pane| {
+        pane.file_image_diff_cache_complete
+    });
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.file_image_diff_cache_new_svg_path.is_some(),
+            "exercise the legacy SVG path renderer"
+        );
+        assert!(!pane.file_image_diff_cache_failed);
+    });
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
+    loop {
+        draw_and_drain_test_window(cx);
+        if cx.debug_bounds("image_preview_unavailable").is_some() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a failed SVG asset must show Preview unavailable rather than an empty pane"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}

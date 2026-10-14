@@ -52,9 +52,8 @@ sys.path.insert(0, str(HERE))
 import perf_metadata  # noqa: E402
 import perf_platform  # noqa: E402
 import perf_gpu  # noqa: E402
-import perf_gpu_frames  # noqa: E402
 
-SURVEY_SOURCE = ROOT / "crates/gitcomet-ui-gpui/src/view/user_survey.rs"
+SURVEY_SOURCE = ROOT / "crates/gitcomet-core/src/identity.rs"
 SAVE_FILE = "save-target.txt"
 SEARCH_FILE = "search-target.txt"
 IGNORED_DIR = "build"
@@ -191,6 +190,9 @@ def file_text(repository, path):
         raise ValueError(f"{path} must be an existing UTF-8 file: {error}") from error
 
 
+TAB_SWITCHES = 30
+EDIT_MARKER = "inactive-tab-edit.txt"
+DIFF_OPEN_CYCLES = 4
 PICKER_RECENT_COUNT = 40
 PICKER_NAME_QUERY = "GitComet-perf-picker"
 # The version-3 session migrates into one workspace containing the active repo.
@@ -255,6 +257,66 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
     ready.append({"do": "settle", "ms": 3000})
     if name == "repo-picker":
         return picker_scenario(ready)
+    others = list(secondary) if isinstance(secondary, (list, tuple)) else ([secondary] if secondary else [])
+    if name == "repo-tabs":
+        # Several open repositories; the measured phase cycles through their
+        # tabs. Each switch is witnessed (that tab active and loaded), then
+        # settles so background work a switch starts lands inside the phase.
+        if not others:
+            raise ValueError("repo-tabs needs --secondary-repository (repeatable)")
+        order = [Path(repository).resolve(), *(Path(path).resolve() for path in others)]
+        steps = list(ready)
+        for path in order[1:]:
+            steps += [{"do": "open_repo", "path": str(path)}, {"do": "wait_ready", "timeout_ms": 180_000}]
+        steps += [{"do": "settle", "ms": 3000}, {"do": "phase", "name": "tab_switch"}]
+        current = len(order) - 1
+        for _ in range(TAB_SWITCHES):
+            current = (current + 1) % len(order)
+            steps += [{"do": "command", "id": "next-repo-tab",
+                       "witness": {"kind": "repo_open", "path": str(order[current])}},
+                      {"do": "settle", "ms": 600}]
+        steps += [{"do": "phase", "name": "tab_idle"}, {"do": "settle", "ms": 3000}]
+        return {"version": 1, "steps": steps}
+    if name == "repo-tabs-edit":
+        # An edit made while the tab is inactive must show after switching
+        # back, and must survive an unchanged round trip (a switch that reuses
+        # the tab's retained state). Leaves EDIT_MARKER in the repository.
+        if not others:
+            raise ValueError("repo-tabs-edit needs --secondary-repository")
+        first, second = Path(repository).resolve(), Path(others[0]).resolve()
+        marker = first / EDIT_MARKER
+        steps = list(ready) + [
+            {"do": "open_repo", "path": str(second)}, {"do": "wait_ready", "timeout_ms": 180_000},
+            {"do": "settle", "ms": 2000},
+            {"do": "phase", "name": "edit_inactive"},
+            {"do": "write_files", "paths": [str(marker)], "contents": "edited while inactive\n",
+             "rounds": 1, "interval_ms": 0, "expect_status": False, "keep": True},
+            {"do": "settle", "ms": 1500},
+            {"do": "command", "id": "next-repo-tab", "witness": {"kind": "repo_open", "path": str(first)}},
+            {"do": "expect_status", "path": EDIT_MARKER, "present": True, "timeout_ms": 10_000},
+            {"do": "phase", "name": "unchanged_round_trip"},
+            {"do": "command", "id": "next-repo-tab", "witness": {"kind": "repo_open", "path": str(second)}},
+            {"do": "settle", "ms": 600},
+            {"do": "command", "id": "next-repo-tab", "witness": {"kind": "repo_open", "path": str(first)}},
+            {"do": "expect_status", "path": EDIT_MARKER, "present": True, "timeout_ms": 10_000},
+            {"do": "settle", "ms": 600},
+        ]
+        return {"version": 1, "steps": steps}
+    if name == "diff-open":
+        # Opens each changed file's diff in turn from the changes list. The
+        # repository needs at least two unstaged files.
+        changed = [line for line in git(repository, "status", "--porcelain").stdout.decode().splitlines()
+                   if line[1:2] != " "]
+        if len(changed) < 2:
+            raise ValueError("diff-open needs a repository with at least two unstaged changes")
+        steps = ready + [{"do": "phase", "name": "diff_open"}]
+        for _ in range(DIFF_OPEN_CYCLES):
+            for index in range(len(changed)):
+                steps += [{"do": "click", "target": {"list": "unstaged_row", "index": index},
+                           "witness": {"kind": "diff_loaded"}},
+                          {"do": "settle", "ms": 800}]
+        steps += [{"do": "phase", "name": "diff_idle"}, {"do": "settle", "ms": 3000}]
+        return {"version": 1, "steps": steps}
     if name == "history-jump":
         return {"steps": ready + [{"do": "phase", "name": "jump"}]
                 + [step for fraction in (.9, .1, .8, .2, .95, .05) for step in (
@@ -280,8 +342,9 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
         return {"version": 1, "steps": ready + [{"do": "phase", "name": "drag"},
                 {"do": "drag_history", "to_fraction": .8, "steps": 90, "interval_ms": 16}]}
     if name == "lifecycle":
-        if secondary is None:
+        if not others:
             raise ValueError("lifecycle needs --secondary-repository")
+        secondary = others[0]
         # Warm caches first; resources should then plateau across cycles.
         return {"steps": ready
                 + [{"do": "phase", "name": "warmup_cycles"}]
@@ -341,6 +404,8 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
             {"do": "phase", "name": "idle_two_windows"},
             {"do": "settle", "ms": 60_000}],
         "idle": ready + [{"do": "phase", "name": "idle"}, {"do": "settle", "ms": 60_000}],
+        # A settled window for screenshots (e.g. renderer pixel comparisons).
+        "still": ready + [{"do": "phase", "name": "still"}, {"do": "settle", "ms": 8000}],
         "idle-minimized": ready + [{"do": "minimize"}, {"do": "settle", "ms": 2000},
                                    {"do": "phase", "name": "idle_minimized"}, {"do": "settle", "ms": 60_000}],
         # Selections faster than details load: latest wins, obsolete loads
@@ -389,14 +454,14 @@ def scenario(name, repository, save_file=SAVE_FILE, secondary=None, cycles=100):
 SCENARIOS = ("startup", "idle", "idle-minimized", "idle-hidden-terminal", "two-windows-idle", "history-select",
              "history-hover", "history-hover-stationary", "history-drag", "history-jump", "history-reopen", "repo-picker",
              "history-select-burst", "history-scroll", "status-save", "status-burst", "status-touch",
-             "ignored-churn",
+             "ignored-churn", "repo-tabs", "repo-tabs-edit", "diff-open", "still",
              "diff-search", "terminal-output", "settings", "lifecycle")
 
 
 # ---------------------------------------------------------------- one run
 
 def survey_id():
-    match = re.search(r'SURVEY_ID: &str = "([^"]+)"', SURVEY_SOURCE.read_text(encoding="utf-8"))
+    match = re.search(r'SurveyLink \{\s*id: Cow::Borrowed\("([^"]+)"\)', SURVEY_SOURCE.read_text(encoding="utf-8"))
     return match.group(1) if match else "unknown"
 
 
@@ -524,16 +589,12 @@ def find_app_pid(parent, binary):
     return None
 
 
-def load_average():
-    return perf_platform.load_average()
-
-
 def wait_for_quiet(max_load, timeout_s=4 * 3600, poll_s=5.0):
     """Blocks until the 1-minute load average drops below `max_load`: on a
     shared machine other builds would otherwise land inside a run."""
     deadline = time.monotonic() + timeout_s
     while True:
-        load = load_average()
+        load = perf_platform.load_average()
         if load is None:
             raise ValueError("--max-load needs a native load-average counter on this platform")
         if float(load[0]) < max_load:
@@ -632,18 +693,26 @@ class HeadlessCompositor:
 def run_once(binary, repository, name, output, timeout, metadata=True, display="headless",
              ping_ms=None, save_file=SAVE_FILE, wrap=None, cold_gpu_cache=False, secondary=None,
              cycles=100, extra_env=None, scenario_steps=None, ui_scale=100, refresh_hz=None, gpu=False,
-             window_size=WINDOW_SIZE, session_overrides=None, gpu_timings=False):
+             window_size=WINDOW_SIZE, session_overrides=None):
     # Absolute: the app runs with its working directory in `output`.
     binary, repository, output = binary.resolve(), repository.resolve(), output.resolve()
     if display == "headless" and platform.system() != "Linux":
         raise ValueError("Headless captures require Linux; use --display desktop on this platform")
     if wrap and platform.system() != "Linux":
         raise ValueError("Launch native profilers around a desktop run; --wrap currently requires Linux PID discovery")
+    if platform.system() == "Darwin" and ".app/Contents/MacOS/" not in str(binary):
+        # A bare executable copies itself into a GitComet.app, relaunches from
+        # there and exits, so the measured process would be gone in a second.
+        raise ValueError("On macOS pass the executable inside an app bundle (GitComet.app/Contents/MacOS/gitcomet); "
+                         "a bare binary relaunches itself from a bundle and exits")
     output.mkdir(parents=True, exist_ok=False)
     run_id = str(uuid.uuid4())
     env = seed_profile(output, repository, window_size, session_overrides)
     scenario_file = output / "scenario.json"
-    secondary = secondary.resolve() if secondary else None
+    if isinstance(secondary, (list, tuple)):
+        secondary = [path.resolve() for path in secondary] or None
+    else:
+        secondary = secondary.resolve() if secondary else None
     session_path = output / "session.json"
     session = json.loads(session_path.read_text(encoding="utf-8"))
     session["ui_scale_percent"] = ui_scale
@@ -658,9 +727,6 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     env.update(GITCOMET_UI_PROBE="1", GITCOMET_UI_PROBE_JSONL=str(frames),
                GITCOMET_UI_PROBE_LOG=str(output / "ui.log"), GITCOMET_UI_SCENARIO=str(scenario_file),
                GITCOMET_PERF_RUN_ID=run_id)
-    env.pop("GPUI_GPU_TIMINGS", None)
-    if gpu_timings:
-        env["GPUI_GPU_TIMINGS"] = "1"
     # Every short picker phase must contain complete probe intervals and
     # process samples; otherwise identical runs can have different metrics.
     env["GITCOMET_UI_PROBE_INTERVAL_MS"] = "250" if name == "repo-picker" else "1000"
@@ -678,22 +744,22 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
     capture = {"version": 2, "run_id": run_id, "scenario": name, "binary": str(binary),
                "binary_sha256": perf_metadata.sha256_file(binary), "repository": str(repository),
                "repository_head": git(repository, "rev-parse", "HEAD").stdout.decode().strip(),
+               "repository_status_sha256": hashlib.sha256(git(repository,"status","--porcelain=v1","-z").stdout).hexdigest(),
                "window_size": window_size, "display": display, "session_overrides": session_overrides or {},
                "refresh_hz": (refresh_hz or REFRESH_HZ) if display == "headless" else refresh_hz,
                "ui_scale_percent": ui_scale, "capabilities": perf_platform.capabilities(),
                "probe_interval_ms": int(env["GITCOMET_UI_PROBE_INTERVAL_MS"]),
-               "measurement_kind": "diagnostic" if wrap or gpu_timings else "live_application",
+               "measurement_kind": "diagnostic" if wrap or gpu else "live_application",
                "ping_ms": ping_ms, "wrap": wrap, "gpu_cache": "cold" if cold_gpu_cache else "warm",
-               "load_before": load_average(), "outcome": "failed",
+               "load_before": perf_platform.load_average(), "outcome": "failed",
                "cycles": cycles if name == "lifecycle" else None, "extra_env": extra_env or {}}
-    capture["gpu_timings_requested"] = gpu_timings
-    capture["renderer_experiments"] = env.get("GPUI_GPU_EXPERIMENTS", "")
-    capture["graph_quad_experiment"] = env.get("GITCOMET_GPU_GRAPH_QUADS", "0")
     capture["gpu_capture"] = {"requested": gpu}
     if metadata:
-        (output / "environment.json").write_text(json.dumps(perf_metadata.collect(
+        environment = perf_metadata.collect(
             binaries=[("gitcomet", binary)], fixtures=[("repository", repository)],
-            command=" ".join(sys.argv)), indent=2) + "\n", encoding="utf-8")
+            command=" ".join(sys.argv))
+        (output / "environment.json").write_text(json.dumps(environment, indent=2) + "\n", encoding="utf-8")
+        (output / "environment.txt").write_text(perf_metadata.readable(environment),encoding="utf-8")
     samples = []
     compositor = HeadlessCompositor(output, refresh_hz or REFRESH_HZ, window_size) if display == "headless" else None
     if compositor:
@@ -709,6 +775,7 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
         process = subprocess.Popen([*prefix, str(binary)], env=env, cwd=output, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
         gpu_sampler = None
+        capture["window_geometries"] = {}
         try:
             app_pid = process.pid
             if gpu:
@@ -731,6 +798,9 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
                     if len(samples) % 20 == 0:
                         sample["pss_breakdown_kib"] = smaps_breakdown(app_pid)
                     samples.append(sample)
+                if platform.system() == "Windows" and not capture["window_geometries"]:
+                    import perf_windows_environment
+                    capture["window_geometries"] = perf_windows_environment.process_windows(app_pid)
                 time.sleep(0.25)
         except TimeoutError as error:
             timeout_problem = str(error)
@@ -739,13 +809,17 @@ def run_once(binary, repository, name, output, timeout, metadata=True, display="
             perf_platform.stop_tree(process)
             raise
         finally:
-            if gpu_sampler:
-                capture["gpu_capture"] = gpu_sampler.close()
-            if compositor:
-                compositor.close()
+            for key, resource in (("gpu_capture", gpu_sampler), (None, compositor)):
+                if resource:
+                    try:
+                        result = resource.close()
+                        if key:
+                            capture[key] = result
+                    except Exception as error:
+                        capture.setdefault("cleanup_errors", []).append(str(error))
             capture["exit_code"] = process.returncode
             capture["wall_s"] = time.time() - started
-            capture["load_after"] = load_average()
+            capture["load_after"] = perf_platform.load_average()
             (output / "process.jsonl").write_text("".join(json.dumps(s) + "\n" for s in samples), encoding="utf-8")
             (output / "capture.json").write_text(json.dumps(capture, indent=2) + "\n", encoding="utf-8")
     crash_dir = output / "profile/state/gitcomet/crashes"
@@ -800,6 +874,7 @@ def summarize(directory):
         problems.append(capture["timeout"])
     if capture.get("crash_reports"):
         problems.append(f"crash reports: {capture['crash_reports']}")
+    problems.extend(capture.get("cleanup_errors", []))
     records = load_records(directory)
     gpu_records = perf_gpu.load(directory)
     starts = [r for r in records if r["event"] == "start"]
@@ -845,8 +920,6 @@ def summarize(directory):
             begin = begins.pop(name)
             phases[name] = analyse_phase(begin, record, draws, submits, by_op, applied,
                                          records, threads, process, start)
-            if capture.get("gpu_timings_requested"):
-                phases[name]["gpu_frames"] = perf_gpu_frames.summarize(records, begin["at_ms"], record["at_ms"], distribution)
             if capture.get("gpu_capture", {}).get("requested"):
                 phases[name]["gpu"] = perf_gpu.summarize_phase(
                     gpu_records, start["unix_ms"] + begin["at_ms"],
@@ -916,7 +989,7 @@ def summarize(directory):
                                 "dirty_to_draw_ms": r["at_ms"] - r["dirty_ms"]} for r in stalled],
                "operations": operations, "operation_results": operation_results, "unfinished_operations": unfinished,
                "binary_sha256": capture["binary_sha256"], "repository_head": capture["repository_head"],
-               "gpu_timings_requested": capture.get("gpu_timings_requested", False),
+               "window_geometries": capture.get("window_geometries",{}),
                "gpu_capture": capture.get("gpu_capture", {"requested": False}),
                "valid": not problems, "problems": problems, "load_before": capture.get("load_before"),
                "load_after": capture.get("load_after"), "phases": phases,
@@ -1048,6 +1121,13 @@ def analyse_phase(begin, end, draws, submits, by_op, applied, records, threads, 
         "process_cpu_cores": delta("cpu_s") / sample_seconds if delta("cpu_s") is not None and sample_seconds else None,
         "children_cpu_s": delta("children_cpu_s"),
         "wakeups_per_second": delta("voluntary_switches") / sample_seconds if delta("voluntary_switches") is not None and sample_seconds else None,
+        # macOS proc_pid_rusage counters; None elsewhere.
+        "idle_wakeups_per_second": delta("idle_wakeups") / sample_seconds if delta("idle_wakeups") is not None and sample_seconds else None,
+        "interrupt_wakeups_per_second": delta("interrupt_wakeups") / sample_seconds if delta("interrupt_wakeups") is not None and sample_seconds else None,
+        # The kernel's CPU-only energy estimate: mJ per second is mW.
+        "cpu_energy_mw": delta("cpu_energy_nj") / 1e6 / sample_seconds if delta("cpu_energy_nj") is not None and sample_seconds else None,
+        "instructions_per_second": delta("instructions") / sample_seconds if delta("instructions") is not None and sample_seconds else None,
+        "phys_footprint_kib": distribution(s.get("phys_footprint_kib") for s in phase_process),
         "rss_kib": distribution(s["rss_kib"] for s in phase_process),
         "pss_kib": distribution(s["pss_kib"] for s in phase_process),
         "private_kib": distribution(s.get("private_kib") for s in phase_process),
@@ -1100,11 +1180,15 @@ METRICS = [
     ("inputs.input_to_witness_ms.p50", "lower"), ("inputs.input_to_witness_ms.p95", "lower"),
     ("inputs.dispatch_delay_ms.p95", "lower"), ("inputs.apply_ms.p95", "lower"),
     ("draw_ms.p50", "lower"), ("draw_ms.p95", "lower"), ("draw_ms.p99", "lower"),
+    # Present, including the renderer's CPU work.
+    ("submit_ms.p50", "lower"), ("submit_ms.p95", "lower"), ("submit_ms.p99", "lower"),
     ("dirty_to_draw_ms.p95", "lower"), ("wake_ms.p99", "lower"),
     ("main_cpu_percent", "lower"), ("process_cpu_cores", "lower"), ("wakeups_per_second", "lower"),
     ("frames_per_second", "info"), ("pss_kib.max", "lower"), ("rss_kib.max", "lower"),
     ("slow_frames_16ms", "lower"), ("inputs.witnessed", "higher"), ("inputs.superseded", "lower"),
     ("inputs.superseded_task_ms", "lower"),
+    # GPU: the app's load (see app_gpu_load), NVIDIA board and Apple SoC GPU power.
+    ("gpu.app_load", "lower"), ("gpu.devices.0.power_w.mean", "lower"), ("gpu.soc.gpu_power_mw", "lower"),
 ]
 # Percentiles over completed inputs only compare like with like when both
 # variants completed the same inputs; a variant that let most inputs be
@@ -1114,10 +1198,25 @@ COMPLETION_SENSITIVE = ("inputs.input_to_", "inputs.apply_ms", "inputs.dispatch_
 LAUNCH_METRICS = [("spawn_to_first_draw_ms", "lower"), ("spawn_to_ready_ms", "lower")]
 
 
-def lookup(data, dotted):
-    for key in dotted.split("."):
-        data = data.get(key) if isinstance(data, dict) else None
-    return data
+def app_gpu_load(phase):
+    """The app's GPU load on its busiest adapter: GPU ms per second on macOS,
+    otherwise the interval-weighted NVIDIA SM or Windows busiest-engine percent."""
+    loads = []
+    for adapter in (perf_metadata.lookup(phase, "gpu.processes.app") or {}).values():
+        load = adapter.get("gpu_ms_per_s")
+        for metric in ("sm_percent", "busiest_engine_percent"):
+            load = load if load is not None else perf_metadata.lookup(adapter, metric + ".duration_weighted_mean")
+        # Memory-only Windows adapters are harmless, but an observed active
+        # adapter with unavailable counters could be the busiest one.
+        if load is None and (adapter.get("engine_instances_observed") or 0) > 0:
+            return None
+        if load is not None:
+            loads.append(load)
+    return max(loads, default=None)
+
+
+def phase_metric(phase, metric):
+    return app_gpu_load(phase) if metric == "gpu.app_load" else perf_metadata.lookup(phase, metric)
 
 
 def bootstrap_ratio(pairs, rounds=4000, seed=7):
@@ -1148,8 +1247,8 @@ def compare(samples, scenarios):
         for phase, pairs in phases.items():
             result[name][phase] = {}
             for metric, direction in METRICS:
-                values = [(lookup(p["baseline"]["summary"]["phases"][phase], metric),
-                           lookup(p["candidate"]["summary"]["phases"].get(phase, {}), metric)) for p in pairs]
+                values = [(phase_metric(p["baseline"]["summary"]["phases"][phase], metric),
+                           phase_metric(p["candidate"]["summary"]["phases"].get(phase, {}), metric)) for p in pairs]
                 values = [(b, c) for b, c in values if b is not None and c is not None]
                 if not values:
                     continue
@@ -1159,8 +1258,8 @@ def compare(samples, scenarios):
                     "candidate_median": statistics.median(c for _, c in values),
                     "ratio": bootstrap_ratio(values)}
                 if metric.startswith(COMPLETION_SENSITIVE):
-                    completed = [(lookup(p["baseline"]["summary"]["phases"][phase], "inputs.witnessed"),
-                                  lookup(p["candidate"]["summary"]["phases"].get(phase, {}), "inputs.witnessed"))
+                    completed = [(perf_metadata.lookup(p["baseline"]["summary"]["phases"][phase], "inputs.witnessed"),
+                                  perf_metadata.lookup(p["candidate"]["summary"]["phases"].get(phase, {}), "inputs.witnessed"))
                                  for p in pairs]
                     if any(b is None or c is None or abs(b - c) > 0.05 * max(b, c, 1) for b, c in completed):
                         entry["not_comparable"] = "variants completed different inputs; compare inputs.witnessed"
@@ -1182,8 +1281,11 @@ def compare(samples, scenarios):
 
 
 def measure(args):
-    if sys.platform != "linux":
-        raise ValueError("live-ui.py drives the Linux application; use ui-responsiveness.py on Windows")
+    system = platform.system()
+    if system not in ("Linux", "Windows", "Darwin"):
+        raise ValueError(f"unsupported measurement host: {system}")
+    if args.display == "headless" and system != "Linux":
+        raise ValueError("Headless captures require Linux; use --display desktop on this platform")
     if args.pairs < 1:
         raise ValueError("--pairs must be positive")
     repository = args.repository.resolve()
@@ -1206,7 +1308,6 @@ def measure(args):
                "candidate_runtime": candidate,
                "display": args.display,
                "gpu_sampling": args.gpu,
-               "gpu_timings": args.gpu_timings,
                "scenarios": args.scenarios, "repository": str(repository), "repository_head": head,
                "binaries": {k: str(v) for k, v in binaries.items()}, "hashes": hashes,
                "environment": perf_metadata.collect(binaries=list(binaries.items()),
@@ -1225,7 +1326,7 @@ def measure(args):
                     summary = run_once(binaries[variant], repository, name, output, args.timeout,
                                        metadata=False, display=args.display, save_file=args.save_file,
                                        secondary=args.secondary_repository, wrap=runtime["wrap"],
-                                       extra_env=runtime["env"], gpu=args.gpu, gpu_timings=args.gpu_timings)
+                                       extra_env=runtime["env"], gpu=args.gpu)
                     if summary["binary_sha256"] != hashes[variant]:
                         raise ValueError(f"{variant} binary changed during the session")
                     if not summary["valid"]:
@@ -1249,8 +1350,6 @@ def report(directories):
     for other in sessions[1:]:
         if other.get("gpu_sampling", False) != reference.get("gpu_sampling", False):
             raise ValueError("sessions disagree on GPU sampling")
-        if other.get("gpu_timings", False) != reference.get("gpu_timings", False):
-            raise ValueError("sessions disagree on GPU timestamps")
         for key in ("hashes", "scenarios", "repository_head", "display", "candidate_runtime"):
             if other.get(key) != reference.get(key):
                 raise ValueError(f"sessions disagree on {key}")
@@ -1295,13 +1394,13 @@ def main():
     single.add_argument("--timeout", type=int, default=600)
     single.add_argument("--display", choices=("headless", "desktop"), default="headless")
     single.add_argument("--ping-ms", type=int)
-    single.add_argument("--gpu-timings", action="store_true", help="asynchronous native GPU frame and pass timestamps")
-    single.add_argument("--gpu", action="store_true", help="sample NVIDIA process/device GPU usage on Linux")
+    single.add_argument("--gpu", action="store_true", help="sample process/device GPU usage (PDH on Windows, NVIDIA on Linux, IOKit on macOS)")
     single.add_argument("--window-size", type=positive_int, nargs=2, default=WINDOW_SIZE,
                         metavar=("WIDTH", "HEIGHT"), help="window dimensions in logical pixels")
     single.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
     single.add_argument("--wrap", help="diagnostic wrapper command, e.g. 'perf record -o {output}/cpu.data --'")
-    single.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    single.add_argument("--secondary-repository", type=Path, action="append",
+                        help="repository lifecycle opens and closes; repo-tabs opens every one given")
     single.add_argument("--cycles", type=positive_int, default=100,
                         help="measured lifecycle cycles; comparing two counts isolates per-cycle retention")
     single.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
@@ -1317,10 +1416,10 @@ def main():
     paired.add_argument("--reverse", action="store_true")
     paired.add_argument("--timeout", type=int, default=600)
     paired.add_argument("--display", choices=("headless", "desktop"), default="headless")
-    paired.add_argument("--gpu-timings", action="store_true", help="collect native GPU timestamps on both sides")
-    paired.add_argument("--gpu", action="store_true", help="sample GPU usage on both sides of each pair")
+    paired.add_argument("--gpu", action="store_true", help="sample GPU usage on both sides of each pair (PDH on Windows, NVIDIA on Linux, IOKit on macOS)")
     paired.add_argument("--save-file", default=SAVE_FILE, help="tracked file status-save and status-touch rewrite")
-    paired.add_argument("--secondary-repository", type=Path, help="repository lifecycle opens and closes")
+    paired.add_argument("--secondary-repository", type=Path, action="append",
+                        help="repository lifecycle opens and closes; repo-tabs opens every one given")
     paired.add_argument("--max-load", type=float,
                         help="wait before each run until the 1-minute load average is below this")
     paired.add_argument("--candidate-wrap", help="launch prefix for candidate runs only (runtime-only candidates)")
@@ -1341,7 +1440,7 @@ def main():
                           wrap=args.wrap, cold_gpu_cache=args.cold_gpu_cache,
                           secondary=args.secondary_repository, cycles=args.cycles,
                           extra_env=dict(item.split("=", 1) for item in args.env), gpu=args.gpu,
-                          window_size=args.window_size, gpu_timings=args.gpu_timings)
+                          window_size=args.window_size)
         print(json.dumps({"valid": result["valid"], "problems": result["problems"]}, indent=2))
         if not result["valid"]:
             sys.exit(1)

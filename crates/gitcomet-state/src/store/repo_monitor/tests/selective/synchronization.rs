@@ -325,3 +325,67 @@ fn native_sync_ntfs_cookies_cover_all_roots_without_git_or_callback_noise() {
         "cookies polluted worktree status"
     );
 }
+
+#[test]
+fn watching_start_moves_the_change_generation() {
+    let (_temp, root) = repository();
+    let config = MonitorConfig::default();
+    let generation = Arc::clone(&config.change_generation);
+    let (_monitor, _callbacks) = injected_monitor(&root, config);
+    // A tab left during the setup walk may have missed a change.
+    assert_eq!(generation.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn inactive_change_moves_the_generation_without_a_refresh() {
+    let (_temp, root) = repository();
+    let config = MonitorConfig::default();
+    let generation = Arc::clone(&config.change_generation);
+    let (monitor, _callbacks) = injected_monitor(&root, config);
+    monitor.active_repo_id.store(2, Ordering::SeqCst);
+    let before = generation.load(Ordering::SeqCst);
+    monitor
+        .tx
+        .send(content_event(root.join("edit.txt")))
+        .unwrap();
+    monitor.drain_delivered();
+    assert!(
+        monitor.rx.try_recv().is_err(),
+        "inactive repository refreshed"
+    );
+    // Its tab must refresh when it is activated again.
+    assert!(generation.load(Ordering::SeqCst) > before);
+}
+
+#[test]
+fn degraded_flag_follows_coverage() {
+    let (_temp, root) = repository();
+    let failing = Arc::new(AtomicBool::new(true));
+    let config = MonitorConfig {
+        recovery_interval: Duration::ZERO,
+        ..Default::default()
+    };
+    let degraded = Arc::clone(&config.degraded);
+    let (tx, _callbacks) = mpsc::channel();
+    let monitor = RunningMonitor::start_with_callback(
+        &root,
+        Arc::new(FaultyBackend {
+            load_failure: failing.clone(),
+            ..Default::default()
+        }),
+        config,
+        Some(tx),
+    );
+    assert!(matches!(
+        monitor.rx.try_recv(),
+        Ok(Msg::RepoWatchDegraded { .. })
+    ));
+    assert!(degraded.load(Ordering::SeqCst));
+    failing.store(false, Ordering::Relaxed);
+    monitor.revalidate();
+    assert!(matches!(
+        monitor.rx.recv_timeout(SYNC_TIMEOUT),
+        Ok(Msg::RepoExternallyChanged { .. })
+    ));
+    assert!(!degraded.load(Ordering::SeqCst));
+}

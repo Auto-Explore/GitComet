@@ -162,12 +162,8 @@ fn builds_pure_components_without_panics() {
             );
         });
 
-        assert_no_panic("window-frame uses shadow/rounding", || {
-            let _ = div()
-                .rounded(px(theme.radii.panel))
-                .shadow_lg()
-                .border_1()
-                .child("x");
+        assert_no_panic("window-frame uses rounding/border", || {
+            let _ = div().rounded(px(theme.radii.panel)).border_1().child("x");
         });
     }
 }

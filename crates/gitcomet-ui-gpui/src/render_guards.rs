@@ -39,8 +39,9 @@ mod tests {
                 // Selection, resizing, dragging, focus, and propagation only.
                 // Discrete controls (including hosted group headers) use on_activate.
                 primary_press: &[
-                    // Diagram panning starts a continuous drag.
+                    // Diagram and image panning start continuous drags.
                     "view/diagram_preview/surface.rs",
+                    "view/image_preview/surface.rs",
                     "view/chrome.rs",
                     "view/diff_text_selection.rs",
                     "view/gitcomet_view.rs",
@@ -216,7 +217,7 @@ mod tests {
     }
 
     /// `window_bounds()` reports the *restore* size while the window is
-    /// maximized or fullscreen, and includes the client-side shadow band, so
+    /// maximized or fullscreen, and includes the client-side decoration inset, so
     /// anything sized or placed from it misfits the visible window. Views use
     /// `chrome::window_surface_bounds`.
     #[test]

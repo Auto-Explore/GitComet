@@ -3,6 +3,9 @@ use gitcomet_core::domain::{DiffArea, DiffTarget, FileSource};
 use gitcomet_core::services::GitBackend;
 use std::path::PathBuf;
 
+mod fixture;
+use fixture::{clean_repository_template, restore_repository};
+
 const REPO: RepoId = RepoId(791);
 type View = Entity<GitCometView>;
 
@@ -61,60 +64,6 @@ fn commit(dir: &Path, message: &str) {
             message,
         ],
     );
-}
-
-// Keep bytes in the shared template; its construction TempDir is removed
-// immediately and each scenario receives an independently writable index.
-fn clean_repository_template() -> &'static Vec<(PathBuf, Vec<u8>)> {
-    static TEMPLATE: std::sync::OnceLock<Vec<(PathBuf, Vec<u8>)>> = std::sync::OnceLock::new();
-    TEMPLATE.get_or_init(|| {
-        let dir = tempfile::tempdir().unwrap();
-        git(dir.path(), &["init", "-q", "-b", "main"]);
-        std::fs::create_dir(dir.path().join("nested")).unwrap();
-        for path in ["a.txt", "b.txt", "nested/c.txt", "nested/d.txt"] {
-            std::fs::write(dir.path().join(path), "base\n").unwrap();
-        }
-        let moved: String = (0..20).map(|line| format!("line {line}\n")).collect();
-        std::fs::write(dir.path().join("moved.txt"), moved).unwrap();
-        git(dir.path(), &["add", "."]);
-        commit(dir.path(), "base");
-        fn collect(root: &Path, path: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
-            let entries = std::fs::read_dir(path).unwrap_or_else(|error| {
-                panic!(
-                    "list repository template directory {}: {error}",
-                    path.display()
-                )
-            });
-            for entry in entries {
-                let entry = entry.unwrap_or_else(|error| {
-                    panic!(
-                        "read repository template entry in {}: {error}",
-                        path.display()
-                    )
-                });
-                let path = entry.path();
-                let file_type = entry.file_type().unwrap_or_else(|error| {
-                    panic!(
-                        "inspect repository template entry {}: {error}",
-                        path.display()
-                    )
-                });
-                if file_type.is_dir() {
-                    collect(root, &path, files);
-                } else {
-                    files.push((
-                        path.strip_prefix(root).unwrap().to_path_buf(),
-                        std::fs::read(&path).unwrap_or_else(|error| {
-                            panic!("read repository template file {}: {error}", path.display())
-                        }),
-                    ));
-                }
-            }
-        }
-        let mut files = Vec::new();
-        collect(dir.path(), dir.path(), &mut files);
-        files
-    })
 }
 
 struct ScenarioApp {
@@ -262,11 +211,7 @@ fn exercise_with_failure(
         finished: false,
     };
     let cx = &mut scenario.app;
-    for (path, bytes) in clean_repository_template() {
-        let path = dir.path().join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, bytes).unwrap();
-    }
+    restore_repository(dir.path(), clean_repository_template());
     let tracked = ["a.txt", "b.txt", "nested/c.txt", "nested/d.txt"];
     for path in tracked {
         std::fs::write(dir.path().join(path), "base\nstaged\n").unwrap();
@@ -956,11 +901,7 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
                 store: None,
                 finished: false,
             };
-            for (path, bytes) in clean_repository_template() {
-                let path = dir.path().join(path);
-                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-                std::fs::write(path, bytes).unwrap();
-            }
+            restore_repository(dir.path(), clean_repository_template());
             let paths = if section == StatusSection::Untracked {
                 ["new/a.txt", "new/b.txt", "new/nested/c.txt"]
             } else {

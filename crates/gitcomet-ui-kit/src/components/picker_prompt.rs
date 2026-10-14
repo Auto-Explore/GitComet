@@ -1594,7 +1594,9 @@ fn section_header_row(
     if collapsed && header.hidden_count > 0 {
         label_row = label_row.child(
             div()
-                .text_color(with_alpha(theme.colors.foreground.secondary, 0.7))
+                .when(theme.is_dark, |count| {
+                    count.text_color(with_alpha(theme.colors.foreground.secondary, 0.7))
+                })
                 .child(SharedString::from(header.hidden_count.to_string())),
         );
     }

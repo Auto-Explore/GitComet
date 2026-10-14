@@ -493,10 +493,11 @@ impl BarItemOwner for BottomStatusBarView {
             .text_size(theme.ui_text(11.0))
             .line_height(scaled_px(theme.metrics.ui_text(12.0)))
             .font_weight(FontWeight::NORMAL)
-            .text_color(with_alpha(
-                theme.colors.foreground.primary,
-                if theme.is_dark { 0.72 } else { 0.62 },
-            ))
+            .text_color(if theme.is_dark {
+                with_alpha(theme.colors.foreground.primary, 0.72)
+            } else {
+                theme.colors.foreground.secondary
+            })
             .on_activate(
                 false,
                 controls::ControlActivation::Action,

@@ -80,7 +80,6 @@ impl HistoryRefsHoverHost {
         source_bounds: Bounds<Pixels>,
         items: Arc<[HistoryRefListItem]>,
         pointer: Point<Pixels>,
-        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         if items.is_empty() {
@@ -113,7 +112,7 @@ impl HistoryRefsHoverHost {
 
         if self.state.is_some() {
             self.cancel_pending_show();
-            self.show_now(next, window, cx);
+            self.show_now(next, cx);
             return;
         }
 
@@ -161,12 +160,7 @@ impl HistoryRefsHoverHost {
         .detach();
     }
 
-    fn show_now(
-        &mut self,
-        next: HistoryRefsHoverState,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    fn show_now(&mut self, next: HistoryRefsHoverState, cx: &mut gpui::Context<Self>) {
         self.close_seq = self.close_seq.wrapping_add(1);
         let changed = self
             .state
@@ -178,8 +172,10 @@ impl HistoryRefsHoverHost {
             self.pinned_item_ix = None;
             *self.panel_bounds.borrow_mut() = None;
             self.state = Some(next);
+            // The host is an uncached overlay of the root view, so notifying it
+            // redraws the card; `window.refresh()` would also re-render every
+            // cached pane for this frame.
             cx.notify();
-            window.refresh();
         }
     }
 
@@ -625,7 +621,6 @@ impl Render for HistoryRefsHoverHost {
             .border_1()
             .border_color(theme.colors.stroke.default)
             .rounded(px(theme.radii.popover))
-            .shadow(crate::theme::shadow_popover(theme))
             .occlude()
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window, cx| {
                 this.keep_open_at(e.position);

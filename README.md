@@ -244,6 +244,8 @@ KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/-
 
 ### Commit signature verification
 
+Verification is disabled by default because it can slow down the Git log. Enable **Settings → Git log → Verify commit signatures** to show verification badges.
+
 GitComet shows verification badges on signed commits. Git performs the check, using `gpg` for GPG and X.509 signatures and `ssh-keygen` for SSH signatures, so badges need those programs and the signers' public keys. **Settings → Executables** shows which programs GitComet found.
 
 To install GnuPG, trust GitHub's signing key, and configure SSH allowed signers, see the [commit signature guide](docs/commit-signatures.md).
