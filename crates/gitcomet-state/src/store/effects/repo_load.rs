@@ -1225,121 +1225,135 @@ pub(super) fn schedule_load_worktree_dirty(
         move |repo, msg_tx| {
             let own_workdir = canonicalize_or_original(own_workdir);
             let read = WorktreeListRead::from_dirty_scan();
-            let result = repo
-                .list_worktrees_cancellable(&cancellation)
-                .inspect_err(|_| {
-                    // The listing is what names the live worktrees, so a failed
-                    // one leaves nothing to prune against -- and its causes (a
-                    // concurrent `git worktree prune`, a permissions blip, an
-                    // unmounted volume) are exactly when stale handles pile up.
-                    // Drop this repo's cache outright: it is only a cache, and
-                    // the next scan reopens whatever it still needs. A cancelled
-                    // listing is not evidence of anything, so it keeps its
-                    // handles.
-                    if !cancellation.is_cancelled() {
-                        retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &[]);
-                    }
-                })
-                .and_then(|worktrees| {
-                    let worktrees = Arc::new(worktrees);
-                    if matches!(scope, WorktreeDirtyScope::All) {
-                        // Background failures must not change the explicit list's
-                        // state or produce a diagnostic on every focus/flush.
-                        publisher.publish(&msg_tx, repo_id, read, Ok(worktrees.clone()));
-                    }
-                    let mut summaries = Vec::new();
-                    let mut scanned = Vec::with_capacity(worktrees.len());
-                    for worktree in worktrees.iter() {
-                        // A scan that stops here has seen only a prefix of the
-                        // list, and the reducer commits an `Ok` as the complete
-                        // set of dirty worktrees: it would blank the rows for
-                        // everything unscanned and -- through
-                        // `selected_worktree_is_gone` -- drop the selection and
-                        // close the diff the user is reading. Cancellation is
-                        // the absence of an answer, so it surfaces as one.
-                        if cancellation.is_cancelled() {
-                            return Err(Error::new(ErrorKind::Cancelled));
+            // gix can panic if a checkout is removed between classifying its
+            // root as a repository and reading that now-empty directory. The
+            // executor catches unwinds, but only this task can finish the load
+            // and let the reducer replay a refresh queued during the scan.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                repo.list_worktrees_cancellable(&cancellation)
+                    .inspect_err(|_| {
+                        // The listing is what names the live worktrees, so a failed
+                        // one leaves nothing to prune against -- and its causes (a
+                        // concurrent `git worktree prune`, a permissions blip, an
+                        // unmounted volume) are exactly when stale handles pile up.
+                        // Drop this repo's cache outright: it is only a cache, and
+                        // the next scan reopens whatever it still needs. A cancelled
+                        // listing is not evidence of anything, so it keeps its
+                        // handles.
+                        if !cancellation.is_cancelled() {
+                            retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &[]);
                         }
-                        if is_own_worktree(&worktree.path, &own_workdir) {
-                            continue;
+                    })
+                    .and_then(|worktrees| {
+                        let worktrees = Arc::new(worktrees);
+                        if matches!(scope, WorktreeDirtyScope::All) {
+                            // Background failures must not change the explicit list's
+                            // state or produce a diagnostic on every focus/flush.
+                            publisher.publish(&msg_tx, repo_id, read, Ok(worktrees.clone()));
                         }
-                        scanned.push(worktree.path.clone());
-                        if !scope.includes(&worktree.path) {
-                            continue;
-                        }
-                        let Some(handle) = worktree_scan_handle(
-                            worktree_scan_handles(),
-                            &*backend,
-                            repo_id,
-                            &worktree.path,
-                        ) else {
-                            continue;
-                        };
-                        let status = match handle.status_cancellable(&cancellation) {
-                            Ok(status) => status,
-                            // Cancellation surfaces as an `Err` here like any
-                            // other failure, and it says nothing about the
-                            // handle. `CancelRepoLoads` fires on every tab
-                            // switch, reload and completed action, so treating
-                            // it as a broken handle would discard healthy ones
-                            // routinely and pay full discovery to reopen them.
-                            Err(_) if cancellation.is_cancelled() => {
+                        let mut summaries = Vec::new();
+                        let mut scanned = Vec::with_capacity(worktrees.len());
+                        for worktree in worktrees.iter() {
+                            // A scan that stops here has seen only a prefix of the
+                            // list, and the reducer commits an `Ok` as the complete
+                            // set of dirty worktrees: it would blank the rows for
+                            // everything unscanned and -- through
+                            // `selected_worktree_is_gone` -- drop the selection and
+                            // close the diff the user is reading. Cancellation is
+                            // the absence of an answer, so it surfaces as one.
+                            if cancellation.is_cancelled() {
                                 return Err(Error::new(ErrorKind::Cancelled));
                             }
-                            Err(_) => {
-                                // A handle that cannot report status is not
-                                // worth keeping: the worktree may have been
-                                // removed or replaced underneath it.
-                                forget_worktree_scan_handle(
-                                    worktree_scan_handles(),
-                                    &worktree.path,
-                                );
+                            if is_own_worktree(&worktree.path, &own_workdir) {
                                 continue;
                             }
-                        };
-                        if status.staged.is_empty() && status.unstaged.is_empty() {
-                            continue;
-                        }
-                        // Only the selected worktree's files are carried back;
-                        // see `WorktreeDirtySummary`.
-                        let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
-                        // Like the file lists, only the selected worktree pays.
-                        let line_stats = if keep_files {
-                            match handle.uncommitted_line_stats_for_status_cancellable(
-                                &status,
-                                &cancellation,
-                            ) {
-                                Ok(stats) => stats,
-                                // Like the status read above: a cancelled scan
-                                // stops the walk rather than reporting a
-                                // worktree whose counts silently went missing.
+                            scanned.push(worktree.path.clone());
+                            if !scope.includes(&worktree.path) {
+                                continue;
+                            }
+                            let Some(handle) = worktree_scan_handle(
+                                worktree_scan_handles(),
+                                &*backend,
+                                repo_id,
+                                &worktree.path,
+                            ) else {
+                                continue;
+                            };
+                            let status = match handle.status_cancellable(&cancellation) {
+                                Ok(status) => status,
+                                // Cancellation surfaces as an `Err` here like any
+                                // other failure, and it says nothing about the
+                                // handle. `CancelRepoLoads` fires on every tab
+                                // switch, reload and completed action, so treating
+                                // it as a broken handle would discard healthy ones
+                                // routinely and pay full discovery to reopen them.
                                 Err(_) if cancellation.is_cancelled() => {
                                     return Err(Error::new(ErrorKind::Cancelled));
                                 }
-                                // Counts are decoration; a worktree that cannot
-                                // produce them still belongs in the list.
-                                Err(_) => Default::default(),
+                                Err(_) => {
+                                    // A handle that cannot report status is not
+                                    // worth keeping: the worktree may have been
+                                    // removed or replaced underneath it.
+                                    forget_worktree_scan_handle(
+                                        worktree_scan_handles(),
+                                        &worktree.path,
+                                    );
+                                    continue;
+                                }
+                            };
+                            if status.staged.is_empty() && status.unstaged.is_empty() {
+                                continue;
                             }
-                        } else {
-                            Default::default()
-                        };
-                        let summary = worktree_dirty_summary(
-                            worktree.clone(),
-                            status,
-                            keep_files,
-                            line_stats,
-                        );
-                        if summary.is_dirty() {
-                            summaries.push(summary);
+                            // Only the selected worktree's files are carried back;
+                            // see `WorktreeDirtySummary`.
+                            let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
+                            // Like the file lists, only the selected worktree pays.
+                            let line_stats = if keep_files {
+                                match handle.uncommitted_line_stats_for_status_cancellable(
+                                    &status,
+                                    &cancellation,
+                                ) {
+                                    Ok(stats) => stats,
+                                    // Like the status read above: a cancelled scan
+                                    // stops the walk rather than reporting a
+                                    // worktree whose counts silently went missing.
+                                    Err(_) if cancellation.is_cancelled() => {
+                                        return Err(Error::new(ErrorKind::Cancelled));
+                                    }
+                                    // Counts are decoration; a worktree that cannot
+                                    // produce them still belongs in the list.
+                                    Err(_) => Default::default(),
+                                }
+                            } else {
+                                Default::default()
+                            };
+                            let summary = worktree_dirty_summary(
+                                worktree.clone(),
+                                status,
+                                keep_files,
+                                line_stats,
+                            );
+                            if summary.is_dirty() {
+                                summaries.push(summary);
+                            }
                         }
-                    }
-                    // Reaching here means the whole list was walked, so `scanned`
-                    // is complete and safe to prune against -- a cancellation
-                    // part-way returned above rather than falling through with a
-                    // partial set.
-                    retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &scanned);
-                    Ok(summaries)
-                });
+                        // Reaching here means the whole list was walked, so `scanned`
+                        // is complete and safe to prune against -- a cancellation
+                        // part-way returned above rather than falling through with a
+                        // partial set.
+                        retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &scanned);
+                        Ok(summaries)
+                    })
+            }))
+            .unwrap_or_else(|payload| {
+                // The scan did not reach its normal pruning step. Reopen this
+                // repo's checkouts next time instead of retaining stale handles.
+                release_worktree_scan_handles(repo_id);
+                Err(Error::new(ErrorKind::Backend(format!(
+                    "Worktree scan panicked: {}",
+                    super::super::send_diagnostics::panic_payload_to_string(payload.as_ref()),
+                ))))
+            });
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
@@ -3406,6 +3420,170 @@ mod worktree_dirty_files_tests {
             );
             assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_err());
         }
+    }
+
+    #[test]
+    fn panicking_worktree_scan_finishes_and_replays_pending_refresh() {
+        use crate::model::{Loadable, RepoLoadsInFlight, RepoState};
+        use crate::msg::{Effect, InternalMsg};
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::time::Duration;
+
+        struct PanickingOnceBackend(AtomicBool);
+        impl GitBackend for PanickingOnceBackend {
+            fn open(&self, path: &Path) -> Result<Arc<dyn GitRepository>, Error> {
+                if self.0.swap(false, Ordering::Relaxed) {
+                    // Unwind after the listing was published, as when gix's
+                    // status walker races with removal of a linked checkout.
+                    panic!("injected worktree scan panic");
+                }
+                gitcomet_git_gix::GixBackend.open(path)
+            }
+        }
+
+        let (dir, own, linked) = crate::store::tests::repo_with_linked_worktree();
+        std::fs::write(linked.join("a.txt"), "linked checkout edit\n").unwrap();
+        let cached_path = dir.path().join("cached-worktree");
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&own)
+            .args(["worktree", "add", "--detach"])
+            .arg(&cached_path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        std::fs::write(cached_path.join("new.txt"), "another dirty checkout\n").unwrap();
+        let repo_id = RepoId(4108);
+        let worker = ScanTestWorker::new(repo_id);
+        let cached_handle = Arc::downgrade(
+            &worktree_scan_handle(
+                worktree_scan_handles(),
+                &gitcomet_git_gix::GixBackend,
+                repo_id,
+                &cached_path,
+            )
+            .unwrap(),
+        );
+        let backend = Arc::new(PanickingOnceBackend(AtomicBool::new(true)));
+        let repo = gitcomet_git_gix::GixBackend.open(&own).unwrap();
+        let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
+        repo_state.set_open(Loadable::Ready(()));
+        let mut previous = worktree();
+        previous.path = linked.clone();
+        repo_state.set_worktree_dirty(Loadable::Ready(vec![worktree_dirty_summary(
+            previous,
+            status(&["a.txt"]),
+            true,
+            Default::default(),
+        )]));
+        repo_state.set_worktree_selection(Some(linked.clone()));
+        let previous_dirty = repo_state.worktree_dirty.clone();
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            repos: vec![repo_state],
+            ..AppState::test_default()
+        };
+        let mut repos = FxHashMap::from_iter([(repo_id, repo)]);
+        let id_alloc = AtomicU64::new(2);
+        let reduce = |state: &mut AppState, repos: &mut RepoMap, msg| {
+            crate::store::reducer::reduce(repos, &id_alloc, state, msg)
+        };
+        let effects = reduce(&mut state, &mut repos, Msg::LoadWorktreeDirty { repo_id });
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::LoadWorktreeDirty { .. }]
+        ));
+        assert!(
+            reduce(&mut state, &mut repos, Msg::LoadWorktreeDirty { repo_id }).is_empty(),
+            "a second refresh waits for the active scan to finish"
+        );
+
+        for fails in [true, false] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            schedule_load_worktree_dirty(
+                &worker.executor,
+                backend.clone(),
+                &repos,
+                StoreWorkerSender::for_test_msg_sender(tx),
+                repo_id,
+                own.clone(),
+                WorktreeDirtyScope::All,
+                Some(linked.clone()),
+                CancellationToken::new(),
+                worker.publisher.clone(),
+            );
+            loop {
+                let msg = rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("even a panicking scan must send its completion");
+                let finished =
+                    if let Msg::Internal(InternalMsg::WorktreeDirtyLoaded { result, .. }) = &msg {
+                        assert_eq!(result.is_err(), fails, "{result:?}");
+                        if let Err(error) = result {
+                            assert!(error.to_string().contains("injected worktree scan panic"));
+                        }
+                        true
+                    } else {
+                        assert!(matches!(
+                            msg,
+                            Msg::Internal(InternalMsg::WorktreesLoaded { .. })
+                        ));
+                        false
+                    };
+                let effects = reduce(&mut state, &mut repos, msg);
+                if finished {
+                    if fails {
+                        assert!(matches!(
+                            effects.as_slice(),
+                            [Effect::LoadWorktreeDirty { .. }]
+                        ));
+                        assert_eq!(state.repos[0].worktree_dirty, previous_dirty);
+                        assert_eq!(
+                            state.repos[0].history_state.worktree_selection.as_ref(),
+                            Some(&linked),
+                            "an interrupted scan must preserve the selected worktree"
+                        );
+                        assert!(
+                            cached_handle.upgrade().is_none(),
+                            "a panicking scan must release its cached checkout handles"
+                        );
+                        let output = std::process::Command::new("git")
+                            .arg("-C")
+                            .arg(&linked)
+                            .args(["branch", "-m", "after-panic"])
+                            .output()
+                            .unwrap();
+                        assert!(output.status.success(), "{output:?}");
+                    } else {
+                        assert!(effects.is_empty(), "{effects:?}");
+                        assert!(
+                            !state.repos[0]
+                                .loads_in_flight
+                                .is_in_flight(RepoLoadsInFlight::WORKTREE_DIRTY)
+                        );
+                    }
+                    break;
+                }
+                assert!(effects.is_empty(), "{effects:?}");
+            }
+        }
+        let dirty = state.repos[0].worktree_dirty.ready().unwrap();
+        assert_eq!(dirty.len(), 2);
+        let linked_dirty = dirty.iter().find(|summary| summary.path == linked).unwrap();
+        assert_eq!(
+            linked_dirty.unstaged.as_slice(),
+            status(&["a.txt"]).unstaged.as_slice()
+        );
+        assert!(
+            state.repos[0]
+                .worktrees
+                .ready()
+                .unwrap()
+                .iter()
+                .any(|worktree| {
+                    worktree.path == linked && worktree.branch.as_deref() == Some("after-panic")
+                })
+        );
     }
 
     #[test]
