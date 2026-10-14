@@ -1392,6 +1392,14 @@ pub(in crate::view) struct PagedFileDiffRows {
 }
 
 impl PagedFileDiffRows {
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn source_byte_lengths(&self) -> (usize, usize) {
+        (
+            self.source.old_source.source_len,
+            self.source.new_source.source_len,
+        )
+    }
+
     fn new(source: Arc<StreamedFileDiffSource>, page_size: usize) -> Self {
         Self {
             source,
@@ -2482,6 +2490,7 @@ mod tests {
         assert_eq!(rebuild.old_line_starts.as_ref(), &[0, 6, 11]);
         assert_eq!(rebuild.new_text.as_ref(), "gamma\ndelta");
         assert_eq!(rebuild.new_line_starts.as_ref(), &[0, 6]);
+        assert_eq!(rebuild.row_provider.source_byte_lengths(), (11, 11));
     }
 
     #[test]
@@ -2641,6 +2650,7 @@ mod tests {
         let rebuild = build_file_diff_cache_rebuild(&file, tmp.path())
             .expect("source-backed file diff should build without patch");
 
+        assert_eq!(rebuild.row_provider.source_byte_lengths(), (19, 18));
         assert!(rebuild.rows.iter().any(|row| {
             row.kind != gitcomet_core::file_diff::FileDiffRowKind::Context
                 && (row.old_line == Some(2) || row.new_line == Some(2))

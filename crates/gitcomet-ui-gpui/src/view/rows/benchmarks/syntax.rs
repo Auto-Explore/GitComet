@@ -1211,6 +1211,33 @@ pub struct WorktreePreviewRenderFixture {
 }
 
 impl WorktreePreviewRenderFixture {
+    #[cfg(test)]
+    pub(super) fn prepare_window_syntax(&self, start: usize, window: usize) {
+        if self.lines.is_empty() || window == 0 {
+            return;
+        }
+
+        let document = self
+            .prepared_document
+            .expect("preview document should be prepared");
+        let start = start % self.lines.len();
+        let end = start.saturating_add(window).min(self.lines.len());
+        let byte_start = self.line_starts[start];
+        let byte_end = self
+            .line_starts
+            .get(end)
+            .copied()
+            .unwrap_or(self.source_text.len());
+        super::diff_text::syntax_highlights_for_prepared_document_byte_range(
+            self.theme,
+            self.source_text.as_ref(),
+            &self.line_starts,
+            document,
+            byte_start..byte_end,
+        )
+        .expect("preview window syntax should be ready");
+    }
+
     pub fn new(lines: usize, line_bytes: usize) -> Self {
         let generated_lines = build_synthetic_source_lines(lines, line_bytes);
         let (source_text, line_starts) = shared_source_text_and_line_starts(&generated_lines);

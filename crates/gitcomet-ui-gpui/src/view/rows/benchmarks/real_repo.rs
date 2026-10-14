@@ -433,8 +433,6 @@ impl RealRepoFixture {
             .expect("real_repo large diff file text benchmark")
             .unwrap_or_else(|| panic!("real_repo large diff benchmark requires file text"));
 
-        let old_text = file.old.as_deref().unwrap_or("");
-        let new_text = file.new.as_deref().unwrap_or("");
         let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
             &file,
             self._repo_root.path(),
@@ -442,6 +440,7 @@ impl RealRepoFixture {
         .expect("real_repo large diff file text should index");
         let split = rebuild.row_provider;
         let inline = rebuild.inline_row_provider;
+        let (old_bytes, new_bytes) = split.source_byte_lengths();
         let split_rows_painted = split
             .slice(0, DEFAULT_HISTORY_WINDOW)
             .take(DEFAULT_HISTORY_WINDOW)
@@ -466,8 +465,8 @@ impl RealRepoFixture {
             RealRepoMetrics {
                 worktree_file_count: bench_counter_u64(self.worktree_file_count),
                 diff_lines: bench_counter_u64(diff.lines.len()),
-                file_old_bytes: bench_counter_u64(old_text.len()),
-                file_new_bytes: bench_counter_u64(new_text.len()),
+                file_old_bytes: bench_counter_u64(old_bytes),
+                file_new_bytes: bench_counter_u64(new_bytes),
                 split_rows_painted: bench_counter_u64(split_rows_painted),
                 inline_rows_painted: bench_counter_u64(inline_rows_painted),
                 ..RealRepoMetrics::default()
@@ -937,6 +936,8 @@ mod tests {
         let (hash, metrics) = fixture.run_with_metrics();
         assert_ne!(hash, 0);
         assert!(metrics.diff_lines >= 200);
+        assert_eq!(metrics.file_old_bytes, 3_218);
+        assert_eq!(metrics.file_new_bytes, 4_050);
         assert!(metrics.file_new_bytes > metrics.file_old_bytes);
         assert!(metrics.split_rows_painted >= 1);
         assert!(metrics.inline_rows_painted >= 1);

@@ -339,8 +339,8 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
     StructuralBudgetSpec {
         bench: "search/in_diff_text_search_incremental_refinement",
         metric: "visible_rows_scanned",
-        comparator: StructuralBudgetComparator::AtLeast,
-        threshold: 110_000.0,
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 7_813.0,
     },
     StructuralBudgetSpec {
         bench: "search/in_diff_text_search_incremental_refinement",
