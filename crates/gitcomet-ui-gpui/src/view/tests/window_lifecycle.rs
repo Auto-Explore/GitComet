@@ -136,17 +136,17 @@ fn check_folder_drop_clears_highlight(
             },
         );
         repo.open = Loadable::Ready(());
+        store.replace_snapshot_for_test(Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        }));
         store.insert_repo_for_test(
             repo_id,
             Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
                 path,
             )),
         );
-        store.replace_snapshot_for_test(Arc::new(AppState {
-            repos: vec![repo],
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        }));
     }
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -578,18 +578,18 @@ fn dropping_multiple_folders_on_repository_bar_opens_each(cx: &mut gpui::TestApp
         },
     );
     seeded.open = Loadable::Ready(());
-    store.insert_repo_for_test(
-        seeded_id,
-        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
-            seeded_path,
-        )),
-    );
     store.replace_snapshot_for_test(Arc::new(AppState {
         repos: vec![seeded],
         active_repo: Some(seeded_id),
         git_runtime: available_git_runtime_state(),
         ..AppState::test_default()
     }));
+    store.insert_repo_for_test(
+        seeded_id,
+        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+            seeded_path,
+        )),
+    );
     let store_for_state = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

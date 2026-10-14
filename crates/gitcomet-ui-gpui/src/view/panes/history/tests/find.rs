@@ -2860,9 +2860,9 @@ fn indexed_history_find_switching_repos_releases_the_previous_search(
     second.history_state.selected_commit = None;
     state.repos.push(second);
     state.active_repo = Some(RepoId(2));
-    store.insert_repo_for_test(RepoId(2), backend.0.clone());
     let state = Arc::new(state);
     store.replace_snapshot_for_test(state.clone());
+    store.insert_repo_for_test(RepoId(2), backend.0.clone());
     cx.update(|_window, app| {
         let model = view.read(app).ui_model.clone();
         model.update(app, |model, cx| model.set_state(state, cx));

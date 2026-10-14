@@ -11,15 +11,15 @@ use crate::model::{
 };
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use crate::msg::{ReferenceEffect, RepoCommandEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
 use gitcomet_core::domain::{DiffTarget, FileConflictKind, Upstream};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CheckoutRemoteBranchMode, CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode,
-    RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+    CheckoutRemoteBranchMode, CommandOutput, InteractiveRebaseEntry, PullMode, RemoteUrlKind,
+    ResetMode, SafePushAfterCommitTarget,
 };
-use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -355,12 +355,12 @@ enum InFlightKind {
 }
 
 fn bump_in_flight(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     kind: InFlightKind,
 ) {
-    if !repos.contains_key(&repo_id) {
+    if !repos.has_repository(&repo_id) {
         return;
     }
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -382,7 +382,7 @@ fn bump_in_flight(
 }
 
 pub(super) fn run_large_file_command(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     command: gitcomet_core::large_files::LargeFileCommand,
@@ -391,7 +391,7 @@ pub(super) fn run_large_file_command(
 }
 
 fn run_large_file_command_with_auth(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     command: gitcomet_core::large_files::LargeFileCommand,
@@ -431,7 +431,7 @@ fn run_large_file_command_with_auth(
 }
 
 pub(super) fn start_queued_large_file_commands(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
@@ -460,7 +460,7 @@ pub(super) fn start_queued_large_file_commands(
 }
 
 pub(super) fn fetch_all(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
@@ -474,7 +474,7 @@ pub(super) fn fetch_all(
 }
 
 pub(super) fn fetch_refspecs(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     remote: String,
@@ -490,7 +490,7 @@ pub(super) fn fetch_refspecs(
 }
 
 pub(super) fn prune_merged_branches(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
@@ -501,7 +501,7 @@ pub(super) fn prune_merged_branches(
 }
 
 pub(super) fn prune_local_tags(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
@@ -512,7 +512,7 @@ pub(super) fn prune_local_tags(
 }
 
 pub(super) fn pull(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     mode: PullMode,
@@ -527,7 +527,7 @@ pub(super) fn pull(
 }
 
 pub(super) fn pull_branch(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     remote: String,
@@ -558,7 +558,7 @@ pub(super) fn squash_ref(repo_id: RepoId, reference: String) -> Vec<Effect> {
 }
 
 pub(super) fn push_with_tags(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     request: gitcomet_core::tag_push::TagPushRequest,
@@ -572,7 +572,7 @@ pub(super) fn push_with_tags(
 }
 
 pub(super) fn push(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
@@ -584,7 +584,7 @@ pub(super) fn push(
 }
 
 pub(super) fn push_after_commit(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     target: SafePushAfterCommitTarget,
@@ -594,7 +594,7 @@ pub(super) fn push_after_commit(
 }
 
 fn push_after_commit_with_auth(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     target: SafePushAfterCommitTarget,
@@ -611,7 +611,7 @@ fn push_after_commit_with_auth(
 }
 
 pub(super) fn force_push(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
@@ -623,7 +623,7 @@ pub(super) fn force_push(
 }
 
 pub(super) fn force_push_with_lease(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     lease: gitcomet_core::services::ForcePushLease,
@@ -637,7 +637,7 @@ pub(super) fn force_push_with_lease(
 }
 
 pub(super) fn push_set_upstream(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     remote: String,
@@ -671,7 +671,7 @@ pub(super) fn unset_upstream_branch(repo_id: RepoId, branch: String) -> Vec<Effe
 }
 
 pub(super) fn delete_remote_branch(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     remote: String,
@@ -687,7 +687,7 @@ pub(super) fn delete_remote_branch(
 }
 
 pub(super) fn delete_remote_branches(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     remote: String,
@@ -902,7 +902,7 @@ pub(super) fn delete_tag(repo_id: RepoId, name: String) -> Vec<Effect> {
 }
 
 pub(super) fn push_tag(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     remote: String,
@@ -918,7 +918,7 @@ pub(super) fn push_tag(
 }
 
 pub(super) fn delete_remote_tag(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     remote: String,
@@ -1100,7 +1100,7 @@ pub(super) fn commit_finished(
 }
 
 pub(super) fn safe_push_after_commit_finished(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,

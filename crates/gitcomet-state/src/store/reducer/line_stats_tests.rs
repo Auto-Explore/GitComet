@@ -3,6 +3,7 @@ use crate::model::LoadKind;
 use crate::model::RepoState;
 use crate::msg::RepoCommandKind;
 use crate::msg::StatusEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{RepoSpec, RepoStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::PathBuf;
@@ -167,7 +168,7 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
     state.repos[0].set_status(Loadable::Ready(Arc::new(snapshot())));
     let previous_counts = Arc::new(gitcomet_core::domain::UncommittedLineStats::default());
     state.repos[0].set_uncommitted_line_stats(Loadable::Ready(Arc::clone(&previous_counts)));
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let ids = AtomicU64::new(902);
     let change = crate::msg::RepoExternalChange {
         worktree: true,
@@ -261,7 +262,7 @@ fn already_up_to_date_pull_still_refreshes_once_and_counts_settle_after_status()
     let (mut state, id) = fixture();
     state.repos[0].pull_in_flight = 1;
     state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let ids = AtomicU64::new(902);
     let mut output = CommandOutput::empty_success("git pull");
     output.stdout = "Already up to date.\n".into();

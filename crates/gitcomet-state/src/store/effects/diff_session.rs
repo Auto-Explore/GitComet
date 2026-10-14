@@ -6,10 +6,11 @@ use super::*;
 use crate::diff_session::{
     DiffSessionContent, DiffSessionEffect, DiffSessionMsg as Event, DiffSessionWork,
 };
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 pub(super) fn schedule(
     executor: &TaskExecutor,
-    repos: &util::RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     cache_lease: WorktreeCacheLease,
@@ -179,8 +180,8 @@ mod tests {
         let runtime = crate::store::repository_runtime::RepositoryRuntime::new(
             crate::model::RepoLifetime::allocate(),
         );
-        let mut repos: util::RepoMap = Default::default();
-        repos.insert(
+        let mut repos: RepositoryRuntimes = Default::default();
+        repos.attach_repository_for_test(
             repo_id,
             Arc::new(crate::store::tests::DummyRepo::new(
                 "/tmp/diff-session-cancelled",
@@ -252,8 +253,8 @@ mod tests {
         let runtime = crate::store::repository_runtime::RepositoryRuntime::new(
             crate::model::RepoLifetime::allocate(),
         );
-        let mut repos: util::RepoMap = Default::default();
-        repos.insert(
+        let mut repos: RepositoryRuntimes = Default::default();
+        repos.attach_repository_for_test(
             repo_id,
             Arc::new(crate::store::tests::DummyRepo::new(
                 "/tmp/diff-session-main",

@@ -1,9 +1,10 @@
 use super::*;
 use crate::msg::{ControlEffect, PersistenceEffect, ReferenceEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn open_repo_sets_opening_and_emits_effect() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -31,7 +32,7 @@ fn open_repo_sets_opening_and_emits_effect() {
 
 #[test]
 fn dropped_repo_stays_provisional_until_the_backend_opens_it() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let path = PathBuf::from("/tmp/dropped-repo");
@@ -64,7 +65,7 @@ fn dropped_repo_stays_provisional_until_the_backend_opens_it() {
 
 #[test]
 fn repeating_or_closing_a_provisional_drop_never_records_it_as_recent() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let path = PathBuf::from("/tmp/dropped-repo");
@@ -107,7 +108,7 @@ fn repeating_or_closing_a_provisional_drop_never_records_it_as_recent() {
 
 #[test]
 fn bulk_close_skips_provisional_drop_when_recording_recents() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -146,7 +147,7 @@ fn bulk_close_skips_provisional_drop_when_recording_recents() {
 
 #[test]
 fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let path = PathBuf::from("/tmp/dropped-repo");
@@ -197,7 +198,7 @@ fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
 
 #[test]
 fn operational_error_discards_dropped_tab_and_preserves_existing_recents() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dir = tempfile::tempdir().expect("tempdir");
@@ -260,7 +261,7 @@ fn operational_error_discards_dropped_tab_and_preserves_existing_recents() {
 
 #[test]
 fn failed_dropped_repo_restores_the_repo_active_before_the_drop() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let session_dir = tempfile::tempdir().expect("session tempdir");
@@ -328,7 +329,7 @@ fn failed_dropped_repo_restores_the_repo_active_before_the_drop() {
 
 #[test]
 fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -364,7 +365,7 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
 
 #[test]
 fn open_repo_allows_same_basename_in_different_folders() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -434,7 +435,7 @@ fn open_repo_allows_same_basename_in_different_folders() {
 
 #[test]
 fn open_repo_refreshes_when_repo_is_already_active() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -532,7 +533,7 @@ fn open_repo_uses_builtin_default_history_mode_without_saved_preferences() {
 
 #[test]
 fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -598,7 +599,7 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
     )
     .expect("persist updated default history mode");
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     reduce(&mut repos, &id_alloc, &mut state, Msg::OpenRepo(repo_path));
@@ -610,7 +611,7 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
 }
 
 fn drop_folder(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: &str,
@@ -626,7 +627,7 @@ fn drop_folder(
 }
 
 fn fail_drop_as_not_a_repository(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,
@@ -668,7 +669,7 @@ fn open_is_loading(state: &AppState, repo_id: RepoId) -> bool {
 // leave the earlier ones validating, or they stay unchecked until clicked.
 #[test]
 fn second_drop_keeps_the_first_drops_validation_running() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -687,7 +688,7 @@ fn second_drop_keeps_the_first_drops_validation_running() {
 
 #[test]
 fn switching_tabs_keeps_a_pending_drop_validation_running() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -715,7 +716,7 @@ fn switching_tabs_keeps_a_pending_drop_validation_running() {
 
 #[test]
 fn failed_drops_fall_back_past_each_other_to_the_pre_drop_tab() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let session_dir = tempfile::tempdir().expect("session tempdir");
@@ -756,7 +757,7 @@ fn failed_drops_fall_back_past_each_other_to_the_pre_drop_tab() {
 
 #[test]
 fn last_drop_failing_selects_the_previous_valid_drop() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let session_dir = tempfile::tempdir().expect("session tempdir");

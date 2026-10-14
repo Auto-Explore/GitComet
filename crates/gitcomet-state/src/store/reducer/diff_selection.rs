@@ -12,20 +12,19 @@ use crate::model::{
 };
 use crate::msg::Effect;
 use crate::msg::RepoCommandEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage,
     FileDiffText, SubmoduleDiffSummary,
 };
 use gitcomet_core::error::Error;
-use gitcomet_core::services::GitRepository;
-use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
 /// The backends the reducer holds, keyed by repo. Only needed to classify a
 /// freshly selected working-tree path against HEAD; see
 /// [`super::cache_selected_deleted_gitlink`].
-type Repos = FxHashMap<RepoId, Arc<dyn GitRepository>>;
+type Repos = RepositoryRuntimes;
 
 pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 3;
 pub(crate) type SelectDiffEffects = SmallVec<[Effect; SELECT_DIFF_INLINE_EFFECT_CAPACITY]>;

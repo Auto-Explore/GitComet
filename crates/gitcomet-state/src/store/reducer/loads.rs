@@ -5,9 +5,9 @@ use super::reduce;
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{Effect, InternalMsg, Msg};
 use crate::store::repo_load_trace;
-use gitcomet_core::services::{CancellationToken, GitRepository};
+use crate::store::repository_runtime::RepositoryRuntimes;
+use gitcomet_core::services::CancellationToken;
 use gitcomet_core::tag_push::{TagPushMode, TagPushPreview, TagPushRequest};
-use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -63,7 +63,7 @@ pub(super) fn tag_push_preview_loaded(
 }
 
 pub(super) fn repo_load_finished(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,

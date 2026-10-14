@@ -3,10 +3,11 @@
 use super::*;
 use crate::model::{FileBrowserSettings, SidebarMode};
 use crate::msg::ControlEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{FileEntry, FileEntryKind, FileSource};
 use std::sync::atomic::AtomicU64;
 
-type Repos = FxHashMap<RepoId, Arc<dyn GitRepository>>;
+type Repos = RepositoryRuntimes;
 
 #[test]
 fn opening_a_background_document_preserves_the_active_repository_and_its_loads() {
@@ -274,7 +275,7 @@ fn ready_state(sidebar_mode: SidebarMode) -> (Repos, AtomicU64, AppState, RepoId
         .file_browser
         .expanded_dirs
         .insert(Arc::new(PathBuf::from("src")));
-    (FxHashMap::default(), AtomicU64::new(1), state, repo_id)
+    (Default::default(), AtomicU64::new(1), state, repo_id)
 }
 
 fn select(

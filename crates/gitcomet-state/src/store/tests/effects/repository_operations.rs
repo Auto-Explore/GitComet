@@ -2,12 +2,13 @@
 
 use super::*;
 use crate::msg::{PersistenceEffect, RepoCommandEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 /// Exercise a worker effect and feed all its replies through the reducer.
 fn apply_effect_with_state_for_test(
     executor: &super::super::executor::TaskExecutor,
     backend: &Arc<dyn GitBackend>,
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     effect: Effect,
 ) -> Vec<Effect> {
@@ -57,8 +58,8 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
     let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
     let repo = backend.open(workdir).unwrap();
     let repo_id = RepoId(9530);
-    let mut repos = FxHashMap::default();
-    repos.insert(repo_id, repo.clone());
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(repo_id, repo.clone());
     let executor = super::super::executor::TaskExecutor::new(1);
     let resolve_commit = |revision: &str| {
         let output = gitcomet_core::test_support::git_fixture::git_command()
@@ -194,8 +195,8 @@ fn saving_attributes_preserves_choices_even_when_the_rule_is_shadowed() {
         let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
         let repo = backend.open(workdir).unwrap();
         let repo_id = RepoId(9540);
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo.clone());
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo.clone());
         let mut state = AppState::test_default();
         let mut repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
         let path = PathBuf::from("sub/menu.txt");
@@ -284,8 +285,8 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
     let repo = backend.open(dir.path()).unwrap();
     let repo_id = RepoId(9521);
     let path = PathBuf::from("menu.txt");
-    let mut repos = FxHashMap::default();
-    repos.insert(repo_id, repo.clone());
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(repo_id, repo.clone());
     let executor = super::super::executor::TaskExecutor::new(1);
     let id_alloc = AtomicU64::new(9522);
     for refresh in [
@@ -343,7 +344,7 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             state.clone(),
             tx,
             load,
@@ -388,7 +389,7 @@ fn repository_refreshes_reload_selected_text_attributes_from_git() {
 fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
     let directory = tempfile::tempdir().unwrap();
     let repo_id = RepoId(1);
-    let repos = [(
+    let mut repos = [(
         repo_id,
         Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
             directory.path(),
@@ -410,7 +411,7 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             msg_tx,
             Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
                 repo_id,
@@ -463,14 +464,14 @@ fn session_update_effects_persist_on_session_executor() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let session_executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &session_executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
         Effect::Persistence(PersistenceEffect::PersistRecentRepo {
             repo_id: Some(RepoId(1)),
@@ -482,7 +483,7 @@ fn session_update_effects_persist_on_session_executor() {
         &executor,
         &session_executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
         Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
             repo_id: Some(RepoId(1)),
@@ -495,7 +496,7 @@ fn session_update_effects_persist_on_session_executor() {
         &executor,
         &session_executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::Persistence(PersistenceEffect::PersistRepoHistoryModesBatch {
             repo_id: Some(RepoId(1)),
@@ -537,8 +538,8 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
     let repo_id = RepoId(3);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(
         repo_id,
         Arc::new(UnsupportedRepo {
             spec: RepoSpec {
@@ -565,7 +566,7 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
             repo_id,
@@ -630,14 +631,14 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CloneRepo {
             url: src.display().to_string(),
@@ -837,9 +838,9 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         staged: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo_trait);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo_trait);
         repos
     };
 
@@ -851,7 +852,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
         Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
             repo_id,
@@ -911,7 +912,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
             repo_id,
@@ -1093,14 +1094,14 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
     let gitignore = base.join(".gitignore");
 
     let repo_id = RepoId(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+    let mut repos: RepositoryRuntimes = {
         let repo: Arc<dyn GitRepository> = Arc::new(Repo {
             spec: RepoSpec {
                 workdir: base.clone(),
             },
         });
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
 
@@ -1109,13 +1110,13 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
 
     // Runs one append to completion and hands back the command's stdout, which
     // is how the worker reports the "nothing to add" short-circuit.
-    let append = |patterns: Vec<String>| -> String {
+    let mut append = |patterns: Vec<String>| -> String {
         let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
         schedule_effect_for_test(
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             msg_tx,
             Effect::RepoCommand(RepoCommandEffect::AppendGitignorePatterns { repo_id, patterns }),
         );
@@ -1334,9 +1335,9 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         checkout_base_calls: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo_trait);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo_trait);
         repos
     };
 
@@ -1348,7 +1349,7 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RepoCommand(RepoCommandEffect::CheckoutConflictBase {
             repo_id,
@@ -1527,9 +1528,9 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         accepted_deletion_calls: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo_trait);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo_trait);
         repos
     };
 
@@ -1541,7 +1542,7 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RepoCommand(RepoCommandEffect::AcceptConflictDeletion {
             repo_id,
@@ -1735,9 +1736,9 @@ fn load_stashes_effect_truncates_results_to_limit() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -1746,7 +1747,7 @@ fn load_stashes_effect_truncates_results_to_limit() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadStashes { repo_id, limit: 2 },
     );
@@ -1924,15 +1925,15 @@ fn stash_effect_requests_stash_reload_on_success() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::Stash {
             repo_id: RepoId(1),
@@ -2123,15 +2124,15 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::PopStash {
             repo_id: RepoId(1),
@@ -2321,15 +2322,15 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::PopStash {
             repo_id: RepoId(1),
@@ -2517,15 +2518,15 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::DropStash {
             repo_id: RepoId(1),
@@ -2711,15 +2712,15 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(RepoId(1), repo);
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::DropStash {
             repo_id: RepoId(1),
@@ -2807,8 +2808,8 @@ fn run_apply_file_change_effect_with_retry(
         }
     }
     let repo_id = RepoId(9);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(
         repo_id,
         gitcomet_git_gix::GixBackend
             .open(repo)
@@ -2821,7 +2822,7 @@ fn run_apply_file_change_effect_with_retry(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
             commit_retry,
@@ -2977,9 +2978,9 @@ fn push_lifecycle_uses_cached_tracking_branch_context() {
         delete_branch_calls: None,
         cancel_delete_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let mut repo_state = RepoState::new_opening(repo_id, spec);
@@ -3001,7 +3002,7 @@ fn push_lifecycle_uses_cached_tracking_branch_context() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         AppState {
             repos: vec![repo_state],
             ..AppState::test_default()
@@ -3106,9 +3107,9 @@ fn checkout_branch_effect_defers_worktree_refresh_until_completion() {
         other_worktree: None,
         current_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3118,7 +3119,7 @@ fn checkout_branch_effect_defers_worktree_refresh_until_completion() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CheckoutBranch {
             repo_id,
@@ -3148,9 +3149,9 @@ fn checkout_remote_branch_effect_defers_worktree_refresh_until_completion() {
         other_worktree: None,
         current_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3160,7 +3161,7 @@ fn checkout_remote_branch_effect_defers_worktree_refresh_until_completion() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CheckoutRemoteBranch {
             repo_id,
@@ -3193,9 +3194,9 @@ fn checkout_commit_effect_defers_worktree_refresh_until_completion() {
         other_worktree: None,
         current_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3206,7 +3207,7 @@ fn checkout_commit_effect_defers_worktree_refresh_until_completion() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CheckoutCommit {
             repo_id,
@@ -3236,9 +3237,9 @@ fn create_branch_and_checkout_effect_defers_worktree_refresh_until_completion() 
         other_worktree: None,
         current_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3248,7 +3249,7 @@ fn create_branch_and_checkout_effect_defers_worktree_refresh_until_completion() 
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CreateBranchAndCheckout {
             repo_id,
@@ -3283,9 +3284,9 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         other_worktree: None,
         current_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3295,7 +3296,7 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CreateBranchAndCheckout {
             repo_id,
@@ -3327,9 +3328,9 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         other_worktree: None,
         current_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3339,7 +3340,7 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::CreateBranchAndCheckout {
             repo_id,
@@ -3386,10 +3387,10 @@ fn assert_only_branches_refresh_before_completion(others: &[Msg], repo_id: RepoI
 #[test]
 fn checkout_branch_effect_reports_other_worktree_without_running_checkout() {
     let repo_id = RepoId(710);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-checkout-redirect", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CheckoutBranch {
             repo_id,
             name: "feature".to_string(),
@@ -3417,10 +3418,10 @@ fn checkout_branch_effect_reports_other_worktree_without_running_checkout() {
 #[test]
 fn create_branch_and_checkout_force_effect_runs_in_other_worktree() {
     let repo_id = RepoId(711);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-force-create-redirect", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CreateBranchAndCheckout {
             repo_id,
             name: "feature".to_string(),
@@ -3454,14 +3455,14 @@ fn create_branch_and_checkout_force_effect_runs_in_other_worktree() {
 #[test]
 fn checkout_remote_branch_overwrite_effect_runs_in_other_worktree() {
     let repo_id = RepoId(712);
-    let fixture = worktree_redirect_fixture(
+    let mut fixture = worktree_redirect_fixture(
         repo_id,
         "gitcomet-remote-overwrite-redirect",
         "feature",
         false,
     );
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CheckoutRemoteBranch {
             repo_id,
             remote: "origin".to_string(),
@@ -3492,10 +3493,10 @@ fn checkout_remote_branch_overwrite_effect_runs_in_other_worktree() {
 #[test]
 fn checkout_remote_branch_create_effect_runs_here_even_when_branch_is_elsewhere() {
     let repo_id = RepoId(713);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-remote-create-here", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CheckoutRemoteBranch {
             repo_id,
             remote: "origin".to_string(),
@@ -3534,9 +3535,9 @@ fn rename_branch_effect_routes_collision_to_prompt() {
     );
     repo.rename_branch_already_exists = true;
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3546,7 +3547,7 @@ fn rename_branch_effect_routes_collision_to_prompt() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RenameBranch {
             repo_id,
@@ -3594,9 +3595,9 @@ fn rename_branch_effect_finishes_normally_without_collision() {
         Arc::clone(&calls),
     );
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -3606,7 +3607,7 @@ fn rename_branch_effect_finishes_normally_without_collision() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RenameBranch {
             repo_id,
@@ -3635,10 +3636,10 @@ fn rename_branch_effect_finishes_normally_without_collision() {
 #[test]
 fn rename_branch_force_effect_runs_in_other_worktree() {
     let repo_id = RepoId(716);
-    let fixture =
+    let mut fixture =
         worktree_redirect_fixture(repo_id, "gitcomet-rename-force-redirect", "feature", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::RenameBranch {
             repo_id,
             old_name: "old".to_string(),
@@ -3806,8 +3807,8 @@ fn pull_releases_the_object_store_before_its_refresh() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(
         RepoId(1),
         Arc::new(RecordingRepo {
             spec: RepoSpec {
@@ -3822,7 +3823,7 @@ fn pull_releases_the_object_store_before_its_refresh() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::RepoCommand(RepoCommandEffect::Pull {
             repo_id: RepoId(1),

@@ -8,6 +8,7 @@ use super::{
 use crate::model::AuthPromptKind;
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
 use crate::msg::{Effect, Msg, RepoCommandKind};
+use crate::store::repository_runtime::RepositoryRuntimes;
 #[cfg(test)]
 use gitcomet_core::auth::stage_git_auth;
 use gitcomet_core::auth::{
@@ -15,12 +16,9 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, GitRepository, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision,
+    CommandOutput, CommitOperationOutcome, SafePushAfterCommitContext, SafePushAfterCommitDecision,
 };
-use rustc_hash::FxHashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 fn auth_prompt_for_repo_command(
@@ -124,7 +122,7 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
 /// plain merge would commit adjusted content to the wrong branch and a plain
 /// push would publish the adjusted branch. `None`: plain Git applies.
 pub(super) fn annex_takeover(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     pull: bool,
@@ -455,7 +453,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
 }
 
 pub(super) fn submit_auth_prompt(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     username: Option<String>,
@@ -576,7 +574,7 @@ pub(super) fn commit_amend(
 }
 
 pub(super) fn commit_finished(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     result: Result<CommitOperationOutcome, Error>,
@@ -624,7 +622,7 @@ pub(super) fn commit_finished(
 }
 
 pub(super) fn safe_push_after_commit_finished(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     context: SafePushAfterCommitContext,
@@ -645,7 +643,7 @@ pub(super) fn safe_push_after_commit_finished(
 }
 
 pub(super) fn repo_command_finished(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     command: RepoCommandKind,

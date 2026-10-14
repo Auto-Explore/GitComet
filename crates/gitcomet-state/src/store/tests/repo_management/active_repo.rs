@@ -1,10 +1,11 @@
 use super::*;
 use crate::model::LoadKind;
 use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn set_active_repo_waits_for_repo_open_before_refreshing() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -62,7 +63,7 @@ fn set_active_repo_waits_for_repo_open_before_refreshing() {
 
 #[test]
 fn switching_away_from_opening_repo_cancels_loading_and_restarts_on_return() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -115,7 +116,7 @@ fn switching_away_from_opening_repo_cancels_loading_and_restarts_on_return() {
 
 #[test]
 fn opening_another_repo_cancels_previous_active_repo_loads() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -148,7 +149,7 @@ fn opening_another_repo_cancels_previous_active_repo_loads() {
 
 #[test]
 fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -223,7 +224,7 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
 
 #[test]
 fn stale_open_result_after_cancel_is_ignored() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -261,13 +262,13 @@ fn stale_open_result_after_cancel_is_ignored() {
     );
 
     assert!(effects.is_empty());
-    assert!(!repos.contains_key(&repo1));
+    assert!(!repos.has_repository(&repo1));
     assert!(matches!(state.repos[0].open, Loadable::NotLoaded));
 }
 
 #[test]
 fn stale_load_result_after_cancel_is_ignored() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -318,7 +319,7 @@ fn stale_load_result_after_cancel_is_ignored() {
 
 #[test]
 fn inactive_open_result_does_not_schedule_refresh_or_tags() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -351,7 +352,7 @@ fn inactive_open_result_does_not_schedule_refresh_or_tags() {
     );
 
     assert!(effects.is_empty());
-    assert!(repos.contains_key(&inactive_repo));
+    assert!(repos.has_repository(&inactive_repo));
     let repo_state = state
         .repos
         .iter()
@@ -365,7 +366,7 @@ fn inactive_open_result_does_not_schedule_refresh_or_tags() {
 
 #[test]
 fn closing_loading_active_repo_cancels_and_opens_neighbor() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -432,7 +433,7 @@ fn closing_loading_active_repo_cancels_and_opens_neighbor() {
 
 #[test]
 fn closing_loading_inactive_repo_cancels_without_changing_active_repo() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -491,7 +492,7 @@ fn closing_loading_inactive_repo_cancels_without_changing_active_repo() {
 
 #[test]
 fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -538,7 +539,7 @@ fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
 
 #[test]
 fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -601,7 +602,7 @@ fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
 fn ref_metadata_load_failure_records_no_diagnostic() {
     // Decorative data: a backend that cannot supply it must not raise an error
     // banner every time a picker opens.
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -637,7 +638,7 @@ fn ref_metadata_load_failure_records_no_diagnostic() {
 fn unsupported_ref_metadata_latches_instead_of_retrying_forever() {
     // Callers refetch on `Error`, so storing `Error` for a backend that can
     // never supply this would re-schedule a doomed load on every picker open.
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -669,7 +670,7 @@ fn unsupported_ref_metadata_latches_instead_of_retrying_forever() {
 
 #[test]
 fn transient_ref_metadata_failure_stays_retryable() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -704,7 +705,7 @@ fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
     // Otherwise the in-flight result (read from the *old* refs) lands as
     // `Ready` and, since callers only refetch on NotLoaded/Error, is never
     // corrected.
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -767,7 +768,7 @@ fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
 
 #[test]
 fn pre_open_submodule_load_auto_starts_after_repo_opened() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -819,7 +820,7 @@ fn pre_open_submodule_load_auto_starts_after_repo_opened() {
 
 #[test]
 fn pre_open_stash_lazy_load_can_retry_after_repo_opened() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -886,7 +887,7 @@ fn pre_open_stash_lazy_load_can_retry_after_repo_opened() {
 
 #[test]
 fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -939,7 +940,7 @@ fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
 
 #[test]
 fn set_active_repo_replays_stored_sidebar_data_request() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -988,7 +989,7 @@ fn set_active_repo_replays_stored_sidebar_data_request() {
 
 #[test]
 fn set_active_repo_full_refresh_with_sidebar_request_and_selected_diff_does_not_panic() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1061,7 +1062,7 @@ fn set_active_repo_full_refresh_with_sidebar_request_and_selected_diff_does_not_
 
 #[test]
 fn set_active_repo_refreshes_repo_state_and_selected_diff() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1140,7 +1141,7 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
 
 #[test]
 fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1234,7 +1235,7 @@ fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details(
 
 #[test]
 fn set_active_repo_resets_the_activated_tabs_history_selection_only_on_change() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1321,7 +1322,7 @@ fn set_active_repo_resets_the_activated_tabs_history_selection_only_on_change() 
 
 #[test]
 fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1377,7 +1378,7 @@ fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
 
 #[test]
 fn set_active_repo_inline_folds_the_reset_selection_into_navigation_tail() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1469,7 +1470,7 @@ fn set_active_repo_inline_folds_the_reset_selection_into_navigation_tail() {
 
 #[test]
 fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1568,7 +1569,7 @@ fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
 
 #[test]
 fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1710,7 +1711,7 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
 
 #[test]
 fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1750,7 +1751,7 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
 
 #[test]
 fn set_active_repo_png_diff_enqueues_image_preview_only() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1792,7 +1793,7 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
 
 #[test]
 fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1834,7 +1835,7 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
 
 #[test]
 fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1901,7 +1902,7 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
 
 #[test]
 fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1953,7 +1954,7 @@ fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
 
 #[test]
 fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -1990,7 +1991,7 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
 
 #[test]
 fn set_active_repo_uses_full_refresh_when_hot_switch_window_expires() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2025,7 +2026,7 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_window_expires() {
 
 #[test]
 fn stale_status_result_after_repo_action_finished_is_dropped() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2085,7 +2086,7 @@ fn stale_status_result_after_repo_action_finished_is_dropped() {
 
 #[test]
 fn set_active_repo_ignores_unknown_repo() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2116,7 +2117,7 @@ fn set_active_repo_ignores_unknown_repo() {
 
 #[test]
 fn set_active_repo_loads_file_browser_when_files_mode_is_active() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2192,7 +2193,7 @@ fn set_active_repo_loads_file_browser_when_files_mode_is_active() {
 
 #[test]
 fn set_active_repo_skips_file_browser_load_in_branches_mode() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -2275,7 +2276,7 @@ fn switch_reloads(effects: &[Effect]) -> Vec<&'static str> {
 }
 
 fn switch_to(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     unchanged: bool,
@@ -2293,7 +2294,7 @@ fn switch_to(
 
 #[test]
 fn switching_to_a_tab_whose_monitor_saw_no_change_reuses_its_state() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let target = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
@@ -2311,7 +2312,7 @@ fn switching_to_a_tab_whose_monitor_saw_no_change_reuses_its_state() {
 
 #[test]
 fn switching_to_a_changed_or_incomplete_tab_still_refreshes() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let target = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
@@ -2345,7 +2346,7 @@ fn switching_to_a_changed_or_incomplete_tab_still_refreshes() {
 #[test]
 fn a_tab_left_mid_refresh_refreshes_when_it_comes_back() {
     for diff_reload in [false, true] {
-        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+        let mut repos: RepositoryRuntimes = Default::default();
         let id_alloc = AtomicU64::new(1);
         let mut state = AppState::test_default();
         let target = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");

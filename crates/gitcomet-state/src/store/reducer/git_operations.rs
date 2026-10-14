@@ -5,10 +5,8 @@ use super::{external_and_history, git_hook_activity, reduce};
 use crate::model::{AppState, GitOperationOuterOutcome, RepoId};
 use crate::msg::ControlEffect;
 use crate::msg::{Effect, InternalMsg, Msg};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::git_operation::{GitOperationEvent, GitOperationId};
-use gitcomet_core::services::GitRepository;
-use rustc_hash::FxHashMap;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::{Duration, SystemTime};
 
@@ -59,7 +57,7 @@ pub(super) fn git_operation_event(
 }
 
 pub(super) fn git_operation_finished(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,

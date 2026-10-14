@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::Upstream;
 
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
@@ -8,15 +9,20 @@ fn schedule_effect_with_state_for_test(
     executor: &super::executor::TaskExecutor,
     session_persist_executor: &super::executor::TaskExecutor,
     backend: &Arc<dyn GitBackend>,
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     state: AppState,
     msg_tx: std::sync::mpsc::Sender<Msg>,
     effect: Effect,
 ) {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
+    // Each invocation represents an independent effect fixture, as when its
+    // task scope was a local map. Tests of shared scopes use the router directly.
+    for repo in &state.repos {
+        repos.take_load_scope(&repo.id);
+    }
+    repos.bind_test_state(&state);
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut repo_task_tokens = FxHashMap::default();
+
     let repo_load_executor = super::executor::TaskExecutor::new(1);
     let metadata_executor = super::executor::TaskExecutor::new(1);
     super::effects::schedule_effect(
@@ -36,8 +42,6 @@ fn schedule_effect_with_state_for_test(
         &thread_state,
         backend,
         repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
         msg_tx,
         effect,
     );
@@ -51,16 +55,37 @@ fn schedule_effect_for_test(
     executor: &super::executor::TaskExecutor,
     session_persist_executor: &super::executor::TaskExecutor,
     backend: &Arc<dyn GitBackend>,
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     msg_tx: std::sync::mpsc::Sender<Msg>,
     effect: Effect,
 ) {
+    let mut state = AppState::test_default();
+    if effect.requires_available_git() {
+        state.repos = repos
+            .repository_specs_for_test()
+            .map(|(repo_id, spec)| {
+                let mut repo = RepoState::new_opening(repo_id, spec);
+                repo.open = Loadable::Ready(());
+                repo
+            })
+            .collect();
+        if let Some(repo_id) = crate::store::repo_load_trace::effect_repo_id(&effect)
+            && !state.repos.iter().any(|repo| repo.id == repo_id)
+        {
+            state.repos.push(RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: "/tmp/missing-test-repository".into(),
+                },
+            ));
+        }
+    }
     schedule_effect_with_state_for_test(
         executor,
         session_persist_executor,
         backend,
         repos,
-        AppState::test_default(),
+        state,
         msg_tx,
         effect,
     );
@@ -1180,7 +1205,7 @@ impl GitBackend for RecordingWorktreeBackend {
 /// An origin repo that reports every branch as checked out in `worktree`, and
 /// the recorder the backend hands out for that worktree.
 struct WorktreeRedirectFixture {
-    repos: FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     origin_calls: Arc<std::sync::Mutex<Vec<String>>>,
     worktree_calls: Arc<std::sync::Mutex<Vec<String>>>,
@@ -1221,8 +1246,8 @@ fn worktree_redirect_fixture(
         repo: Arc::new(worktree_repo),
         opened: Arc::clone(&opened),
     });
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(repo_id, Arc::new(origin));
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(repo_id, Arc::new(origin));
     WorktreeRedirectFixture {
         repos,
         backend,
@@ -1254,7 +1279,7 @@ fn recv_until_action_finished(msg_rx: &std::sync::mpsc::Receiver<Msg>) -> (Vec<M
 }
 
 fn run_effect_with_fixture(
-    fixture: &WorktreeRedirectFixture,
+    fixture: &mut WorktreeRedirectFixture,
     effect: Effect,
 ) -> std::sync::mpsc::Receiver<Msg> {
     let executor = super::executor::TaskExecutor::new(1);
@@ -1263,7 +1288,7 @@ fn run_effect_with_fixture(
         &executor,
         &executor,
         &fixture.backend,
-        &fixture.repos,
+        &mut fixture.repos,
         msg_tx,
         effect,
     );

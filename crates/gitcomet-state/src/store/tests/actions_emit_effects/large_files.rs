@@ -2,17 +2,13 @@
 
 use super::*;
 use crate::msg::{RepoCommandEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
-fn large_file_fixture() -> (
-    FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    AtomicU64,
-    AppState,
-    RepoId,
-) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+fn large_file_fixture() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId) {
+    let mut repos: RepositoryRuntimes = Default::default();
     let mut state = AppState::test_default();
     let repo_id = RepoId(41);
-    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
     let mut repo_state = RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -836,7 +832,7 @@ fn runs_annex(effects: &[Effect], pull: bool) -> bool {
 }
 
 fn finish_large_file_effects(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     effects: &[Effect],

@@ -1,8 +1,8 @@
 use super::*;
 use crate::msg::RepoExternalChange;
 use crate::msg::{PersistenceEffect, RepoCommandEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::services::{GitRepository, Result};
-use rustc_hash::FxHashMap;
 use std::sync::atomic::AtomicU64;
 
 /// A repository whose only real answer is its shared git directory.
@@ -157,7 +157,7 @@ impl GitRepository for CommonDirRepo {
 }
 
 fn open_repo_tab(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     workdir: &str,
@@ -196,7 +196,7 @@ fn repo(state: &AppState, repo_id: RepoId) -> &RepoState {
 
 #[test]
 fn opening_the_active_tab_requests_one_maintenance_check_an_hour() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (repo_id, effects) = open_repo_tab(
@@ -225,7 +225,7 @@ fn opening_the_active_tab_requests_one_maintenance_check_an_hour() {
 
 #[test]
 fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (main, _) = open_repo_tab(
@@ -295,7 +295,7 @@ fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
 
 #[test]
 fn external_changes_wait_for_maintenance_and_replay_when_it_ends() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (main, _) = open_repo_tab(
@@ -376,7 +376,7 @@ fn external_changes_wait_for_maintenance_and_replay_when_it_ends() {
 
 #[test]
 fn recommendations_turned_off_ask_nothing_and_withdraw_cards() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (main, _) = open_repo_tab(

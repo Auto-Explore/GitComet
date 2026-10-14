@@ -17,9 +17,10 @@ use crate::model::{
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange, RepoPathList};
 use crate::msg::{PersistenceEffect, ReferenceEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::{GitRepository, InteractiveRebaseEntry, SequencerState};
+use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,7 +68,7 @@ fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
 }
 
 pub(super) fn reload_repo(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
 ) -> Vec<Effect> {
@@ -172,7 +173,7 @@ fn file_browser_refresh_for_external_change(
 }
 
 pub(super) fn repo_externally_changed(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
@@ -881,7 +882,7 @@ enum RepoActionCompletion {
 }
 
 fn finish_repo_action(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
@@ -996,7 +997,7 @@ fn finish_repo_action(
 }
 
 pub(super) fn repo_action_finished(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
@@ -1010,7 +1011,7 @@ pub(super) fn repo_action_finished(
 }
 
 pub(super) fn branch_already_exists(
-    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     action: RepoActionKind,
     prompt: BranchExistsPromptState,
@@ -1043,7 +1044,7 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
 }
 
 pub(super) fn repo_paths_action_finished(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     action: RepoActionKind,
@@ -1070,7 +1071,7 @@ pub(super) fn repo_paths_action_finished(
 }
 
 pub(super) fn repo_action_finished_in_worktree(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     repo_id: RepoId,

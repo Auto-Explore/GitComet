@@ -1,5 +1,6 @@
 use crate::model::{AppState, ConflictFileLoadMode, RepoLifetime, WorktreeDirtyScope};
 use crate::msg::{Msg, WorktreeListRead};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
 use gitcomet_core::domain::{
     DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
@@ -20,7 +21,7 @@ use super::super::{
     RepoId, executor::TaskExecutor, repo_load_trace, worker_channel::StoreWorkerSender,
 };
 use super::util::{
-    RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
+    missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
     spawn_with_repo_or_else,
 };
 use super::worktree_list::WorktreeListPublisher;
@@ -77,13 +78,13 @@ fn spawn_with_selected_diff_guard(
     executor: &TaskExecutor,
     slot: &super::super::executor::LatestTaskSlot,
     task_name: &'static str,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     guard: SelectedDiffLoadGuard,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender, SelectedDiffLoadGuard) + Send + 'static,
 ) -> bool {
-    let Some(repo) = repos.get(&repo_id).cloned() else {
+    let Some(repo) = repos.repository(&repo_id).cloned() else {
         repo_load_trace::trace!("repo_task_missing_handle repo_id={repo_id:?} task={task_name}");
         return false;
     };
@@ -301,8 +302,8 @@ mod selected_diff_guard_tests {
             let _ = release_rx.recv();
         });
         let slots = super::super::super::executor::SelectedDiffSlots::default();
-        let mut repos: RepoMap = FxHashMap::default();
-        repos.insert(
+        let mut repos: RepositoryRuntimes = Default::default();
+        repos.attach_repository_for_test(
             repo_id,
             Arc::new(crate::store::tests::DummyRepo::new(
                 "/tmp/selected-diff-trace-test",
@@ -418,7 +419,7 @@ fn conflict_file_current_from_session(session: &ConflictSession) -> Option<Confl
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_log(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     seq: crate::model::LogLoadSeq,
@@ -482,7 +483,7 @@ pub(super) fn schedule_load_log(
 
 pub(super) fn schedule_load_stashes(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
@@ -521,7 +522,7 @@ pub(super) fn schedule_load_stashes(
 
 pub(super) fn schedule_load_conflict_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -688,7 +689,7 @@ pub(super) fn schedule_load_conflict_file(
 
 pub(super) fn schedule_load_reflog(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
@@ -721,7 +722,7 @@ pub(super) fn schedule_load_reflog(
 
 pub(super) fn schedule_load_file_history(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -757,7 +758,7 @@ pub(super) fn load_blame(
 
 pub(super) fn schedule_load_blame(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -779,7 +780,7 @@ pub(super) fn schedule_load_blame(
 
 pub(super) fn schedule_load_worktrees(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -824,7 +825,7 @@ pub(super) fn schedule_load_worktrees(
 pub(super) fn schedule_load_worktree_dirty(
     executor: &TaskExecutor,
     backend: Arc<dyn GitBackend>,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cache_lease: super::WorktreeCacheLease,
@@ -1282,7 +1283,7 @@ fn worktree_dirty_summary(
 
 pub(super) fn schedule_load_submodules(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1317,7 +1318,7 @@ pub(in crate::store::effects) mod explorer_listing;
 
 pub(super) fn schedule_load_large_file_support(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1350,7 +1351,7 @@ pub(super) fn schedule_load_large_file_support(
 
 pub(super) fn schedule_load_lfs_locks(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1383,7 +1384,7 @@ pub(super) fn schedule_load_lfs_locks(
 
 pub(super) fn schedule_load_annex_unused(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1414,7 +1415,7 @@ pub(super) fn schedule_load_annex_unused(
 
 pub(super) fn schedule_load_annex_whereis(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     key: String,
@@ -1452,7 +1453,7 @@ pub(super) fn schedule_load_annex_whereis(
 
 pub(super) fn schedule_load_file_browser(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     source: gitcomet_core::domain::FileSource,
@@ -1513,7 +1514,7 @@ pub(super) fn schedule_load_file_browser(
 
 pub(super) fn schedule_load_rebase_state(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1547,7 +1548,7 @@ pub(super) fn schedule_load_rebase_state(
 
 pub(super) fn schedule_load_rebase_and_merge_state(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1595,7 +1596,7 @@ pub(super) fn schedule_load_rebase_and_merge_state(
 
 pub(super) fn schedule_load_merge_commit_message(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
@@ -1629,7 +1630,7 @@ pub(super) fn schedule_load_merge_commit_message(
 
 pub(super) fn schedule_load_hover_commit_message(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1680,7 +1681,7 @@ pub(super) fn schedule_load_hover_commit_message(
 
 pub(super) fn schedule_verify_commit_signatures(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     epoch: u64,
@@ -1709,7 +1710,7 @@ pub(super) fn schedule_verify_commit_signatures(
 /// details pane needs anyway.
 pub(super) fn schedule_resolve_commit_for_reveal(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: gitcomet_core::domain::CommitId,
@@ -1732,7 +1733,7 @@ pub(super) fn schedule_resolve_commit_for_reveal(
 /// this runs while the user is still typing.
 pub(super) fn schedule_resolve_commit_lookup(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: gitcomet_core::domain::CommitId,
@@ -1756,7 +1757,7 @@ pub(super) fn schedule_resolve_commit_lookup(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_range_files(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     from: gitcomet_core::domain::CommitId,
@@ -1782,7 +1783,7 @@ pub(super) fn schedule_load_range_files(
 
 pub(super) fn schedule_load_squash_message_preview(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     oldest: gitcomet_core::domain::CommitId,
@@ -1815,7 +1816,7 @@ pub(super) struct SquashRebaseSetupRequest {
 
 pub(super) fn schedule_load_squash_rebase_setup(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: SquashRebaseSetupRequest,
@@ -1849,7 +1850,7 @@ pub(super) fn schedule_load_squash_rebase_setup(
 
 pub(super) fn schedule_open_file_at_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1883,7 +1884,7 @@ pub(super) fn schedule_open_file_at_commit(
 
 pub(super) fn schedule_open_file_at_commit_parent(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1931,7 +1932,7 @@ pub(super) fn schedule_open_file_at_commit_parent(
 
 pub(super) fn schedule_load_recent_commit_messages(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
@@ -1967,7 +1968,7 @@ pub(super) fn file_encoding_override(
 
 pub(super) fn schedule_load_diff(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
@@ -1989,7 +1990,7 @@ pub(super) fn schedule_load_diff(
 
 pub(super) fn schedule_load_diff_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
@@ -2010,7 +2011,7 @@ pub(super) fn schedule_load_diff_file(
 
 pub(super) fn schedule_load_diff_preview_text_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
@@ -2036,7 +2037,7 @@ pub(super) fn schedule_load_diff_preview_text_file(
 
 pub(super) fn schedule_load_submodule_summary(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
@@ -2160,7 +2161,7 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
 
 pub(super) fn schedule_load_diff_file_image(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
@@ -2182,7 +2183,7 @@ pub(super) fn schedule_load_diff_file_image(
 pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
     slots: &super::super::executor::SelectedDiffSlots,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     thread_state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -2369,7 +2370,7 @@ pub(super) fn schedule_load_selected_diff(
 /// subject-only seed would make saving the dialog destructive.
 pub(super) fn schedule_load_interactive_cherry_pick_messages(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     ids: Vec<String>,
@@ -2428,7 +2429,7 @@ pub(super) fn schedule_load_interactive_cherry_pick_messages(
 
 pub(super) fn schedule_load_interactive_rebase_setup(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     base: String,
@@ -3027,7 +3028,7 @@ mod worktree_dirty_files_tests {
         let repo_id = RepoId(4107);
         let worker = ScanTestWorker::new();
         let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
-        let repos = FxHashMap::from_iter([(repo_id, backend.open(&own).unwrap())]);
+        let repos = RepositoryRuntimes::from_iter([(repo_id, backend.open(&own).unwrap())]);
         for expected in [1, 0, 0] {
             let (tx, rx) = std::sync::mpsc::channel();
             schedule_load_worktree_dirty(
@@ -3119,7 +3120,7 @@ mod worktree_dirty_files_tests {
         let repo_id = RepoId(4106);
         let worker = ScanTestWorker::new();
         let repo: Arc<dyn GitRepository> = Arc::new(DummyRepo::new("/unavailable"));
-        let repos = FxHashMap::from_iter([(repo_id, repo)]);
+        let repos = RepositoryRuntimes::from_iter([(repo_id, repo)]);
         for scope in [
             WorktreeDirtyScope::All,
             WorktreeDirtyScope::Paths(vec!["/linked".into()]),
@@ -3211,9 +3212,9 @@ mod worktree_dirty_files_tests {
             repos: vec![repo_state],
             ..AppState::test_default()
         };
-        let mut repos = FxHashMap::from_iter([(repo_id, repo)]);
+        let mut repos = RepositoryRuntimes::from_iter([(repo_id, repo)]);
         let id_alloc = AtomicU64::new(2);
-        let reduce = |state: &mut AppState, repos: &mut RepoMap, msg| {
+        let reduce = |state: &mut AppState, repos: &mut RepositoryRuntimes, msg| {
             crate::store::reducer::reduce(repos, &id_alloc, state, msg)
         };
         let effects = reduce(&mut state, &mut repos, Msg::LoadWorktreeDirty { repo_id });
@@ -3352,7 +3353,7 @@ mod worktree_dirty_files_tests {
         let expected = repo
             .list_worktrees(&gitcomet_core::services::CancellationToken::new())
             .unwrap();
-        let repos = FxHashMap::from_iter([(repo_id, repo)]);
+        let repos = RepositoryRuntimes::from_iter([(repo_id, repo)]);
         let (started, started_rx) = mpsc::channel();
         let (release_tx, release) = mpsc::channel();
         let backend = Arc::new(BlockingBackend {
@@ -3448,8 +3449,10 @@ mod worktree_dirty_files_tests {
         std::fs::write(selected.join("a.txt"), "selected checkout edit\n").unwrap();
         std::fs::write(other.join("a.txt"), "other checkout edit\n").unwrap();
         let repo_id = RepoId(4104);
-        let repos =
-            FxHashMap::from_iter([(repo_id, gitcomet_git_gix::GixBackend.open(&own).unwrap())]);
+        let repos = RepositoryRuntimes::from_iter([(
+            repo_id,
+            gitcomet_git_gix::GixBackend.open(&own).unwrap(),
+        )]);
         let backend = Arc::new(CountingBackend {
             opened: Mutex::new(Vec::new()),
         });

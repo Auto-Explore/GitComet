@@ -1,9 +1,10 @@
 use super::*;
 use crate::msg::RepoCommandEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn dropped_existing_repo_focuses_its_tab_without_creating_a_duplicate() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -112,7 +113,7 @@ fn session_persist_error_without_repo_still_reports_notification() {
 
 #[test]
 fn session_persist_failed_msg_reports_notification_and_repo_diagnostic() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
@@ -374,7 +375,7 @@ fn folder_toggles_stay_live_for_a_whitespace_only_query() {
 
 #[test]
 fn delete_branches_emits_one_effect_carrying_every_name() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     reduce(
@@ -424,7 +425,7 @@ fn delete_branches_emits_one_effect_carrying_every_name() {
 
 #[test]
 fn delete_branches_with_an_empty_list_does_nothing() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     reduce(
@@ -456,7 +457,7 @@ fn delete_branches_with_an_empty_list_does_nothing() {
 
 #[test]
 fn delete_remote_branches_keeps_the_batch_under_one_remote() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     reduce(

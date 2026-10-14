@@ -1,4 +1,5 @@
 use crate::msg::RepoCommandEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 mod actions_emit_effects;
 mod auth;
 mod branch_exists_prompt;
@@ -33,7 +34,6 @@ mod util;
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
 use auth::{annex_adjusted_refusal, annex_takeover};
-use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -69,7 +69,7 @@ fn normalize_repo_relative_path(
 }
 
 fn cache_selected_deleted_gitlink(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     target: &gitcomet_core::domain::DiffTarget,
@@ -114,13 +114,13 @@ fn head_gitlink_lookup_is_worth_it(
 }
 
 fn refresh_head_gitlink_path(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     path: &std::path::Path,
 ) {
     let Some(is_gitlink) = repos
-        .get(&repo_id)
+        .repository(&repo_id)
         .and_then(|repo| repo.head_path_is_gitlink(path).ok())
     else {
         return;
@@ -136,7 +136,7 @@ fn refresh_head_gitlink_path(
 }
 
 fn refresh_selected_head_gitlink(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) {
@@ -405,7 +405,7 @@ fn report_error(state: &mut AppState, repo_id: Option<RepoId>, message: String) 
 /// kept running while it was inactive and saw no change, so its retained state
 /// is current and the refresh a switch normally starts can be skipped.
 pub(crate) fn fill_set_active_repo_inline(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     unchanged: bool,
@@ -435,7 +435,7 @@ pub(crate) fn fill_reorder_repo_tabs_inline(
 // helper in `store/mod.rs` so that the inline reduce path can be measured.
 #[cfg(feature = "benchmarks")]
 pub(crate) fn fill_select_diff_inline(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     target: gitcomet_core::domain::DiffTarget,
@@ -515,7 +515,7 @@ pub(crate) fn reset_conflict_resolutions_inline(
 }
 
 pub(super) fn reduce(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     msg: Msg,
@@ -682,7 +682,7 @@ fn reconcile_active_nav_history(state: &mut AppState, push: bool) {
 }
 
 fn reduce_inner(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     msg: Msg,

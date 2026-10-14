@@ -4,6 +4,7 @@ use crate::model::{
     ConflictFile, PendingFileBrowserReopen, RepoState, SidebarDataRequest, SidebarMode,
 };
 use crate::msg::{ReferenceEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
     DiffArea, DiffTarget, FileConflictKind, FileEntry, FileEntryKind, FileSource, FileStatus,
     LogScope, RemoteBranch, RepoSpec,
@@ -16,8 +17,8 @@ mod worktrees;
 
 /// No backends: these tests exercise browse-point bookkeeping, not the HEAD
 /// gitlink classification that `open_file_content` performs behind it.
-fn no_repos() -> FxHashMap<RepoId, Arc<dyn GitRepository>> {
-    FxHashMap::default()
+fn no_repos() -> RepositoryRuntimes {
+    Default::default()
 }
 
 fn backend_error(message: &str) -> Error {

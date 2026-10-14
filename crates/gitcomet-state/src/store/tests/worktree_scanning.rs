@@ -43,7 +43,7 @@ fn state() -> AppState {
 }
 
 fn dispatch(state: &mut AppState, msg: Msg) -> Vec<Effect> {
-    reduce(&mut FxHashMap::default(), &AtomicU64::new(2), state, msg)
+    reduce(&mut Default::default(), &AtomicU64::new(2), state, msg)
 }
 
 fn select(path: &str) -> Msg {

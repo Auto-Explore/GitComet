@@ -2,10 +2,10 @@
 
 use super::*;
 use crate::msg::{ControlEffect, ReferenceEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     for cancel_repo_loads in [false, true] {
         let primary = super::super::executor::TaskExecutor::new(1);
         let signatures = super::super::executor::TaskExecutor::new(1);
@@ -39,7 +39,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
             .repos
             .push(RepoState::new_opening(repo_id, spec.clone()));
         let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-        let repos = [(
+        let mut repos: RepositoryRuntimes = [(
             repo_id,
             Arc::new(DummyRepo::new(spec.workdir)) as Arc<dyn GitRepository>,
         )]
@@ -48,14 +48,13 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
         let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let sender = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-        let mut tokens = FxHashMap::default();
+
+        repos.bind_test_state(&thread_state.read().unwrap());
         super::super::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut tokens,
-            &mut repo_runtimes,
+            &mut repos,
             sender.clone(),
             Effect::VerifyCommitSignatures {
                 repo_id,
@@ -67,27 +66,25 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
             },
         );
         if cancel_repo_loads {
+            repos.bind_test_state(&thread_state.read().unwrap());
             super::super::effects::schedule_effect(
                 executors,
                 &thread_state,
                 &backend,
-                &repos,
-                &mut tokens,
-                &mut repo_runtimes,
+                &mut repos,
                 sender.clone(),
                 Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }),
             );
             assert!(
-                tokens.contains_key(&repo_id),
+                repos.load_scope(&repo_id).is_some(),
                 "a repo load must actually be pending"
             );
+            repos.bind_test_state(&thread_state.read().unwrap());
             super::super::effects::schedule_effect(
                 executors,
                 &thread_state,
                 &backend,
-                &repos,
-                &mut tokens,
-                &mut repo_runtimes,
+                &mut repos,
                 sender,
                 Effect::Control(ControlEffect::CancelRepoLoads {
                     repo_id,
@@ -172,14 +169,14 @@ fn clone_repo_effect_abort_removes_partially_created_destination() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
         Effect::CloneRepo {
             url: local_file_url(&src),
@@ -200,7 +197,7 @@ fn clone_repo_effect_abort_removes_partially_created_destination() {
                 &executor,
                 &executor,
                 &backend,
-                &repos,
+                &mut repos,
                 msg_tx.clone(),
                 Effect::Control(ControlEffect::AbortCloneRepo { dest: dest.clone() }),
             );
@@ -259,9 +256,9 @@ fn delete_branches_effect_stops_batch_and_preserves_cancellation() {
         delete_branch_calls: Some(Arc::clone(&calls)),
         cancel_delete_branch: Some("cancel-here".to_string()),
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -272,7 +269,7 @@ fn delete_branches_effect_stops_batch_and_preserves_cancellation() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::DeleteBranches {
             repo_id,
@@ -312,7 +309,6 @@ fn delete_branches_effect_stops_batch_and_preserves_cancellation() {
 
 #[test]
 fn open_repo_effect_suppresses_result_after_cancellation() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     use std::sync::{Condvar, Mutex};
 
     struct Backend {
@@ -351,7 +347,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
     });
 
     let executor = super::super::executor::TaskExecutor::new(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
     let mut state = AppState::test_default();
@@ -362,10 +358,11 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         },
     ));
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-    let mut repo_task_tokens = FxHashMap::default();
+
     let repo_load_executor = super::super::executor::TaskExecutor::new(1);
     let metadata_executor = super::super::executor::TaskExecutor::new(1);
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         super::super::effects::EffectExecutors {
             executor: &executor,
@@ -382,9 +379,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         },
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx.clone(),
         Effect::OpenRepo {
             repo_id,
@@ -395,6 +390,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         .recv_timeout(Duration::from_secs(2))
         .expect("open effect did not start");
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         super::super::effects::EffectExecutors {
             executor: &executor,
@@ -411,9 +407,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         },
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx,
         Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id,
@@ -435,7 +429,6 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
 
 #[test]
 fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     let repo_a = RepoId(520);
     let repo_b = RepoId(521);
     let release = Arc::new((Mutex::new(false), Condvar::new()));
@@ -443,9 +436,9 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         release: Arc::clone(&release),
     };
     let (started_tx, started_rx) = std::sync::mpsc::channel::<RepoId>();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(
             repo_a,
             Arc::new(SelectedDiffSchedulingRepo {
                 spec: RepoSpec {
@@ -457,7 +450,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
                 release: Arc::clone(&release),
             }) as Arc<dyn GitRepository>,
         );
-        repos.insert(
+        repos.attach_repository_for_test(
             repo_b,
             Arc::new(SelectedDiffSchedulingRepo {
                 spec: RepoSpec {
@@ -497,7 +490,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
     state.repos.push(repo_state_a);
     state.repos.push(repo_state_b);
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-    let mut repo_task_tokens = FxHashMap::default();
+
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
@@ -512,13 +505,12 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         }),
     };
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx.clone(),
         Effect::LoadSelectedDiff {
             repo_id: repo_a,
@@ -536,26 +528,24 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         repo_a
     );
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx.clone(),
         Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id: repo_a,
             load_epoch: crate::model::RepoLoadEpoch(0),
         }),
     );
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx,
         Effect::LoadSelectedDiff {
             repo_id: repo_b,
@@ -581,7 +571,6 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
 /// will use.
 #[test]
 fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     let snapshot = Arc::new(RepoStatus {
         staged: Default::default(),
         unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
@@ -597,9 +586,9 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         release: Arc::clone(&release),
     };
     let (started_tx, started_rx) = std::sync::mpsc::channel::<RepoId>();
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(
             repo_a,
             Arc::new(SelectedDiffSchedulingRepo {
                 spec: RepoSpec {
@@ -611,7 +600,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
                 release: Arc::clone(&release),
             }) as Arc<dyn GitRepository>,
         );
-        repos.insert(
+        repos.attach_repository_for_test(
             repo_b,
             Arc::new(SelectedDiffSchedulingRepo {
                 spec: RepoSpec {
@@ -645,7 +634,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         },
     ));
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-    let mut repo_task_tokens = FxHashMap::default();
+
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
@@ -660,13 +649,12 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         }),
     };
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx.clone(),
         Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id: repo_a,
@@ -682,26 +670,24 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         repo_a
     );
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx.clone(),
         Effect::Control(ControlEffect::CancelRepoLoads {
             repo_id: repo_a,
             load_epoch: crate::model::RepoLoadEpoch(0),
         }),
     );
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx,
         Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id: repo_b,

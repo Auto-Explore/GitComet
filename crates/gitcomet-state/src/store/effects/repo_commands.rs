@@ -1,6 +1,7 @@
 use crate::model::{AppState, Loadable};
 use crate::msg::RepoCommandEffect;
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::domain::{DiffTarget, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -16,7 +17,7 @@ use std::sync::RwLock;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, RepoMap, message_subject, missing_repo_error, send_or_log, short_commit_id,
+    GitOperationTask, message_subject, missing_repo_error, send_or_log, short_commit_id,
     single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
 
@@ -259,7 +260,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
 
 fn schedule_repo_command_with_context<F>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mut command: RepoCommandKind,
@@ -318,7 +319,7 @@ fn schedule_repo_command_with_context<F>(
 
 fn schedule_repo_command<F>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     command: RepoCommandKind,
@@ -422,7 +423,7 @@ struct SaveWorktreeFileRequest {
 
 fn schedule_save_worktree_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: SaveWorktreeFileRequest,
@@ -516,7 +517,7 @@ fn guarded_worktree_save(
 /// competing edit from the file editor, an external editor, or another window.
 fn schedule_append_gitignore_patterns(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patterns: Vec<String>,
@@ -536,7 +537,7 @@ fn schedule_append_gitignore_patterns(
 
 fn schedule_append_gitattributes_rule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     rule: String,
@@ -630,7 +631,7 @@ fn append_gitignore_patterns_in_workdir(
 
 fn schedule_export_patch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -653,7 +654,7 @@ fn schedule_export_patch(
 
 fn schedule_apply_patch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: PathBuf,
@@ -673,7 +674,7 @@ fn schedule_apply_patch(
 
 fn schedule_add_worktree(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -696,7 +697,7 @@ fn schedule_add_worktree(
 
 fn schedule_remove_worktree(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -714,7 +715,7 @@ fn schedule_remove_worktree(
 
 fn schedule_force_remove_worktree(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -732,7 +733,7 @@ fn schedule_force_remove_worktree(
 
 fn schedule_add_submodule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: AddSubmoduleRequest,
@@ -783,7 +784,7 @@ fn schedule_add_submodule(
 
 fn schedule_update_submodules(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     approved_sources: Vec<SubmoduleTrustTarget>,
@@ -809,7 +810,7 @@ fn schedule_update_submodules(
 
 fn schedule_check_submodule_add_trust(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: CheckSubmoduleAddTrustRequest,
@@ -841,7 +842,7 @@ fn schedule_check_submodule_add_trust(
 
 fn schedule_check_submodule_update_trust(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote_url_policy: RemoteUrlPolicy,
@@ -857,7 +858,7 @@ fn schedule_check_submodule_update_trust(
 
 fn schedule_check_submodule_load_trust(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -878,7 +879,7 @@ fn schedule_check_submodule_load_trust(
 
 fn schedule_load_submodule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -907,7 +908,7 @@ fn schedule_load_submodule(
 
 fn schedule_change_submodule_pointer(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -930,7 +931,7 @@ fn schedule_change_submodule_pointer(
 
 fn schedule_remove_submodule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -948,7 +949,7 @@ fn schedule_remove_submodule(
 
 fn schedule_stage_hunk(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: crate::msg::ContentBytes,
@@ -965,7 +966,7 @@ fn schedule_stage_hunk(
 
 fn schedule_unstage_hunk(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: crate::msg::ContentBytes,
@@ -982,7 +983,7 @@ fn schedule_unstage_hunk(
 
 fn schedule_apply_worktree_patch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: crate::msg::ContentBytes,
@@ -1000,7 +1001,7 @@ fn schedule_apply_worktree_patch(
 
 fn schedule_large_file_command(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     command: gitcomet_core::large_files::LargeFileCommand,
@@ -1016,7 +1017,7 @@ fn schedule_large_file_command(
 
 fn schedule_fetch_all(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     prune: bool,
@@ -1034,7 +1035,7 @@ fn schedule_fetch_all(
 
 fn schedule_fetch_refspecs(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1052,7 +1053,7 @@ fn schedule_fetch_refspecs(
 
 fn schedule_prune_merged_branches(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1068,7 +1069,7 @@ fn schedule_prune_merged_branches(
 
 fn schedule_prune_local_tags(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1091,7 +1092,11 @@ fn maintenance_executor() -> TaskExecutor {
 /// Asks git whether the repository needs maintenance, at most once a day per
 /// repository: the claim lives in the session file, shared by its worktrees
 /// and every window.
-fn schedule_check_maintenance(repos: &RepoMap, msg_tx: StoreWorkerSender, repo_id: RepoId) {
+fn schedule_check_maintenance(
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) {
     spawn_with_repo(
         &maintenance_executor(),
         repos,
@@ -1115,7 +1120,7 @@ fn schedule_check_maintenance(repos: &RepoMap, msg_tx: StoreWorkerSender, repo_i
 }
 
 fn schedule_run_maintenance(
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -1146,7 +1151,7 @@ fn schedule_run_maintenance(
 
 fn schedule_pull(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
@@ -1174,7 +1179,7 @@ fn schedule_pull(
 
 fn schedule_pull_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1206,7 +1211,7 @@ fn schedule_pull_branch(
 
 fn schedule_merge_ref(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: String,
@@ -1226,7 +1231,7 @@ fn schedule_merge_ref(
 
 fn schedule_squash_ref(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: String,
@@ -1246,7 +1251,7 @@ fn schedule_squash_ref(
 
 fn schedule_push_with_tags(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: gitcomet_core::tag_push::TagPushRequest,
@@ -1273,7 +1278,7 @@ fn schedule_push_with_tags(
 
 fn schedule_push(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     tracking: Option<(String, String)>,
@@ -1293,7 +1298,7 @@ fn schedule_push(
 
 fn schedule_push_after_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: SafePushAfterCommitTarget,
@@ -1324,7 +1329,7 @@ fn schedule_push_after_commit(
 
 fn schedule_safe_push_after_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     context: SafePushAfterCommitContext,
@@ -1348,7 +1353,7 @@ fn schedule_safe_push_after_commit(
 
 fn schedule_force_push(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     tracking: Option<(String, String)>,
@@ -1368,7 +1373,7 @@ fn schedule_force_push(
 
 fn schedule_force_push_with_lease(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     lease: ForcePushLease,
@@ -1389,7 +1394,7 @@ fn schedule_force_push_with_lease(
 
 fn schedule_push_set_upstream(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1420,7 +1425,7 @@ fn schedule_push_set_upstream(
 
 fn schedule_set_upstream_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     branch: String,
@@ -1443,7 +1448,7 @@ fn schedule_set_upstream_branch(
 
 fn schedule_unset_upstream_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     branch: String,
@@ -1463,7 +1468,7 @@ fn schedule_unset_upstream_branch(
 
 fn schedule_delete_remote_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1491,7 +1496,7 @@ fn schedule_delete_remote_branch(
 
 fn schedule_delete_remote_branches(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1519,7 +1524,7 @@ fn schedule_delete_remote_branches(
 
 fn schedule_reset(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: String,
@@ -1541,7 +1546,7 @@ fn schedule_reset(
 
 fn schedule_squash_commits(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     oldest: gitcomet_core::domain::CommitId,
@@ -1562,7 +1567,7 @@ fn schedule_squash_commits(
 
 fn schedule_rebase(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     onto: String,
@@ -1580,7 +1585,7 @@ fn schedule_rebase(
 
 fn schedule_rebase_continue(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,
@@ -1597,7 +1602,7 @@ fn schedule_rebase_continue(
 
 fn schedule_rebase_abort(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1613,7 +1618,7 @@ fn schedule_rebase_abort(
 
 fn schedule_interactive_rebase(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     base: String,
@@ -1636,7 +1641,7 @@ fn schedule_interactive_rebase(
 
 fn schedule_interactive_cherry_pick(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     entries: Vec<InteractiveRebaseEntry>,
@@ -1658,7 +1663,7 @@ fn schedule_interactive_cherry_pick(
 
 fn schedule_cherry_pick_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1689,7 +1694,7 @@ fn schedule_cherry_pick_commit(
 
 fn schedule_revert_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1733,7 +1738,7 @@ fn schedule_revert_commit(
 
 fn schedule_apply_file_change(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: gitcomet_core::domain::ApplyChangeTarget,
@@ -1815,7 +1820,7 @@ fn applied_change_commit_message(
 
 fn schedule_merge_abort(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1831,7 +1836,7 @@ fn schedule_merge_abort(
 
 fn schedule_create_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1859,7 +1864,7 @@ fn schedule_create_tag(
 
 fn schedule_delete_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1877,7 +1882,7 @@ fn schedule_delete_tag(
 
 fn schedule_push_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1901,7 +1906,7 @@ fn schedule_push_tag(
 
 fn schedule_delete_remote_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1925,7 +1930,7 @@ fn schedule_delete_remote_tag(
 
 fn schedule_add_remote(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1949,7 +1954,7 @@ fn schedule_add_remote(
 
 fn schedule_remove_remote(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1967,7 +1972,7 @@ fn schedule_remove_remote(
 
 fn schedule_set_remote_url(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1993,7 +1998,7 @@ fn schedule_set_remote_url(
 
 fn schedule_checkout_conflict_side(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2015,7 +2020,7 @@ fn schedule_checkout_conflict_side(
 
 fn schedule_checkout_conflict_base(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2033,7 +2038,7 @@ fn schedule_checkout_conflict_base(
 
 fn schedule_accept_conflict_deletion(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2051,7 +2056,7 @@ fn schedule_accept_conflict_deletion(
 
 fn schedule_launch_mergetool(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2319,7 +2324,7 @@ pub(super) fn schedule(
     executor: &TaskExecutor,
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     backend: &Arc<dyn GitBackend>,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     work: RepoCommandEffect,
 ) {

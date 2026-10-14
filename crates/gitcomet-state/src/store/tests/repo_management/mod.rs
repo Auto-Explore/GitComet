@@ -98,11 +98,7 @@ fn has_effect_for_repo(
     effects.iter().any(|effect| matches_effect(effect, repo_id))
 }
 
-fn mark_repo_open_ready(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    state: &mut AppState,
-    repo_id: RepoId,
-) {
+fn mark_repo_open_ready(repos: &mut RepositoryRuntimes, state: &mut AppState, repo_id: RepoId) {
     let workdir = state
         .repos
         .iter()
@@ -112,7 +108,7 @@ fn mark_repo_open_ready(
         .workdir
         .to_string_lossy()
         .into_owned();
-    repos.insert(repo_id, Arc::new(DummyRepo::new(&workdir)));
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new(&workdir)));
 
     let repo_state = state
         .repos
@@ -124,7 +120,7 @@ fn mark_repo_open_ready(
 }
 
 fn open_repo_ready(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: impl Into<PathBuf>,
@@ -139,7 +135,7 @@ fn assert_open_repo_history_mode_resolution(
     seed_session: impl FnOnce(&Path, &Path),
     expected: LogScope,
 ) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -215,13 +211,8 @@ fn file_browser_tree_entries() -> Vec<gitcomet_core::domain::FileEntry> {
     ]
 }
 
-fn state_with_file_browser_tree() -> (
-    FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    AtomicU64,
-    AppState,
-    RepoId,
-) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+fn state_with_file_browser_tree() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId) {
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -245,4 +236,5 @@ mod file_browser_and_misc;
 mod open_drop;
 mod repo_opened;
 mod restore_session;
+mod runtime_lifecycle;
 mod worker_commands;

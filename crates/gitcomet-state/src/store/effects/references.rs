@@ -1,28 +1,25 @@
-use crate::model::{AppState, RepoId};
+use crate::model::AppState;
 use crate::msg::{InternalMsg, Msg, ReferenceEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use crate::store::{executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use gitcomet_core::services::{CancellationToken, GitRepository};
-use rustc_hash::FxHashMap;
 use std::sync::{Arc, RwLock};
 
-use super::load_tokens::{RepoTaskToken, repo_load_context};
+use super::load_tokens::repo_load_context;
 use super::util::{
-    RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else,
-    spawn_with_repo_or_else,
+    missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo_or_else,
 };
 
 pub(super) fn schedule(
     repo_load_executor: &TaskExecutor,
     metadata_executor: &TaskExecutor,
     thread_state: &Arc<RwLock<Arc<AppState>>>,
-    repos: &RepoMap,
-    repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
+    repos: &mut RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     work: ReferenceEffect,
 ) {
     let repo_id = work.repo_id();
-    let Some((msg_tx, cancellation)) =
-        repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+    let Some((msg_tx, cancellation)) = repo_load_context(thread_state, repos, msg_tx, repo_id)
     else {
         return;
     };

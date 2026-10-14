@@ -27,7 +27,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [x] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
 - [x] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
 - [x] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
-- [ ] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
+- [x] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
 - [ ] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
 - [x] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
 - [x] Establish one document owner per WindowHost with stable BufferId, load/save generations, disk versions, encoding, dirty state and retention.
@@ -111,15 +111,23 @@ core/backend tests, and the strict LFS/annex supplement passed 98 tests without
 runtime prerequisite skips. Normal and opt-in Clippy checks passed, including
 the operation probe.
 
-The state worker now owns revocable linked-worktree cache leases. Accepted
-repository removal releases them outside the AppState write lock, and shutdown
-revokes them before joining workers. Cache hits and backend-open completions check
-liveness under the cache mutex, so a delayed open cannot restore closed ownership.
-Refresh cancellation preserves a live lease. The close regression observes handle
-destruction while the store remains alive; shutdown and shared-cache-hit regressions
-cover the other release paths. Independent review accepted this fix after all
-1,315 state tests passed, with six existing skips, and strict Clippy passed.
-Backend/task-token consolidation and prepared reducer inputs remain in progress.
+The state worker's private `RepositoryRuntimes` is the sole index of backend
+connections, ordinary load scopes and linked-worktree cache leases. Each entry
+uses its model's checked lifetime and distinguishes opening from opened connections.
+Refreshes replace the load scope when needed while retaining the backend and cache
+lease. Accepted closes retire the whole entry; disposal runs outside the state
+write lock before replacement effects. Shutdown uses the same cleanup. This also
+stops ordinary loads when successful worktree removal closes a tab indirectly.
+Signature verification and history find retain their independent cancellation
+protocols.
+
+Cache hits and backend-open completions check lease liveness under the cache mutex,
+so a delayed open cannot restore closed ownership. Close and worktree-removal
+regressions observe cleanup before store shutdown. Independent review accepted the
+runtime consolidation and lifecycle fixes; all 1,336 state tests passed, including
+the integration suites, with six existing skips, and strict Clippy passed. All six
+UI tests covering the five fixture ordering changes passed with the renderer build.
+Prepared reducer inputs remain in progress.
 
 The canonical repository API migration passed 1,971 core/backend tests with
 22 existing skips and strict Clippy. Its cancellation regressions failed when the
@@ -185,6 +193,10 @@ when forwarding requests and completions. Their tuple constructors are internal.
 `finish_log` takes its request identity and rejects stale completions itself.
 `RepoState::lifetime_id()` provides a process-unique `RepoLifetime`; the existing
 scalar `lifetime()` accessor remains available to consumers that only compare it.
+
+Test harnesses using `AppStore::insert_repo_for_test` must first seed the matching
+repository through `replace_snapshot_for_test`. The runtime uses that model's
+lifetime; a backend inserted without a repository model is invalid test setup.
 
 Persistence, control, status, reference and repository-command requests now use
 typed `Effect` payloads exported from `gitcomet_state::msg`. For example,

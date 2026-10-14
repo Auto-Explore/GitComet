@@ -4169,13 +4169,13 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
             this.store.insert_repo_for_test(
                 repo_id,
                 Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
                     workdir.clone(),
                 )),
             );
-            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
             this.main_pane
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         });

@@ -9,6 +9,7 @@ use crate::model::{
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect, WorktreeListRead};
 use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictRegionResolution, ConflictRegionSourceRanges,
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
@@ -21,7 +22,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
-use gitcomet_core::services::{GitRepository, InteractiveRebaseAction, InteractiveRebaseEntry};
+use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -2268,7 +2269,7 @@ enum ReopenDecision {
 /// `source` is in: show the same file there, or close the view when the file
 /// does not exist at that point.
 fn reopen_after_retarget(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     source: FileSource,
@@ -2313,7 +2314,7 @@ fn reopen_after_retarget(
 }
 
 pub(super) fn file_browser_loaded(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     source: FileSource,

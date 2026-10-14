@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
@@ -173,9 +174,9 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -184,7 +185,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
             repo_id,
@@ -402,9 +403,9 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -413,7 +414,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
             repo_id,
@@ -654,9 +655,9 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -665,7 +666,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
             repo_id,
@@ -914,9 +915,9 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -925,7 +926,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
             repo_id,
@@ -1200,9 +1201,9 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -1211,7 +1212,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
             repo_id,
@@ -1320,14 +1321,14 @@ fn open_repo_effect_emits_repo_opened_ok() {
     let backend: Arc<dyn GitBackend> = Arc::new(Backend { repo });
 
     let executor = super::super::executor::TaskExecutor::new(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::OpenRepo {
             repo_id,
@@ -1372,14 +1373,14 @@ fn open_repo_effect_emits_repo_opened_err() {
     let workdir = unique_temp_path("gitcomet-open-repo-err");
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let executor = super::super::executor::TaskExecutor::new(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::OpenRepo {
             repo_id,
@@ -1406,7 +1407,6 @@ fn open_repo_effect_emits_repo_opened_err() {
 
 #[test]
 fn open_repo_effects_are_bounded_by_repo_load_executor() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     struct Backend {
         started_tx: std::sync::mpsc::Sender<PathBuf>,
         release: Arc<(Mutex<bool>, Condvar)>,
@@ -1440,11 +1440,17 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let repo_load_executor = super::super::executor::TaskExecutor::new(1);
     let metadata_executor = super::super::executor::TaskExecutor::new(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::test_default())));
-    let mut repo_task_tokens = FxHashMap::default();
+    let mut state = AppState::test_default();
+    for (repo_id, workdir) in [(repo_a, workdir_a.clone()), (repo_b, workdir_b.clone())] {
+        state
+            .repos
+            .push(RepoState::new_opening(repo_id, RepoSpec { workdir }));
+    }
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
@@ -1459,13 +1465,12 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         }),
     };
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx.clone(),
         Effect::OpenRepo {
             repo_id: repo_a,
@@ -1479,13 +1484,12 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         workdir_a
     );
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
-        &mut repo_runtimes,
+        &mut repos,
         msg_tx,
         Effect::OpenRepo {
             repo_id: repo_b,
@@ -1566,9 +1570,9 @@ fn load_log_effect_uses_history_mode_api() {
         },
         calls: Arc::clone(&calls),
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -1578,7 +1582,7 @@ fn load_log_effect_uses_history_mode_api() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadLog {
             repo_id,
@@ -1633,8 +1637,8 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
         let spec = RepoSpec {
             workdir: unique_temp_path("gitcomet-log-streaming"),
         };
-        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-        repos.insert(
+        let mut repos: RepositoryRuntimes = Default::default();
+        repos.attach_repository_for_test(
             repo_id,
             Arc::new(RecordingLogRepo {
                 spec: spec.clone(),
@@ -1658,7 +1662,7 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             state,
             tx,
             Effect::LoadLog {
@@ -1699,9 +1703,9 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
         delete_branch_calls: None,
         cancel_delete_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -1726,7 +1730,7 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::Status(StatusEffect::LoadStatus { repo_id }),
     );
@@ -1750,7 +1754,6 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
 
 #[test]
 fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     for (load, expected) in [
         (
             Effect::References(ReferenceEffect::LoadRemoteTags {
@@ -1778,9 +1781,9 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             release: Arc::clone(&release),
         };
         let (started_tx, started_rx) = std::sync::mpsc::channel::<&'static str>();
-        let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-            let mut repos = FxHashMap::default();
-            repos.insert(
+        let mut repos: RepositoryRuntimes = {
+            let mut repos = RepositoryRuntimes::default();
+            repos.attach_repository_for_test(
                 repo_a,
                 Arc::new(MetadataSchedulingRepo {
                     spec: RepoSpec {
@@ -1791,7 +1794,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
                     release: Arc::clone(&release),
                 }) as Arc<dyn GitRepository>,
             );
-            repos.insert(
+            repos.attach_repository_for_test(
                 repo_b,
                 Arc::new(MetadataSchedulingRepo {
                     spec: RepoSpec {
@@ -1828,7 +1831,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             },
         ));
         let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-        let mut repo_task_tokens = FxHashMap::default();
+
         let executors = super::effects::EffectExecutors {
             executor: &executor,
             repo_load_executor: &repo_load_executor,
@@ -1843,13 +1846,12 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             }),
         };
 
+        repos.bind_test_state(&thread_state.read().unwrap());
         super::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut repo_task_tokens,
-            &mut repo_runtimes,
+            &mut repos,
             msg_tx.clone(),
             load,
         );
@@ -1860,13 +1862,12 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             expected
         );
 
+        repos.bind_test_state(&thread_state.read().unwrap());
         super::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut repo_task_tokens,
-            &mut repo_runtimes,
+            &mut repos,
             msg_tx,
             Effect::References(ReferenceEffect::LoadTags { repo_id: repo_b }),
         );
@@ -1882,7 +1883,6 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
 
 #[test]
 fn schedule_effect_dispatches_many_variants_with_repo_present() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     struct Backend;
     impl GitBackend for Backend {
         fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
@@ -1901,9 +1901,9 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         delete_branch_calls: None,
         cancel_delete_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
 
@@ -2604,13 +2604,12 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         }
         let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(effect_state)));
         let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+        repos.bind_test_state(&thread_state.read().unwrap());
         super::super::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut FxHashMap::default(),
-            &mut repo_runtimes,
+            &mut repos,
             super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx),
             effect,
         );
@@ -2644,7 +2643,6 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
 /// Drive the real effect router and backend, not just two executor instances.
 #[test]
 fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
-    let mut repo_runtimes = crate::store::repository_runtime::RepositoryRuntimes::default();
     use crate::store::{effects::EffectExecutors, executor::TaskExecutor};
     let (_dir, workdir, _linked) =
         crate::store::tests::worktree_redirect::repo_with_linked_worktree();
@@ -2656,7 +2654,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     repo_state.open = Loadable::Ready(());
     state.repos.push(repo_state);
     state.active_repo = Some(repo_id);
-    let mut repos = FxHashMap::from_iter([(repo_id, repo)]);
+    let mut repos = RepositoryRuntimes::from_iter([(repo_id, repo)]);
     let effects = reduce(
         &mut repos,
         &AtomicU64::new(2),
@@ -2678,7 +2676,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     let tx = crate::store::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
-    let mut tokens = FxHashMap::default();
+
     let executors = EffectExecutors {
         executor: &other,
         repo_load_executor: &foreground,
@@ -2696,13 +2694,12 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
                 | Effect::References(ReferenceEffect::LoadHeadBranch { .. })
         )
     }) {
+        repos.bind_test_state(&thread_state.read().unwrap());
         crate::store::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut tokens,
-            &mut repo_runtimes,
+            &mut repos,
             tx.clone(),
             effect,
         );
@@ -2747,22 +2744,21 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     scans.spawn(move || {
         let _ = release_rx.recv_timeout(Duration::from_secs(5));
     });
+    repos.bind_test_state(&thread_state.read().unwrap());
     crate::store::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut tokens,
-        &mut repo_runtimes,
+        &mut repos,
         tx.clone(),
         Effect::LoadWorktreeDirty {
             repo_id,
             scope: crate::model::WorktreeDirtyScope::All,
-            workdir: repos[&repo_id].spec().workdir.clone(),
+            workdir: thread_state.read().unwrap().repos[0].spec.workdir.clone(),
             files_for: None,
         },
     );
-    tokens[&repo_id].cancel();
+    repos.load_scope(&repo_id).unwrap().cancel();
     release_tx.send(()).unwrap();
     let (drained_tx, drained_rx) = std::sync::mpsc::channel();
     scans.spawn(move || {
@@ -2780,18 +2776,17 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         let mut state = thread_state.write().unwrap();
         Arc::make_mut(&mut state).repos[0].bump_load_epoch();
     }
+    repos.bind_test_state(&thread_state.read().unwrap());
     crate::store::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut tokens,
-        &mut repo_runtimes,
+        &mut repos,
         tx,
         Effect::LoadWorktreeDirty {
             repo_id,
             scope: crate::model::WorktreeDirtyScope::All,
-            workdir: repos[&repo_id].spec().workdir.clone(),
+            workdir: thread_state.read().unwrap().repos[0].spec.workdir.clone(),
             files_for: None,
         },
     );
