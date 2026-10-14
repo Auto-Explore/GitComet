@@ -373,9 +373,17 @@ fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
 fn resolve_worktree_save_target(workdir: &Path, path: &Path) -> Result<(PathBuf, PathBuf), Error> {
     let relative_path = normalize_worktree_relative_path(path)?;
     let full = gitcomet_core::path_utils::symlink_free_write_target(workdir, &relative_path)
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::InvalidInput => Error::new(ErrorKind::Backend(err.to_string())),
-            kind => Error::new(ErrorKind::Io(kind)),
+        .map_err(|error| {
+            let error = match error.kind() {
+                std::io::ErrorKind::InvalidInput => {
+                    Error::new(ErrorKind::Backend(error.to_string())).with_source(error)
+                }
+                _ => Error::from(error),
+            };
+            error.with_context(
+                "resolve worktree save target",
+                Some(&workdir.join(&relative_path)),
+            )
         })?;
     Ok((relative_path, full))
 }
@@ -487,7 +495,11 @@ fn guarded_worktree_save(
     contents: &[u8],
     expected_contents: Option<&[u8]>,
 ) -> Result<(), Error> {
-    let io_error = |e: std::io::Error| Error::new(ErrorKind::Backend(e.to_string()));
+    let io_error = |error: std::io::Error| {
+        Error::new(ErrorKind::Backend(error.to_string()))
+            .with_source(error)
+            .with_context("save worktree file", Some(path))
+    };
     let version = match gitcomet_core::filesystem::DiskVersion::read(path) {
         Ok(version) => Some(version),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -564,11 +576,15 @@ fn append_gitattributes_rule_in_workdir(
     let existing = match std::fs::read(&full) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(error) => {
+            return Err(Error::from(error).with_context("read .gitattributes", Some(&full)));
+        }
     };
     let stdout = match append_rule(&existing, rule) {
         Some(updated) => {
-            std::fs::write(&full, updated).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            std::fs::write(&full, updated).map_err(|error| {
+                Error::from(error).with_context("write .gitattributes", Some(&full))
+            })?;
             String::new()
         }
         None => NOTHING_TO_ADD.to_string(),
@@ -592,20 +608,26 @@ fn append_gitignore_patterns_in_workdir(
     let version = match gitcomet_core::filesystem::DiskVersion::read(&full) {
         Ok(version) => Some(version),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+        Err(error) => {
+            return Err(Error::from(error).with_context("read .gitignore version", Some(&full)));
+        }
     };
 
     // Read bytes and convert explicitly: `read_to_string` would report a
     // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
     // the user nothing about what to do next. Never rewrite it lossily.
     let existing = match std::fs::read(&full) {
-        Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
                 "{GITIGNORE_FILE_NAME} is not valid UTF-8; edit it manually"
             )))
+            .with_source(error.utf8_error())
+            .with_context("decode .gitignore", Some(&full))
         })?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(error) => {
+            return Err(Error::from(error).with_context("read .gitignore", Some(&full)));
+        }
     };
 
     let Some(updated) = gitcomet_core::gitignore::append_patterns(&existing, patterns) else {
@@ -619,7 +641,11 @@ fn append_gitignore_patterns_in_workdir(
 
     filesystem
         .save(&full, updated.as_bytes(), version.as_ref(), false)
-        .map_err(|error| Error::new(ErrorKind::Backend(error.to_string())))?;
+        .map_err(|error| {
+            Error::new(ErrorKind::Backend(error.to_string()))
+                .with_source(error)
+                .with_context("save .gitignore", Some(&full))
+        })?;
 
     Ok(CommandOutput {
         command: format!("Update {GITIGNORE_FILE_NAME}"),
