@@ -256,22 +256,26 @@ fn linked_worktrees_share_matching_queries_and_isolate_heads_filters_and_options
 }
 
 #[test]
-fn common_maintenance_refreshes_all_worktrees_after_repacking() {
+fn configured_backend_maintenance_refreshes_all_worktrees_after_repacking() {
     let dir = fixture();
     let linked = dir.path().join("linked");
     run_git(
         dir.path(),
         &["worktree", "add", "-qb", "linked", linked.to_str().unwrap()],
     );
-    let main = GixBackend.open(dir.path()).unwrap();
-    let other = GixBackend.open(&linked).unwrap();
+    let backend = gitcomet_core::services::ConfiguredBackend::new(
+        Arc::new(GixBackend),
+        RepositoryOptions::default(),
+    );
+    let main = backend.open(dir.path()).unwrap();
+    let other = backend.open(&linked).unwrap();
     let before = index(&*main, HistoryMode::AllBranches, None);
     let cancel = CancellationToken::new();
     let pinned = main
         .read_history_range_shared(&before, 0..256, &cancel)
         .unwrap();
     run_git(dir.path(), &["repack", "-ad"]);
-    GixBackend.release_object_stores(&main.common_dir().unwrap());
+    backend.release_object_stores(&main.common_dir().unwrap());
     assert!(
         main.read_history_range_shared(&before, 0..256, &cancel)
             .is_err()

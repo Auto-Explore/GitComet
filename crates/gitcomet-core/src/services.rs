@@ -2485,6 +2485,10 @@ impl GitBackend for ConfiguredBackend {
         self.inner.open_with_options(workdir, &self.options)
     }
 
+    fn release_object_stores(&self, common_dir: &Path) {
+        self.inner.release_object_stores(common_dir);
+    }
+
     fn open_with_options(
         &self,
         workdir: &Path,
