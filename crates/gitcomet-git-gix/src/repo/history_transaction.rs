@@ -412,9 +412,8 @@ fn sync_tree(path: &Path, old: &CommitId, new: &CommitId, dry: bool) -> Result<C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
     fn git(root: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = gitcomet_core::test_support::git_fixture::git_command()
             .current_dir(root)
             .args(args)
             .output()
@@ -539,7 +538,7 @@ mod tests {
         ];
         assert!(repo.update_refs_with_output(&updates).is_err());
         assert!(
-            !Command::new("git")
+            !gitcomet_core::test_support::git_fixture::git_command()
                 .current_dir(d.path())
                 .args(["show-ref", "--verify", "refs/heads/created"])
                 .output()
@@ -653,14 +652,19 @@ mod tests {
             let recorded_tree = git(d.path(), &["write-tree"]);
             let original_bytes = std::fs::read(d.path().join("file")).unwrap();
             let repo = crate::GixBackend.open(d.path()).unwrap();
-            std::fs::write(d.path().join("file"), "later unsaved edit\n").unwrap();
+            let unsaved_edit = if autocrlf == "true" {
+                "later unsaved edit\r\n"
+            } else {
+                "later unsaved edit\n"
+            };
+            std::fs::write(d.path().join("file"), unsaved_edit).unwrap();
             assert!(
                 repo.recover_branch_updates_with_output(std::slice::from_ref(&update))
                     .is_err()
             );
             assert_eq!(
                 std::fs::read_to_string(d.path().join("file")).unwrap(),
-                "later unsaved edit\n"
+                unsaved_edit
             );
             assert_eq!(git(d.path(), &["write-tree"]), recorded_tree);
             assert_eq!(
@@ -714,7 +718,7 @@ mod tests {
         ];
         assert!(repo.apply_branch_updates_with_output(&updates).is_err());
         assert!(
-            !std::process::Command::new("git")
+            !gitcomet_core::test_support::git_fixture::git_command()
                 .current_dir(d.path())
                 .args(["show-ref", "--verify", "refs/heads/created"])
                 .output()

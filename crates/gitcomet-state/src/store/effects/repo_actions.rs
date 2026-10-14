@@ -154,26 +154,6 @@ fn send_refresh_branches_on_success(
     }
 }
 
-fn send_load_worktrees_on_success(
-    msg_tx: &StoreWorkerSender,
-    repo_id: RepoId,
-    result: &Result<(), Error>,
-) {
-    if result.is_ok() {
-        send_or_log(msg_tx, Msg::LoadWorktrees { repo_id });
-        send_or_log(msg_tx, Msg::LoadWorktreeDirty { repo_id });
-    }
-}
-
-fn send_refresh_branches_and_load_worktrees_on_success(
-    msg_tx: &StoreWorkerSender,
-    repo_id: RepoId,
-    result: &Result<(), Error>,
-) {
-    send_refresh_branches_on_success(msg_tx, repo_id, result);
-    send_load_worktrees_on_success(msg_tx, repo_id, result);
-}
-
 fn dedup_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.sort();
     paths.dedup();
@@ -313,7 +293,7 @@ fn schedule_branch_action(
                 }
             };
             if ran {
-                send_refresh_branches_and_load_worktrees_on_success(&msg_tx, repo_id, &result);
+                send_refresh_branches_on_success(&msg_tx, repo_id, &result);
             }
             let outcome = GitOperationTask::outcome(&result);
             let message = match host {
@@ -382,7 +362,7 @@ pub(super) fn schedule_checkout_remote_branch(
             RepoActionKind::CheckoutRemoteBranch,
             context,
             move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
-            send_refresh_branches_and_load_worktrees_on_success,
+            send_refresh_branches_on_success,
             repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
         ),
         CheckoutRemoteBranchMode::Overwrite => {
@@ -419,7 +399,7 @@ pub(super) fn schedule_checkout_commit(
         RepoActionKind::CheckoutCommit,
         context,
         move |repo| repo.checkout_commit(&commit_id),
-        send_load_worktrees_on_success,
+        |_msg_tx, _repo_id, _result| {},
         repo_action_finished(RepoActionKind::CheckoutCommit),
     );
 }
@@ -523,10 +503,6 @@ pub(super) fn schedule_create_branch_and_checkout(
             if refresh {
                 send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
             }
-            if result.is_ok() {
-                send_or_log(&msg_tx, Msg::LoadWorktrees { repo_id });
-                send_or_log(&msg_tx, Msg::LoadWorktreeDirty { repo_id });
-            }
             let outcome = GitOperationTask::outcome(&result);
             operation.finish(
                 outcome,
@@ -601,7 +577,7 @@ pub(super) fn schedule_rename_branch(
                 );
                 return;
             }
-            send_refresh_branches_and_load_worktrees_on_success(&msg_tx, repo_id, &result);
+            send_refresh_branches_on_success(&msg_tx, repo_id, &result);
             let outcome = GitOperationTask::outcome(&result);
             operation.finish(
                 outcome,

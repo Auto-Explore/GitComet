@@ -11,7 +11,7 @@ pub use effect::Effect;
 pub use message::{
     BranchExistsChoice, CommitSelectMode, ConflictAutosolveMode, ConflictAutosolveStats,
     ConflictBulkChoice, ConflictBulkScope, ConflictRegionChoice, ConflictRegionResolutionUpdate,
-    ContentBytes, InternalMsg, Msg, RepoActionKind, RepoWatchDegradedReason,
+    ContentBytes, InternalMsg, Msg, RepoActionKind, RepoWatchDegradedReason, WorktreeListRead,
 };
 pub use repo_command_kind::RepoCommandKind;
 pub use repo_external_change::{ChangedPaths, MAX_CHANGED_PATHS, RepoExternalChange};

@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 fn git_command() -> Command {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     // Keep tests deterministic by isolating from host git config.
     test_git_env::apply(&mut cmd);
     // Local bare remotes require file protocol to be permitted.

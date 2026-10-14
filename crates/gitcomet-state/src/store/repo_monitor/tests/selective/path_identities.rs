@@ -98,7 +98,7 @@ fn moving_directory_symlink_into_worktree_refreshes_status() {
                 .unwrap())
             .worktree
     );
-    let status = Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("--no-optional-locks")
         .arg("-C")
         .arg(&root)
@@ -291,7 +291,7 @@ fn lfs_parent_after_symlink_keeps_source_coverage(absolute: bool) {
     run_git(&root, &["config", "lfs.storage", storage.to_str().unwrap()]);
     // Git LFS cleans the path before traversing links. Its actual cache is
     // Storage/tmp; other/Storage/tmp is an unrelated tracked source directory.
-    let env = Command::new("git")
+    let env = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(&root)
         .args(["lfs", "env"])

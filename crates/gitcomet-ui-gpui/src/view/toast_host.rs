@@ -281,7 +281,7 @@ impl ToastHost {
             body: ToastBody::Error(std::rc::Rc::new(ErrorNotice::new(report))),
             actions: Vec::new(),
             dismiss_behavior: ToastDismissBehavior::Remove,
-            ttl: None,
+            leaving: false,
         });
         cx.notify();
     }
@@ -545,15 +545,31 @@ impl ToastHost {
             },
             actions,
             dismiss_behavior,
-            ttl,
+            leaving: false,
         });
         cx.notify();
 
         if let Some(ttl) = ttl {
-            let lifetime = toast_total_lifetime(ttl);
             cx.spawn(
                 async move |view: WeakEntity<ToastHost>, cx: &mut gpui::AsyncApp| {
-                    smol::Timer::after(lifetime).await;
+                    cx.background_executor()
+                        .timer(toast_fade_in_duration() + ttl)
+                        .await;
+                    let still_shown = view.update(cx, |this, cx| {
+                        let Some(toast) = this.toasts.iter_mut().find(|toast| toast.id == id)
+                        else {
+                            return false;
+                        };
+                        toast.leaving = true;
+                        cx.notify();
+                        true
+                    });
+                    if !matches!(still_shown, Ok(true)) {
+                        return;
+                    }
+                    cx.background_executor()
+                        .timer(toast_fade_out_duration())
+                        .await;
                     let _ = view.update(cx, |this, cx| {
                         this.remove_toast(id, cx);
                     });
@@ -850,7 +866,6 @@ impl ToastHost {
             .border_1()
             .border_color(shell_border)
             .rounded(px(theme.radii.popover))
-            .shadow(crate::theme::shadow_popover(theme))
             .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.primary)
             .px(ui_scale.px(14.0))
@@ -1261,7 +1276,6 @@ impl ToastHost {
             .border_color(clone_progress_shell_border_color(theme))
             .rounded(px(theme.radii.popover))
             .overflow_hidden()
-            .shadow(crate::theme::shadow_popover(theme))
             .text_color(theme.colors.foreground.primary)
             .child(svg_spinner(
                 ("hook_progress_spinner", operation_id.0),
@@ -1293,9 +1307,15 @@ impl ToastHost {
         toast: &ToastState,
         message: impl IntoElement,
         close: impl IntoElement,
-        animations: Vec<Animation>,
     ) -> AnyElement {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        let leaving = toast.leaving;
+        // A new id restarts the animation state for the fade-out.
+        let (animation_id, duration) = if leaving {
+            ("toast_leaving", toast_fade_out_duration())
+        } else {
+            ("toast", toast_fade_in_duration())
+        };
         div()
             .relative()
             .child(components::toast(
@@ -1311,20 +1331,14 @@ impl ToastHost {
                     .right(scaled_px(10.0))
                     .child(close),
             )
-            .with_animations(
-                ("toast", toast.id),
-                animations,
-                move |toast, animation_ix, delta| {
-                    let opacity = match animation_ix {
-                        0 => delta,
-                        1 => 1.0,
-                        2 => 1.0 - delta,
-                        _ => 1.0,
-                    };
-                    let slide_x = match animation_ix {
-                        0 => -(1.0 - delta) * TOAST_SLIDE_PX,
-                        2 => -delta * TOAST_SLIDE_PX,
-                        _ => 0.0,
+            .with_animation(
+                (animation_id, toast.id),
+                Animation::new(duration).with_easing(gpui::quadratic),
+                move |toast, delta| {
+                    let (opacity, slide_x) = if leaving {
+                        (1.0 - delta, -delta * TOAST_SLIDE_PX)
+                    } else {
+                        (delta, -(1.0 - delta) * TOAST_SLIDE_PX)
                     };
                     toast.opacity(opacity).relative().left(px(slide_x))
                 },
@@ -1497,7 +1511,6 @@ impl Render for ToastHost {
                 .border_1()
                 .border_color(theme.colors.stroke.default)
                 .rounded(px(theme.radii.popover))
-                .shadow(crate::theme::shadow_popover(theme))
                 .child(
                     components::Button::new("toast_more_errors", label)
                         .style(components::ButtonStyle::Transparent)
@@ -1509,20 +1522,9 @@ impl Render for ToastHost {
                 .into_any_element()
         });
 
-        let fade_in = toast_fade_in_duration();
-        let fade_out = toast_fade_out_duration();
         let mut children = displayed
             .drain(..)
             .map(move |t| {
-                let animations = match t.ttl {
-                    Some(ttl) => vec![
-                        Animation::new(fade_in).with_easing(gpui::quadratic),
-                        Animation::new(ttl),
-                        Animation::new(fade_out).with_easing(gpui::quadratic),
-                    ],
-                    None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
-                };
-
                 let toast_id = t.id;
                 let dismiss_behavior = t.dismiss_behavior.clone();
                 let close = components::Button::new(format!("toast_close_{}", t.id), "")
@@ -1551,14 +1553,7 @@ impl Render for ToastHost {
                             notice,
                             cx,
                         );
-                        return Self::render_toast_frame(
-                            theme,
-                            ui_scale_percent,
-                            &t,
-                            body,
-                            close,
-                            animations,
-                        );
+                        return Self::render_toast_frame(theme, ui_scale_percent, &t, body, close);
                     }
                 };
                 let message_scroll = div()
@@ -1637,7 +1632,7 @@ impl Render for ToastHost {
                     )
                     .when_some(action_buttons, |this, buttons| this.child(buttons));
 
-                Self::render_toast_frame(theme, ui_scale_percent, &t, message, close, animations)
+                Self::render_toast_frame(theme, ui_scale_percent, &t, message, close)
             })
             .collect::<Vec<_>>();
         children.extend(more_errors);
@@ -1678,6 +1673,43 @@ mod tests {
         assert_eq!(toast_ttl(components::ToastKind::Error), None);
         assert!(toast_ttl(components::ToastKind::Warning).is_some());
         assert!(toast_ttl(components::ToastKind::Success).is_some());
+    }
+
+    #[gpui::test]
+    fn expiring_toasts_fade_out_then_leave(cx: &mut gpui::TestAppContext) {
+        let host = cx.update(|app| {
+            app.new(|cx| {
+                let mut host =
+                    ToastHost::new(AppTheme::gitcomet_dark(), gpui::WeakEntity::new_invalid());
+                // Only the live runtime gives toasts a TTL.
+                crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
+                    host.push_toast(components::ToastKind::Success, "Saved".into(), cx)
+                });
+                host
+            })
+        });
+        let leaving = |cx: &mut gpui::TestAppContext| {
+            cx.update(|app| {
+                host.read(app)
+                    .toasts
+                    .iter()
+                    .map(|toast| toast.leaving)
+                    .collect::<Vec<_>>()
+            })
+        };
+        let shown = toast_fade_in_duration()
+            + toast_ttl(components::ToastKind::Success).expect("success toasts expire");
+
+        cx.executor()
+            .advance_clock(shown - Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(leaving(cx), [false], "shown through its fade-in and TTL");
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(leaving(cx), [true], "then fades out");
+        cx.executor().advance_clock(toast_fade_out_duration());
+        cx.run_until_parked();
+        assert!(leaving(cx).is_empty(), "and is removed");
     }
     use crate::theme::with_alpha;
     use gitcomet_state::model::{CloneProgressMeter, CloneProgressStage};

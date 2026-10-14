@@ -383,7 +383,7 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
 }
 
 fn fake_gitlink_id(repo: &Path) -> String {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "--show-object-format"])

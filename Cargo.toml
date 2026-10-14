@@ -17,6 +17,8 @@ members = [
   "crates/gitcomet-ui-kit",
 ]
 exclude = [
+  "vendor/block",
+  "vendor/block/test_utils",
   "vendor/mermaid-rs-renderer",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
@@ -77,6 +79,10 @@ authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
 rust-version = "1.99.0"
 
+[patch.crates-io]
+# block 0.1.6 has no released fix for its uninhabited extern class static.
+block = { path = "vendor/block" }
+
 [workspace.dependencies]
 # Internal crates
 gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
@@ -120,11 +126,12 @@ futures = "0.3.34"
 gix = { version = "0.89.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
 gix-quote = "0.10.0"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "f7474ab18033dee1e58770494c3b56afb3938b24", default-features = false }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", default-features = false }
 image = "0.25.10"
+fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
 itertools = "0.15.0"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
@@ -151,12 +158,12 @@ rustfs-mimalloc-sys = "0.5.6"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "process"] }
 same-file = "1.0.6"
 semver = "1.0.28"
-sha2 = "0.11.0"
-schemars = "1.2.2"
+sha2 = "0.11.1"
+schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 signal-hook = "0.4.5"
-smallvec = "1.16.2"
+smallvec = "1.16.3"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
@@ -164,7 +171,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
 tree-sitter = "0.27.1"
-uuid = { version = "1.27.0", features = ["serde", "v4"] }
+uuid = { version = "1.28.0", features = ["serde", "v4"] }
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
 # small-state threshold. tree-sitter's generator gives a parse state either a
@@ -381,11 +388,11 @@ opt-level = 1
 [profile.ci-test.package.taffy]
 opt-level = 1
 
-# Compile/link coverage only. Actual performance measurements still use bench,
-# which inherits the production release settings below.
+# Unoptimized compile/link coverage only. Actual performance measurements use
+# release or bench with the production release settings below.
 [profile.ci-bench]
 inherits = "release"
-opt-level = 1
+opt-level = 0
 debug = 0
 split-debuginfo = "off"
 lto = "off"
@@ -423,10 +430,3 @@ strip = "debuginfo"
 inherits = "release"
 debug = 2
 strip = "none"
-
-# Diagnostic compile/link candidate. Promote only after paired hosted measurements.
-[profile.ci-bench-candidate]
-inherits = "ci-bench"
-
-[profile.ci-bench-candidate.package.gitcomet-ui-gpui]
-opt-level = 0

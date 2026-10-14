@@ -47,7 +47,7 @@ def isolated_environment(root):
 
 
 def git(repo, env, *args):
-    result = subprocess.run(["git", "-C", str(repo), *map(str, args)], env=env,
+    result = subprocess.run(["git", "-c", "maintenance.auto=false", "-C", str(repo), *map(str, args)], env=env,
                             capture_output=True, timeout=300)
     if result.returncode:
         raise RuntimeError(f"git {args}: {result.stderr.decode(errors='replace')}")
@@ -278,7 +278,7 @@ def run(args):
                     with server.lock:
                         records = list(server.records)
                     if not report["complete"] and len(records) == len(expected) and all(r["success"] for r in records):
-                        remote = subprocess.run(["git", "-C", str(root / "remote.git"), "rev-parse", "--verify", "refs/heads/fixture"],
+                        remote = subprocess.run(["git", "-c", "maintenance.auto=false", "-C", str(root / "remote.git"), "rev-parse", "--verify", "refs/heads/fixture"],
                                                 env=env, capture_output=True, timeout=30)
                         if remote.returncode == 0 and remote.stdout.strip() == git(repo, env, "rev-parse", "HEAD").strip():
                             verify_objects(server.root, expected)

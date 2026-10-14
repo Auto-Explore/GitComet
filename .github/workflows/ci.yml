@@ -49,11 +49,6 @@ on:
         description: Workspace UI libtest concurrency
         type: string
         default: ''
-      benchmark-profile:
-        description: Compile/link profile (candidate disables UI optimization)
-        type: choice
-        options: [ci-bench, ci-bench-candidate]
-        default: ci-bench
 
 permissions:
   contents: read
@@ -86,7 +81,6 @@ jobs:
     uses: ./.github/workflows/benchmark-targets.yml
     with:
       cold-cache: ${{ inputs.cold-cache || false }}
-      benchmark-profile: ${{ inputs.benchmark-profile || 'ci-bench' }}
   complete:
     name: CI complete
     runs-on: ubuntu-22.04

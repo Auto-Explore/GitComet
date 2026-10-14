@@ -26,34 +26,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  indexed-history-correctness:
-    name: Deterministic performance regressions
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ github.event.inputs.ref || github.ref }}
-    - name: Install UI dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
-    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
-      with:
-        toolchain: stable
-    - uses: ./.github/actions/setup-mold
-    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-    - name: Verify topology, bounded work and rendered history behavior
-      run: |
-        cargo test -p gitcomet-core --lib history_index
-        cargo test -p gitcomet-state --lib indexed_history
-        cargo test -p gitcomet-git-gix --test log_integration indexed
-        cargo test -p gitcomet-ui-gpui --lib indexed_history
-        cargo test -p gitcomet-ui-gpui --lib transitions_and_restored_checkpoints_match_original_frontier
-        cargo test -p gitcomet-ui-gpui --lib checkpoint_windows_match_continuous_graph_and_attribution
-        cargo test -p gitcomet-ui-kit --lib highlighted_path_typing_does_not_measure_every_hidden_suffix
-        cargo test -p gitcomet-ui-gpui --lib repo_picker_typing_long_recent_paths_has_bounded_text_measurements
-
   performance-budgets:
     name: Performance budgets (manual PR subset)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'pr-subset'

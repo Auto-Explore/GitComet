@@ -3219,7 +3219,6 @@ impl TextInput {
             .border_1()
             .border_color(self.style.menu_theme.colors.stroke.default)
             .rounded(px(self.style.menu_theme.radii.popover))
-            .shadow_lg()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {

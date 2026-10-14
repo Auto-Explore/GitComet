@@ -516,7 +516,6 @@ impl Render for GitCometView {
                 },
             ));
         }
-        root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if this.view_mode != GitCometViewMode::FocusedDiff
@@ -814,6 +813,9 @@ impl Render for GitCometView {
             Some(frame_overlay.into_any_element()),
             self.ui_scale_percent,
         ));
+        // Painted last, so viewports with their own Ctrl/Cmd+scroll zoom
+        // capture the wheel first.
+        root = root.child(UiScaleScrollCapture { view: cx.entity() });
 
         if crate::startup_probe::is_enabled() {
             root = root.on_children_prepainted(|_children_bounds, window, _cx| {

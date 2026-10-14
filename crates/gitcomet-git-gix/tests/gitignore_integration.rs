@@ -11,10 +11,9 @@ use gitcomet_core::gitignore::{self, GitignoreScope};
 mod test_git_env;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let status = cmd
         .arg("-C")
@@ -34,7 +33,7 @@ fn init_repo(repo: &Path) {
 
 /// Whether git considers `relative` ignored, via `git check-ignore`.
 fn is_ignored(repo: &Path, relative: &Path) -> bool {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     cmd.arg("-C")
         .arg(repo)
@@ -48,7 +47,7 @@ fn is_ignored(repo: &Path, relative: &Path) -> bool {
 /// The untracked paths git still reports, so we can prove the *unignored*
 /// control file survives every pattern we wrote.
 fn untracked(repo: &Path) -> Vec<String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let out = cmd
         .arg("-C")

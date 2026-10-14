@@ -1105,6 +1105,86 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
     );
 }
 
+#[gpui::test]
+fn image_toolbar_preserves_file_navigation_and_staging_at_normal_window_widths(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let paths = ["first.png", "second.png", "third.png"].map(std::path::PathBuf::from);
+    let mut repo = simple_worktree_repo(
+        RepoId(70569),
+        dir.path(),
+        &CommitId("abcdef001122338d".into()),
+        &paths,
+        &paths[1],
+    );
+    let pixels = image::RgbaImage::from_pixel(64, 64, image::Rgba([255, 0, 0, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    pixels
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    repo.diff_state.diff_file_rev = 1;
+    repo.diff_state.diff_file_image =
+        Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffImage {
+            path: paths[1].clone(),
+            old: Some(bytes.get_ref().clone()),
+            new: Some(bytes.into_inner()),
+            ..Default::default()
+        })));
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    wait_for_file_image_diff_cache(cx, &view, "image toolbar layout", |pane| {
+        pane.file_image_diff_cache_complete
+    });
+
+    for width in [1280.0, 1100.0, 1600.0] {
+        cx.simulate_resize(gpui::size(px(width), px(900.0)));
+        draw_and_drain_test_window(cx);
+        let bar = cx.debug_bounds("diff_bottom_bar").unwrap();
+        let mut controls = Vec::new();
+        for selector in [
+            "diff_prev_file",
+            "diff_next_file",
+            "diff_bar_position",
+            "diff_bar_stage_frame",
+            "image_sampling",
+            "image_zoom_out",
+            "image_zoom",
+            "image_zoom_in",
+            "image_fit",
+            "image_native",
+            "image_link",
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            assert!(
+                bounds.left() >= bar.left()
+                    && bounds.right() <= bar.right()
+                    && bounds.top() >= bar.top()
+                    && bounds.bottom() <= bar.bottom(),
+                "{selector} must fit the bar at {width}px: {bounds:?} vs {bar:?}"
+            );
+            for (other, other_bounds) in &controls {
+                assert!(
+                    !bounds.intersects(other_bounds),
+                    "{selector} overlaps {other} at {width}px: {bounds:?} vs {other_bounds:?}"
+                );
+            }
+            controls.push((selector, bounds));
+        }
+    }
+
+    cx.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    draw_and_drain_test_window(cx);
+    let button = cx.debug_bounds("diff_bar_stage").unwrap();
+    cx.simulate_click(button.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, &paths[2]);
+}
+
 /// Every control on the diff's header and bar names its keys in its tooltip.
 #[gpui::test]
 fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {

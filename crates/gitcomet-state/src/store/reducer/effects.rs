@@ -7,7 +7,7 @@ use crate::model::{
     FileBrowserSettings, ForeignDiffOrigin, Loadable, PendingFileBrowserReopen, RangeSelection,
     RepoId, RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode, WorktreeDirtyScope,
 };
-use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
+use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect, WorktreeListRead};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictRegionResolution, ConflictRegionSourceRanges,
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
@@ -565,21 +565,35 @@ fn build_conflict_session(
 pub(super) fn worktrees_loaded(
     state: &mut AppState,
     repo_id: RepoId,
-    result: std::result::Result<Vec<Worktree>, Error>,
+    read: WorktreeListRead,
+    result: std::result::Result<Arc<Vec<Worktree>>, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let worktrees = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+        if read.seq > repo_state.worktrees_read_seq {
+            match result {
+                Ok(worktrees) => {
+                    repo_state.worktrees_read_seq = read.seq;
+                    repo_state.set_worktrees_shared(Loadable::Ready(worktrees));
+                }
+                Err(e) => {
+                    // Only explicit loads publish errors. Cancelled replies are
+                    // suppressed by the worker's repo-load guard.
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    // An unavailable listing is not evidence that the worktrees
+                    // disappeared. Keep rows and badges until a read succeeds.
+                    if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
+                        repo_state.set_worktrees(Loadable::Error(e.to_string()));
+                    }
+                }
             }
-        };
-        repo_state.set_worktrees(worktrees);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::WORKTREES)
+        }
+        // A scan observation cannot finish a concurrent explicit list load.
+        // A stale explicit reply still has to release its own lane.
+        if read.completes_load
+            && repo_state
+                .loads_in_flight
+                .finish(RepoLoadsInFlight::WORKTREES)
         {
             effects.push(Effect::LoadWorktrees { repo_id });
         }
@@ -696,6 +710,8 @@ pub(super) fn worktree_dirty_loaded(
             };
             effects.push(worktree_dirty_effect(repo_state, scope));
         }
+        // Recover a missing requested list independently of scan replays.
+        append_ensure_worktrees_effect(repo_state, &mut effects);
     }
     // Outside the borrow above.
     match inline_refresh {
@@ -1395,6 +1411,22 @@ pub(super) fn clear_commit_selection(state: &mut AppState, repo_id: RepoId) -> V
     Vec::new()
 }
 
+fn append_ensure_worktrees_effect(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    if matches!(repo_state.open, Loadable::Ready(()))
+        && repo_state.sidebar_data_request.worktrees
+        && matches!(repo_state.worktrees, Loadable::NotLoaded)
+    {
+        // Scans may be queued behind an inaccessible checkout. The list's
+        // foreground lane must remain usable even while a full scan is running.
+        if let Some(effect) = request_worktrees_effect(repo_state) {
+            effects.push_effect(effect);
+        }
+    }
+}
+
 pub(super) fn append_ensure_sidebar_data_effects(
     repo_state: &mut RepoState,
     effects: &mut impl EffectAccumulator,
@@ -1403,18 +1435,9 @@ pub(super) fn append_ensure_sidebar_data_effects(
         return;
     }
 
+    append_ensure_worktrees_effect(repo_state, effects);
     let repo_id = repo_state.id;
     let request = repo_state.sidebar_data_request;
-
-    if request.worktrees && matches!(repo_state.worktrees, Loadable::NotLoaded) {
-        repo_state.set_worktrees(Loadable::Loading);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::WORKTREES)
-        {
-            effects.push_effect(Effect::LoadWorktrees { repo_id });
-        }
-    }
 
     if request.submodules && matches!(repo_state.submodules, Loadable::NotLoaded) {
         repo_state.set_submodules(Loadable::Loading);
@@ -1711,18 +1734,20 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return Vec::new();
     }
+    request_worktrees_effect(repo_state).into_iter().collect()
+}
+
+pub(super) fn request_worktrees_effect(repo_state: &mut RepoState) -> Option<Effect> {
     // Keep branch badges visible while refreshing after a checkout.
     if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
         repo_state.set_worktrees(Loadable::Loading);
     }
-    if repo_state
+    repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::WORKTREES)
-    {
-        vec![Effect::LoadWorktrees { repo_id }]
-    } else {
-        Vec::new()
-    }
+        .then_some(Effect::LoadWorktrees {
+            repo_id: repo_state.id,
+        })
 }
 
 pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

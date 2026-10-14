@@ -3,8 +3,22 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::Instant;
+
+/// System-PATH Git for fixtures, with automatic maintenance disabled.
+///
+/// Detached maintenance can still change or remove files after Git exits,
+/// racing fixture snapshots and teardown. Keep this override on the command
+/// so repository config and other tests are unaffected. A test of automatic
+/// maintenance can append `-c maintenance.auto=true` before its subcommand.
+/// Explicit `git maintenance run` and `git gc` still work.
+pub fn git_command() -> Command {
+    let mut command = crate::process::background_command("git");
+    command.args(["-c", "maintenance.auto=false"]);
+    command
+}
 
 /// Exercise Git's user-defined tool registration without scanning every
 /// installed third-party tool. Keep the empty directory alive until Git exits.
@@ -188,13 +202,102 @@ impl Drop for FixtureTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
+
+    fn isolated_git(repo: &Path) -> Command {
+        let mut command = git_command();
+        command
+            .arg("-C")
+            .arg(repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "");
+        command
+    }
+
+    fn run(command: &mut Command) -> Vec<u8> {
+        let output = command.output().expect("run fixture Git");
+        assert!(output.status.success(), "{output:?}");
+        output.stdout
+    }
+
+    fn maintenance_fixture(repo: &Path) {
+        run(isolated_git(repo).args(["init", "-q", "-b", "main"]));
+        append_config(
+            repo,
+            &[
+                ("user.name", "Test"),
+                ("user.email", "test@example.com"),
+                ("commit.gpgsign", "false"),
+                ("maintenance.auto", "true"),
+                ("maintenance.autoDetach", "false"),
+                ("gc.autoDetach", "false"),
+                ("maintenance.gc.enabled", "false"),
+                ("maintenance.commit-graph.enabled", "true"),
+                ("maintenance.commit-graph.auto", "-1"),
+            ],
+        );
+    }
+
+    #[test]
+    fn automatic_maintenance_requires_command_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        maintenance_fixture(repo);
+        let config = fs::read(repo.join(".git/config")).unwrap();
+
+        for enabled in [false, true] {
+            let trace = repo.join(format!("trace-{enabled}.json"));
+            let mut command = isolated_git(repo);
+            if enabled {
+                command.args(["-c", "maintenance.auto=true"]);
+            }
+            run(command.env("GIT_TRACE2_EVENT", &trace).args([
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "maintenance policy",
+            ]));
+            let maintenance_started = fs::read_to_string(&trace).unwrap().lines().any(|line| {
+                let event: serde_json::Value = serde_json::from_str(line).unwrap();
+                event["event"] == "child_start"
+                    && event["argv"].as_array().is_some_and(|args| {
+                        args.iter().any(|arg| arg == "maintenance")
+                            && args.iter().any(|arg| arg == "--auto")
+                    })
+            });
+            assert_eq!(maintenance_started, enabled, "trace: {}", trace.display());
+            assert_eq!(fs::read(repo.join(".git/config")).unwrap(), config);
+        }
+    }
+
+    #[test]
+    fn explicit_maintenance_still_runs_with_automatic_maintenance_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        maintenance_fixture(repo);
+        run(isolated_git(repo).args(["commit", "--allow-empty", "-qm", "base"]));
+        let graph = repo.join(".git/objects/info/commit-graphs/commit-graph-chain");
+        assert!(!graph.exists(), "fixture commit must not run maintenance");
+        run(isolated_git(repo).args(["maintenance", "run", "--task=commit-graph"]));
+        assert!(graph.exists(), "explicit maintenance must write the graph");
+        run(isolated_git(repo).args(["commit-graph", "verify"]));
+    }
+
+    #[test]
+    fn nested_git_inherits_the_maintenance_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run(isolated_git(dir.path()).args([
+            "-c",
+            "alias.fixture-policy=!git config --bool maintenance.auto",
+            "fixture-policy",
+        ]));
+        assert_eq!(output, b"false\n");
+    }
 
     #[test]
     fn imported_history_preserves_parent_authors_messages_and_file_bytes() {
         let repo = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
-            let output = Command::new("git")
+            let output = git_command()
                 .arg("-C")
                 .arg(repo.path())
                 .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -206,7 +309,7 @@ mod tests {
             String::from_utf8(output.stdout).unwrap()
         };
         git(&["init", "-b", "main"]);
-        let mut command = Command::new("git");
+        let mut command = git_command();
         command
             .arg("-C")
             .arg(repo.path())
@@ -255,7 +358,7 @@ mod tests {
     fn imported_paths_preserve_spaces_quotes_controls_and_utf8() {
         let repo = tempfile::tempdir().unwrap();
         let command = || {
-            let mut cmd = Command::new("git");
+            let mut cmd = git_command();
             cmd.arg("-C")
                 .arg(repo.path())
                 .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -325,7 +428,7 @@ mod tests {
         ];
         append_config(repo.path(), &values);
         for (key, value) in values {
-            let output = Command::new("git")
+            let output = git_command()
                 .args(["config", "--file"])
                 .arg(repo.path().join(".git/config"))
                 .args(["--get", key])

@@ -918,6 +918,7 @@ impl MainPaneView {
         let seq = self.conflict_image_preview_seq;
         self.conflict_image_preview_inflight = Some(seq);
         self.conflict_resolver.image_preview = ConflictResolverImagePreviewState {
+            sources: Default::default(),
             source_hash: Some(source_hash),
             path: Some(path.clone()),
             conflict_rev,
@@ -942,7 +943,17 @@ impl MainPaneView {
                             [base_bytes, ours_bytes, theirs_bytes],
                             &cancel,
                             |bytes| {
-                                super::diff_cache::render_raster_conflict_preview(format, bytes)
+                                let image = super::diff_cache::render_raster_conflict_preview(
+                                    format, bytes,
+                                )?;
+                                Some((
+                                    image,
+                                    crate::view::image_preview::Source::new(
+                                        format,
+                                        bytes,
+                                        128 * 1024 * 1024,
+                                    ),
+                                ))
                             },
                         )
                     };
@@ -965,6 +976,14 @@ impl MainPaneView {
 
                         this.conflict_image_preview_inflight = None;
                         this.conflict_image_preview_cancel = None;
+                        let [base_image, ours_image, theirs_image] =
+                            [base_image, ours_image, theirs_image].map(|result| {
+                                result.map_or((None, None), |(image, source)| (Some(image), source))
+                            });
+                        this.conflict_resolver.image_preview.sources =
+                            [base_image.1, ours_image.1, theirs_image.1];
+                        let (base_image, ours_image, theirs_image) =
+                            (base_image.0, ours_image.0, theirs_image.0);
                         this.conflict_resolver.image_preview.images.base =
                             loadable_conflict_preview_render_image(base_image, base_has_source);
                         this.conflict_resolver.image_preview.images.ours =
@@ -988,7 +1007,18 @@ impl MainPaneView {
                     map_deduplicated_conflict_preview_sides(
                         [base_bytes, ours_bytes, theirs_bytes],
                         &cancel,
-                        |bytes| rasterize_conflict_preview_svg_payload(Some(bytes.to_vec())),
+                        |bytes| {
+                            let payload =
+                                rasterize_conflict_preview_svg_payload(Some(bytes.to_vec()))?;
+                            Some((
+                                payload,
+                                crate::view::image_preview::Source::new(
+                                    format,
+                                    bytes,
+                                    128 * 1024 * 1024,
+                                ),
+                            ))
+                        },
                     )
                 };
                 let [base_payload, ours_payload, theirs_payload] =
@@ -1010,6 +1040,14 @@ impl MainPaneView {
 
                     this.conflict_image_preview_inflight = None;
                     this.conflict_image_preview_cancel = None;
+                    let [base_payload, ours_payload, theirs_payload] =
+                        [base_payload, ours_payload, theirs_payload].map(|result| {
+                            result.map_or((None, None), |(payload, source)| (Some(payload), source))
+                        });
+                    this.conflict_resolver.image_preview.sources =
+                        [base_payload.1, ours_payload.1, theirs_payload.1];
+                    let (base_payload, ours_payload, theirs_payload) =
+                        (base_payload.0, ours_payload.0, theirs_payload.0);
                     this.conflict_resolver.image_preview.images.base =
                         loadable_conflict_preview_svg_image(base_payload, base_has_source);
                     this.conflict_resolver.image_preview.images.ours =

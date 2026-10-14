@@ -2649,7 +2649,7 @@ mod tests {
     use super::{branches_to_prune, normalize_remote_url, parse_refname_set, run_git_command};
     use gitcomet_core::services::CommandOutput;
     use rustc_hash::FxHashSet;
-    use std::{cell::Cell, process::Command};
+    use std::cell::Cell;
 
     #[test]
     fn parse_refname_set_trims_and_deduplicates_lines() {
@@ -2720,7 +2720,7 @@ feature/no-upstream\t\n";
         let with_output_called = Cell::new(false);
 
         let output = run_git_command(
-            Command::new("git"),
+            gitcomet_core::test_support::git_fixture::git_command(),
             "git push",
             false,
             |_, label| {
@@ -2752,7 +2752,7 @@ feature/no-upstream\t\n";
         };
 
         let output = run_git_command(
-            Command::new("git"),
+            gitcomet_core::test_support::git_fixture::git_command(),
             "git push",
             true,
             |_, _| {

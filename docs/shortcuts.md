@@ -42,6 +42,24 @@ macOS-only window-management shortcuts:
 - `Cmd-H`: Hide GitComet.
 - `Option-Cmd-H`: Hide other applications.
 
+## Image preview shortcuts
+
+These keys apply when an image viewport has focus. They also work in image diffs
+and image conflict previews.
+
+| Action | Shortcut |
+| --- | --- |
+| Zoom in / out | `+` / `-` |
+| Fit | `0` or double-click |
+| Actual size (100%) | `1` |
+| Zoom around pointer | Ctrl/Cmd + scroll |
+| Pan | Drag or scroll |
+
+The sampling and shared zoom menus are in the file's bottom bar. When comparison
+images are unlinked, each pane has its own zoom controls beneath the image.
+Ctrl/Cmd + scroll over an image changes image zoom; outside the image it changes
+application UI scale.
+
 ## Text input shortcuts
 
 File operation shortcuts are scoped to the Files explorer. See

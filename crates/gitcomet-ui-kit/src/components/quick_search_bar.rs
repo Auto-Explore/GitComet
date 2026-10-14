@@ -268,7 +268,6 @@ impl<V: 'static> QuickSearchBar<V> {
                     .border_1()
                     .border_color(theme.colors.stroke.default)
                     .bg(theme.colors.surface.raised)
-                    .shadow(crate::theme::shadow_surface(theme))
             });
         if let Some(input) = input_row {
             bar = bar.child(input);

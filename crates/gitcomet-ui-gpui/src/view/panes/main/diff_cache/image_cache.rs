@@ -1,5 +1,6 @@
 use super::*;
-use crate::view::diff_utils::{fill_svg_viewport_white, image_format_for_path};
+use crate::view::diff_utils::image_format_for_path;
+use crate::view::image_preview::{limit_decoder, svg};
 use image::{AnimationDecoder as _, ImageDecoder as _};
 use rustc_hash::FxHasher;
 use std::hash::Hash;
@@ -22,8 +23,6 @@ const CONFLICT_RASTER_PREVIEW_MAX_BYTES: usize = 512 * 512 * 4;
 const CONFLICT_RASTER_PREVIEW_MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 const IMAGE_DIFF_SVG_PREVIEW_TARGET_WIDTH_PX: f32 = 640.0;
 const IMAGE_DIFF_SVG_PREVIEW_MAX_EDGE_PX: f32 = 1024.0;
-static IMAGE_DIFF_SVG_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
-    std::sync::LazyLock::new(resvg::usvg::Options::default);
 static IMAGE_DIFF_CACHE_STARTUP_CLEANUP: std::sync::Once = std::sync::Once::new();
 static IMAGE_DIFF_CACHE_WRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -200,22 +199,9 @@ fn decode_file_image_diff_bytes(
 
 #[derive(Clone, Default)]
 struct DecodedImageDiffPreview {
+    source: Option<Arc<crate::view::image_preview::Source>>,
     render: Option<Arc<gpui::RenderImage>>,
     cached_path: Option<std::path::PathBuf>,
-}
-
-fn image_rs_format_for_diff_preview(format: gpui::ImageFormat) -> Option<image::ImageFormat> {
-    match format {
-        gpui::ImageFormat::Png => Some(image::ImageFormat::Png),
-        gpui::ImageFormat::Jpeg => Some(image::ImageFormat::Jpeg),
-        gpui::ImageFormat::Gif => Some(image::ImageFormat::Gif),
-        gpui::ImageFormat::Webp => Some(image::ImageFormat::WebP),
-        gpui::ImageFormat::Bmp => Some(image::ImageFormat::Bmp),
-        gpui::ImageFormat::Tiff => Some(image::ImageFormat::Tiff),
-        gpui::ImageFormat::Ico => Some(image::ImageFormat::Ico),
-        gpui::ImageFormat::Svg => None,
-        gpui::ImageFormat::Pnm => Some(image::ImageFormat::Pnm),
-    }
 }
 
 fn swap_rgba_to_bgra(color: &mut [u8]) {
@@ -449,31 +435,11 @@ fn prepare_raster_preview_animation_frames(
     frames
 }
 
-fn configure_raster_decoder(
-    decoder: &mut impl image::ImageDecoder,
-    policy: RasterPreviewPolicy,
-) -> image::ImageResult<()> {
-    let (width, height) = decoder.dimensions();
-    let rgba_bytes = u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or_else(|| {
-            image::ImageError::Limits(image::error::LimitError::from_kind(
-                image::error::LimitErrorKind::InsufficientMemory,
-            ))
-        })?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(policy.max_decode_bytes);
-    limits.reserve(decoder.total_bytes())?;
-    limits.reserve(rgba_bytes)?;
-    decoder.set_limits(limits)
-}
-
 fn decode_oriented_static_raster_frame(
     mut decoder: impl image::ImageDecoder,
     policy: RasterPreviewPolicy,
 ) -> Option<image::Frame> {
-    configure_raster_decoder(&mut decoder, policy).ok()?;
+    limit_decoder(&mut decoder, policy.max_decode_bytes).ok()?;
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
@@ -490,11 +456,11 @@ fn decode_raster_preview_frames(
     bytes: &[u8],
     policy: RasterPreviewPolicy,
 ) -> Option<Vec<image::Frame>> {
-    let image_format = image_rs_format_for_diff_preview(format)?;
+    let image_format = crate::view::image_preview::raster_format(format)?;
     let frames = match format {
         gpui::ImageFormat::Gif => {
             let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?;
-            configure_raster_decoder(&mut decoder, policy).ok()?;
+            limit_decoder(&mut decoder, policy.max_decode_bytes).ok()?;
             let dimensions = decoder.dimensions();
             prepare_raster_preview_animation_frames(
                 decoder.into_frames(),
@@ -505,7 +471,7 @@ fn decode_raster_preview_frames(
         }
         gpui::ImageFormat::Webp => {
             let mut decoder = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).ok()?;
-            configure_raster_decoder(&mut decoder, policy).ok()?;
+            limit_decoder(&mut decoder, policy.max_decode_bytes).ok()?;
             if decoder.has_animation() {
                 let dimensions = decoder.dimensions();
                 let orientation = decoder
@@ -534,9 +500,8 @@ fn decode_raster_preview_frames(
 }
 
 pub(in crate::view) fn render_svg_image_diff_preview(
-    svg_bytes: &[u8],
+    tree: &resvg::usvg::Tree,
 ) -> Option<Arc<gpui::RenderImage>> {
-    let tree = resvg::usvg::Tree::from_data(svg_bytes, &IMAGE_DIFF_SVG_USVG_OPTIONS).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
     let svg_height = svg_size.height();
@@ -560,15 +525,12 @@ pub(in crate::view) fn render_svg_image_diff_preview(
 
     let raster_width = raster_width.max(1.0) as u32;
     let raster_height = raster_height.max(1.0) as u32;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(raster_width, raster_height)?;
-    fill_svg_viewport_white(&mut pixmap);
-    let transform = resvg::tiny_skia::Transform::from_scale(
-        raster_width as f32 / svg_width,
-        raster_height as f32 / svg_height,
-    );
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-    let mut buffer = image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())?;
+    let mut buffer = svg::raster_region(
+        tree,
+        (raster_width, raster_height),
+        (0, 0, raster_width, raster_height),
+    )
+    .ok()?;
     for pixel in buffer.as_chunks_mut::<4>().0 {
         swap_rgba_pa_to_bgra(pixel);
     }
@@ -596,20 +558,31 @@ fn decode_file_image_diff_preview_side(
     format: gpui::ImageFormat,
     bytes: &[u8],
 ) -> DecodedImageDiffPreview {
+    let source = crate::view::image_preview::Source::new(
+        format,
+        bytes,
+        IMAGE_DIFF_RASTER_PREVIEW_MAX_DECODE_BYTES,
+    );
     match format {
         gpui::ImageFormat::Svg => {
-            if let Some(render) = render_svg_image_diff_preview(bytes) {
+            if let Some(render) = source
+                .as_ref()
+                .and_then(|source| render_svg_image_diff_preview(source.svg()?))
+            {
                 return DecodedImageDiffPreview {
+                    source,
                     render: Some(render),
                     cached_path: None,
                 };
             }
             DecodedImageDiffPreview {
+                source,
                 render: None,
                 cached_path: cached_image_diff_path(bytes, "svg"),
             }
         }
         _ => DecodedImageDiffPreview {
+            source,
             render: render_raster_image_diff_preview(format, bytes),
             cached_path: None,
         },
@@ -684,6 +657,7 @@ fn write_image_diff_cache_file(path: &std::path::Path, bytes: &[u8]) -> std::io:
 }
 
 struct ImageDiffCacheRebuild {
+    sources: [Option<Arc<crate::view::image_preview::Source>>; 2],
     file_path: Option<std::path::PathBuf>,
     old: Option<Arc<gpui::RenderImage>>,
     new: Option<Arc<gpui::RenderImage>>,
@@ -751,6 +725,7 @@ fn build_file_image_diff_cache_rebuild(
 
     let Some(format) = format else {
         return ImageDiffCacheRebuild {
+            sources: Default::default(),
             file_path,
             old: None,
             new: None,
@@ -768,6 +743,7 @@ fn build_file_image_diff_cache_rebuild(
                 && new_preview.render.is_none()
                 && new_preview.cached_path.is_none());
     ImageDiffCacheRebuild {
+        sources: [old_preview.source, new_preview.source],
         file_path,
         old: old_preview.render,
         new: new_preview.render,
@@ -778,7 +754,7 @@ fn build_file_image_diff_cache_rebuild(
 }
 
 impl MainPaneView {
-    fn advance_file_image_preview_side(
+    pub(in crate::view) fn advance_file_image_preview_side(
         state: &mut FileImagePreviewAnimationSide,
         image: Option<&Arc<gpui::RenderImage>>,
         now: std::time::Instant,
@@ -832,8 +808,18 @@ impl MainPaneView {
         window: &gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> [usize; 2] {
+        let timer: fn(&mut Self) -> &mut _ = |this| &mut this.file_image_preview_timer;
+        if self.image_preview_group.read(cx).paused {
+            self.file_image_preview_animation.old.frame_started_at = None;
+            self.file_image_preview_animation.new.frame_started_at = None;
+            self.file_image_preview_timer.schedule(None, timer, cx);
+            return [
+                self.file_image_preview_animation.old.frame_index,
+                self.file_image_preview_animation.new.frame_index,
+            ];
+        }
         let now = std::time::Instant::now();
-        let animate = window.is_window_active() && !cx.reduce_motion();
+        let animate = crate::view::image_preview::animates(window, cx);
         let old_deadline = Self::advance_file_image_preview_side(
             &mut self.file_image_preview_animation.old,
             old,
@@ -850,29 +836,7 @@ impl MainPaneView {
             (Some(old), Some(new)) => Some(old.min(new)),
             (old, new) => old.or(new),
         };
-
-        if deadline != self.file_image_preview_animation.scheduled_deadline {
-            self.file_image_preview_animation_task = None;
-            self.file_image_preview_animation.generation =
-                self.file_image_preview_animation.generation.wrapping_add(1);
-            self.file_image_preview_animation.scheduled_deadline = deadline;
-            if let Some(deadline) = deadline {
-                let generation = self.file_image_preview_animation.generation;
-                let delay = deadline.saturating_duration_since(now);
-                self.file_image_preview_animation_task = Some(cx.spawn(
-                    async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                        cx.background_executor().timer(delay).await;
-                        let _ = view.update(cx, |this, cx| {
-                            if this.file_image_preview_animation.generation != generation {
-                                return;
-                            }
-                            this.file_image_preview_animation.scheduled_deadline = None;
-                            cx.notify();
-                        });
-                    },
-                ));
-            }
-        }
+        self.file_image_preview_timer.schedule(deadline, timer, cx);
 
         [
             self.file_image_preview_animation.old.frame_index,
@@ -902,10 +866,11 @@ impl MainPaneView {
         self.file_image_diff_cache_complete = false;
         self.file_image_diff_cache_failed = false;
         self.file_image_diff_cache_path = None;
+        self.file_image_sources = Default::default();
         self.file_image_diff_cache_old_svg_path = None;
         self.file_image_diff_cache_new_svg_path = None;
         self.file_image_preview_animation = FileImagePreviewAnimation::default();
-        self.file_image_preview_animation_task = None;
+        self.file_image_preview_timer = Default::default();
     }
 
     pub(in crate::view) fn ensure_file_image_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
@@ -985,6 +950,7 @@ impl MainPaneView {
                 self.file_image_diff_cache_failed = rebuild.failed;
                 self.file_image_diff_cache_content_signature = Some(content_signature);
                 self.file_image_diff_cache_path = rebuild.file_path;
+                self.file_image_sources = rebuild.sources;
                 self.file_image_diff_cache_old = rebuild.old;
                 self.file_image_diff_cache_new = rebuild.new;
                 self.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
@@ -1017,6 +983,7 @@ impl MainPaneView {
                     this.file_image_diff_cache_failed = rebuild.failed;
                     this.file_image_diff_cache_content_signature = Some(content_signature);
                     this.file_image_diff_cache_path = rebuild.file_path;
+                    this.file_image_sources = rebuild.sources;
                     this.file_image_diff_cache_old = rebuild.old;
                     this.file_image_diff_cache_new = rebuild.new;
                     this.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
@@ -1724,7 +1691,8 @@ mod tests {
     #[test]
     fn render_svg_image_diff_preview_fills_transparent_viewport_white() {
         let svg = inset_rect_svg(4, 4, 1, 1);
-        let render = render_svg_image_diff_preview(&svg).expect("svg render image");
+        let render =
+            render_svg_image_diff_preview(&svg::parse(&svg).unwrap()).expect("svg render image");
         let size = render.size(0);
 
         assert_eq!(render_pixel_bgra(&render, 0, 0), [255, 255, 255, 255]);

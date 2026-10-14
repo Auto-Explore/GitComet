@@ -130,6 +130,8 @@ pub struct RepoState {
     pub suggested_commit_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
+    /// Latest successful list read applied, shared by explicit loads and scans.
+    pub(crate) worktrees_read_seq: u64,
     /// Uncommitted-change counts for the *other* linked worktrees, so the
     /// history pane can show work left behind in a worktree that is not the one
     /// being viewed. Only worktrees with changes are kept.
@@ -191,6 +193,10 @@ pub struct RepoState {
     /// command *starts*, which would spend the signal before the disk changed.
     pub local_worktree_write_rev: u64,
     pub last_active_at: Option<SystemTime>,
+    /// The tab was left with loads or a diff reload in flight. Leaving
+    /// cancelled them, so the values they were replacing stay stale until the
+    /// tab is refreshed on its next activation.
+    pub left_mid_refresh: bool,
 
     pub feedback: RepoFeedbackState,
     pub pending: RepoPendingState,
@@ -312,6 +318,7 @@ impl RepoState {
             suggested_commit_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
+            worktrees_read_seq: 0,
             worktree_dirty: Loadable::NotLoaded,
             worktree_dirty_rev: 0,
             ref_metadata: Loadable::NotLoaded,
@@ -344,6 +351,7 @@ impl RepoState {
             change_lists: Arc::default(),
             local_worktree_write_rev: 0,
             last_active_at: None,
+            left_mid_refresh: false,
             feedback: RepoFeedbackState::default(),
             pending: RepoPendingState::default(),
             load_epoch: 0,
@@ -504,7 +512,10 @@ impl RepoState {
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
-        let worktrees = loadable_into_arc(worktrees);
+        self.set_worktrees_shared(loadable_into_arc(worktrees));
+    }
+
+    pub(crate) fn set_worktrees_shared(&mut self, worktrees: Loadable<Arc<Vec<Worktree>>>) {
         if self.worktrees == worktrees {
             return;
         }

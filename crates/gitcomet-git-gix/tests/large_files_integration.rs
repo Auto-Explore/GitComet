@@ -20,7 +20,7 @@ const ANNEX_KEY: &str =
     "SHA256E-s5--2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824.bin";
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -37,7 +37,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 fn git_lfs_available() -> bool {
-    let available = Command::new("git")
+    let available = gitcomet_core::test_support::git_fixture::git_command()
         .args(["lfs", "version"])
         .output()
         .is_ok_and(|output| output.status.success());
@@ -449,7 +449,7 @@ fn conflicted_large_file_text_diff_resolves_both_index_stages() {
             let id = git(&repo, &["hash-object", "-w", "--no-filters", "a.bin"]);
             index_info.push_str(&format!("100644 {} {stage}\ta.bin\n", id.trim()));
         }
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         test_git_env::apply(&mut cmd);
         let mut child = cmd
             .arg("-C")

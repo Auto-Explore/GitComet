@@ -6,7 +6,6 @@ use gitcomet_core::test_support::git_fixture::{
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 fn run_git(repo: &Path, args: &[&str]) {
     // Concurrent local transports can leave Git-for-Windows shell children
@@ -17,7 +16,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
     let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -44,7 +43,7 @@ fn initialize_repo_with_commit(repo: &Path) {
             ("commit.gpgsign", "false"),
         ],
     );
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.arg("-C").arg(repo);
     import_linear_history(
         &mut cmd,
@@ -676,7 +675,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .is_empty(),
         "the push must not silently fall back to the local branch name"
     );
-    let pending_marker = Command::new("git")
+    let pending_marker = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(&work_repo)
         .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
@@ -740,7 +739,7 @@ fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
         .fetch_all_with_output_prune(true)
         .expect("fetch newly live upstream");
 
-    let marker = Command::new("git")
+    let marker = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(&work_repo)
         .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
@@ -1236,7 +1235,7 @@ fn tracked_branch_listing_scales_with_branch_count() {
             writeln!(config, "\n[branch \"branch-{index}\"]\n remote = origin\n merge = refs/heads/main\n gitcometPendingUpstream = false").unwrap();
         }
         drop(config);
-        let mut child = Command::new("git")
+        let mut child = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(repo)
             .args(["update-ref", "--stdin"])

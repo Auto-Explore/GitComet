@@ -89,6 +89,40 @@ buffers remain available above recent documents even after history removal or
 eviction. A multiple-file drop records every successful file and displays the
 first one; later background replies cannot steal focus after another navigation.
 
+## Image previews
+
+Image files, image diffs, and image conflict previews support zoom and pan.
+The bottom bar provides Fit, Actual size, zoom steps from 1% to 6400%, and sampling
+controls. At 100%, one original image pixel occupies one physical screen pixel,
+independently of the application's UI scale. Drag or scroll to pan; hold Ctrl or
+Cmd while scrolling to zoom around the pointer. Double-click to fit.
+
+Auto uses the selected smooth filter below 300% and nearest neighbor at 300%
+and above. Smooth always uses Spline36, Robidoux, or Hann; Pixels always uses
+nearest neighbor. At 100%, all modes preserve original pixels. The default is
+Auto with Spline36. Sampling choices are shared across windows and repositories
+and survive restart. SVG previews remain vector-rendered and have no raster
+sampling selector. ICO files do not enlarge automatically in Fit mode.
+
+SVG text uses system and bundled fonts. Filtered SVGs render as a whole before
+tiling so shadows and offsets cross tile boundaries correctly. If that render
+would exceed the 16 MiB raster limit, the bounded preview remains visible with
+a detail-unavailable message; zooming out restores detailed rendering.
+
+Comparison panes share zoom and pan by default, with their top-left source
+coordinates aligned. Click Linked zoom & pan to inspect each pane independently:
+each image gets its own zoom percentage, zoom menu, Fit, and Actual size controls
+beneath it. Actual size sets zoom to 100%; Fit sizes the image to its pane.
+Linking again uses the last image you adjusted. Opening another file resets to
+Fit and Linked zoom & pan.
+For animated GIF and WebP files, Pause to inspect freezes the displayed frame
+and loads its original pixels; Resume returns to the bounded animation preview.
+With reduced motion turned on, animations stay on one frame at full detail and
+have no Pause control.
+If the visible image exceeds the 64 MiB tile cache, central tiles retain full
+detail and peripheral areas use the smaller preview. Reducing the pane size
+allows the entire view to fit within that budget.
+
 ## Filesystem service and recovery
 
 `gitcomet-core::filesystem` owns typed requests, cancellation, progress, per-item

@@ -313,6 +313,9 @@ impl MainPaneView {
             )
         });
 
+        let image_preview_group = cx.new(crate::view::image_preview::Group::new);
+        cx.observe(&image_preview_group, |_, _, cx| cx.notify())
+            .detach();
         let mut pane = Self {
             store: store.into(),
             hosted_content_width: None,
@@ -516,6 +519,9 @@ impl MainPaneView {
             worktree_markdown: WorktreeMarkdownPreview::default(),
             main_pane_surface_frame: 0,
             main_pane_surface_memo: std::cell::RefCell::new(None),
+            image_preview_group,
+            image_preview_active: false,
+            file_image_sources: Default::default(),
             file_image_diff_cache_repo_id: None,
             file_image_diff_cache_rev: 0,
             file_image_diff_cache_content_signature: None,
@@ -530,7 +536,7 @@ impl MainPaneView {
             file_image_diff_cache_old_svg_path: None,
             file_image_diff_cache_new_svg_path: None,
             file_image_preview_animation: FileImagePreviewAnimation::default(),
-            file_image_preview_animation_task: None,
+            file_image_preview_timer: Default::default(),
             conflict_image_preview_seq: 0,
             conflict_image_preview_inflight: None,
             conflict_image_preview_task: None,

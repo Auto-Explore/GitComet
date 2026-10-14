@@ -4,10 +4,10 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -17,7 +17,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn hash_blob(repo: &Path, contents: &[u8]) -> String {
-    let mut child = Command::new("git")
+    let mut child = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["hash-object", "-w", "--stdin"])
@@ -68,7 +68,7 @@ fn set_unmerged_stages(
         index_info.push_str(&format!("100644 {blob} 3\t{path}\n"));
     }
 
-    let mut child = Command::new("git")
+    let mut child = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["update-index", "--index-info"])

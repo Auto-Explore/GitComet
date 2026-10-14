@@ -360,7 +360,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     let _guard = crate::test_support::lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(dir.path())
             .args(args)
@@ -382,7 +382,7 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
         stream.push('\n');
     }
     stream.push_str("done\n");
-    let mut child = std::process::Command::new("git")
+    let mut child = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(dir.path())
         .args(["fast-import", "--quiet", "--done"])

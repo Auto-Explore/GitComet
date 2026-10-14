@@ -1738,6 +1738,7 @@ impl MainPaneView {
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
+        self.begin_image_preview_frame(cx);
         let title = self.diff_panel_title(theme, cx);
         self.ensure_diagram_search_source(cx);
         // What the pane shows, as every other question about it answers it.
@@ -2237,7 +2238,6 @@ impl MainPaneView {
             new_large.as_ref(),
         );
         let disk_notice = self.render_file_disk_notice(theme, cx);
-        let diff_bar = self.diff_bar(repo_id, window, cx);
 
         let body: AnyElement = if has_large_file && !show_large_file_content {
             let action = self.large_file_card_actions(
@@ -2515,8 +2515,8 @@ impl MainPaneView {
                 conflict_target_path,
                 repo_id,
                 theme,
-                ui_scale_percent,
                 editor_font_family.clone(),
+                window,
                 cx,
             )
         } else if is_conflict_compare {
@@ -2698,6 +2698,7 @@ impl MainPaneView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == "diff_editor_menu");
         let diff_search_overlay = self.render_diff_search_overlay(theme, ui_scale_percent, cx);
+        let diff_bar = self.diff_bar(repo_id, window, cx);
 
         div()
             .relative()

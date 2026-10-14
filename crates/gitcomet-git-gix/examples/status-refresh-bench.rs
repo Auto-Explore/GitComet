@@ -12,6 +12,7 @@ use std::{
 
 fn git(path: &Path, args: &[&str]) {
     let output = Command::new("git")
+        .args(["-c", "maintenance.auto=false"])
         .arg("-C")
         .arg(path)
         .args(args)

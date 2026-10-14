@@ -257,8 +257,11 @@ mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
 mod diagram_preview;
+mod image_preview;
 #[cfg(feature = "benchmarks")]
 pub use diagram_preview::benchmarks::MermaidPreviewFixture;
+#[cfg(feature = "benchmarks")]
+pub use image_preview::benchmarks::ImageInspectionFixture;
 pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;

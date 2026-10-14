@@ -85,6 +85,13 @@ pub(super) struct MonitorConfig {
     /// Set while a watch lease holds this repository: its changes are
     /// delivered even when another repository is active.
     pub leased: Arc<AtomicBool>,
+    /// Counts every change this monitor flushes, delivered or not. A monitor
+    /// kept running for an inactive repository drops its changes; an unchanged
+    /// count across the inactive stretch proves nothing changed meanwhile.
+    pub change_generation: Arc<AtomicU64>,
+    /// Coverage is incomplete (see `note_watch_outcome`), so an unchanged
+    /// count proves nothing.
+    pub degraded: Arc<AtomicBool>,
     pub worktree_owner: Option<(u64, PathBuf)>,
     #[cfg(test)]
     pub native_events: Option<Arc<AtomicU64>>,
@@ -105,6 +112,8 @@ impl Default for MonitorConfig {
             startup_progress: None,
             before_registration: None,
             leased: Arc::default(),
+            change_generation: Arc::default(),
+            degraded: Arc::default(),
             worktree_owner: None,
             #[cfg(test)]
             native_events: None,
@@ -662,8 +671,13 @@ pub(super) fn repo_monitor_thread(
     if !monitor_enabled.load(Ordering::Relaxed) {
         return;
     }
+    let change_generation = Arc::clone(&config.change_generation);
+    let degraded_flag = Arc::clone(&config.degraded);
     let mut degraded = false;
-    note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+    note_watch_outcome(&msg_tx, repo_id, &mut degraded, &degraded_flag, outcome);
+    // Watching starts here: a change made during the setup walk is never
+    // reported, so a tab left before this point must not count as unchanged.
+    change_generation.fetch_add(1, Ordering::SeqCst);
     let mut last_recovery = degraded.then(Instant::now);
     let mut debouncer = DebouncedChange::new(config.debounce, config.max_delay);
     #[cfg(test)]
@@ -675,7 +689,8 @@ pub(super) fn repo_monitor_thread(
     let leased = Arc::clone(&config.leased);
     let worktree_owner = config.worktree_owner.clone();
     let flush = |change| {
-        let active = active_repo_id.load(Ordering::Relaxed);
+        change_generation.fetch_add(1, Ordering::SeqCst);
+        let active = active_repo_id.load(Ordering::SeqCst);
         if active == repo_id.0 || leased.load(Ordering::Relaxed) {
             trace_repo_monitor_flush("flush", repo_id, &change, active);
             msg_tx.send_repo_monitor_or_log(
@@ -763,6 +778,7 @@ pub(super) fn repo_monitor_thread(
                                             &msg_tx,
                                             repo_id,
                                             &mut degraded,
+                                            &degraded_flag,
                                             outcome,
                                         );
                                         if degraded && !was_degraded {
@@ -796,7 +812,7 @@ pub(super) fn repo_monitor_thread(
                 }
                 if state.rules.failed && outcome != WatchSetupOutcome::PolicyFailed {
                     outcome = WatchSetupOutcome::PolicyFailed;
-                    note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+                    note_watch_outcome(&msg_tx, repo_id, &mut degraded, &degraded_flag, outcome);
                     rebuild = Some("ignore-lookup");
                     due_change = debouncer
                         .push(RepoExternalChange::all(), Instant::now())
@@ -888,7 +904,7 @@ pub(super) fn repo_monitor_thread(
                     }
                     WatchSetup::Cancelled => break,
                 }
-                note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
+                note_watch_outcome(&msg_tx, repo_id, &mut degraded, &degraded_flag, outcome);
                 debouncer.take();
                 due_change = Some(RepoExternalChange {
                     verification_context: policy_dirty,

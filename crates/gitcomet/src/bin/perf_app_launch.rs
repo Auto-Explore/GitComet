@@ -1312,6 +1312,7 @@ fn empty_git_config() -> &'static Path {
 fn git_command(repo: &Path) -> Command {
     let empty_config = empty_git_config();
     let mut command = Command::new("git");
+    command.args(["-c", "maintenance.auto=false"]);
     command
         .arg("-C")
         .arg(repo)

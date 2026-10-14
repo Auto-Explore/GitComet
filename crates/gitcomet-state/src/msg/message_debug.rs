@@ -301,9 +301,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("result", result)
                 .field("conflict_session", conflict_session)
                 .finish(),
-            InternalMsg::WorktreesLoaded { repo_id, result } => f
+            InternalMsg::WorktreesLoaded {
+                repo_id,
+                read,
+                result,
+            } => f
                 .debug_struct("WorktreesLoaded")
                 .field("repo_id", repo_id)
+                .field("read", read)
                 .field("result", result)
                 .finish(),
             InternalMsg::WorktreeDirtyLoaded {

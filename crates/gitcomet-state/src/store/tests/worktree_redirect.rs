@@ -3,7 +3,7 @@
 use super::*;
 
 fn git_output(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -193,7 +193,7 @@ fn rename_onto_branch_held_by_linked_worktree_overwrites_there_and_opens_the_tab
         "feature"
     );
     assert!(
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .args([
                 "-C",
                 repo.to_str().expect("utf-8"),
@@ -216,7 +216,7 @@ fn rename_onto_branch_held_by_linked_worktree_overwrites_there_and_opens_the_tab
 }
 
 fn git_config_is_unset(repo: &Path, key: &str) -> bool {
-    !Command::new("git")
+    !gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["config", "--get", key])

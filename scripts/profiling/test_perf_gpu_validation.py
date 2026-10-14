@@ -1,5 +1,4 @@
-"""Cross-platform validation plans must retain instrumentation and pin boundaries."""
-import argparse
+"""Native renderer validation must test the pinned revision and fail on empty suites."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,40 +14,49 @@ class ValidationTests(unittest.TestCase):
             with self.subTest(host=host):
                 tests = validation.native_tests(host)
                 self.assertTrue(any(package in argv for _, argv in tests))
-                self.assertTrue(any("shared_atlas" in argv for _, argv in tests))
+                self.assertTrue(any("--lib" in argv for _, argv in tests))
+        # WGPU DX12 is Windows' default renderer, so its whole suite runs there.
+        wgpu = ["-p", "gpui_ce_wgpu", "--features", "test-support", "--lib"]
+        for host in ("Windows", "Linux"):
+            self.assertIn(wgpu, [argv for _, argv in validation.native_tests(host)])
+        # Match the application's Windows bridge so its WGPU integration tests execute.
+        windows = ["-p", "gpui_ce_windows", "--features", "windows-wgpu", "--lib"]
+        self.assertIn(windows, [argv for _, argv in validation.native_tests("Windows")])
         with self.assertRaisesRegex(ValueError, "unsupported"):
             validation.native_tests("Unknown")
 
-    def test_clean_commands_exclude_instrumentation_and_lifecycle_exercises_both_sides(self):
-        args = argparse.Namespace(repositories=[Path("repository with spaces"), Path("history")],
-                                  pairs=5, inputs=120, display="desktop", variants=["batch"],
-                                  windows=[1, 4], sizes=["1400x900"], scales=[100],
-                                  gpu=True, cycles=100, output=Path("output with spaces"))
-        commands = dict(validation.measurement_commands(args, Path("frozen/gitcomet.exe")))
-        self.assertIn("--gpu", commands["gpu-matrix"])
-        clean = commands["clean-input"]
-        self.assertNotIn("--gpu", clean)
-        self.assertEqual(clean[clean.index("--timing-mode") + 1], "clean")
-        self.assertIn("repository with spaces", clean)
-        baseline, candidate = commands["lifecycle-baseline"], commands["lifecycle-candidate"]
-        self.assertIn("GPUI_GPU_EXPERIMENTS=", baseline)
-        self.assertTrue(any("cached-layers" in arg and "pooled-targets" in arg for arg in candidate))
-        self.assertIn(str(Path("frozen/gitcomet.exe")), candidate)
-        self.assertEqual(candidate[candidate.index("--cycles") + 1], "100")
-        args.cycles = 0
-        self.assertFalse(any(name.startswith("lifecycle") for name, _ in validation.measurement_commands(args, Path("binary"))))
+    def test_zero_executed_tests_fail_closed(self):
+        with self.assertRaisesRegex(ValueError, "zero"):
+            validation.require_executed_tests("test result: ok. 0 passed; 0 failed; 3 filtered out")
+        self.assertEqual(validation.require_executed_tests("test result: ok. 2 passed; 0 failed"), 2)
 
     def test_mismatched_dependency_pins_fail_before_testing_another_renderer(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "Cargo.toml"
-            lines = ['[workspace.dependencies]']
-            for name in ("gpui", "gpui_platform", "gpui_wgpu"):
-                lines.append(f'{name} = {{ git = "https://example.invalid/gpui.git", rev = "same" }}')
-            path.write_text("\n".join(lines), encoding="utf-8")
-            self.assertEqual(validation.pinned_renderer(path)[1], "same")
-            path.write_text(path.read_text().replace('rev = "same"', 'rev = "different"', 1), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "same pinned revision"):
-                validation.pinned_renderer(path)
+        url = "https://example.invalid/gpui.git"
+        pinned = f'source = "git+{url}?rev=same#same"'
+        pins = "\n".join(f'{name} = {{ git = "{url}", rev = "same" }}'
+                         for name in ("gpui", "gpui_platform", "gpui_wgpu", "gpui_parley"))
+        packages = {"gpui-ce": pinned, "gpui_ce_render": pinned, "xim-parser": pinned,
+                    "serde": 'source = "registry+https://github.com/rust-lang/crates.io-index"'}
+
+        def check(manifest=f"[workspace.dependencies]\n{pins}\n", **overrides):
+            with tempfile.TemporaryDirectory() as tmp:
+                lock = "version = 4\n" + "".join(
+                    f'\n[[package]]\nname = "{name}"\nversion = "0.1.0"\n{source}\n'
+                    for name, source in {**packages, **overrides}.items())
+                (Path(tmp) / "Cargo.toml").write_text(manifest, encoding="utf-8")
+                (Path(tmp) / "Cargo.lock").write_text(lock, encoding="utf-8")
+                return validation.pinned_renderer(Path(tmp) / "Cargo.toml", Path(tmp) / "Cargo.lock")
+
+        self.assertEqual(check(), (url, "same"))
+        mismatched = pins.replace('rev = "same"', 'rev = "other"', 1)
+        with self.assertRaisesRegex(ValueError, "same pinned revision"):
+            check(f"[workspace.dependencies]\n{mismatched}\n")
+        with self.assertRaisesRegex(ValueError, "must not be patched"):
+            check(f'[workspace.dependencies]\n{pins}\n[patch."{url}"]\ngpui_ce_render = {{ path = "vendor" }}\n')
+        with self.assertRaisesRegex(ValueError, r"outside same: \['gpui_ce_render'\]"):
+            check(gpui_ce_render="")
+        with self.assertRaisesRegex(ValueError, r"outside same: \['xim-parser'\]"):
+            check(**{"xim-parser": f'source = "git+{url}?rev=old#old"'})
 
 
 if __name__ == "__main__":

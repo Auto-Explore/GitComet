@@ -14,7 +14,7 @@ use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 fn git_command() -> Command {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     cmd
 }

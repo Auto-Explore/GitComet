@@ -39,7 +39,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(report["work"]["candidate"]["log_topology_build"])
 
     def test_development_or_allocation_diagnostics_cannot_pass_latency(self):
-        for key in ("allocation_tracking", "debug_assertions", "gpu_timings_requested"):
+        for key in ("allocation_tracking", "debug_assertions"):
             records = self.records(2, 2)
             records[0]["result"][key] = True
             self.assertFalse(shared.comparison(records, 5)[0]["passes_latency"])

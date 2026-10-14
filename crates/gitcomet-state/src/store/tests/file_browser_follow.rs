@@ -169,7 +169,7 @@ fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
     let nested = outer.join("nested");
     let linked = directory.path().join("linked");
     fn git(directory: &Path, arguments: &[&std::ffi::OsStr]) {
-        let result = std::process::Command::new("git")
+        let result = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(directory)
             .args([
@@ -857,7 +857,13 @@ fn activating_a_repo_tab_enters_it_live_with_one_walk() {
     // Coming back clears the selection, so the tab enters at its live tip and
     // the activation's own listing request already names the live tree.
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(&repos, &mut state, repo_id, &mut effects);
+    crate::store::reducer::fill_set_active_repo_inline(
+        &repos,
+        &mut state,
+        repo_id,
+        false,
+        &mut effects,
+    );
 
     assert_eq!(
         file_browser_loads(&effects),
