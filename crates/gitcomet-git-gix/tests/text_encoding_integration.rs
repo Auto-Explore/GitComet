@@ -65,7 +65,7 @@ fn file_text(
     target: &DiffTarget,
     encoding: Option<TextEncoding>,
 ) -> FileDiffText {
-    repo.diff_file_text_with_encoding_cancellable(target, encoding, &CancellationToken::new())
+    repo.diff_file_text(target, encoding, &CancellationToken::new())
         .expect("file text")
         .expect("file text present")
 }
@@ -76,7 +76,7 @@ fn read_side(source: Option<&FileDiffTextSource>) -> String {
 }
 
 fn patch(repo: &dyn GitRepository, target: &DiffTarget, encoding: Option<TextEncoding>) -> Diff {
-    repo.diff_parsed_with_encoding_cancellable(target, encoding, &CancellationToken::new())
+    repo.diff_parsed(target, encoding, &CancellationToken::new())
         .expect("patch parses")
 }
 
@@ -795,7 +795,7 @@ fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
 
     let repo = open(repo_dir);
     let session = repo
-        .conflict_session_with_encoding(Path::new("menu.txt"), None)
+        .conflict_session(Path::new("menu.txt"), None)
         .unwrap()
         .expect("conflict session");
     let text = |payload: &ConflictPayload| payload.as_text().expect("decoded text").to_string();
@@ -818,7 +818,7 @@ fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
     );
     git(repo_dir, &["config", "gui.encoding", "koi8-r"]);
     let refreshed = repo
-        .conflict_session_with_encoding(Path::new("menu.txt"), None)
+        .conflict_session(Path::new("menu.txt"), None)
         .unwrap()
         .unwrap();
     let format = refreshed.current_format.unwrap();
@@ -862,7 +862,7 @@ fn mixed_encoding_conflict_can_save_either_decoded_stage() {
     );
     let repo = open(root);
     let session = repo
-        .conflict_session_with_encoding(Path::new("menu.txt"), None)
+        .conflict_session(Path::new("menu.txt"), None)
         .unwrap()
         .unwrap();
     assert_eq!(session.theirs.as_text(), Some("Café crème brûlée 日本語\n"));
@@ -968,7 +968,7 @@ fn review_conflict_stages_share_legacy_detection_evidence() {
             .success()
     );
     let session = open(root)
-        .conflict_session_with_encoding(Path::new("menu.txt"), None)
+        .conflict_session(Path::new("menu.txt"), None)
         .unwrap()
         .unwrap();
     assert_eq!(session.theirs.as_text(), Some("ø\n"));

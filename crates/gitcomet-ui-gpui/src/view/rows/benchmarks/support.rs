@@ -273,10 +273,10 @@ pub(crate) fn seed_repo_status(repo: &mut RepoState, status: RepoStatus) {
 
 pub(crate) fn load_split_repo_status(repo: &dyn GitRepository, context: &str) -> RepoStatus {
     let unstaged = repo
-        .worktree_status()
+        .worktree_status(&gitcomet_core::services::CancellationToken::new())
         .unwrap_or_else(|error| panic!("{context} worktree_status failed: {error}"));
     let staged = repo
-        .staged_status()
+        .staged_status(&gitcomet_core::services::CancellationToken::new())
         .unwrap_or_else(|error| panic!("{context} staged_status failed: {error}"));
     RepoStatus {
         unstaged: std::sync::Arc::new(unstaged),
@@ -290,13 +290,13 @@ pub(crate) fn measure_split_repo_status(
 ) -> (RepoStatus, u64, f64) {
     let started_at = std::time::Instant::now();
     let unstaged = repo
-        .worktree_status()
+        .worktree_status(&gitcomet_core::services::CancellationToken::new())
         .unwrap_or_else(|error| panic!("{context} worktree_status failed: {error}"));
     let worktree_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
 
     let started_at = std::time::Instant::now();
     let staged = repo
-        .staged_status()
+        .staged_status(&gitcomet_core::services::CancellationToken::new())
         .unwrap_or_else(|error| panic!("{context} staged_status failed: {error}"));
     let staged_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
 

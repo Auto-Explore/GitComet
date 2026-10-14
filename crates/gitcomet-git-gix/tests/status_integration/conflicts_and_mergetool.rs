@@ -86,7 +86,9 @@ fn status_and_conflict_stages_cover_all_conflict_kinds() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     for fixture in &fixtures {
         let path = Path::new(fixture.path);
@@ -159,7 +161,7 @@ fn status_and_conflict_stages_cover_all_conflict_kinds() {
         }
 
         let session = opened
-            .conflict_session(path)
+            .conflict_session(path, None)
             .unwrap()
             .expect("conflict session");
         assert_eq!(session.path, PathBuf::from(fixture.path));
@@ -262,7 +264,9 @@ fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
             let backend = GixBackend;
             let opened = backend.open(repo).unwrap();
 
-            let before = opened.status().unwrap();
+            let before = opened
+                .status(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             let conflict_entry = before
                 .unstaged
                 .iter()
@@ -275,7 +279,9 @@ fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
                 .checkout_conflict_side(Path::new("a.txt"), side)
                 .unwrap();
 
-            let after = opened.status().unwrap();
+            let after = opened
+                .status(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             let selected_stage_exists = match side {
                 ConflictSide::Ours => fixture.has_ours,
                 ConflictSide::Theirs => fixture.has_theirs,
@@ -399,7 +405,9 @@ fn accept_conflict_deletion_resolves_delete_outcome_conflicts() {
         let backend = GixBackend;
         let opened = backend.open(repo).unwrap();
 
-        let before = opened.status().unwrap();
+        let before = opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         let conflict_entry = before
             .unstaged
             .iter()
@@ -410,7 +418,9 @@ fn accept_conflict_deletion_resolves_delete_outcome_conflicts() {
 
         opened.accept_conflict_deletion(Path::new("a.txt")).unwrap();
 
-        let after = opened.status().unwrap();
+        let after = opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert!(
             !repo.join("a.txt").exists(),
             "expected path to be removed after accepting deletion for {:?}",
@@ -465,7 +475,9 @@ fn status_reports_single_conflict_for_modify_delete() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     let entries = status
         .unstaged
@@ -520,7 +532,9 @@ fn status_reports_conflict_kind_for_add_add() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(status.unstaged.len(), 1);
     assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
     assert_eq!(status.unstaged[0].kind, FileStatusKind::Conflicted);
@@ -589,7 +603,7 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
     assert_eq!(stages.theirs, None);
 
     let session = opened
-        .conflict_session(Path::new("bin.dat"))
+        .conflict_session(Path::new("bin.dat"), None)
         .unwrap()
         .expect("conflict session");
     assert_eq!(session.path, PathBuf::from("bin.dat"));
@@ -646,7 +660,7 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
     let opened = backend.open(repo).unwrap();
 
     let session = opened
-        .conflict_session(Path::new("bin.dat"))
+        .conflict_session(Path::new("bin.dat"), None)
         .unwrap()
         .expect("binary conflict session");
     assert_eq!(session.strategy, ConflictResolverStrategy::BinarySidePick);
@@ -657,7 +671,9 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
 
     assert_eq!(fs::read(repo.join("bin.dat")).unwrap(), theirs_bytes);
 
-    let status_after = opened.status().unwrap();
+    let status_after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status_after
             .unstaged
@@ -698,7 +714,9 @@ fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -708,7 +726,7 @@ fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
     assert_eq!(entry.conflict, Some(FileConflictKind::BothDeleted));
 
     let session = opened
-        .conflict_session(Path::new("gone.bin"))
+        .conflict_session(Path::new("gone.bin"), None)
         .unwrap()
         .expect("conflict session");
     assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
@@ -757,10 +775,11 @@ fn diff_file_text_handles_modify_delete_conflicts() {
     let opened = backend.open(repo).unwrap();
 
     let diff = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for conflicted changes");
     assert_file_diff_text_sources(&diff, None, Some("theirs\n"));
@@ -811,7 +830,9 @@ fn checkout_conflict_side_resolves_modify_delete_using_ours() {
         !repo.join("a.txt").exists(),
         "expected ours resolution to remove file from worktree"
     );
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status
             .staged
@@ -868,7 +889,9 @@ fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
         "theirs\n",
         "expected theirs resolution to restore file contents"
     );
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status.unstaged.is_empty(),
         "expected theirs resolution to clear unstaged entries"
@@ -925,7 +948,9 @@ fn checkout_conflict_side_stages_resolution() {
         .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Theirs)
         .unwrap();
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.unstaged.iter().all(|s| s.path != Path::new("a.txt")));
     assert!(
         status
@@ -987,7 +1012,9 @@ fn discard_resolves_merge_conflicts_as_ours_beside_plain_changes() {
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "ours\n");
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "b\n");
     assert!(!repo.join("c.txt").exists());
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status.unstaged.is_empty() && status.staged.is_empty(),
         "expected a clean status, got {status:?}"
@@ -1090,7 +1117,9 @@ fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
     assert_eq!(on_disk[0], b'R');
     assert_eq!(result.merged_contents.as_deref(), Some(on_disk.as_slice()));
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.unstaged.iter().all(|e| e.path != Path::new("a.txt")));
     assert!(
         status
@@ -1129,7 +1158,9 @@ fn launch_mergetool_reflects_config_written_after_backend_open() {
     );
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "theirs\n");
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .unstaged
@@ -1164,7 +1195,9 @@ fn launch_mergetool_trust_exit_false_requires_content_change() {
     assert_eq!(result.output.exit_code, Some(0));
     assert!(result.merged_contents.is_none());
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .staged
@@ -1210,7 +1243,9 @@ fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
         "mergetool delete output should remove the worktree file"
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status.unstaged.iter().all(|e| e.path != Path::new("a.txt")),
         "expected conflict to clear from unstaged after delete-output mergetool run, got {status:?}"
@@ -1259,7 +1294,9 @@ fn launch_mergetool_rejects_unresolved_marker_output() {
         other => panic!("expected backend error, got {other:?}"),
     }
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .staged
@@ -1314,7 +1351,9 @@ fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
         Some("theirs\n".as_bytes())
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status.unstaged.iter().all(|e| e.path != path),
         "expected conflict to clear after mergetool resolution: {status:?}"
@@ -1392,7 +1431,9 @@ fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
         Some("theirs\n".as_bytes())
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status.unstaged.iter().all(|entry| entry.path != path),
         "expected unicode conflict to clear after mergetool resolution: {status:?}"

@@ -82,7 +82,9 @@ fn status(repo: &Path) -> String {
 }
 
 fn sequencer_state(repo: &Path) -> SequencerState {
-    open_backend(repo).sequencer_state().unwrap()
+    open_backend(repo)
+        .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+        .unwrap()
 }
 
 fn assert_no_revert_state(repo: &Path) {

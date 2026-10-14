@@ -148,7 +148,9 @@ fn packed_files_branch_listing_does_not_read_direct_target_objects() {
         // branch names and direct target IDs are all in the reference store.
         fs::remove_dir_all(dir.path().join(".git/objects/pack")).unwrap();
         let repo = GixBackend.open(dir.path()).unwrap();
-        let branches = repo.list_branches().unwrap();
+        let branches = repo
+            .list_branches(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert_eq!(
             branches
                 .iter()
@@ -251,7 +253,8 @@ fn files_operation_state_does_not_dwim_root_refs_to_branches() {
             assert!(!dir.path().join(".git").join(name).exists());
             let repo = GixBackend.open(dir.path()).unwrap();
             assert_eq!(
-                repo.sequencer_state().unwrap(),
+                repo.sequencer_state(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap(),
                 SequencerState::None,
                 "{hash} refs/heads/{name} is an ordinary branch during bisect"
             );

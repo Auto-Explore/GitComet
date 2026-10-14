@@ -11,7 +11,12 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
     let cancel = CancellationToken::new();
     let _capture = capture();
     let first = repo
-        .log_history_mode_page(HistoryMode::FullReachable, 20, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            20,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(count(Work::LogWalkObjectRead), 4_096);
     assert_eq!(count(Work::LogTopologyBuild), 1);
@@ -24,7 +29,12 @@ fn indexed_history_scans_headers_once_and_reuses_bootstrap_topology() {
         .unwrap();
     assert_eq!(index.len(), 4_096);
     let second = repo
-        .log_history_mode_page(HistoryMode::FullReachable, 20, first.next_cursor.as_ref())
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            20,
+            first.next_cursor.as_ref(),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     let rows = repo.read_history_range(&index, 0..40, &cancel).unwrap();
     assert_eq!(&rows.commits[..20], first.commits.as_slice());
@@ -143,7 +153,12 @@ fn indexed_history_uses_existing_commit_graph_without_eager_object_scan() {
     let repo = GixBackend.open(dir.path()).unwrap();
     let _capture = capture();
     let first = repo
-        .log_history_mode_page(HistoryMode::FullReachable, 20, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            20,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(first.commits.len(), 20);
     assert_eq!(count(Work::LogWalkObjectRead), 0);

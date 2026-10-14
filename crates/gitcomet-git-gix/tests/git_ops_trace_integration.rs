@@ -78,21 +78,28 @@ fn git_op_trace_captures_backend_entry_points_once_per_operation() {
 
     let _capture = git_ops_trace::capture();
 
-    let status = opened.status().expect("status");
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .expect("status");
     assert_eq!(status.unstaged.len(), 1);
 
-    let page = opened.log_head_page(16, None).expect("log head page");
+    let page = opened
+        .log_head_page(16, None, &gitcomet_core::services::CancellationToken::new())
+        .expect("log head page");
     assert!(page.commits.len() >= 2);
 
-    let branches = opened.list_branches().expect("list branches");
+    let branches = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .expect("list branches");
     assert!(branches.iter().any(|branch| branch.name == "main"));
     assert!(branches.iter().any(|branch| branch.name == "feature"));
 
     let diff = opened
-        .diff_parsed(&DiffTarget::working_tree(
-            PathBuf::from("story.txt"),
-            DiffArea::Unstaged,
-        ))
+        .diff_parsed(
+            &DiffTarget::working_tree(PathBuf::from("story.txt"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("diff parsed");
     assert!(!diff.lines.is_empty());
 

@@ -287,7 +287,9 @@ fn single_cherry_pick_validates_mainline_before_starting() {
         assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
         assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
         assert_eq!(
-            open_backend(&repo).sequencer_state().unwrap(),
+            open_backend(&repo)
+                .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+                .unwrap(),
             SequencerState::None
         );
     }
@@ -328,7 +330,11 @@ fn already_applied_cherry_pick_is_successful_noop_and_cleans_state() {
     );
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert!(
         !git_output(&repo, &["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"])
             .status
@@ -362,7 +368,11 @@ fn already_applied_merge_cherry_pick_uses_selected_parent_for_empty_detection() 
                 .contains("GITCOMET_CHERRY_PICK_ALREADY_APPLIED")
         );
         assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
-        assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+        assert!(
+            !open_backend(&repo)
+                .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+        );
         assert!(!repo.join(".git/gitcomet-cherry-pick-mainline").exists());
     }
 }
@@ -406,7 +416,11 @@ fn merge_conflict_resolved_to_no_changes_is_skipped_on_continue() {
         .expect("empty merge resolution should be skipped");
 
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert!(!repo.join(".git/gitcomet-cherry-pick-mainline").exists());
 }
 
@@ -478,7 +492,11 @@ fn custom_cherry_pick_rejects_staged_changes() {
         git_stdout(&repo, &["status", "--porcelain"]),
         "A  unrelated.txt"
     );
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
 }
 
 #[test]
@@ -515,7 +533,11 @@ fn custom_cherry_pick_resumes_full_plan_after_conflict() {
         )
         .expect("conflicting custom cherry-pick should pause, not fail");
     assert_ne!(output.exit_code, Some(0));
-    assert!(open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU file.txt");
 
     fs::write(repo.join("file.txt"), "resolved\n").expect("resolve conflict");
@@ -525,7 +547,11 @@ fn custom_cherry_pick_resumes_full_plan_after_conflict() {
         .rebase_continue_with_output()
         .expect("continue should finish the remaining plan");
 
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(
         git_stdout(&repo, &["log", "-2", "--format=%s"]),
         "second reworded\nfeature change"
@@ -573,7 +599,11 @@ fn custom_cherry_pick_drops_already_applied_commits() {
         )
         .expect("already-applied pick should be dropped, not strand the plan");
 
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(
         git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
         (before_count + 1).to_string()
@@ -748,7 +778,11 @@ fn multi_cherry_pick_skips_already_applied_commits() {
         .expect("empty pick should be skipped, not strand the sequence");
 
     assert_eq!(output.exit_code, Some(0));
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(
         git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
         (before_count + 1).to_string()
@@ -794,7 +828,9 @@ fn initial_multi_cherry_pick_conflict_is_reported_as_a_pause() {
 
     assert_ne!(output.exit_code, Some(0));
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU file.txt");
@@ -820,7 +856,9 @@ fn cherry_pick_continue_without_resolution_is_an_error() {
         "cherry-pick should pause at the first conflict"
     );
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
 
@@ -830,7 +868,9 @@ fn cherry_pick_continue_without_resolution_is_an_error() {
         .rebase_continue_with_output()
         .expect_err("continue without resolution should fail");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
 
@@ -843,7 +883,9 @@ fn cherry_pick_continue_without_resolution_is_an_error() {
         .expect("continue past the first conflict");
     assert_ne!(output.exit_code, Some(0));
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU two.txt");
@@ -854,7 +896,9 @@ fn cherry_pick_continue_without_resolution_is_an_error() {
         .rebase_continue_with_output()
         .expect("finish the cherry-pick");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
     assert_eq!(
@@ -906,7 +950,9 @@ fn cherry_pick_continue_surfaces_hook_failure_on_later_step() {
         "unexpected hook error: {message}"
     );
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
     assert_eq!(
@@ -963,7 +1009,11 @@ fn multi_cherry_pick_preserves_intentionally_empty_commits() {
         .expect("intentionally empty commit should be preserved");
 
     assert_eq!(output.exit_code, Some(0));
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(
         git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
         (before_count + 2).to_string()
@@ -1010,7 +1060,9 @@ fn intentionally_empty_cherry_pick_signing_failure_is_not_auto_skipped() {
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
     assert_eq!(git_stdout(&repo, &["rev-parse", "CHERRY_PICK_HEAD"]), empty);
@@ -1157,7 +1209,11 @@ fn empty_pick_auto_skip_works_with_untracked_files_present() {
         .expect("empty pick should be skipped despite untracked files");
 
     assert_eq!(output.exit_code, Some(0));
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(
         git_stdout(&repo, &["log", "-1", "--format=%s"]),
         "fresh change"
@@ -1226,7 +1282,9 @@ fn multi_cherry_pick_rejects_merge_commits_before_starting() {
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
 
@@ -1311,7 +1369,9 @@ fn conflicting_cherry_pick_returns_error_and_leaves_worktree_conflicted() {
     );
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU file.txt");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
     assert!(
@@ -1386,9 +1446,15 @@ fn continue_falls_back_to_cherry_pick_continue_when_cherry_pick_is_paused() {
         !conflict.status.success(),
         "cherry-pick should pause at a conflict"
     );
-    assert!(open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
 
@@ -1399,7 +1465,11 @@ fn continue_falls_back_to_cherry_pick_continue_when_cherry_pick_is_paused() {
         .rebase_continue_with_output()
         .expect("continue paused cherry-pick");
     assert_eq!(output.command, "git cherry-pick --continue");
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert!(
         !git_output(&repo, &["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"])
             .status
@@ -1435,7 +1505,9 @@ fn abort_returns_active_cherry_pick_lock_error() {
         "cherry-pick error was replaced by the rebase fallback: {message}"
     );
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::CherryPick
     );
 }
@@ -1477,7 +1549,9 @@ fn multi_cherry_pick_rejects_a_plan_that_drops_every_commit() {
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
 }
@@ -1513,9 +1587,15 @@ fn multi_cherry_pick_applies_picks_around_a_dropped_commit() {
         .expect("a dropped commit should leave the surrounding picks alone");
 
     assert_eq!(output.exit_code, Some(0));
-    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert!(
+        !open_backend(&repo)
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
     assert_eq!(
@@ -1749,7 +1829,9 @@ fn cherry_pick_commit_beside_staged_work_rolls_back_a_conflict() {
     );
     assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "main\n");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
     assert!(!repo.join(".git/MERGE_MSG").exists());
@@ -1910,7 +1992,9 @@ fn signing_failure_on_a_clean_index_resumes_at_the_commit_on_replay() {
     assert_eq!(git_stdout(&repo, &["log", "-1", "--format=%s"]), "pick me");
     assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
 }
@@ -1968,7 +2052,9 @@ fn multi_cherry_pick_without_commit_stages_all_changes() {
         "A  a.txt\nA  b.txt\nA  c.txt"
     );
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
 }
@@ -2030,7 +2116,9 @@ fn multi_cherry_pick_without_commit_stops_at_a_conflict_and_names_the_rest() {
     assert!(!repo.join("c.txt").exists());
     // No sequencer: nothing offers an Abort that would reset the index.
     assert_eq!(
-        open_backend(&repo).sequencer_state().unwrap(),
+        open_backend(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::None
     );
 }

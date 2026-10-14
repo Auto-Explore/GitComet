@@ -75,10 +75,14 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
                 &["symbolic-ref", "refs/heads/alias", "refs/heads/side"],
             );
             let repo = GixBackend.open(dir.path()).unwrap();
-            let tags = repo.list_tags().unwrap();
+            let tags = repo
+                .list_tags(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             assert_eq!(tags[0].target, head);
             assert_eq!(tags[1].target, head);
-            let branches = repo.list_branches().unwrap();
+            let branches = repo
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             assert!(
                 branches
                     .iter()
@@ -105,19 +109,23 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
             fs::write(dir.path().join("renamed.txt"), "root\nchild\nlocal\n").unwrap();
             fs::create_dir(dir.path().join("untracked")).unwrap();
             fs::write(dir.path().join("untracked/new.txt"), "new\n").unwrap();
-            let status = repo.status().unwrap();
+            let status = repo
+                .status(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             assert_eq!(status.staged.len(), 1);
             assert!(
-                repo.diff_file_text(&DiffTarget::working_tree(
-                    "renamed.txt".into(),
-                    DiffArea::Staged
-                ))
+                repo.diff_file_text(
+                    &DiffTarget::working_tree("renamed.txt".into(), DiffArea::Staged),
+                    None,
+                    &gitcomet_core::services::CancellationToken::new()
+                )
                 .unwrap()
                 .is_some()
             );
             let snapshot = format!(
                 "{branches:?} {tags:?} {:?} {logs:?} {status:?}",
-                repo.list_remote_branches().unwrap()
+                repo.list_remote_branches(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap()
             );
             snapshots.push(snapshot);
             if refs == "reftable" {
@@ -127,7 +135,7 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
                 );
                 assert!(
                     !repo
-                        .list_branches()
+                        .list_branches(&gitcomet_core::services::CancellationToken::new())
                         .unwrap()
                         .iter()
                         .any(|b| b.name == "dangling")
@@ -140,7 +148,7 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
                 &["update-ref", "refs/heads/side", head.as_ref()],
             );
             assert!(
-                repo.list_branches()
+                repo.list_branches(&gitcomet_core::services::CancellationToken::new())
                     .unwrap()
                     .iter()
                     .any(|b| b.name == "side" && b.target == head)
@@ -179,7 +187,7 @@ fn reftable_branch_writes_work_without_identity_and_respect_linked_worktrees() {
         repo.delete_branch_force("renamed").unwrap();
         assert!(
             !repo
-                .list_branches()
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
                 .unwrap()
                 .iter()
                 .any(|b| b.name == "renamed")
@@ -192,21 +200,48 @@ fn reftable_branch_writes_work_without_identity_and_respect_linked_worktrees() {
             &["worktree", "add", linked.to_str().unwrap(), "linked"],
         );
         let linked_repo = GixBackend.open(&linked).unwrap();
-        assert_eq!(linked_repo.current_branch().unwrap(), "linked");
         assert_eq!(
-            linked_repo.log_head_page(10, None).unwrap().commits[0].id,
+            linked_repo
+                .current_branch(&gitcomet_core::services::CancellationToken::new())
+                .unwrap(),
+            "linked"
+        );
+        assert_eq!(
+            linked_repo
+                .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .commits[0]
+                .id,
             root
         );
         assert!(repo.delete_branch_force("linked").is_err());
         linked_repo.checkout_commit(&root).unwrap();
-        assert_eq!(linked_repo.current_branch().unwrap(), "HEAD");
-        assert_eq!(repo.current_branch().unwrap(), "main");
+        assert_eq!(
+            linked_repo
+                .current_branch(&gitcomet_core::services::CancellationToken::new())
+                .unwrap(),
+            "HEAD"
+        );
+        assert_eq!(
+            repo.current_branch(&gitcomet_core::services::CancellationToken::new())
+                .unwrap(),
+            "main"
+        );
         repo.delete_branch_force("linked").unwrap();
         repo.create_tag_with_output("light", root.as_ref(), None, false)
             .unwrap();
-        assert_eq!(repo.list_tags().unwrap()[0].target, root);
+        assert_eq!(
+            repo.list_tags(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()[0]
+                .target,
+            root
+        );
         repo.delete_tag_with_output("light").unwrap();
-        assert!(repo.list_tags().unwrap().is_empty());
+        assert!(
+            repo.list_tags(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
@@ -225,7 +260,11 @@ fn resolved_single_cherry_pick_survives_unstage_all() {
             commit_file(dir.path(), "main\n", "main");
             let repo = GixBackend.open(dir.path()).unwrap();
             assert!(repo.cherry_pick(&source).is_err());
-            assert_eq!(repo.sequencer_state().unwrap(), SequencerState::CherryPick);
+            assert_eq!(
+                repo.sequencer_state(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap(),
+                SequencerState::CherryPick
+            );
             fs::write(dir.path().join("file.txt"), "resolved\n").unwrap();
             repo.stage(&[Path::new("file.txt")]).unwrap();
             repo.unstage(&[]).unwrap();
@@ -233,10 +272,24 @@ fn resolved_single_cherry_pick_survives_unstage_all() {
                 git(dir.path(), &["rev-parse", "--verify", "CHERRY_PICK_HEAD"]),
                 source.as_ref()
             );
-            assert_eq!(repo.sequencer_state().unwrap(), SequencerState::CherryPick);
-            assert!(!repo.status().unwrap().unstaged.is_empty());
+            assert_eq!(
+                repo.sequencer_state(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap(),
+                SequencerState::CherryPick
+            );
+            assert!(
+                !repo
+                    .status(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap()
+                    .unstaged
+                    .is_empty()
+            );
             repo.rebase_abort_with_output().unwrap();
-            assert_eq!(repo.sequencer_state().unwrap(), SequencerState::None);
+            assert_eq!(
+                repo.sequencer_state(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap(),
+                SequencerState::None
+            );
         }
     }
 }
@@ -264,7 +317,14 @@ fn shallow_and_no_checkout_clones_use_native_refs_and_index_fallback() {
             ],
         );
         let shallow = GixBackend.open(&parent.path().join("shallow")).unwrap();
-        assert_eq!(shallow.log_head_page(10, None).unwrap().commits.len(), 1);
+        assert_eq!(
+            shallow
+                .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .commits
+                .len(),
+            1
+        );
         git(
             parent.path(),
             &[
@@ -281,11 +341,17 @@ fn shallow_and_no_checkout_clones_use_native_refs_and_index_fallback() {
         assert_eq!(cloned.commit_details(&head).unwrap().id, head);
         assert!(
             cloned
-                .diff_file_text(&DiffTarget::commit(head.clone(), "file.txt".into()))
+                .diff_file_text(
+                    &DiffTarget::commit(head.clone(), "file.txt".into()),
+                    None,
+                    &gitcomet_core::services::CancellationToken::new()
+                )
                 .unwrap()
                 .is_some()
         );
-        cloned.status().unwrap();
+        cloned
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert!(
             !cloned_path.join(".git/index").exists(),
             "reads must not create a real index"

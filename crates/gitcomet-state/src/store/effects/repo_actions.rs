@@ -211,7 +211,7 @@ fn open_worktree_holding_branch(
             path.display()
         ))));
     }
-    let current = handle.current_branch()?;
+    let current = handle.current_branch(&gitcomet_core::services::CancellationToken::new())?;
     if current != branch {
         return Err(Error::new(ErrorKind::Backend(format!(
             "the worktree at '{}' no longer has branch '{branch}' checked out",

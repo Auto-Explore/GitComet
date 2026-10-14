@@ -91,7 +91,9 @@ fn upstream_divergence_reports_ahead_and_behind_counts() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open repository");
-    let divergence = opened.upstream_divergence().expect("read divergence");
+    let divergence = opened
+        .upstream_divergence(&gitcomet_core::services::CancellationToken::new())
+        .expect("read divergence");
 
     assert_eq!(
         divergence,
@@ -121,7 +123,9 @@ fn upstream_divergence_returns_none_when_branch_has_no_upstream() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open repository");
-    let divergence = opened.upstream_divergence().expect("read divergence");
+    let divergence = opened
+        .upstream_divergence(&gitcomet_core::services::CancellationToken::new())
+        .expect("read divergence");
 
     assert_eq!(divergence, None);
 }
@@ -166,7 +170,12 @@ fn upstream_divergence_reflects_new_upstream_without_reopen() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open repository");
 
-    assert_eq!(opened.upstream_divergence().expect("read divergence"), None);
+    assert_eq!(
+        opened
+            .upstream_divergence(&gitcomet_core::services::CancellationToken::new())
+            .expect("read divergence"),
+        None
+    );
 
     opened
         .push_set_upstream("origin", "feature")
@@ -174,7 +183,7 @@ fn upstream_divergence_reflects_new_upstream_without_reopen() {
 
     assert_eq!(
         opened
-            .upstream_divergence()
+            .upstream_divergence(&gitcomet_core::services::CancellationToken::new())
             .expect("read divergence after push -u"),
         Some(UpstreamDivergence {
             ahead: 0,
@@ -216,7 +225,9 @@ fn upstream_divergence_returns_none_on_detached_head() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open repository");
-    let divergence = opened.upstream_divergence().expect("read divergence");
+    let divergence = opened
+        .upstream_divergence(&gitcomet_core::services::CancellationToken::new())
+        .expect("read divergence");
 
     assert_eq!(divergence, None);
 }

@@ -87,7 +87,9 @@ fn status(
     std::sync::Arc<dyn gitcomet_core::services::GitRepository>,
 ) {
     let opened = GixBackend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     (status, opened)
 }
 
@@ -110,7 +112,7 @@ fn lfs_repository_reports_filter_patterns_and_store() {
 
     let (_, opened) = status(&repo);
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(support.lfs.filter_configured && support.lfs.filter_required);
     assert!(
@@ -156,10 +158,10 @@ fn lfs_lock_capability_detects_separate_attribute_rules() {
 
         let (status, opened) = status(repo);
         let support = opened
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap();
         let files = opened
-            .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+            .uncommitted_large_files_for_status(&status, &CancellationToken::new())
             .unwrap();
         assert_eq!(files.staged[Path::new("a.bin")].lockable, lockable);
         assert_eq!(
@@ -181,7 +183,7 @@ fn plain_repository_is_not_active() {
     git(&repo, &["commit", "-qm", "init"]);
     let (_, opened) = status(&repo);
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(!support.is_active(), "{support:?}");
 }
@@ -204,7 +206,14 @@ fn plain_pointer_text_diff_regression() {
         CommitId(git(repo, &["rev-parse", "HEAD"]).trim().into()),
         "example.png".into(),
     );
-    let text = opened.diff_file_text(&target).unwrap().unwrap();
+    let text = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert!(
         text.new_large.is_none(),
         "ordinary text must remain diffable"
@@ -214,11 +223,18 @@ fn plain_pointer_text_diff_regression() {
         Some(pointer.as_str())
     );
     let preview = opened
-        .diff_preview_text_file(&target, DiffPreviewTextSide::New)
+        .diff_preview_text_file(
+            &target,
+            DiffPreviewTextSide::New,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .unwrap();
     assert!(preview.large_file.is_none());
-    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    let image = opened
+        .diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .unwrap();
     assert!(image.new_large.is_none());
     assert_eq!(image.new.as_deref(), Some(pointer.as_bytes()));
 }
@@ -237,7 +253,7 @@ fn lfs_rows_report_pointer_worktree_and_presence() {
 
     let (status, opened) = status(&repo);
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&status, &CancellationToken::new())
         .unwrap();
 
     let staged = &files.staged[Path::new("b.psd")];
@@ -281,7 +297,7 @@ fn lfs_pointer_only_worktree_reports_missing_content() {
         unstaged: vec![row("a.bin", FileStatusKind::Modified)].into(),
     };
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&status, &CancellationToken::new())
         .unwrap();
     let state = &files.unstaged[Path::new("a.bin")];
     assert_eq!(state.worktree, Some(LargeFileWorktree::Pointer));
@@ -327,14 +343,16 @@ fn annex_locked_and_unlocked_rows_are_recognised() {
 
     let opened = GixBackend.open(&repo).unwrap();
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(support.annex.has_annex_dir && support.annex.has_annex_branch);
     assert!(support.annex.initialized() && support.is_active());
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&status, &CancellationToken::new())
         .unwrap();
     let state = |name: &str| files.staged[Path::new(name)].clone();
     let present = state("present.bin");
@@ -387,7 +405,7 @@ fn annex_link_text_in_a_plain_worktree_file_is_a_pointer() {
         unstaged: vec![row("locked.bin", FileStatusKind::Modified)].into(),
     };
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&status, &CancellationToken::new())
         .unwrap();
     let state = &files.unstaged[Path::new("locked.bin")];
     assert!(
@@ -467,7 +485,14 @@ fn conflicted_large_file_text_diff_resolves_both_index_stages() {
         assert!(child.wait().unwrap().success());
         fs::write(repo.join("a.bin"), "unrelated worktree resolution").unwrap();
         let opened = GixBackend.open(&repo).unwrap();
-        let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &unstaged("a.bin"),
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(
             source_text(diff.old_source.as_ref()).as_deref(),
             Some("hello")
@@ -479,7 +504,14 @@ fn conflicted_large_file_text_diff_resolves_both_index_stages() {
         assert_eq!(diff.old_large.unwrap().content, LargeFileContent::Available);
         assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
         fs::remove_file(&objects[1]).unwrap();
-        let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &unstaged("a.bin"),
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(
             diff.new_large.unwrap().content,
             LargeFileContent::MissingLocally
@@ -506,7 +538,14 @@ fn annex_worktree_diffs_never_run_the_clean_filter() {
     fs::write(repo.join("a.bin"), "edited content\n").unwrap();
     let opened = GixBackend.open(&repo).unwrap();
     for _ in 0..2 {
-        let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &unstaged("a.bin"),
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(
             source_text(diff.new_source.as_ref()).as_deref(),
             Some("edited content\n")
@@ -518,7 +557,14 @@ fn annex_worktree_diffs_never_run_the_clean_filter() {
         .unwrap()
         .set_len(bytes)
         .unwrap();
-    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &unstaged("a.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         diff.new_large.unwrap().content,
         LargeFileContent::TooLarge { bytes }
@@ -557,7 +603,14 @@ fn edited_unlocked_annex_file_is_not_described_by_the_index_key() {
     let pointer = |side: Option<LargeFileSide>| side.map(|side| side.pointer);
     let annexed = gitcomet_core::annex::parse_key(ANNEX_KEY).map(LargeFilePointer::Annex);
 
-    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &unstaged("a.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         pointer(diff.new_large),
         annexed,
@@ -569,7 +622,14 @@ fn edited_unlocked_annex_file_is_not_described_by_the_index_key() {
     );
 
     fs::write(repo.join("a.bin"), "edited content\n").unwrap();
-    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &unstaged("a.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         pointer(diff.new_large),
         None,
@@ -585,7 +645,14 @@ fn edited_unlocked_annex_file_is_not_described_by_the_index_key() {
         .unwrap()
         .set_len(bytes)
         .unwrap();
-    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &unstaged("a.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     let (old, new) = (diff.old_source.unwrap(), diff.new_source.unwrap());
     assert_ne!(
         old.identity, new.identity,
@@ -614,7 +681,14 @@ fn lfs_text_diff_reads_real_content_when_present() {
     fs::write(repo.join("a.bin"), b"new large contents\n").unwrap();
 
     let opened = GixBackend.open(&repo).unwrap();
-    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &unstaged("a.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     let (old, new) = (
         diff.old_large.clone().unwrap(),
         diff.new_large.clone().unwrap(),
@@ -637,7 +711,11 @@ fn lfs_text_diff_reads_real_content_when_present() {
     ));
 
     let plain = opened
-        .diff_file_text(&unstaged("notes.txt"))
+        .diff_file_text(
+            &unstaged("notes.txt"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .unwrap();
     assert!(plain.old_large.is_none() && plain.new_large.is_none());
@@ -658,7 +736,14 @@ fn lfs_text_diff_reports_missing_content() {
     fs::write(repo.join("a.bin"), pointer.replace("size 20", "size 21")).unwrap();
 
     let opened = GixBackend.open(&repo).unwrap();
-    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &unstaged("a.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     let old = diff.old_large.clone().expect("old side is a pointer");
     let new = diff.new_large.clone().expect("new side is a pointer");
     assert_eq!(old.content, LargeFileContent::MissingLocally);
@@ -696,10 +781,10 @@ fn lfs_image_diff_decodes_both_sides_from_the_store() {
 
     let opened = GixBackend.open(&repo).unwrap();
     let image = opened
-        .diff_file_image(&DiffTarget::working_tree(
-            PathBuf::from("pic.png"),
-            DiffArea::Staged,
-        ))
+        .diff_file_image(
+            &DiffTarget::working_tree(PathBuf::from("pic.png"), DiffArea::Staged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -893,7 +978,7 @@ fn lfs_install_local_configures_filters_and_hooks() {
     let opened = GixBackend.open(&repo).unwrap();
     assert!(
         opened
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap()
             .lfs
             .filter_configured
@@ -1131,7 +1216,14 @@ fn lfs_positional_fetch_preserves_default_remote_selection() {
                 target: target.clone(),
             })
             .unwrap();
-        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(
             source_text(diff.new_source.as_ref()).as_deref(),
             Some("middle version\n"),
@@ -1154,7 +1246,14 @@ fn lfs_diff_download_fetches_both_historical_sides_without_checkout() {
         "a.bin".into(),
     );
     let opened = GixBackend.open(&repo).unwrap();
-    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         diff.old_large.unwrap().content,
         LargeFileContent::MissingLocally
@@ -1169,7 +1268,14 @@ fn lfs_diff_download_fetches_both_historical_sides_without_checkout() {
             target: target.clone(),
         },
     );
-    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         source_text(diff.old_source.as_ref()).as_deref(),
         Some("large file contents\n")
@@ -1204,7 +1310,11 @@ fn lfs_added_and_deleted_previews_show_payloads() {
     ] {
         let target = DiffTarget::working_tree(path.into(), DiffArea::Staged);
         let preview = opened
-            .diff_preview_text_file(&target, side)
+            .diff_preview_text_file(
+                &target,
+                side,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -1241,7 +1351,10 @@ fn lfs_missing_images_do_not_send_pointer_text_to_the_decoder() {
         "pic.png".into(),
     );
     let opened = GixBackend.open(repo).unwrap();
-    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    let image = opened
+        .diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .unwrap();
     assert_eq!(
         image.new_large.as_ref().unwrap().content,
         LargeFileContent::MissingLocally
@@ -1274,6 +1387,7 @@ fn lfs_diff_download_handles_root_commits_and_revision_ranges() {
         .diff_preview_text_file(
             &root_target,
             gitcomet_core::domain::DiffPreviewTextSide::New,
+            &gitcomet_core::services::CancellationToken::new(),
         )
         .unwrap()
         .unwrap();
@@ -1288,7 +1402,14 @@ fn lfs_diff_download_handles_root_commits_and_revision_ranges() {
             target: range.clone(),
         },
     );
-    let diff = opened.diff_file_text(&range).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &range,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         source_text(diff.old_source.as_ref()).as_deref(),
         Some("large file contents\n")
@@ -1319,12 +1440,22 @@ fn lfs_images_use_the_image_size_limit_instead_of_the_text_limit() {
     git(repo, &["add", "."]);
     let opened = GixBackend.open(repo).unwrap();
     let target = DiffTarget::working_tree("large.png".into(), DiffArea::Staged);
-    let text = opened.diff_file_text(&target).unwrap().unwrap();
+    let text = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert!(matches!(
         text.new_large.unwrap().content,
         LargeFileContent::TooLarge { .. }
     ));
-    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    let image = opened
+        .diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .unwrap();
     assert_eq!(
         image.new_large.unwrap().content,
         LargeFileContent::Available
@@ -1423,7 +1554,7 @@ fn unlocked_annex_presence_is_read_from_the_object_store() {
 
     let (status, opened) = status(&repo);
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&status, &CancellationToken::new())
         .unwrap();
     let presence = |name: &str| files.staged[Path::new(name)].in_local_store;
     assert_eq!(presence("present.bin"), Some(true));
@@ -1433,7 +1564,7 @@ fn unlocked_annex_presence_is_read_from_the_object_store() {
     fs::remove_dir_all(repo.join(".git/annex/objects")).unwrap();
     object(ANNEX_KEY_LOWER_DIR, ANNEX_KEY);
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&status, &CancellationToken::new())
         .unwrap();
     assert_eq!(
         files.staged[Path::new("present.bin")].in_local_store,
@@ -1461,7 +1592,14 @@ fn lfs_diff_download_fetches_the_index_side_of_a_staged_diff() {
     fs::write(repo.join("a.bin"), &worktree).unwrap();
     let target = DiffTarget::working_tree(PathBuf::from("a.bin"), DiffArea::Staged);
     let opened = GixBackend.open(&repo).unwrap();
-    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         diff.new_large.unwrap().content,
         LargeFileContent::MissingLocally
@@ -1472,7 +1610,14 @@ fn lfs_diff_download_fetches_the_index_side_of_a_staged_diff() {
             target: target.clone(),
         },
     );
-    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         source_text(diff.old_source.as_ref()).as_deref(),
         Some("middle version\n"),
@@ -1530,7 +1675,14 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
             )
         };
         let opened = GixBackend.open(&repo).unwrap();
-        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(
             diff.old_large.unwrap().content,
             LargeFileContent::MissingLocally
@@ -1546,7 +1698,14 @@ fn lfs_diff_download_fetches_a_worktree_pointer_absent_from_head_and_index() {
             })
             .unwrap();
 
-        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(diff.old_large.unwrap().content, LargeFileContent::Available);
         assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
         assert_eq!(
@@ -1596,7 +1755,11 @@ fn lfs_diff_download_does_not_follow_worktree_symlinks() {
     let diff = GixBackend
         .open(&repo)
         .unwrap()
-        .diff_file_text(&target)
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -1651,7 +1814,10 @@ fn annex_locked_worktree_image_resolves_through_its_symlink() {
 
     let opened = GixBackend.open(&repo).unwrap();
     let image = opened
-        .diff_file_image(&unstaged("pic.png"))
+        .diff_file_image(
+            &unstaged("pic.png"),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(image.old.as_deref(), Some(before.as_slice()), "index side");
@@ -1689,7 +1855,7 @@ fn lfs_lock_listing_does_not_consume_credentials_staged_for_a_command() {
         username: Some("alice".into()),
         secret: "test-token".into(),
     });
-    let _ = opened.lfs_locks_cancellable(&CancellationToken::new());
+    let _ = opened.lfs_locks(&CancellationToken::new());
     let pending = take_staged_git_auth()
         .expect("the lock listing must leave the retried command's credentials staged");
     assert_eq!(pending.username.as_deref(), Some("alice"));
@@ -1726,7 +1892,7 @@ fn lfs_lock_listing_asks_credential_helpers_not_to_prompt() {
     let _ = GixBackend
         .open(&repo)
         .unwrap()
-        .lfs_locks_cancellable(&CancellationToken::new());
+        .lfs_locks(&CancellationToken::new());
     let calls = fs::read_to_string(&marker).expect("git-lfs asks the helper for credentials");
     assert!(
         calls
@@ -1819,7 +1985,7 @@ fn support_refresh_reads_external_config_and_attribute_changes() {
     let opened = GixBackend.open(repo).unwrap();
     assert!(
         !opened
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap()
             .lfs
             .in_use()
@@ -1828,7 +1994,7 @@ fn support_refresh_reads_external_config_and_attribute_changes() {
     git(repo, &["config", "lfs.storage", "custom-lfs"]);
     fs::write(repo.join(".gitattributes"), "*.bin filter=lfs -text\n").unwrap();
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(support.lfs.filter_configured);
     assert!(support.lfs.storage_dir.ends_with("custom-lfs"));
@@ -1840,7 +2006,7 @@ fn support_refresh_reads_external_config_and_attribute_changes() {
     )
     .unwrap();
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert_eq!(support.lfs.tracked_patterns[0].pattern, "*.psd");
     assert!(support.lfs.has_lockable_patterns);
@@ -1880,14 +2046,21 @@ fn support_refresh_updates_worktree_filter_configuration() {
     );
     let opened = GixBackend.open(repo).unwrap();
     opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     configure_lfs_filters(repo);
     fs::write(repo.join("a.bin"), "new content\n").unwrap();
     opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
-    let diff = opened.diff_file_text(&unstaged("a.bin")).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &unstaged("a.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert!(
         diff.new_large.is_some(),
         "the new filter config must clean the worktree content to its LFS pointer"
@@ -1903,13 +2076,19 @@ fn support_refresh_updates_worktree_filter_configuration() {
     // to compare through the newly installed clean filter.
     fs::write(repo.join("a.bin"), "new content\n").unwrap();
     opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(git(repo, &["--no-optional-locks", "status", "--porcelain"]).is_empty());
-    let fresh_status = GixBackend.open(repo).unwrap().status().unwrap();
+    let fresh_status = GixBackend
+        .open(repo)
+        .unwrap()
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(fresh_status.staged.is_empty() && fresh_status.unstaged.is_empty());
     assert_eq!(
-        opened.status().unwrap(),
+        opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         fresh_status,
         "status on the existing handle must also use the refreshed LFS filters"
     );
@@ -1924,7 +2103,7 @@ fn annex_remote_tracking_detection_handles_loose_and_packed_refs() {
     let opened = GixBackend.open(repo).unwrap();
     assert!(
         !opened
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap()
             .annex
             .in_use()
@@ -1938,7 +2117,7 @@ fn annex_remote_tracking_detection_handles_loose_and_packed_refs() {
             git(repo, &["pack-refs", "--all", "--prune"]);
         }
         let support = opened
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap();
         assert!(support.annex.has_annex_branch, "packed={packed}");
         assert!(support.annex.in_use());
@@ -2000,7 +2179,7 @@ fn annex_remote_tracking_detection_matches_the_complete_branch_name() {
                 git(repo, &["pack-refs", "--all", "--prune"]);
             }
             let support = opened
-                .large_file_support_cancellable(&CancellationToken::new())
+                .large_file_support(&CancellationToken::new())
                 .unwrap();
             assert_eq!(
                 support.annex.has_annex_branch, annex,
@@ -2054,7 +2233,11 @@ fn lfs_worktree_range_download_fetches_the_displayed_index_pointer() {
     let opened = GixBackend.open(&repo).unwrap();
     assert_eq!(
         opened
-            .diff_file_text(&target)
+            .diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new()
+            )
             .unwrap()
             .unwrap()
             .new_large
@@ -2069,7 +2252,14 @@ fn lfs_worktree_range_download_fetches_the_displayed_index_pointer() {
             },
         )
         .unwrap();
-    let diff = opened.diff_file_text(&target).unwrap().unwrap();
+    let diff = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(
         source_text(diff.old_source.as_ref()).as_deref(),
         Some("middle version\n")
@@ -2124,13 +2314,11 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
         } else {
             repo.join(".git").join(configured)
         };
-        let support = opened
-            .large_file_support_cancellable(&cancellation)
-            .unwrap();
+        let support = opened.large_file_support(&cancellation).unwrap();
         assert_eq!(support.lfs.storage_dir, storage);
         assert!(!support.lfs.has_local_store);
         let missing = opened
-            .uncommitted_large_files_for_status_cancellable(&status, &cancellation)
+            .uncommitted_large_files_for_status(&status, &cancellation)
             .unwrap();
         assert_eq!(
             missing.staged[Path::new("a.bin")].in_local_store,
@@ -2138,7 +2326,11 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
         );
         assert_eq!(
             opened
-                .diff_file_text(&text_target)
+                .diff_file_text(
+                    &text_target,
+                    None,
+                    &gitcomet_core::services::CancellationToken::new()
+                )
                 .unwrap()
                 .unwrap()
                 .new_large
@@ -2148,23 +2340,40 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
         );
         fs::rename(&previous, &storage).unwrap();
         let present = opened
-            .uncommitted_large_files_for_status_cancellable(&status, &cancellation)
+            .uncommitted_large_files_for_status(&status, &cancellation)
             .unwrap();
         assert_eq!(
             present.staged[Path::new("a.bin")].in_local_store,
             Some(true)
         );
-        let diff = opened.diff_file_text(&text_target).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &text_target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(
             source_text(diff.new_source.as_ref()).as_deref(),
             Some("new content\n")
         );
         let preview = opened
-            .diff_preview_text_file(&text_target, DiffPreviewTextSide::New)
+            .diff_preview_text_file(
+                &text_target,
+                DiffPreviewTextSide::New,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(fs::read_to_string(preview.path).unwrap(), "new content\n");
-        let image = opened.diff_file_image(&image_target).unwrap().unwrap();
+        let image = opened
+            .diff_file_image(
+                &image_target,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(image.new.as_deref(), Some(image_bytes.as_slice()));
         for rows in [
             opened.commit_details(&head).unwrap().files,
@@ -2470,7 +2679,11 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
         details.files
     );
     let diff = opened
-        .diff_file_text(&unstaged("raw.bin"))
+        .diff_file_text(
+            &unstaged("raw.bin"),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("the modified row has a diff");
     for side in [diff.old_source.as_ref(), diff.new_source.as_ref()] {
@@ -2482,7 +2695,7 @@ fn raw_file_committed_under_an_lfs_rule_matches_git_and_stages_as_a_pointer() {
     assert!(git(&repo, &["show", ":raw.bin"]).starts_with("version https://git-lfs"));
     let (rows, opened) = status(&repo);
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&rows, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&rows, &CancellationToken::new())
         .unwrap();
     assert!(files.staged[Path::new("raw.bin")].pointer.is_lfs());
 }
@@ -2660,7 +2873,7 @@ fn lfs_lock_list_and_unlock_against_a_lock_server() {
     let opened = GixBackend.open(&repo).unwrap();
     let listed = || {
         let mut locks: Vec<_> = opened
-            .lfs_locks_cancellable(&CancellationToken::new())
+            .lfs_locks(&CancellationToken::new())
             .unwrap()
             .into_iter()
             .map(|lock| {

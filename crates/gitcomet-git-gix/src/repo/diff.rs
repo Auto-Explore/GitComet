@@ -33,13 +33,7 @@ impl GixRepo {
     pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
         self.diff_file_text_impl_cancellable(target, &CancellationToken::new())
     }
-    pub(super) fn diff_preview_text_file_impl(
-        &self,
-        target: &DiffTarget,
-        side: DiffPreviewTextSide,
-    ) -> Result<Option<DiffPreviewTextFile>> {
-        self.diff_preview_text_file_impl_cancellable(target, side, &CancellationToken::new())
-    }
+
     #[cfg(test)]
     pub(super) fn cached_preview_blob_file_path(
         &self,
@@ -889,13 +883,6 @@ impl GixRepo {
         Ok(Some(cache_path))
     }
 
-    pub(super) fn diff_file_image_impl(
-        &self,
-        target: &DiffTarget,
-    ) -> Result<Option<FileDiffImage>> {
-        self.diff_file_image_impl_cancellable(target, &CancellationToken::new())
-    }
-
     pub(super) fn diff_file_image_impl_cancellable(
         &self,
         target: &DiffTarget,
@@ -1087,10 +1074,6 @@ impl GixRepo {
             &repo_path,
             gix_index_conflict_stage_data(&repo, &repo_path)?,
         )))
-    }
-
-    pub(super) fn conflict_session_impl(&self, path: &Path) -> Result<Option<ConflictSession>> {
-        self.conflict_session_with_encoding_impl(path, None)
     }
 
     /// The conflict session with every side decoded: the stages as git stores

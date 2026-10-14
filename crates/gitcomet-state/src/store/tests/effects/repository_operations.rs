@@ -98,12 +98,12 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
             repo.text_attributes(Path::new("menu.txt")).unwrap(),
         ));
         let original = Arc::new(
-            repo.diff_parsed_with_encoding_cancellable(&target, None, &CancellationToken::new())
+            repo.diff_parsed(&target, None, &CancellationToken::new())
                 .unwrap(),
         );
         repo_state.diff_state.diff = Loadable::Ready(original.clone());
         repo_state.diff_state.diff_file = Loadable::Ready(
-            repo.diff_file_text_with_encoding_cancellable(&target, None, &CancellationToken::new())
+            repo.diff_file_text(&target, None, &CancellationToken::new())
                 .unwrap()
                 .map(Arc::new),
         );
@@ -704,7 +704,9 @@ fn save_worktree_file_effect_writes_and_can_stage() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -713,19 +715,39 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -749,7 +771,11 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -771,10 +797,14 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -949,7 +979,9 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -958,19 +990,39 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -994,7 +1046,11 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1012,10 +1068,14 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1147,7 +1207,9 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1156,19 +1218,39 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1192,7 +1274,11 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1210,10 +1296,14 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1310,7 +1400,9 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1319,19 +1411,39 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1355,7 +1467,11 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1373,10 +1489,14 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1476,7 +1596,9 @@ fn load_stashes_effect_truncates_results_to_limit() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1485,19 +1607,39 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1521,8 +1663,15 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
-            Ok(self.stashes.clone())
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
+            let result: Result<Vec<StashEntry>> = { Ok(self.stashes.clone()) };
+            let result = result?;
+            cancellation.check_cancelled()?;
+            Ok(result)
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
             unimplemented!()
@@ -1539,10 +1688,14 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1642,7 +1795,9 @@ fn stash_effect_requests_stash_reload_on_success() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1651,19 +1806,39 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1691,7 +1866,11 @@ fn stash_effect_requests_stash_reload_on_success() {
             ));
             Ok(())
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1710,10 +1889,14 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1812,7 +1995,9 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1821,19 +2006,39 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1858,7 +2063,11 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, index: usize) -> Result<()> {
@@ -1879,10 +2088,14 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1980,7 +2193,9 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1989,19 +2204,39 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -2026,7 +2261,11 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, index: usize) -> Result<()> {
@@ -2047,10 +2286,14 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2147,7 +2390,9 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2156,19 +2401,39 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -2193,7 +2458,11 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -2213,10 +2482,14 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -2311,7 +2584,9 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2320,19 +2595,39 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -2357,7 +2652,11 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -2377,10 +2676,14 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -3382,7 +3685,9 @@ fn pull_releases_the_object_store_before_its_refresh() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3391,19 +3696,39 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -3427,7 +3752,11 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -3445,12 +3774,19 @@ fn pull_releases_the_object_store_before_its_refresh() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
-            self.calls.lock().unwrap().push("pull");
-            Ok(())
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
+            let result: Result<()> = {
+                self.calls.lock().unwrap().push("pull");
+                Ok(())
+            };
+            result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
         }
         fn push(&self) -> Result<()> {
             unimplemented!()

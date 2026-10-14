@@ -98,7 +98,9 @@ fn overlapping_remote_names_keep_exact_branch_identities() {
     );
 
     let opened = GixBackend.open(&repo).unwrap();
-    let branches = opened.list_remote_branches().unwrap();
+    let branches = opened
+        .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(
         branches
             .iter()
@@ -170,7 +172,7 @@ fn structured_upstream_target_preserves_an_ambiguous_name_boundary() {
             )
         );
         let feature = opened
-            .list_branches()
+            .list_branches(&gitcomet_core::services::CancellationToken::new())
             .unwrap()
             .into_iter()
             .find(|branch| branch.name == "feature")
@@ -199,7 +201,7 @@ fn checkout_remote_branch_uses_the_fetch_refspec_tracking_destination() {
     let opened = GixBackend.open(&repo).unwrap();
     assert!(
         opened
-            .list_remote_branches()
+            .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
             .unwrap()
             .iter()
             .any(|branch| branch.remote == "origin" && branch.name == "main")
@@ -335,7 +337,9 @@ fn list_branches_reports_upstream_and_divergence() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
-    let branches = opened.list_branches().unwrap();
+    let branches = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature = branches
         .iter()
         .find(|branch| branch.name == "feature")
@@ -406,7 +410,9 @@ fn list_branches_gone_upstream_is_exposed_as_untracked() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
-    let branches = opened.list_branches().unwrap();
+    let branches = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature = branches
         .iter()
         .find(|branch| branch.name == "feature")
@@ -461,7 +467,9 @@ fn list_branches_reflects_new_upstream_without_reopen() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
 
-    let before = opened.list_branches().unwrap();
+    let before = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature_before = before
         .iter()
         .find(|branch| branch.name == "feature")
@@ -470,7 +478,9 @@ fn list_branches_reflects_new_upstream_without_reopen() {
 
     opened.push_set_upstream("origin", "feature").unwrap();
 
-    let after = opened.list_branches().unwrap();
+    let after = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature_after = after
         .iter()
         .find(|branch| branch.name == "feature")
@@ -530,7 +540,9 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
 
-    let before = opened.list_branches().unwrap();
+    let before = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature_before = before
         .iter()
         .find(|branch| branch.name == "feature")
@@ -552,7 +564,9 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
     );
     assert_eq!(upstream_after.trim(), "origin/feature");
 
-    let after = opened.list_branches().unwrap();
+    let after = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature_after = after
         .iter()
         .find(|branch| branch.name == "feature")
@@ -607,7 +621,7 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         .set_upstream_branch_with_output("feature", &target)
         .expect("configure not-yet-pushed upstream");
     opened
-        .fetch_all_with_output_prune(true)
+        .fetch_all(true)
         .expect("pending upstream survives a pruning fetch before its first push");
 
     assert!(
@@ -641,7 +655,9 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
         "true"
     );
 
-    let branches = opened.list_branches().unwrap();
+    let branches = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature = branches
         .iter()
         .find(|branch| branch.name == "feature")
@@ -735,9 +751,7 @@ fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
         &work_repo,
         &["update-ref", "-d", "refs/remotes/origin/review/feature"],
     );
-    opened
-        .fetch_all_with_output_prune(true)
-        .expect("fetch newly live upstream");
+    opened.fetch_all(true).expect("fetch newly live upstream");
 
     let marker = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
@@ -754,11 +768,9 @@ fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
         &work_repo,
         &["push", "origin", "--delete", "review/feature"],
     );
-    opened
-        .fetch_all_with_output_prune(true)
-        .expect("prune removed upstream");
+    opened.fetch_all(true).expect("prune removed upstream");
     let feature = opened
-        .list_branches()
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
         .unwrap()
         .into_iter()
         .find(|branch| branch.name == "feature")
@@ -824,14 +836,25 @@ fn list_branches_reflects_repeated_tracking_toggles_on_same_repo_instance() {
             .clone()
     };
 
-    assert_eq!(feature_upstream(&opened.list_branches().unwrap()), None);
+    assert_eq!(
+        feature_upstream(
+            &opened
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+        ),
+        None
+    );
 
     let output = opened
         .set_upstream_branch_with_output("feature", &upstream("origin", "feature"))
         .expect("set upstream");
     assert_eq!(output.exit_code, Some(0));
     assert_eq!(
-        feature_upstream(&opened.list_branches().unwrap()),
+        feature_upstream(
+            &opened
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+        ),
         Some(Upstream {
             remote: "origin".to_string(),
             branch: "feature".to_string(),
@@ -842,14 +865,25 @@ fn list_branches_reflects_repeated_tracking_toggles_on_same_repo_instance() {
         .unset_upstream_branch_with_output("feature")
         .expect("unset upstream");
     assert_eq!(output.exit_code, Some(0));
-    assert_eq!(feature_upstream(&opened.list_branches().unwrap()), None);
+    assert_eq!(
+        feature_upstream(
+            &opened
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+        ),
+        None
+    );
 
     let output = opened
         .set_upstream_branch_with_output("feature", &upstream("origin", "feature"))
         .expect("restore upstream");
     assert_eq!(output.exit_code, Some(0));
     assert_eq!(
-        feature_upstream(&opened.list_branches().unwrap()),
+        feature_upstream(
+            &opened
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+        ),
         Some(Upstream {
             remote: "origin".to_string(),
             branch: "feature".to_string(),
@@ -910,7 +944,9 @@ fn list_branches_preserves_nested_upstream_branch_names() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
-    let branches = opened.list_branches().unwrap();
+    let branches = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature = branches
         .iter()
         .find(|branch| branch.name == nested_branch)
@@ -978,7 +1014,9 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
 
-    let before = opened.list_branches().unwrap();
+    let before = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature_before = before
         .iter()
         .find(|branch| branch.name == "feature")
@@ -1009,7 +1047,9 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
         "expected feature to have no upstream after unlink: {upstream_after:?}"
     );
 
-    let after = opened.list_branches().unwrap();
+    let after = opened
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let feature_after = after
         .iter()
         .find(|branch| branch.name == "feature")
@@ -1063,7 +1103,9 @@ fn list_ref_metadata_reports_author_date_and_subject_for_local_and_remote_refs()
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
-    let metadata = opened.list_ref_metadata().expect("list ref metadata");
+    let metadata = opened
+        .list_ref_metadata(&gitcomet_core::services::CancellationToken::new())
+        .expect("list ref metadata");
 
     let lookup = |name: &str| {
         metadata
@@ -1126,7 +1168,9 @@ fn list_branches_uses_first_merge_entry() {
             "origin/old [ahead 1]"
         );
         let opened = GixBackend.open(repo).unwrap();
-        let branches = opened.list_branches().unwrap();
+        let branches = opened
+            .list_branches(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         let main = branches
             .iter()
             .find(|branch| branch.name == "main")
@@ -1199,7 +1243,9 @@ fn changing_upstream_replaces_repeated_merge_entries() {
             run_git_capture(repo, &["config", "branch.main.description"]).trim(),
             "keep-me"
         );
-        let branches = opened.list_branches().unwrap();
+        let branches = opened
+            .list_branches(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert_eq!(
             branches.iter().find(|b| b.name == "main").unwrap().upstream,
             Some(upstream("origin", "new"))
@@ -1253,7 +1299,9 @@ fn tracked_branch_listing_scales_with_branch_count() {
         let mut best = Duration::MAX;
         for _ in 0..3 {
             let start = Instant::now();
-            let branches = opened.list_branches().unwrap();
+            let branches = opened
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             best = best.min(start.elapsed());
             assert_eq!(branches.len(), count + 1);
             assert_eq!(
@@ -1337,52 +1385,89 @@ fn timing_refresh_listings_real_repos() {
     for path in repos.split(':') {
         let opened = GixBackend.open(Path::new(path)).unwrap();
         let name = Path::new(path).file_name().unwrap().to_string_lossy();
-        let (t, v) = best(|| opened.list_branches().unwrap().len());
+        let (t, v) = best(|| {
+            opened
+                .list_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .len()
+        });
         println!(
             "timing list_branches {name} n={v} {:.3}ms",
             t.as_secs_f64() * 1e3
         );
-        let (t, v) = best(|| opened.list_remote_branches().unwrap().len());
+        let (t, v) = best(|| {
+            opened
+                .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .len()
+        });
         println!(
             "timing list_remote_branches {name} n={v} {:.3}ms",
             t.as_secs_f64() * 1e3
         );
-        let (t, v) = best(|| opened.list_tags().unwrap().len());
+        let (t, v) = best(|| {
+            opened
+                .list_tags(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .len()
+        });
         println!(
             "timing list_tags {name} n={v} {:.3}ms",
             t.as_secs_f64() * 1e3
         );
-        let (t, v) = best(|| opened.list_remotes().unwrap().len());
+        let (t, v) = best(|| {
+            opened
+                .list_remotes(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .len()
+        });
         println!(
             "timing list_remotes {name} n={v} {:.3}ms",
             t.as_secs_f64() * 1e3
         );
-        let (t, _) = best(|| opened.upstream_divergence().unwrap());
+        let (t, _) = best(|| {
+            opened
+                .upstream_divergence(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+        });
         println!(
             "timing upstream_divergence {name} {:.3}ms",
             t.as_secs_f64() * 1e3
         );
-        let (t, _) = best(|| opened.current_branch().unwrap());
+        let (t, _) = best(|| {
+            opened
+                .current_branch(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+        });
         println!(
             "timing current_branch {name} {:.3}ms",
             t.as_secs_f64() * 1e3
         );
-        let (t, v) = best(|| opened.stash_list().unwrap().len());
+        let (t, v) = best(|| {
+            opened
+                .stash_list(&gitcomet_core::services::CancellationToken::new())
+                .unwrap()
+                .len()
+        });
         println!(
             "timing stash_list {name} n={v} {:.3}ms",
             t.as_secs_f64() * 1e3
         );
         let (t, v) = best(|| {
-            let s = opened.status().unwrap();
+            let s = opened
+                .status(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             s.staged.len() + s.unstaged.len()
         });
         println!("timing status {name} n={v} {:.3}ms", t.as_secs_f64() * 1e3);
         // What a refresh runs after its status load: the counts for that status.
-        let status = opened.status().unwrap();
+        let status = opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         let cancellation = gitcomet_core::services::CancellationToken::new();
         let (t, v) = best(|| {
             let stats = opened
-                .uncommitted_line_stats_for_status_cancellable(&status, &cancellation)
+                .uncommitted_line_stats_for_status(&status, &cancellation)
                 .unwrap();
             stats.staged.len() + stats.unstaged.len()
         });

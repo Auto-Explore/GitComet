@@ -264,6 +264,11 @@ Harness verification: `python3 -m unittest discover -s scripts/profiling -p
 To build that probe directly, run `cargo build --release -p gitcomet-git-gix
 --features benchmarks,test-support --example operation-context-probe`.
 `local-performance.py` also enables `test-support` on revisions that provide it.
+It copies one byte-identical workload into both checkouts and selects the probe's
+legacy or current repository adapter from the exact supported trait signatures.
+Unknown or mixed signatures fail the build. The build record keeps the shared
+workload hash plus each checkout's API mode and adapter build-script hash; this
+compatibility code is confined to the measurement driver.
 
 ```sh
 python scripts/profiling/application-probe.py --profiles release --samples 35 --output target/profiling/application

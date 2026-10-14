@@ -22,8 +22,17 @@ impl GitRepository for CommonDirRepo {
     fn common_dir(&self) -> Option<PathBuf> {
         Some(self.common_dir.clone())
     }
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<Arc<LogPage>> {
-        unsupported()
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Arc<LogPage>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
         unsupported()
@@ -31,20 +40,55 @@ impl GitRepository for CommonDirRepo {
     fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
         unsupported()
     }
-    fn current_branch(&self) -> Result<String> {
-        unsupported()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        unsupported()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        unsupported()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        unsupported()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn status(&self) -> Result<RepoStatus> {
-        unsupported()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported()
@@ -67,8 +111,15 @@ impl GitRepository for CommonDirRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported()
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        unsupported()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         unsupported()
@@ -85,11 +136,17 @@ impl GitRepository for CommonDirRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         unsupported()
     }
-    fn fetch_all(&self) -> Result<()> {
-        unsupported()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        unsupported()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         unsupported()

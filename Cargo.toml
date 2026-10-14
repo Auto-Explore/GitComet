@@ -314,6 +314,7 @@ x11-clipboard = "0.9.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(gitcomet_probe_legacy_repository_api)"] }
 
 [profile.dev]
 incremental = true

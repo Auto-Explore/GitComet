@@ -527,7 +527,11 @@ fn interactive_rebase_drops_picks_that_become_empty() {
         .expect("become-empty pick should be dropped, not strand the rebase");
 
     assert_eq!(output.exit_code, Some(0));
-    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
     assert_eq!(git_stdout(&repo, &["rev-list", "--count", "HEAD"]), "3");
     assert_eq!(
         git_stdout(&repo, &["log", "-2", "--format=%s"]),
@@ -569,7 +573,11 @@ fn interactive_rebase_aborts_when_branch_changes_after_setup() {
         git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
         count_before
     );
-    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 }
 
 #[test]
@@ -666,7 +674,11 @@ fn interactive_rebase_edited_squash_message_survives_conflict() {
     backend
         .interactive_rebase_with_output(&root, &entries)
         .expect("start interactive rebase");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
     run_git(&repo, &["add", "file.txt"]);
@@ -675,7 +687,9 @@ fn interactive_rebase_edited_squash_message_survives_conflict() {
         .expect("continue interactive rebase");
 
     assert!(
-        !backend.rebase_in_progress().expect("read rebase state"),
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
         "rebase still in progress after continue: {continue_output:?}"
     );
     assert_eq!(
@@ -708,7 +722,11 @@ fn interactive_rebase_reword_works_in_repo_path_with_spaces() {
     backend
         .interactive_rebase_with_output(&root, &entries)
         .expect("start interactive rebase");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
     run_git(&repo, &["add", "file.txt"]);
@@ -717,7 +735,9 @@ fn interactive_rebase_reword_works_in_repo_path_with_spaces() {
         .expect("continue interactive rebase");
 
     assert!(
-        !backend.rebase_in_progress().expect("read rebase state"),
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
         "rebase still in progress after continue: {continue_output:?}"
     );
     assert_eq!(
@@ -799,7 +819,11 @@ fn rebase_continue_blocks_external_rebase_with_pending_reword() {
     );
 
     let backend = open_backend(&repo);
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     // Resolve the conflict so only the guard stands between continue and
     // silently finalizing the reword with its unedited message.
@@ -814,7 +838,9 @@ fn rebase_continue_blocks_external_rebase_with_pending_reword() {
         "unexpected error: {err}"
     );
     assert!(
-        backend.rebase_in_progress().expect("read rebase state"),
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
         "rebase must stay paused and recoverable"
     );
 }
@@ -837,7 +863,11 @@ fn rebase_continue_allows_external_rebase_without_message_steps() {
     );
 
     let backend = open_backend(&repo);
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
     run_git(&repo, &["add", "file.txt"]);
@@ -845,7 +875,11 @@ fn rebase_continue_allows_external_rebase_without_message_steps() {
         .rebase_continue_with_output()
         .expect("continue a pick-only external rebase");
 
-    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
     assert_eq!(
         git_stdout(&repo, &["log", "-1", "--format=%s"]),
         "Reword me"
@@ -869,7 +903,11 @@ fn rebase_continue_rejects_damaged_persisted_reword_state() {
     backend
         .interactive_rebase_with_output(&root, &entries)
         .expect("start interactive rebase");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     // Damage the persisted plan: the state dir survives but the editor is gone.
     let persisted = git_path(&repo, "rebase-merge/gitcomet-reword");
@@ -891,7 +929,9 @@ fn rebase_continue_rejects_damaged_persisted_reword_state() {
         "unexpected error: {err}"
     );
     assert!(
-        backend.rebase_in_progress().expect("read rebase state"),
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
         "rebase must stay paused and recoverable"
     );
 }
@@ -911,7 +951,11 @@ fn rebase_continue_with_unresolved_conflict_keeps_git_error() {
     backend
         .interactive_rebase_with_output(&root, &entries)
         .expect("start interactive rebase (pauses at conflict)");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     // Continue without resolving: git fails without advancing, and that
     // failure must reach the caller instead of masquerading as a pause.
@@ -923,7 +967,11 @@ fn rebase_continue_with_unresolved_conflict_keeps_git_error() {
         msg.contains("conflict") || msg.contains("unmerged") || msg.contains("fix them"),
         "error should carry git's message: {err}"
     );
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 }
 
 #[cfg(unix)]
@@ -961,7 +1009,11 @@ fn rebase_continue_with_signing_failure_keeps_git_error() {
         err.to_string().contains("commit"),
         "error should carry git's commit failure: {err}"
     );
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 }
 
 #[test]
@@ -987,7 +1039,11 @@ fn rebase_continue_pausing_at_next_conflict_is_success() {
     backend
         .interactive_rebase_with_output(&root, &entries)
         .expect("start interactive rebase (pauses at first conflict)");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     fs::write(repo.join("a.txt"), "a2\n").expect("resolve first conflict");
     run_git(&repo, &["add", "a.txt"]);
@@ -995,14 +1051,22 @@ fn rebase_continue_pausing_at_next_conflict_is_success() {
     backend
         .rebase_continue_with_output()
         .expect("advancing to the next conflict is a successful pause");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     fs::write(repo.join("b.txt"), "b2\n").expect("resolve second conflict");
     run_git(&repo, &["add", "b.txt"]);
     backend
         .rebase_continue_with_output()
         .expect("finish the rebase");
-    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 }
 
 #[test]
@@ -1026,7 +1090,11 @@ fn interactive_rebase_preserves_current_reword_message_across_conflict() {
     backend
         .interactive_rebase_with_output(&root, &entries)
         .expect("start interactive rebase");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     let persisted = git_path(&repo, "rebase-merge/gitcomet-reword");
     assert!(persisted.is_dir(), "reword state must survive the pause");
@@ -1038,7 +1106,9 @@ fn interactive_rebase_preserves_current_reword_message_across_conflict() {
         .expect("continue interactive rebase");
 
     assert!(
-        !backend.rebase_in_progress().expect("read rebase state"),
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
         "rebase still in progress after continue: {continue_output:?}; status: {}",
         git_stdout(&repo, &["status", "--porcelain=v2", "--branch"])
     );
@@ -1074,7 +1144,11 @@ fn interactive_rebase_preserves_later_reword_message_across_conflict() {
     backend
         .interactive_rebase_with_output(&root, &entries)
         .expect("start interactive rebase");
-    assert!(backend.rebase_in_progress().expect("read rebase state"));
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
 
     fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
     run_git(&repo, &["add", "file.txt"]);
@@ -1083,7 +1157,9 @@ fn interactive_rebase_preserves_later_reword_message_across_conflict() {
         .expect("continue interactive rebase");
 
     assert!(
-        !backend.rebase_in_progress().expect("read rebase state"),
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
         "rebase still in progress after continue: {continue_output:?}; status: {}",
         git_stdout(&repo, &["status", "--porcelain=v2", "--branch"])
     );

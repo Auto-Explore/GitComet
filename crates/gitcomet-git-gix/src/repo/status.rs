@@ -154,10 +154,6 @@ impl GixRepo {
         )
     }
 
-    pub(super) fn worktree_status_impl(&self) -> Result<Vec<FileStatus>> {
-        self.worktree_status_cancellable_impl(&CancellationToken::new())
-    }
-
     pub(super) fn worktree_status_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
@@ -199,10 +195,6 @@ impl GixRepo {
 
         sort_and_dedup_status_entries(&mut unstaged);
         Ok(unstaged)
-    }
-
-    pub(super) fn staged_status_impl(&self) -> Result<Vec<FileStatus>> {
-        self.staged_status_cancellable_impl(&CancellationToken::new())
     }
 
     pub(super) fn staged_status_cancellable_impl(
@@ -281,10 +273,6 @@ impl GixRepo {
         paths.sort_unstable();
         paths.dedup();
         Ok(paths)
-    }
-
-    pub(super) fn upstream_divergence_impl(&self) -> Result<Option<UpstreamDivergence>> {
-        self.upstream_divergence_cancellable_impl(&CancellationToken::new())
     }
 
     pub(super) fn upstream_divergence_cancellable_impl(
@@ -2131,8 +2119,12 @@ pub(crate) mod tests {
 
         let gix_repo = open_repo(workdir);
         let combined = gix_repo.status_impl().expect("combined status");
-        let staged = gix_repo.staged_status_impl().expect("staged status");
-        let unstaged = gix_repo.worktree_status_impl().expect("worktree status");
+        let staged = gix_repo
+            .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+            .expect("staged status");
+        let unstaged = gix_repo
+            .worktree_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+            .expect("worktree status");
 
         assert_eq!(*combined.staged, staged);
         assert_eq!(*combined.unstaged, unstaged);
@@ -2176,7 +2168,7 @@ pub(crate) mod tests {
             );
         }
         assert_eq!(
-            gix_repo.worktree_status_impl().expect("worktree status"),
+            gix_repo.worktree_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new()).expect("worktree status"),
             vec![file_status("dir/new.txt", FileStatusKind::Untracked)]
         );
     }
@@ -2214,11 +2206,13 @@ pub(crate) mod tests {
         );
         // The per-lane entry points must agree with the combined status.
         assert_eq!(
-            gix_repo.staged_status_impl().expect("staged lane"),
+            gix_repo
+                .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+                .expect("staged lane"),
             *status.staged
         );
         assert_eq!(
-            gix_repo.worktree_status_impl().expect("worktree lane"),
+            gix_repo.worktree_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new()).expect("worktree lane"),
             *status.unstaged
         );
     }
@@ -2234,7 +2228,9 @@ pub(crate) mod tests {
 
         let gix_repo = open_repo(workdir);
         let combined = gix_repo.status_impl().expect("combined status");
-        let staged = gix_repo.staged_status_impl().expect("staged status");
+        let staged = gix_repo
+            .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+            .expect("staged status");
 
         assert_eq!(*combined.staged, staged);
         assert_eq!(staged, vec![file_status("new.txt", FileStatusKind::Added)]);
@@ -2249,8 +2245,12 @@ pub(crate) mod tests {
 
         let gix_repo = open_repo(workdir);
         let combined = gix_repo.status_impl().expect("combined status");
-        let staged = gix_repo.staged_status_impl().expect("staged status");
-        let worktree = gix_repo.worktree_status_impl().expect("worktree status");
+        let staged = gix_repo
+            .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+            .expect("staged status");
+        let worktree = gix_repo
+            .worktree_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+            .expect("worktree status");
 
         assert!(combined.staged.is_empty());
         assert!(staged.is_empty());
@@ -2292,7 +2292,9 @@ pub(crate) mod tests {
         .expect("head tree");
         assert_ne!(head_commit_id, head_tree_id);
 
-        let staged = gix_repo.staged_status_impl().expect("staged status");
+        let staged = gix_repo
+            .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+            .expect("staged status");
         assert_eq!(staged.len(), 1);
         assert_eq!(staged[0].path, PathBuf::from("tracked.txt"));
         assert_eq!(staged[0].kind, FileStatusKind::Modified);
@@ -2480,7 +2482,7 @@ pub(crate) mod tests {
         // With a clean index nothing is staged; this also primes the cache.
         assert!(
             gix_repo
-                .staged_status_impl()
+                .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
                 .expect("staged status")
                 .is_empty()
         );
@@ -2510,7 +2512,7 @@ pub(crate) mod tests {
         // recomputed as empty instead of being served from the cache.
         assert!(
             gix_repo
-                .staged_status_impl()
+                .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
                 .expect("recomputed staged status")
                 .is_empty(),
             "a content-exact stamp must invalidate a stale staged cache on len+mtime collisions"
@@ -2529,7 +2531,9 @@ pub(crate) mod tests {
                 staged: vec![file_status("sentinel.txt", FileStatusKind::Added)],
             });
         assert_eq!(
-            gix_repo.staged_status_impl().expect("cached staged status"),
+            gix_repo
+                .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+                .expect("cached staged status"),
             vec![file_status("sentinel.txt", FileStatusKind::Added)],
             "an exact stamp match should still hit the staged cache"
         );
@@ -2599,11 +2603,13 @@ pub(crate) mod tests {
 
         // The per-lane entry points must agree with the combined status after all the churn.
         assert_eq!(
-            gix_repo.staged_status_impl().expect("staged lane"),
+            gix_repo
+                .staged_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+                .expect("staged lane"),
             *status.staged
         );
         assert_eq!(
-            gix_repo.worktree_status_impl().expect("worktree lane"),
+            gix_repo.worktree_status_cancellable_impl(&gitcomet_core::services::CancellationToken::new()).expect("worktree lane"),
             *status.unstaged
         );
     }
@@ -2870,12 +2876,24 @@ pub(crate) mod tests {
 
         let repo = open_repo(workdir);
         let expected = vec![file_status("racy.txt", FileStatusKind::Modified)];
-        assert_eq!(repo.worktree_status_impl().expect("status"), expected);
+        assert_eq!(
+            repo.worktree_status_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .expect("status"),
+            expected
+        );
         assert!(
             repo.stat_refreshed_index.lock().expect("lock").is_some(),
             "the touched files should have produced an in-memory refresh"
         );
-        assert_eq!(repo.worktree_status_impl().expect("status"), expected);
+        assert_eq!(
+            repo.worktree_status_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .expect("status"),
+            expected
+        );
     }
 
     /// A write landing right after a walk starts can carry a coarser mtime
@@ -2909,7 +2927,13 @@ pub(crate) mod tests {
         // from the file clock: the last instant of the previous second.
         let just_before = filetime::FileTime::from_unix_time(now.unix_seconds() - 1, 999_000_000);
         filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
-        assert_eq!(repo.worktree_status_impl().expect("status"), vec![]);
+        assert_eq!(
+            repo.worktree_status_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .expect("status"),
+            vec![]
+        );
         assert_eq!(
             repo.stat_refreshed_index
                 .lock()
@@ -2925,7 +2949,10 @@ pub(crate) mod tests {
         write_file(workdir, "racy.txt", "bar\n");
         filetime::set_file_mtime(workdir.join("racy.txt"), just_before).expect("mtime");
         assert_eq!(
-            repo.worktree_status_impl().expect("status"),
+            repo.worktree_status_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .expect("status"),
             vec![file_status("racy.txt", FileStatusKind::Modified)]
         );
     }
@@ -2980,7 +3007,12 @@ pub(crate) mod tests {
             }
             let gix_repo = open_repo(workdir);
             let start = std::time::Instant::now();
-            let first = gix_repo.worktree_status_impl().expect("status");
+            let first =
+                gix_repo
+                    .worktree_status_cancellable_impl(
+                        &gitcomet_core::services::CancellationToken::new(),
+                    )
+                    .expect("status");
             let first_ms = start.elapsed().as_secs_f64() * 1e3;
             assert!(first.is_empty(), "touched files are unchanged");
             // Refreshes are debounced (250 ms to 2 s): the next one starts in a
@@ -2990,7 +3022,11 @@ pub(crate) mod tests {
             let cpu_start = cpu_ms();
             for _ in 0..20 {
                 let start = std::time::Instant::now();
-                let again = gix_repo.worktree_status_impl().expect("status");
+                let again = gix_repo
+                    .worktree_status_cancellable_impl(
+                        &gitcomet_core::services::CancellationToken::new(),
+                    )
+                    .expect("status");
                 best = best.min(start.elapsed().as_secs_f64() * 1e3);
                 assert!(again.is_empty());
             }
@@ -2998,12 +3034,21 @@ pub(crate) mod tests {
             // Control: the same tree once git has written the new stats back.
             git_success(workdir, &["update-index", "-q", "--refresh"]);
             let fresh = open_repo(workdir);
-            let _ = fresh.worktree_status_impl().expect("status");
+            let _ =
+                fresh
+                    .worktree_status_cancellable_impl(
+                        &gitcomet_core::services::CancellationToken::new(),
+                    )
+                    .expect("status");
             let mut clean = f64::MAX;
             let cpu_start = cpu_ms();
             for _ in 0..20 {
                 let start = std::time::Instant::now();
-                let _ = fresh.worktree_status_impl().expect("status");
+                let _ = fresh
+                    .worktree_status_cancellable_impl(
+                        &gitcomet_core::services::CancellationToken::new(),
+                    )
+                    .expect("status");
                 clean = clean.min(start.elapsed().as_secs_f64() * 1e3);
             }
             let clean_cpu = (cpu_ms() - cpu_start) / 20.0;

@@ -837,7 +837,11 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
     commit_file(tmp.path(), "a.txt", "one\n", "first");
     let repo = open_repo(tmp.path());
     let shallow = shallow_snapshot(&repo.repo()).expect("shallow snapshot");
-    let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
+    let commit = repo
+        .log_head_page_cancellable_impl(1, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .commits[0]
+        .clone();
     for limit in [4000, 4001, 4002, 20_000] {
         let key = repo.log_page_cache_key(
             HistoryMode::AllBranches,
@@ -1231,7 +1235,9 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
 
     let repo = open_repo(tmp.path());
-    let first = repo.upstream_divergence_impl().expect("divergence");
+    let first = repo
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+        .expect("divergence");
     assert_eq!(
         first,
         Some(UpstreamDivergence {
@@ -1241,13 +1247,15 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     );
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 1);
 
-    let again = repo.upstream_divergence_impl().expect("divergence again");
+    let again = repo
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+        .expect("divergence again");
     assert_eq!(again, first);
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 1);
 
     commit_file(tmp.path(), "a.txt", "3\n", "c3");
     let moved = repo
-        .upstream_divergence_impl()
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
         .expect("divergence after move");
     assert_eq!(
         moved,
@@ -1261,7 +1269,7 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     // Upstream catching up produces the equal-tip fast path (no walk, no entry).
     git_success(tmp.path(), &["fetch", "-q", "origin"]);
     let caught_up = repo
-        .upstream_divergence_impl()
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
         .expect("divergence caught up");
     assert_eq!(caught_up, Some(UpstreamDivergence::default()));
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 2);
@@ -1312,9 +1320,12 @@ fn upstream_divergence_cache_invalidates_on_shallow_boundary_changes() {
             fs::remove_file(tmp.path().join(".git/shallow")).expect("unshallow");
         }
         assert_eq!(git_stdout(tmp.path(), &["show-ref"]), tips);
-        let fresh = open_repo(tmp.path())
-            .upstream_divergence_impl()
-            .expect("fresh divergence");
+        let fresh =
+            open_repo(tmp.path())
+                .upstream_divergence_cancellable_impl(
+                    &gitcomet_core::services::CancellationToken::new(),
+                )
+                .expect("fresh divergence");
         let ahead: usize = git_stdout(
             tmp.path(),
             &["rev-list", "--count", "HEAD", "--not", "@{upstream}"],
@@ -1323,7 +1334,13 @@ fn upstream_divergence_cache_invalidates_on_shallow_boundary_changes() {
         .unwrap();
         assert_eq!(ahead, expected_ahead);
         assert_eq!(fresh.unwrap().ahead, ahead);
-        assert_eq!(repo.upstream_divergence_impl().expect("divergence"), fresh);
+        assert_eq!(
+            repo.upstream_divergence_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .expect("divergence"),
+            fresh
+        );
     }
 }
 
@@ -1861,7 +1878,11 @@ fn timing_upstream_divergence_far_behind() {
     let repo = open_repo(tmp.path());
     for round in 1..=3 {
         let started = std::time::Instant::now();
-        let divergence = repo.upstream_divergence_impl().expect("divergence");
+        let divergence =
+            repo.upstream_divergence_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .expect("divergence");
         println!(
             "timing upstream_divergence round {round}: {:?} -> {divergence:?}",
             started.elapsed()
@@ -1911,7 +1932,11 @@ fn timing_all_branches_page_with_many_refs() {
     for round in 1..=3 {
         let started = std::time::Instant::now();
         let page = repo
-            .log_all_branches_page_impl(50, None)
+            .log_all_branches_page_cancellable_impl(
+                50,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("all branches page");
         println!(
             "timing all_branches_page round {round}: {:?} ({} commits)",

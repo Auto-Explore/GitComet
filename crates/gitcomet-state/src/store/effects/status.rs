@@ -58,15 +58,15 @@ fn run(
     match work {
         StatusEffect::LoadWorktreeStatus { repo_id } => InternalMsg::WorktreeStatusLoaded {
             repo_id,
-            result: repo.worktree_status_cancellable(cancellation),
+            result: repo.worktree_status(cancellation),
         },
         StatusEffect::LoadStagedStatus { repo_id } => InternalMsg::StagedStatusLoaded {
             repo_id,
-            result: repo.staged_status_cancellable(cancellation),
+            result: repo.staged_status(cancellation),
         },
         StatusEffect::LoadStatus { repo_id } => InternalMsg::StatusLoaded {
             repo_id,
-            result: repo.status_cancellable(cancellation),
+            result: repo.status(cancellation),
         },
         StatusEffect::LoadUncommittedLineStats {
             repo_id,
@@ -74,10 +74,9 @@ fn run(
             status,
             large_files,
         } => {
-            let result = repo.uncommitted_line_stats_for_status_cancellable(&status, cancellation);
-            let large_files = large_files.then(|| {
-                repo.uncommitted_large_files_for_status_cancellable(&status, cancellation)
-            });
+            let result = repo.uncommitted_line_stats_for_status(&status, cancellation);
+            let large_files =
+                large_files.then(|| repo.uncommitted_large_files_for_status(&status, cancellation));
             InternalMsg::UncommittedLineStatsLoaded {
                 repo_id,
                 generation,

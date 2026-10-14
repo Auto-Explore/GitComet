@@ -31,22 +31,29 @@ fn bare_repository_status_refreshes_are_empty_and_history_remains_readable() {
         let cancel = CancellationToken::new();
 
         for _ in 0..2 {
-            assert_eq!(repo.status().unwrap(), RepoStatus::default());
             assert_eq!(
-                repo.status_cancellable(&cancel).unwrap(),
+                repo.status(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap(),
                 RepoStatus::default()
             );
-            assert!(repo.worktree_status().unwrap().is_empty());
+            assert_eq!(repo.status(&cancel).unwrap(), RepoStatus::default());
             assert!(
-                repo.worktree_status_cancellable(&cancel)
+                repo.worktree_status(&gitcomet_core::services::CancellationToken::new())
                     .unwrap()
                     .is_empty()
             );
-            assert!(repo.staged_status().unwrap().is_empty());
-            assert!(repo.staged_status_cancellable(&cancel).unwrap().is_empty());
+            assert!(repo.worktree_status(&cancel).unwrap().is_empty());
+            assert!(
+                repo.staged_status(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(repo.staged_status(&cancel).unwrap().is_empty());
         }
 
-        let page = repo.log_all_branches_page(20, None).unwrap();
+        let page = repo
+            .log_all_branches_page(20, None, &gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         let index = repo
             .build_history_index(HistoryMode::AllBranches, None, &cancel, &mut |_| {})
             .unwrap()
@@ -70,17 +77,15 @@ fn bare_repository_status_refreshes_are_empty_and_history_remains_readable() {
 
         cancel.cancel();
         assert!(matches!(
-            repo.status_cancellable(&cancel).unwrap_err().kind(),
+            repo.status(&cancel).unwrap_err().kind(),
             ErrorKind::Cancelled
         ));
         assert!(matches!(
-            repo.worktree_status_cancellable(&cancel)
-                .unwrap_err()
-                .kind(),
+            repo.worktree_status(&cancel).unwrap_err().kind(),
             ErrorKind::Cancelled
         ));
         assert!(matches!(
-            repo.staged_status_cancellable(&cancel).unwrap_err().kind(),
+            repo.staged_status(&cancel).unwrap_err().kind(),
             ErrorKind::Cancelled
         ));
     }
@@ -105,7 +110,9 @@ fn linked_worktree_of_bare_repository_still_reports_staged_and_unstaged_changes(
     write(&worktree, "untracked.txt", "new\n");
 
     let repo = GixBackend.open(&worktree).unwrap();
-    let status = repo.status().unwrap();
+    let status = repo
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(status.staged.len(), 1);
     assert_eq!(status.staged[0].path, Path::new("file.txt"));
     assert_eq!(status.staged[0].kind, FileStatusKind::Modified);
@@ -125,15 +132,23 @@ fn linked_worktree_of_bare_repository_still_reports_staged_and_unstaged_changes(
                 && entry.kind == FileStatusKind::Untracked)
     );
     assert_eq!(
-        repo.staged_status().unwrap().as_slice(),
+        repo.staged_status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .as_slice(),
         status.staged.as_slice()
     );
     assert_eq!(
-        repo.worktree_status().unwrap().as_slice(),
+        repo.worktree_status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .as_slice(),
         status.unstaged.as_slice()
     );
     assert_eq!(
-        GixBackend.open(&bare).unwrap().status().unwrap(),
+        GixBackend
+            .open(&bare)
+            .unwrap()
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         RepoStatus::default()
     );
 }

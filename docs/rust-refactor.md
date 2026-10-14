@@ -21,7 +21,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [x] Fix ConfiguredBackend object-store release delegation with a regression test.
 - [x] Fix worktree-cache ownership collisions between stores using process-unique repository lifetimes.
 - [x] Reject late cache insertions after repository close and release cache leases on shutdown.
-- [ ] Canonicalize repository API families: cancellation-aware reads; encoded text/conflict reads; fetch/pull pruning; remote/submodule policies.
+- [x] Canonicalize repository API families: cancellation-aware reads; encoded text/conflict reads; fetch/pull pruning; remote/submodule policies.
 - [ ] Preserve error causes and operation/path context while retaining classifications and cloning.
 - [x] Replace public raw load masks with LoadKind; give logs, line statistics and scoped worktree refreshes dedicated protocols.
 - [x] Introduce distinct log IDs, load epochs, line-stat generations and repository lifetime types; completion methods reject stale IDs.
@@ -115,7 +115,37 @@ cover the other release paths. Independent review accepted this fix after all
 1,315 state tests passed, with six existing skips, and strict Clippy passed.
 Backend/task-token consolidation and prepared reducer inputs remain in progress.
 
+The canonical repository API migration passed 1,971 core/backend tests with
+22 existing skips and strict Clippy. Its cancellation regressions failed when the
+before-work and after-success checks were deliberately removed. The same profiling
+driver source builds against both the original and current APIs, with identical
+dependency versions and explicit adapter hashes recorded in the build output.
+
 ## Migration notes
+
+`GitRepository` remains object-safe for external backends. Each equivalent method
+family now has one entry point; migrate implementations and callers together.
+Optional unsupported or absent results retain their previous meanings. Streaming
+and indexed history, supplied-status line statistics, unified and parsed diffs,
+images and file-backed previews remain distinct capabilities.
+
+| Previous use | Canonical call and preserved default |
+|---|---|
+| Plain or `_cancellable` reads | Pass `&CancellationToken` to the base method, such as `status`. Forward existing tokens; otherwise pass a fresh token. |
+| Encoded `diff_parsed` / `diff_file_text` overloads | Pass `(target, encoding, cancellation)`; `encoding: None` keeps the previous default. |
+| `conflict_session_with_encoding` | Use `conflict_session(path, encoding)`. |
+| Signature verification overloads | Use `verify_commit_signatures(ids, formats, cancellation)`; former plain calls use `SignatureFormats::ALL`. |
+| URL-policy overloads | Append `RemoteUrlPolicy` to the base method; former policy-less calls use `RemoteUrlPolicy::default()`. |
+| Fetch overloads | Required `fetch_all(prune) -> Result<CommandOutput>`; former calls without pruning arguments pass `true`. |
+| Pull overloads | Required `pull(mode, prune) -> Result<CommandOutput>`; former calls without pruning arguments pass `true`. |
+| Branch-pull overloads | Optional `pull_branch_with_output(remote, branch, prune)`; former plain calls pass `false`. |
+
+Custom implementations that previously relied on a cancellable wrapper must keep
+its cancellation checks before work and after a successful result. Implementations
+that supplied only unit-returning fetch/pull methods preserve their effects and
+errors, returning `CommandOutput::empty_success("git fetch --all")` or
+`CommandOutput::empty_success("git pull")` on success. Implementations with captured
+output keep that output. No deprecated forwarding overloads remain.
 
 External test harnesses using `install_test_git_command_environment` or
 `allow_test_repo_local_mergetool_command` must enable
@@ -123,8 +153,9 @@ External test harnesses using `install_test_git_command_environment` or
 `operation-context-probe` builds enable `benchmarks,test-support`; the profiling
 helpers select those features automatically and retain support for older baseline
 manifests. Build the production app separately from probes to keep test overrides
-and benchmark instrumentation out of its dependency features. Repository service
-signatures are unchanged in the cache and test-support commits.
+and benchmark instrumentation out of its dependency features. The shared profiling
+driver selects its historical API adapter from checked signatures and records that
+selection while keeping the workload source identical across compared revisions.
 
 Ordinary load queries and transitions now take `LoadKind`, for example
 `LoadKind::HeadBranch`, instead of `RepoLoadsInFlight` bit constants. Logs,

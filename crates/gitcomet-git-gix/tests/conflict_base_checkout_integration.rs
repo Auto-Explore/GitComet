@@ -114,7 +114,9 @@ fn checkout_conflict_base_restores_non_utf8_stage_and_resolves_conflict() {
     set_unmerged_stages(repo, "bin.dat", Some(base_blob.as_str()), None, None);
 
     let opened = GixBackend.open(repo).unwrap();
-    let before = opened.status().unwrap();
+    let before = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         before
             .unstaged
@@ -126,7 +128,9 @@ fn checkout_conflict_base_restores_non_utf8_stage_and_resolves_conflict() {
     opened.checkout_conflict_base(Path::new("bin.dat")).unwrap();
 
     assert_eq!(fs::read(repo.join("bin.dat")).unwrap(), base_bytes);
-    let after = opened.status().unwrap();
+    let after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         after
             .unstaged
@@ -168,7 +172,9 @@ fn checkout_conflict_base_errors_when_base_stage_is_missing() {
     );
 
     let opened = GixBackend.open(repo).unwrap();
-    let before = opened.status().unwrap();
+    let before = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         before
             .unstaged
@@ -186,7 +192,9 @@ fn checkout_conflict_base_errors_when_base_stage_is_missing() {
         "unexpected error: {msg}"
     );
 
-    let after = opened.status().unwrap();
+    let after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         after
             .unstaged

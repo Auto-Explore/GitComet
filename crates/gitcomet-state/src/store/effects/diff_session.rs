@@ -76,13 +76,11 @@ pub(super) fn schedule(
                         send(DiffSessionContent::Attributes(repo.text_attributes(path)));
                     }
                     if patch {
-                        send(DiffSessionContent::Patch(
-                            repo.diff_parsed_with_encoding_cancellable(
-                                &target,
-                                encoding,
-                                &cancellation,
-                            ),
-                        ));
+                        send(DiffSessionContent::Patch(repo.diff_parsed(
+                            &target,
+                            encoding,
+                            &cancellation,
+                        )));
                     }
                     // Every part asked for is answered, or the session's
                     // pending flags never clear; once cancelled, the readers
@@ -92,20 +90,16 @@ pub(super) fn schedule(
                             cancellation
                                 .check_cancelled()
                                 .and_then(|()| {
-                                    repo.diff_file_text_with_encoding_cancellable(
-                                        &target,
-                                        encoding,
-                                        &cancellation,
-                                    )
+                                    repo.diff_file_text(&target, encoding, &cancellation)
                                 })
                                 .map(|text| text.map(Box::new)),
                         ));
                     }
                     if image {
                         send(DiffSessionContent::Image(
-                            cancellation.check_cancelled().and_then(|()| {
-                                repo.diff_file_image_cancellable(&target, &cancellation)
-                            }),
+                            cancellation
+                                .check_cancelled()
+                                .and_then(|()| repo.diff_file_image(&target, &cancellation)),
                         ));
                     }
                 }
@@ -122,10 +116,10 @@ pub(super) fn schedule(
                         } => {
                             let status = match area {
                                 gitcomet_core::domain::DiffArea::Staged => {
-                                    repo.staged_status_cancellable(&cancellation)
+                                    repo.staged_status(&cancellation)
                                 }
                                 gitcomet_core::domain::DiffArea::Unstaged => {
-                                    repo.worktree_status_cancellable(&cancellation)
+                                    repo.worktree_status(&cancellation)
                                 }
                             };
                             status.map(|files| (None, files.into_iter()

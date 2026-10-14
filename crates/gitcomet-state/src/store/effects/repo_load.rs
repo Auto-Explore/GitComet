@@ -495,7 +495,7 @@ pub(super) fn schedule_load_stashes(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let mut entries = repo.stash_list_cancellable(&cancellation);
+            let mut entries = repo.stash_list(&cancellation);
             if let Ok(v) = &mut entries {
                 v.truncate(limit);
             }
@@ -534,11 +534,7 @@ pub(super) fn schedule_load_conflict_file(
 
         let conflict_session_started = Instant::now();
         let conflict_session = load_full
-            .then(|| {
-                repo.conflict_session_with_encoding(&path, encoding)
-                    .ok()
-                    .flatten()
-            })
+            .then(|| repo.conflict_session(&path, encoding).ok().flatten())
             .flatten();
         let session_ref = conflict_session.as_ref();
         mergetool_trace::record_with(|| {
@@ -571,7 +567,11 @@ pub(super) fn schedule_load_conflict_file(
             match repo.conflict_file_stages(&path) {
                 Ok(v) => Ok(v),
                 Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
-                    .diff_file_text(&DiffTarget::working_tree(path.clone(), DiffArea::Unstaged))
+                    .diff_file_text(
+                        &DiffTarget::working_tree(path.clone(), DiffArea::Unstaged),
+                        None,
+                        &gitcomet_core::services::CancellationToken::new(),
+                    )
                     .map(|opt| {
                         opt.map(|d| {
                             let ours_bytes = d
@@ -793,7 +793,7 @@ pub(super) fn schedule_load_worktrees(
         msg_tx,
         move |repo, msg_tx| {
             let read = WorktreeListRead::explicit();
-            let result = repo.list_worktrees_cancellable(&cancellation).map(Arc::new);
+            let result = repo.list_worktrees(&cancellation).map(Arc::new);
             publisher.publish(&msg_tx, repo_id, read, result);
         },
         move |msg_tx| {
@@ -850,7 +850,7 @@ pub(super) fn schedule_load_worktree_dirty(
             // executor catches unwinds, but only this task can finish the load
             // and let the reducer replay a refresh queued during the scan.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                repo.list_worktrees_cancellable(&cancellation)
+                repo.list_worktrees(&cancellation)
                     .inspect_err(|_| {
                         // The listing is what names the live worktrees, so a failed
                         // one leaves nothing to prune against -- and its causes (a
@@ -899,7 +899,7 @@ pub(super) fn schedule_load_worktree_dirty(
                             ) else {
                                 continue;
                             };
-                            let status = match handle.status_cancellable(&cancellation) {
+                            let status = match handle.status(&cancellation) {
                                 Ok(status) => status,
                                 // Cancellation surfaces as an `Err` here like any
                                 // other failure, and it says nothing about the
@@ -929,10 +929,9 @@ pub(super) fn schedule_load_worktree_dirty(
                             let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
                             // Like the file lists, only the selected worktree pays.
                             let line_stats = if keep_files {
-                                match handle.uncommitted_line_stats_for_status_cancellable(
-                                    &status,
-                                    &cancellation,
-                                ) {
+                                match handle
+                                    .uncommitted_line_stats_for_status(&status, &cancellation)
+                                {
                                     Ok(stats) => stats,
                                     // Like the status read above: a cancelled scan
                                     // stops the walk rather than reporting a
@@ -1176,7 +1175,7 @@ pub(super) fn linked_worktree_handle(
     };
     let linked = !names_path(&repo.spec().workdir)
         && repo
-            .list_worktrees()?
+            .list_worktrees(&gitcomet_core::services::CancellationToken::new())?
             .iter()
             .any(|worktree| names_path(&worktree.path));
     if !linked {
@@ -1298,7 +1297,7 @@ pub(super) fn schedule_load_submodules(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
                     repo_id,
-                    result: repo.list_submodules_cancellable(&cancellation),
+                    result: repo.list_submodules(&cancellation),
                 }),
             );
         },
@@ -1333,7 +1332,7 @@ pub(super) fn schedule_load_large_file_support(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LargeFileSupportLoaded {
                     repo_id,
-                    result: repo.large_file_support_cancellable(&cancellation),
+                    result: repo.large_file_support(&cancellation),
                 }),
             );
         },
@@ -1366,7 +1365,7 @@ pub(super) fn schedule_load_lfs_locks(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LfsLocksLoaded {
                     repo_id,
-                    result: repo.lfs_locks_cancellable(&cancellation),
+                    result: repo.lfs_locks(&cancellation),
                 }),
             );
         },
@@ -1395,7 +1394,7 @@ pub(super) fn schedule_load_annex_unused(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = repo.annex_unused_cancellable(&cancellation);
+            let result = repo.annex_unused(&cancellation);
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::AnnexUnusedLoaded { repo_id, result }),
@@ -1428,7 +1427,7 @@ pub(super) fn schedule_load_annex_whereis(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = repo.annex_whereis_cancellable(&key, &cancellation);
+            let result = repo.annex_whereis(&key, &cancellation);
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::AnnexWhereisLoaded {
@@ -1530,7 +1529,7 @@ pub(super) fn schedule_load_rebase_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.sequencer_state_cancellable(&cancellation),
+                    result: repo.sequencer_state(&cancellation),
                 }),
             );
         },
@@ -1564,14 +1563,14 @@ pub(super) fn schedule_load_rebase_and_merge_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.sequencer_state_cancellable(&cancellation),
+                    result: repo.sequencer_state(&cancellation),
                 }),
             );
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message_cancellable(&cancellation),
+                    result: repo.merge_commit_message(&cancellation),
                 }),
             );
         },
@@ -1612,7 +1611,7 @@ pub(super) fn schedule_load_merge_commit_message(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message_cancellable(&cancellation),
+                    result: repo.merge_commit_message(&cancellation),
                 }),
             );
         },
@@ -1697,11 +1696,7 @@ pub(super) fn schedule_verify_commit_signatures(
                 repo_id,
                 epoch,
                 batch,
-                result: repo.verify_commit_signatures_cancellable(
-                    &commit_ids,
-                    formats,
-                    &cancellation,
-                ),
+                result: repo.verify_commit_signatures(&commit_ids, formats, &cancellation),
             }),
         );
     });
@@ -1980,11 +1975,7 @@ pub(super) fn schedule_load_diff(
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         // UI consumes this parsed diff through paged/lazy row adapters.
-        let result = repo.diff_parsed_with_encoding_cancellable(
-            &target,
-            encoding,
-            &CancellationToken::new(),
-        );
+        let result = repo.diff_parsed(&target, encoding, &CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
@@ -2005,11 +1996,7 @@ pub(super) fn schedule_load_diff_file(
     encoding: Option<gitcomet_core::text_format::TextEncoding>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_file_text_with_encoding_cancellable(
-            &target,
-            encoding,
-            &CancellationToken::new(),
-        );
+        let result = repo.diff_file_text(&target, encoding, &CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
@@ -2030,7 +2017,11 @@ pub(super) fn schedule_load_diff_preview_text_file(
     side: DiffPreviewTextSide,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_preview_text_file(&target, side);
+        let result = repo.diff_preview_text_file(
+            &target,
+            side,
+            &gitcomet_core::services::CancellationToken::new(),
+        );
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
@@ -2051,7 +2042,8 @@ pub(super) fn schedule_load_submodule_summary(
     target: DiffTarget,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.submodule_diff_summary(&target);
+        let result = repo
+            .submodule_diff_summary(&target, &gitcomet_core::services::CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
@@ -2079,9 +2071,13 @@ pub(super) fn schedule_load_inline_submodule_selected_diff(
     }
 
     executor.spawn(move || {
-        let result = backend
-            .open(&submodule_repo_path)
-            .and_then(|repo| repo.diff_parsed(&target));
+        let result = backend.open(&submodule_repo_path).and_then(|repo| {
+            repo.diff_parsed(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+        });
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
@@ -2110,9 +2106,13 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file(
     }
 
     executor.spawn(move || {
-        let result = backend
-            .open(&submodule_repo_path)
-            .and_then(|repo| repo.diff_file_text(&target));
+        let result = backend.open(&submodule_repo_path).and_then(|repo| {
+            repo.diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+        });
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
@@ -2141,9 +2141,9 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
     }
 
     executor.spawn(move || {
-        let result = backend
-            .open(&submodule_repo_path)
-            .and_then(|repo| repo.diff_file_image(&target));
+        let result = backend.open(&submodule_repo_path).and_then(|repo| {
+            repo.diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
+        });
         send_or_log(
             &msg_tx,
             Msg::Internal(
@@ -2166,7 +2166,8 @@ pub(super) fn schedule_load_diff_file_image(
     target: DiffTarget,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.diff_file_image(&target);
+        let result =
+            repo.diff_file_image(&target, &gitcomet_core::services::CancellationToken::new());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
@@ -2237,8 +2238,7 @@ pub(super) fn schedule_load_selected_diff(
             guard,
             move |repo, msg_tx, guard| {
                 // UI consumes this parsed diff through paged/lazy row adapters.
-                let result =
-                    repo.diff_parsed_with_encoding_cancellable(&target, encoding, &cancellation);
+                let result = repo.diff_parsed(&target, encoding, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2265,8 +2265,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result =
-                    repo.diff_file_text_with_encoding_cancellable(&target, encoding, &cancellation);
+                let result = repo.diff_file_text(&target, encoding, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2293,7 +2292,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.submodule_diff_summary_cancellable(&target, &cancellation);
+                let result = repo.submodule_diff_summary(&target, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2320,7 +2319,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.diff_file_image_cancellable(&target, &cancellation);
+                let result = repo.diff_file_image(&target, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -2347,7 +2346,7 @@ pub(super) fn schedule_load_selected_diff(
             msg_tx.clone(),
             guard.clone(),
             move |repo, msg_tx, guard| {
-                let result = repo.diff_preview_text_file_cancellable(&target, side, &cancellation);
+                let result = repo.diff_preview_text_file(&target, side, &cancellation);
                 if !guard.is_current() {
                     return;
                 }
@@ -3350,7 +3349,9 @@ mod worktree_dirty_files_tests {
         let repo_id = RepoId(4105);
         let worker = ScanTestWorker::new();
         let repo = gitcomet_git_gix::GixBackend.open(&own).unwrap();
-        let expected = repo.list_worktrees().unwrap();
+        let expected = repo
+            .list_worktrees(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         let repos = FxHashMap::from_iter([(repo_id, repo)]);
         let (started, started_rx) = mpsc::channel();
         let (release_tx, release) = mpsc::channel();

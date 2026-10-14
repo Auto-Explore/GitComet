@@ -1391,8 +1391,13 @@ impl GitRepository for SubmoduleTestRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        Self::unsupported()
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1403,24 +1408,59 @@ impl GitRepository for SubmoduleTestRepo {
         Self::unsupported()
     }
 
-    fn current_branch(&self) -> Result<String> {
-        Self::unsupported()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        Self::unsupported()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        Self::unsupported()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        Self::unsupported()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn status(&self) -> Result<RepoStatus> {
-        Self::unsupported()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1456,17 +1496,33 @@ impl GitRepository for SubmoduleTestRepo {
         Self::unsupported()
     }
 
-    fn list_submodules(&self) -> Result<Vec<Submodule>> {
-        self.gate.wait();
-        Ok(Vec::new())
+    fn list_submodules(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Submodule>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Submodule>> = {
+            self.gate.wait();
+            Ok(Vec::new())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         Self::unsupported()
     }
 
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        Self::unsupported()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1489,12 +1545,18 @@ impl GitRepository for SubmoduleTestRepo {
         Self::unsupported()
     }
 
-    fn fetch_all(&self) -> Result<()> {
-        Self::unsupported()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Self::unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        Self::unsupported()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Self::unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
     fn push(&self) -> Result<()> {
@@ -1544,8 +1606,13 @@ impl GitRepository for StashTestRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        Self::unsupported()
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1556,24 +1623,59 @@ impl GitRepository for StashTestRepo {
         Self::unsupported()
     }
 
-    fn current_branch(&self) -> Result<String> {
-        Self::unsupported()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        Self::unsupported()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        Self::unsupported()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        Self::unsupported()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn status(&self) -> Result<RepoStatus> {
-        Self::unsupported()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { Self::unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -1604,9 +1706,18 @@ impl GitRepository for StashTestRepo {
         Self::unsupported()
     }
 
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        self.gate.wait();
-        Ok(Vec::new())
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = {
+            self.gate.wait();
+            Ok(Vec::new())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -1629,12 +1740,18 @@ impl GitRepository for StashTestRepo {
         Self::unsupported()
     }
 
-    fn fetch_all(&self) -> Result<()> {
-        Self::unsupported()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Self::unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        Self::unsupported()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Self::unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
     fn push(&self) -> Result<()> {

@@ -60,10 +60,6 @@ fn delete_local_tag(repo: &gix::Repository, name: &str) -> Result<()> {
 }
 
 impl GixRepo {
-    pub(super) fn list_tags_impl(&self) -> Result<Vec<Tag>> {
-        self.list_tags_cancellable_impl(&CancellationToken::new())
-    }
-
     pub(super) fn list_tags_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
@@ -93,10 +89,6 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         tags.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         Ok(tags)
-    }
-
-    pub(super) fn list_remote_tags_impl(&self) -> Result<Vec<RemoteTag>> {
-        self.list_remote_tags_cancellable_impl(&CancellationToken::new())
     }
 
     pub(super) fn list_remote_tags_cancellable_impl(

@@ -69,13 +69,6 @@ impl GixRepo {
         list_submodules_in(&repo, cancellation)
     }
 
-    pub(super) fn submodule_diff_summary_impl(
-        &self,
-        target: &DiffTarget,
-    ) -> Result<SubmoduleDiffSummary> {
-        self.submodule_diff_summary_cancellable_impl(target, &CancellationToken::new())
-    }
-
     pub(super) fn submodule_diff_summary_cancellable_impl(
         &self,
         target: &DiffTarget,
@@ -2292,10 +2285,10 @@ mod tests {
 
         let repo = open_repo(tmp.path());
         let summary = repo
-            .submodule_diff_summary_impl(&DiffTarget::working_tree(
-                submodule_path.into(),
-                DiffArea::Staged,
-            ))
+            .submodule_diff_summary_cancellable_impl(
+                &DiffTarget::working_tree(submodule_path.into(), DiffArea::Staged),
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("staged submodule removal summary");
         let staged_range = summary
             .ranges

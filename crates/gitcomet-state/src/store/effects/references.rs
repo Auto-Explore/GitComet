@@ -68,37 +68,37 @@ fn run(
     match work {
         ReferenceEffect::LoadBranches { repo_id } => InternalMsg::BranchesLoaded {
             repo_id,
-            result: repo.list_branches_cancellable(cancellation),
+            result: repo.list_branches(cancellation),
         },
         ReferenceEffect::LoadRemotes { repo_id } => InternalMsg::RemotesLoaded {
             repo_id,
-            result: repo.list_remotes_cancellable(cancellation),
+            result: repo.list_remotes(cancellation),
         },
         ReferenceEffect::LoadRemoteBranches { repo_id } => InternalMsg::RemoteBranchesLoaded {
             repo_id,
-            result: repo.list_remote_branches_cancellable(cancellation),
+            result: repo.list_remote_branches(cancellation),
         },
         ReferenceEffect::LoadHeadBranch { repo_id } => InternalMsg::HeadBranchLoaded {
             repo_id,
-            result: repo.current_branch_cancellable(cancellation),
+            result: repo.current_branch(cancellation),
         },
         ReferenceEffect::LoadUpstreamDivergence { repo_id } => {
             InternalMsg::UpstreamDivergenceLoaded {
                 repo_id,
-                result: repo.upstream_divergence_cancellable(cancellation),
+                result: repo.upstream_divergence(cancellation),
             }
         }
         ReferenceEffect::LoadTags { repo_id } => InternalMsg::TagsLoaded {
             repo_id,
-            result: repo.list_tags_cancellable(cancellation),
+            result: repo.list_tags(cancellation),
         },
         ReferenceEffect::LoadRemoteTags { repo_id } => InternalMsg::RemoteTagsLoaded {
             repo_id,
-            result: repo.list_remote_tags_cancellable(cancellation),
+            result: repo.list_remote_tags(cancellation),
         },
         ReferenceEffect::LoadRefMetadata { repo_id } => InternalMsg::RefMetadataLoaded {
             repo_id,
-            result: repo.list_ref_metadata_cancellable(cancellation),
+            result: repo.list_ref_metadata(cancellation),
         },
     }
 }

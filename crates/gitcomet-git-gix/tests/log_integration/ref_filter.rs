@@ -102,7 +102,12 @@ fn excluded_refs_leave_every_all_branches_reader() {
 
     // HEAD's own history is unaffected by the filter.
     let head = filtered
-        .log_history_mode_page(HistoryMode::FullReachable, 10, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            10,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(head.commits.len(), 2);
 }

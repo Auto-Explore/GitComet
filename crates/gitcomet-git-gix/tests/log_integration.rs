@@ -264,7 +264,14 @@ fn history_modes_return_expected_commits_on_canonical_graph() {
     ];
 
     for (mode, expected_ids, excluded_ids) in cases {
-        let page = opened.log_history_mode_page(mode, 20, None).unwrap();
+        let page = opened
+            .log_history_mode_page(
+                mode,
+                20,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap();
         let ids = page
             .commits
             .iter()
@@ -292,7 +299,12 @@ fn history_modes_preserve_expected_order_on_canonical_graph() {
     let opened = backend.open(fixture.repo()).unwrap();
 
     let full_reachable = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 20, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            20,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         full_reachable
@@ -304,7 +316,12 @@ fn history_modes_preserve_expected_order_on_canonical_graph() {
     );
 
     let first_parent = opened
-        .log_history_mode_page(HistoryMode::FirstParent, 20, None)
+        .log_history_mode_page(
+            HistoryMode::FirstParent,
+            20,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         first_parent
@@ -316,7 +333,12 @@ fn history_modes_preserve_expected_order_on_canonical_graph() {
     );
 
     let no_merges = opened
-        .log_history_mode_page(HistoryMode::NoMerges, 20, None)
+        .log_history_mode_page(
+            HistoryMode::NoMerges,
+            20,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         no_merges
@@ -328,7 +350,12 @@ fn history_modes_preserve_expected_order_on_canonical_graph() {
     );
 
     let merges_only = opened
-        .log_history_mode_page(HistoryMode::MergesOnly, 20, None)
+        .log_history_mode_page(
+            HistoryMode::MergesOnly,
+            20,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         merges_only
@@ -347,7 +374,12 @@ fn no_merges_history_mode_paginates_without_repeating_filtered_commits() {
     let opened = backend.open(fixture.repo()).unwrap();
 
     let first = opened
-        .log_history_mode_page(HistoryMode::NoMerges, 2, None)
+        .log_history_mode_page(
+            HistoryMode::NoMerges,
+            2,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         first
@@ -364,7 +396,12 @@ fn no_merges_history_mode_paginates_without_repeating_filtered_commits() {
     );
 
     let second = opened
-        .log_history_mode_page(HistoryMode::NoMerges, 2, Some(cursor))
+        .log_history_mode_page(
+            HistoryMode::NoMerges,
+            2,
+            Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         second
@@ -388,7 +425,12 @@ fn no_merges_history_mode_paginates_without_repeating_filtered_commits() {
         resume_token: Some(Arc::from("stale")),
     };
     let stale_second = opened
-        .log_history_mode_page(HistoryMode::NoMerges, 2, Some(&stale_cursor))
+        .log_history_mode_page(
+            HistoryMode::NoMerges,
+            2,
+            Some(&stale_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(stale_second.commits, second.commits);
 
@@ -398,7 +440,12 @@ fn no_merges_history_mode_paginates_without_repeating_filtered_commits() {
         resume_token: None,
     };
     let legacy_second = opened
-        .log_history_mode_page(HistoryMode::NoMerges, 2, Some(&legacy_cursor))
+        .log_history_mode_page(
+            HistoryMode::NoMerges,
+            2,
+            Some(&legacy_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(legacy_second.commits, second.commits);
 }
@@ -410,7 +457,12 @@ fn full_reachable_history_mode_paginates_without_repeating_commits() {
     let opened = backend.open(fixture.repo()).unwrap();
 
     let first = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 2, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            2,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         first
@@ -427,7 +479,12 @@ fn full_reachable_history_mode_paginates_without_repeating_commits() {
     );
 
     let second = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 2, Some(cursor))
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            2,
+            Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         second
@@ -451,7 +508,12 @@ fn full_reachable_history_mode_paginates_without_repeating_commits() {
         resume_token: Some(Arc::from("stale")),
     };
     let stale_second = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 2, Some(&stale_cursor))
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            2,
+            Some(&stale_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(stale_second.commits, second.commits);
 
@@ -461,7 +523,12 @@ fn full_reachable_history_mode_paginates_without_repeating_commits() {
         resume_token: None,
     };
     let legacy_second = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 2, Some(&legacy_cursor))
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            2,
+            Some(&legacy_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(legacy_second.commits, second.commits);
 }
@@ -479,7 +546,14 @@ fn every_history_mode_paginates_through_a_resumable_walk() {
         HistoryMode::MergesOnly,
         HistoryMode::AllBranches,
     ] {
-        let whole = opened.log_history_mode_page(mode, 20, None).unwrap();
+        let whole = opened
+            .log_history_mode_page(
+                mode,
+                20,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap();
         assert!(
             whole.next_cursor.is_none(),
             "{mode:?}: the fixture is meant to fit in one page"
@@ -489,7 +563,12 @@ fn every_history_mode_paginates_through_a_resumable_walk() {
         let mut cursor = None;
         for _ in 0..whole.commits.len() + 1 {
             let page = opened
-                .log_history_mode_page(mode, 1, cursor.as_ref())
+                .log_history_mode_page(
+                    mode,
+                    1,
+                    cursor.as_ref(),
+                    &gitcomet_core::services::CancellationToken::new(),
+                )
                 .unwrap();
             paged.extend(page.commits.iter().map(|c| c.id.as_ref().to_string()));
             let Some(next) = page.next_cursor.clone() else {
@@ -521,7 +600,13 @@ fn all_branches_author_filter_resumes_instead_of_re_walking() {
     let opened = backend.open(fixture.repo()).unwrap();
 
     let all = opened
-        .log_history_mode_page_filtered(HistoryMode::AllBranches, Some("You"), 20, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::AllBranches,
+            Some("You"),
+            20,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert!(
         all.commits.len() > 1,
@@ -529,7 +614,13 @@ fn all_branches_author_filter_resumes_instead_of_re_walking() {
     );
 
     let first = opened
-        .log_history_mode_page_filtered(HistoryMode::AllBranches, Some("You"), 1, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::AllBranches,
+            Some("You"),
+            1,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     let cursor = first.next_cursor.clone().expect("more to page through");
     assert!(
@@ -538,7 +629,13 @@ fn all_branches_author_filter_resumes_instead_of_re_walking() {
     );
 
     let second = opened
-        .log_history_mode_page_filtered(HistoryMode::AllBranches, Some("You"), 1, Some(&cursor))
+        .log_history_mode_page_filtered(
+            HistoryMode::AllBranches,
+            Some("You"),
+            1,
+            Some(&cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         second.commits.first().map(|c| c.id.as_ref()),
@@ -601,7 +698,14 @@ fn shallow_history_modes_paginate_and_stop_at_the_boundary() {
     let opened = backend.open(&shallow).unwrap();
 
     for mode in [HistoryMode::FullReachable, HistoryMode::NoMerges] {
-        let first = opened.log_history_mode_page(mode, 1, None).unwrap();
+        let first = opened
+            .log_history_mode_page(
+                mode,
+                1,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap();
         assert_eq!(first.commits.len(), 1);
         assert_eq!(first.commits[0].id.as_ref(), tip_id.as_str());
         let cursor = first.next_cursor.as_ref().expect("next cursor");
@@ -611,7 +715,14 @@ fn shallow_history_modes_paginate_and_stop_at_the_boundary() {
             "a shallow repository resumes its walk like any other"
         );
 
-        let second = opened.log_history_mode_page(mode, 1, Some(cursor)).unwrap();
+        let second = opened
+            .log_history_mode_page(
+                mode,
+                1,
+                Some(cursor),
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap();
         assert_eq!(second.commits.len(), 1);
         assert_eq!(second.commits[0].id.as_ref(), middle_id.as_str());
         assert!(second.next_cursor.is_none());
@@ -668,7 +779,12 @@ fn merges_only_history_mode_paginates_without_repeating_filtered_merges() {
     let opened = backend.open(repo).unwrap();
 
     let first = opened
-        .log_history_mode_page(HistoryMode::MergesOnly, 1, None)
+        .log_history_mode_page(
+            HistoryMode::MergesOnly,
+            1,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(first.commits.len(), 1);
     assert_eq!(first.commits[0].id.as_ref(), merge_two.as_str());
@@ -682,7 +798,12 @@ fn merges_only_history_mode_paginates_without_repeating_filtered_merges() {
     );
 
     let second = opened
-        .log_history_mode_page(HistoryMode::MergesOnly, 1, Some(cursor))
+        .log_history_mode_page(
+            HistoryMode::MergesOnly,
+            1,
+            Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(second.commits.len(), 1);
     assert_eq!(second.commits[0].id.as_ref(), merge_one.as_str());
@@ -695,7 +816,12 @@ fn merges_only_history_mode_paginates_without_repeating_filtered_merges() {
         resume_token: Some(Arc::from("stale")),
     };
     let stale_second = opened
-        .log_history_mode_page(HistoryMode::MergesOnly, 1, Some(&stale_cursor))
+        .log_history_mode_page(
+            HistoryMode::MergesOnly,
+            1,
+            Some(&stale_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(stale_second.commits, second.commits);
 
@@ -705,7 +831,12 @@ fn merges_only_history_mode_paginates_without_repeating_filtered_merges() {
         resume_token: None,
     };
     let legacy_second = opened
-        .log_history_mode_page(HistoryMode::MergesOnly, 1, Some(&legacy_cursor))
+        .log_history_mode_page(
+            HistoryMode::MergesOnly,
+            1,
+            Some(&legacy_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(legacy_second.commits, second.commits);
 }
@@ -747,13 +878,25 @@ fn log_all_branches_includes_remote_tracking_branches() {
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
 
-    let head = opened.log_head_page(200, None).unwrap();
+    let head = opened
+        .log_head_page(
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert!(
         !head.commits.iter().any(|c| c.id.as_ref() == feature_tip),
         "head log unexpectedly contains feature commit"
     );
 
-    let all = opened.log_all_branches_page(200, None).unwrap();
+    let all = opened
+        .log_all_branches_page(
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert!(
         all.commits.iter().any(|c| c.id.as_ref() == feature_tip),
         "all-branches log should include remote-tracking branch commit"
@@ -795,7 +938,13 @@ fn log_all_branches_orders_rows_like_git_date_order_under_committer_date_skew() 
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let page = opened.log_all_branches_page(200, None).unwrap();
+    let page = opened
+        .log_all_branches_page(
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     let actual: Vec<String> = page
         .commits
         .iter()
@@ -896,7 +1045,14 @@ fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
             .lines()
             .map(str::to_owned)
             .collect();
-        let page = opened.log_history_mode_page(mode, 50, None).unwrap();
+        let page = opened
+            .log_history_mode_page(
+                mode,
+                50,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap();
         let actual: Vec<String> = page
             .commits
             .iter()
@@ -909,7 +1065,12 @@ fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
     }
 
     let first_parent = opened
-        .log_history_mode_page(HistoryMode::FirstParent, 50, None)
+        .log_history_mode_page(
+            HistoryMode::FirstParent,
+            50,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert!(
         first_parent
@@ -919,7 +1080,12 @@ fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
         "first-parent rows must report only the parent the walk followed"
     );
     let full = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 50, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            50,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert!(
         full.commits
@@ -950,7 +1116,7 @@ fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
 
     let summaries = || -> Vec<String> {
         opened
-            .log_all_branches_page(50, None)
+            .log_all_branches_page(50, None, &gitcomet_core::services::CancellationToken::new())
             .unwrap()
             .commits
             .iter()
@@ -1077,14 +1243,21 @@ fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
         &shallow,
         &["for-each-ref", "--format=%(objectname) %(refname)"],
     );
-    let truncated = opened.log_all_branches_page(50, None).unwrap();
+    let truncated = opened
+        .log_all_branches_page(50, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(
         truncated.commits.len(),
         2,
         "a depth-2 clone starts with two rows"
     );
     let first = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 1, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            1,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         first
@@ -1110,7 +1283,9 @@ fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
         "the deepen must not move a ref, or the test proves nothing"
     );
 
-    let deepened = opened.log_all_branches_page(50, None).unwrap();
+    let deepened = opened
+        .log_all_branches_page(50, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(
         deepened.commits.len(),
         5,
@@ -1118,7 +1293,12 @@ fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
     );
 
     let continued = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 10, Some(&shallow_cursor))
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            10,
+            Some(&shallow_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         continued
@@ -1205,7 +1385,12 @@ fn a_missing_ancestor_object_still_renders_the_rows_above_it() {
 
     let opened = GixBackend.open(repo).unwrap();
     let page = opened
-        .log_history_mode_page(HistoryMode::FullReachable, 2, None)
+        .log_history_mode_page(
+            HistoryMode::FullReachable,
+            2,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("a page that stops above the hole must not fail");
     let summaries: Vec<&str> = page
         .commits
@@ -1257,7 +1442,13 @@ fn log_all_branches_includes_nonstandard_ref_namespaces() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let all = opened.log_all_branches_page(200, None).unwrap();
+    let all = opened
+        .log_all_branches_page(
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert!(
         all.commits.iter().any(|c| c.id.as_ref() == feature_tip),
         "all-branches log should include commits reachable from refs outside refs/heads and refs/remotes"
@@ -1307,7 +1498,13 @@ fn log_all_branches_does_not_include_tag_only_tips() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let all = opened.log_all_branches_page(200, None).unwrap();
+    let all = opened
+        .log_all_branches_page(
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert!(
         !all.commits.iter().any(|c| c.id.as_ref() == tag_only_tip),
         "all-branches log should not be expanded by tag-only tips"
@@ -1339,7 +1536,13 @@ fn log_all_branches_ignores_non_commit_refs() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let all = opened.log_all_branches_page(200, None).unwrap();
+    let all = opened
+        .log_all_branches_page(
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
 
     assert_eq!(all.commits.len(), 1);
     assert_eq!(all.commits[0].id.as_ref(), head);
@@ -1356,11 +1559,30 @@ fn empty_repo_log_and_head_branch_do_not_error() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    assert_eq!(opened.current_branch().unwrap(), "main");
-    assert!(opened.log_head_page(200, None).unwrap().commits.is_empty());
+    assert_eq!(
+        opened
+            .current_branch(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
+        "main"
+    );
     assert!(
         opened
-            .log_all_branches_page(200, None)
+            .log_head_page(
+                200,
+                None,
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .unwrap()
+            .commits
+            .is_empty()
+    );
+    assert!(
+        opened
+            .log_all_branches_page(
+                200,
+                None,
+                &gitcomet_core::services::CancellationToken::new()
+            )
             .unwrap()
             .commits
             .is_empty()
@@ -1389,7 +1611,12 @@ fn detached_head_reports_head_as_current_branch() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    assert_eq!(opened.current_branch().unwrap(), "HEAD");
+    assert_eq!(
+        opened
+            .current_branch(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
+        "HEAD"
+    );
 }
 
 #[test]
@@ -1418,7 +1645,9 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let first = opened.log_head_page(1, None).unwrap();
+    let first = opened
+        .log_head_page(1, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(first.commits.len(), 1);
     let first_id = first.commits[0].id.as_ref().to_string();
     let cursor = first.next_cursor.as_ref().expect("next cursor");
@@ -1429,7 +1658,13 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
         .expect("resume hint should point at next first-parent commit");
     assert_eq!(cursor.resume_from.as_ref(), Some(&expected_resume));
 
-    let second = opened.log_head_page(10, Some(cursor)).unwrap();
+    let second = opened
+        .log_head_page(
+            10,
+            Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert!(!second.commits.is_empty());
     assert!(
         second.commits.iter().all(|c| c.id.as_ref() != first_id),
@@ -1441,7 +1676,13 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
         resume_from: None,
         resume_token: None,
     };
-    let legacy_second = opened.log_head_page(10, Some(&legacy_cursor)).unwrap();
+    let legacy_second = opened
+        .log_head_page(
+            10,
+            Some(&legacy_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert_eq!(legacy_second.commits, second.commits);
 }
 
@@ -1493,7 +1734,9 @@ fn log_head_page_resume_hint_follows_first_parent_after_merge_commit() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let first = opened.log_head_page(1, None).unwrap();
+    let first = opened
+        .log_head_page(1, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(first.commits.len(), 1);
     assert_eq!(&*first.commits[0].summary, "merge feature");
     assert_eq!(
@@ -1507,7 +1750,13 @@ fn log_head_page_resume_hint_follows_first_parent_after_merge_commit() {
         Some(CommitId(first_parent_tip.clone().into()))
     );
 
-    let second = opened.log_head_page(10, Some(cursor)).unwrap();
+    let second = opened
+        .log_head_page(
+            10,
+            Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     let second_summaries: Vec<&str> = second.commits.iter().map(|c| &*c.summary).collect();
     assert_eq!(second_summaries, vec!["main", "base"]);
     assert!(
@@ -1520,7 +1769,13 @@ fn log_head_page_resume_hint_follows_first_parent_after_merge_commit() {
         resume_from: None,
         resume_token: None,
     };
-    let legacy_second = opened.log_head_page(10, Some(&legacy_cursor)).unwrap();
+    let legacy_second = opened
+        .log_head_page(
+            10,
+            Some(&legacy_cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert_eq!(legacy_second.commits, second.commits);
 }
 
@@ -1550,7 +1805,9 @@ fn log_head_page_exact_limit_has_no_next_cursor() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let page = opened.log_head_page(2, None).unwrap();
+    let page = opened
+        .log_head_page(2, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(page.commits.len(), 2);
     assert!(page.next_cursor.is_none());
 }
@@ -1581,8 +1838,12 @@ fn repeated_log_head_page_reuses_cached_commit_arcs_and_invalidates_on_head_chan
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let first = opened.log_head_page(2, None).unwrap();
-    let second = opened.log_head_page(2, None).unwrap();
+    let first = opened
+        .log_head_page(2, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let second = opened
+        .log_head_page(2, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     assert_eq!(first.commits, second.commits);
     assert!(Arc::ptr_eq(&first.commits[0].id.0, &second.commits[0].id.0));
@@ -1599,7 +1860,9 @@ fn repeated_log_head_page_reuses_cached_commit_arcs_and_invalidates_on_head_chan
     run_git(repo, &["add", "a.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "C"]);
 
-    let refreshed = opened.log_head_page(2, None).unwrap();
+    let refreshed = opened
+        .log_head_page(2, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let summaries: Vec<&str> = refreshed
         .commits
         .iter()
@@ -1630,11 +1893,15 @@ fn zero_limit_log_pages_return_empty_without_cursor() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let head = opened.log_head_page(0, None).unwrap();
+    let head = opened
+        .log_head_page(0, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(head.commits.is_empty());
     assert!(head.next_cursor.is_none());
 
-    let all = opened.log_all_branches_page(0, None).unwrap();
+    let all = opened
+        .log_all_branches_page(0, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(all.commits.is_empty());
     assert!(all.next_cursor.is_none());
 
@@ -2220,7 +2487,13 @@ fn log_all_branches_includes_older_stash_reflog_entries() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let all = opened.log_all_branches_page(200, None).unwrap();
+    let all = opened
+        .log_all_branches_page(
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
 
     assert!(
         all.commits.iter().any(|c| c.id.as_ref() == stash_ids[0]),
@@ -2275,7 +2548,13 @@ fn author_filter_keeps_only_matching_commits() {
     let opened = GixBackend.open(&repo).unwrap();
 
     let page = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("rare"), 10, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("rare"),
+            10,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
 
     assert_eq!(
@@ -2305,7 +2584,13 @@ fn author_filter_matches_case_insensitively_on_a_substring() {
 
     for query in ["RARE", "rare per", "Person"] {
         let page = opened
-            .log_history_mode_page_filtered(HistoryMode::FullReachable, Some(query), 10, None)
+            .log_history_mode_page_filtered(
+                HistoryMode::FullReachable,
+                Some(query),
+                10,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .unwrap();
         assert_eq!(
             page.commits.len(),
@@ -2348,7 +2633,13 @@ fn author_filter_matches_a_name_with_non_ascii_uppercase() {
     // Exact, ASCII-folded, and a substring starting on the non-ASCII letter.
     for query in ["José Ángel", "josé Ángel", "Ángel"] {
         let page = opened
-            .log_history_mode_page_filtered(HistoryMode::FullReachable, Some(query), 10, None)
+            .log_history_mode_page_filtered(
+                HistoryMode::FullReachable,
+                Some(query),
+                10,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .unwrap();
         assert_eq!(
             page.commits
@@ -2367,7 +2658,13 @@ fn author_filter_pages_without_repeating_or_skipping() {
     let opened = GixBackend.open(&repo).unwrap();
 
     let first = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("common"), 3, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("common"),
+            3,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         first
@@ -2380,7 +2677,13 @@ fn author_filter_pages_without_repeating_or_skipping() {
     let cursor = first.next_cursor.as_ref().expect("more matches remain");
 
     let second = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("common"), 3, Some(cursor))
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("common"),
+            3,
+            Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         second
@@ -2421,7 +2724,13 @@ fn author_filter_page_filled_at_a_decode_boundary_still_has_a_successor() {
 
     let opened = GixBackend.open(repo).unwrap();
     let first = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("Match"), 200, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("Match"),
+            200,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(first.commits.len(), 200);
     let cursor = first
@@ -2435,6 +2744,7 @@ fn author_filter_page_filled_at_a_decode_boundary_still_has_a_successor() {
             Some("Match"),
             200,
             Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
         )
         .unwrap();
     assert_eq!(second.commits.len(), 102);
@@ -2449,14 +2759,26 @@ fn author_filter_resume_token_is_not_reused_across_filters() {
     let opened = GixBackend.open(&repo).unwrap();
 
     let filtered = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("common"), 3, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("common"),
+            3,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     let cursor = filtered.next_cursor.as_ref().expect("more matches remain");
 
     // Same cursor, different filter: the walk is rebuilt from the cursor's
     // `last_seen` rather than resumed mid-history.
     let other = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("rare"), 3, Some(cursor))
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("rare"),
+            3,
+            Some(cursor),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         other
@@ -2530,7 +2852,13 @@ fn author_filter_full_page_does_not_advertise_more_without_another_match() {
 
     // The rare author owns exactly one commit, and a page of one is full.
     let page = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("rare"), 1, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("rare"),
+            1,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
 
     assert_eq!(page.commits.len(), 1);
@@ -2541,7 +2869,13 @@ fn author_filter_full_page_does_not_advertise_more_without_another_match() {
 
     // Whereas a filter that does have more to give still pages.
     let more = opened
-        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("common"), 1, None)
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("common"),
+            1,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(more.commits.len(), 1);
     assert!(more.next_cursor.is_some());

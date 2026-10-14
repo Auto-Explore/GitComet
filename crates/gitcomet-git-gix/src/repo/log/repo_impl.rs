@@ -402,14 +402,6 @@ impl GixRepo {
         })
     }
 
-    pub(in super::super) fn log_head_page_impl(
-        &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
-    ) -> Result<Arc<LogPage>> {
-        self.log_history_mode_page_impl(HistoryMode::FirstParent, limit, cursor)
-    }
-
     pub(in super::super) fn log_head_page_cancellable_impl(
         &self,
         limit: usize,
@@ -679,14 +671,6 @@ impl GixRepo {
         };
 
         self.finish_log_page(cache_key, page, cancellation)
-    }
-
-    pub(in super::super) fn log_all_branches_page_impl(
-        &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
-    ) -> Result<Arc<LogPage>> {
-        self.log_all_branches_page_impl_inner(limit, cursor, None, None, None)
     }
 
     pub(in super::super) fn log_all_branches_page_cancellable_impl(

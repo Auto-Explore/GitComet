@@ -159,7 +159,9 @@ fn list_submodules_opens_dot_git_suffixed_submodule() {
 
     let backend = GixBackend;
     let opened = backend.open(&superproject).expect("open superproject");
-    let submodules = opened.list_submodules().expect("list submodules");
+    let submodules = opened
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .expect("list submodules");
 
     let nested = submodules
         .iter()

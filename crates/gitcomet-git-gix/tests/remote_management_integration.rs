@@ -158,22 +158,33 @@ fn remote_add_set_url_and_remove_round_trip() {
     let opened = backend.open(&repo).expect("open repository");
 
     let add_output = opened
-        .add_remote_with_output("origin", &fetch_remote_str)
+        .add_remote_with_output(
+            "origin",
+            &fetch_remote_str,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("add remote");
     assert_eq!(add_output.exit_code, Some(0));
 
-    let remotes = opened.list_remotes().expect("list remotes after add");
+    let remotes = opened
+        .list_remotes(&gitcomet_core::services::CancellationToken::new())
+        .expect("list remotes after add");
     assert_eq!(remotes.len(), 1);
     assert_eq!(remotes[0].name, "origin");
     assert_eq!(remotes[0].url.as_deref(), Some(fetch_remote_str.as_str()));
 
     let fetch_set_output = opened
-        .set_remote_url_with_output("origin", &push_remote_str, RemoteUrlKind::Fetch)
+        .set_remote_url_with_output(
+            "origin",
+            &push_remote_str,
+            RemoteUrlKind::Fetch,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("set fetch url");
     assert_eq!(fetch_set_output.exit_code, Some(0));
 
     let remotes_after_fetch = opened
-        .list_remotes()
+        .list_remotes(&gitcomet_core::services::CancellationToken::new())
         .expect("list remotes after fetch url update");
     assert_eq!(remotes_after_fetch.len(), 1);
     assert_eq!(
@@ -182,7 +193,12 @@ fn remote_add_set_url_and_remove_round_trip() {
     );
 
     let push_set_output = opened
-        .set_remote_url_with_output("origin", &fetch_remote_str, RemoteUrlKind::Push)
+        .set_remote_url_with_output(
+            "origin",
+            &fetch_remote_str,
+            RemoteUrlKind::Push,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("set push url");
     assert_eq!(push_set_output.exit_code, Some(0));
 
@@ -196,7 +212,9 @@ fn remote_add_set_url_and_remove_round_trip() {
         .expect("remove remote");
     assert_eq!(remove_output.exit_code, Some(0));
 
-    let remotes_after_remove = opened.list_remotes().expect("list remotes after remove");
+    let remotes_after_remove = opened
+        .list_remotes(&gitcomet_core::services::CancellationToken::new())
+        .expect("list remotes after remove");
     assert!(remotes_after_remove.is_empty());
 }
 
@@ -212,7 +230,7 @@ fn remote_management_honors_the_selected_protocol_policy() {
     let opened = backend.open(&repo).expect("open repository");
     let http_url = "http://git.internal/example.git";
     let blocked = opened
-        .add_remote_with_output_and_policy("origin", http_url, RemoteUrlPolicy::default())
+        .add_remote_with_output("origin", http_url, RemoteUrlPolicy::default())
         .expect_err("HTTP must be blocked by default");
     assert!(
         blocked.to_string().contains("Allowed remote protocols"),
@@ -221,13 +239,13 @@ fn remote_management_honors_the_selected_protocol_policy() {
 
     let http_allowed = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Http, true);
     opened
-        .add_remote_with_output_and_policy("origin", http_url, http_allowed)
+        .add_remote_with_output("origin", http_url, http_allowed)
         .expect("explicitly allowed HTTP remote");
 
     let ftp_url = "ftp://git.internal/example.git";
     assert!(
         opened
-            .set_remote_url_with_output_and_policy(
+            .set_remote_url_with_output(
                 "origin",
                 ftp_url,
                 RemoteUrlKind::Fetch,
@@ -238,7 +256,7 @@ fn remote_management_honors_the_selected_protocol_policy() {
     );
     let ftp_allowed = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Ftp, true);
     opened
-        .set_remote_url_with_output_and_policy("origin", ftp_url, RemoteUrlKind::Fetch, ftp_allowed)
+        .set_remote_url_with_output("origin", ftp_url, RemoteUrlKind::Fetch, ftp_allowed)
         .expect("explicitly allowed FTP remote");
     assert_eq!(
         run_git_capture(&repo, &["config", "--get", "remote.origin.url"]).trim(),
@@ -746,7 +764,7 @@ fn prune_merged_branches_unlinks_but_keeps_an_unmerged_local_branch() {
     );
     assert!(
         opened
-            .list_remote_branches()
+            .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("list remote branches")
             .iter()
             .all(|branch| !(branch.remote == "origin" && branch.name == "feature")),
@@ -836,15 +854,13 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
     let opened = backend.open(&work_repo).expect("open work repo");
     assert!(
         opened
-            .list_remote_branches()
+            .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("prime packed remote branch snapshot")
             .iter()
             .any(|branch| branch.remote == "origin" && branch.name == "feature"),
         "expected the stale tracking branch to be visible before pruning"
     );
-    let output = opened
-        .fetch_all_with_output_prune(false)
-        .expect("fetch all without pruning");
+    let output = opened.fetch_all(false).expect("fetch all without pruning");
     assert_eq!(output.exit_code, Some(0));
     assert_eq!(output.command, "git fetch --all --no-prune --no-prune-tags");
     assert!(
@@ -857,9 +873,7 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
         "a non-pruning fetch must preserve upstream configuration"
     );
 
-    let output = opened
-        .fetch_all_with_output_prune(true)
-        .expect("fetch all with pruning");
+    let output = opened.fetch_all(true).expect("fetch all with pruning");
     assert_eq!(output.exit_code, Some(0));
     assert_eq!(output.command, "git fetch --all --prune --no-prune-tags");
     assert!(
@@ -875,7 +889,7 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
     );
     assert!(
         opened
-            .list_remote_branches()
+            .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("refresh remote branch list after pruning")
             .iter()
             .all(|branch| !(branch.remote == "origin" && branch.name == "feature")),
@@ -917,7 +931,7 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
         "expected stale tracking ref recreation to succeed"
     );
 
-    opened.fetch_all().expect("fetch all");
+    opened.fetch_all(true).expect("fetch all");
     assert!(
         !tracking_ref_present().success(),
         "expected fetch_all to prune stale remote-tracking refs"
@@ -973,7 +987,7 @@ fn pruning_fetch_preserves_upstreams_outside_a_narrow_fetch_refspec() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     opened
-        .fetch_all_with_output_prune(true)
+        .fetch_all(true)
         .expect("pruning fetch with narrow refspec");
 
     assert_eq!(
@@ -986,7 +1000,7 @@ fn pruning_fetch_preserves_upstreams_outside_a_narrow_fetch_refspec() {
         "refs/heads/feature"
     );
     let feature = opened
-        .list_branches()
+        .list_branches(&gitcomet_core::services::CancellationToken::new())
         .expect("list branches")
         .into_iter()
         .find(|branch| branch.name == "feature")
@@ -1179,7 +1193,7 @@ fn pull_non_output_supports_all_modes_when_upstream_exists() {
         &["update-ref", "refs/remotes/origin/deleted", &stale_target],
     );
     opened_b
-        .pull_with_output_prune(PullMode::Default, true)
+        .pull(PullMode::Default, true)
         .expect("pull and prune stale tracking refs");
     assert!(
         !run_git_status(
@@ -1195,14 +1209,16 @@ fn pull_non_output_supports_all_modes_when_upstream_exists() {
         "expected pull with pruning enabled to remove stale remote-tracking refs"
     );
     opened_b
-        .pull(PullMode::FastForwardIfPossible)
+        .pull(PullMode::FastForwardIfPossible, true)
         .expect("pull ff-if-possible");
-    opened_b.pull(PullMode::Merge).expect("pull merge");
+    opened_b.pull(PullMode::Merge, true).expect("pull merge");
     opened_b
-        .pull(PullMode::FastForwardOnly)
+        .pull(PullMode::FastForwardOnly, true)
         .expect("pull ff-only");
-    opened_b.pull(PullMode::Rebase).expect("pull rebase");
-    opened_b.pull(PullMode::Default).expect("pull default");
+    opened_b.pull(PullMode::Rebase, true).expect("pull rebase");
+    opened_b
+        .pull(PullMode::Default, true)
+        .expect("pull default");
 }
 
 #[test]
@@ -1237,7 +1253,7 @@ fn failed_pruning_pull_unlinks_an_upstream_removed_by_its_fetch_phase() {
     run_git(&remote_repo, &["update-ref", "-d", "refs/heads/main"]);
 
     opened
-        .pull_with_output_prune(PullMode::Default, true)
+        .pull(PullMode::Default, true)
         .expect_err("pull must fail after its upstream is deleted");
 
     assert!(
@@ -1290,7 +1306,7 @@ fn failed_pruning_pull_preserves_an_upstream_whose_tracking_ref_was_already_miss
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     let error = opened
-        .pull_with_output_prune(PullMode::Default, true)
+        .pull(PullMode::Default, true)
         .expect_err("an unavailable remote must fail the pull");
 
     assert!(
@@ -1381,7 +1397,7 @@ fn pull_without_remotes_on_local_branch_returns_error() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).expect("open repository");
-    assert!(opened.pull(PullMode::Default).is_err());
+    assert!(opened.pull(PullMode::Default, true).is_err());
 }
 
 #[test]
@@ -1401,7 +1417,7 @@ fn pull_on_detached_head_returns_error() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).expect("open repository");
-    assert!(opened.pull(PullMode::Default).is_err());
+    assert!(opened.pull(PullMode::Default, true).is_err());
 }
 
 #[test]
@@ -1427,7 +1443,7 @@ fn pull_local_branch_with_pruning_does_not_treat_dot_as_a_named_remote() {
     let backend = GixBackend;
     let opened = backend.open(repo).expect("open repository");
     let output = opened
-        .pull_branch_with_output_prune(".", "dev", true)
+        .pull_branch_with_output(".", "dev", true)
         .expect("pull local branch while automatic pruning is enabled");
 
     assert_eq!(output.exit_code, Some(0));
@@ -1468,7 +1484,7 @@ fn pull_local_branch_stopped_at_conflicts_says_so() {
     let backend = GixBackend;
     let opened = backend.open(repo).expect("open repository");
     let error = opened
-        .pull_branch_with_output_prune(".", "dev", true)
+        .pull_branch_with_output(".", "dev", true)
         .expect_err("conflicting pull");
 
     let detail = stopped_at_conflicts_detail(&error);
@@ -1484,7 +1500,7 @@ fn pull_local_branch_stopped_at_conflicts_says_so() {
 
     // With the merge in progress git refuses to pull; that is a plain failure.
     let error = opened
-        .pull_branch_with_output_prune(".", "dev", true)
+        .pull_branch_with_output(".", "dev", true)
         .expect_err("pull during a merge");
     assert!(
         matches!(error.kind(), ErrorKind::Git(failure) if failure.id() == GitFailureId::CommandFailed),
@@ -1503,7 +1519,7 @@ fn pull_rebase_stopped_at_conflicts_says_so() {
     let backend = GixBackend;
     let opened = backend.open(repo).expect("open repository");
     let error = opened
-        .pull_with_output(PullMode::Rebase)
+        .pull(PullMode::Rebase, true)
         .expect_err("conflicting rebase pull");
 
     let detail = stopped_at_conflicts_detail(&error);
@@ -1549,7 +1565,7 @@ fn pull_stopped_at_conflicts_keeps_a_local_branch_upstream() {
     let backend = GixBackend;
     let opened = backend.open(&clone).expect("open repository");
     let error = opened
-        .pull_with_output(PullMode::Default)
+        .pull(PullMode::Default, true)
         .expect_err("conflicting pull");
     stopped_at_conflicts_detail(&error);
     run_git(&clone, &["merge", "--abort"]);
@@ -1585,7 +1601,7 @@ fn pull_after_a_committed_cherry_pick_step_still_reports_conflicts() {
     let backend = GixBackend;
     let opened = backend.open(repo).expect("open repository");
     let error = opened
-        .pull_branch_with_output_prune(".", "dev", false)
+        .pull_branch_with_output(".", "dev", false)
         .expect_err("conflicting pull");
     stopped_at_conflicts_detail(&error);
 }
@@ -1608,7 +1624,7 @@ fn pull_with_rerere_resolved_conflicts_reports_the_merge_in_progress() {
     let backend = GixBackend;
     let opened = backend.open(repo).expect("open repository");
     let error = opened
-        .pull_branch_with_output_prune(".", "dev", false)
+        .pull_branch_with_output(".", "dev", false)
         .expect_err("pull stopped by rerere");
     let detail = stopped_at_conflicts_detail(&error);
     assert!(detail.contains("base.txt"), "{detail}");
@@ -1682,7 +1698,7 @@ fn pull_branch_with_output_merges_named_remote_branch() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     let output = opened
-        .pull_branch_with_output_prune("origin", "feature", true)
+        .pull_branch_with_output("origin", "feature", true)
         .expect("pull branch with output");
     assert_eq!(output.exit_code, Some(0));
     assert!(
@@ -1707,7 +1723,7 @@ fn pull_branch_with_output_merges_named_remote_branch() {
 
     run_git(&remote_repo, &["update-ref", "-d", "refs/heads/feature"]);
     let error = opened
-        .pull_branch_with_output_prune("origin", "feature", true)
+        .pull_branch_with_output("origin", "feature", true)
         .expect_err("deleted remote branch should not be merged");
     assert!(
         error
@@ -1777,7 +1793,7 @@ fn pruning_pull_preserves_tags_from_explicit_fetch_refspecs() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     opened
-        .pull_with_output_prune(PullMode::Default, true)
+        .pull(PullMode::Default, true)
         .expect("pull with branch pruning");
 
     assert!(
@@ -1878,7 +1894,7 @@ fn pruning_pull_branch_fetches_a_requested_branch_excluded_by_remote_refspecs() 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     opened
-        .pull_branch_with_output_prune("origin", "feature", true)
+        .pull_branch_with_output("origin", "feature", true)
         .expect("pull excluded branch into current");
 
     assert_eq!(
@@ -1978,7 +1994,7 @@ exec git "$@"
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     let error = opened
-        .pull_branch_with_output_prune("origin", "feature", true)
+        .pull_branch_with_output("origin", "feature", true)
         .expect_err("the deleted remote branch must not be merged");
 
     assert!(
@@ -2061,7 +2077,7 @@ fn pruning_pull_branch_merges_the_fetched_oid_when_a_short_ref_is_ambiguous() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     opened
-        .pull_branch_with_output_prune("origin", "feature", true)
+        .pull_branch_with_output("origin", "feature", true)
         .expect("pull unambiguous fetched commit");
 
     assert_eq!(
@@ -2110,7 +2126,7 @@ fn failed_fetch_all_cleans_up_refs_pruned_before_a_later_remote_fails() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     opened
-        .fetch_all_with_output_prune(true)
+        .fetch_all(true)
         .expect_err("the later inaccessible remote must fail fetch --all");
 
     assert!(
@@ -2282,7 +2298,7 @@ fn assert_fetch_all_preserves_upstream_for_skipped_remote(
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     opened
-        .fetch_all_with_output_prune(true)
+        .fetch_all(true)
         .expect("fetch --all must skip the unavailable remote");
 
     assert_eq!(
@@ -2321,9 +2337,7 @@ fn pruning_fetch_all_preserves_tags_from_explicit_fetch_refspecs() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    opened
-        .fetch_all_with_output_prune(true)
-        .expect("fetch all with pruning");
+    opened.fetch_all(true).expect("fetch all with pruning");
 
     assert!(
         ref_exists(&work_repo, "refs/tags/local-only"),
@@ -2364,9 +2378,7 @@ fn pruning_fetch_all_keeps_upstreams_of_remotes_it_does_not_fetch() {
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    opened
-        .fetch_all_with_output_prune(true)
-        .expect("fetch all with pruning");
+    opened.fetch_all(true).expect("fetch all with pruning");
 
     assert_eq!(
         run_git_capture(&work_repo, &["config", "--get", "branch.offline.remote"]).trim(),
@@ -2426,7 +2438,7 @@ fn pruning_pull_refuses_to_retarget_a_deleted_upstream_at_another_branch() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     let err = opened
-        .pull_with_output_prune(PullMode::Default, true)
+        .pull(PullMode::Default, true)
         .expect_err("pull must not fall back to another remote branch");
 
     assert!(
@@ -2457,7 +2469,7 @@ fn pruning_pull_prunes_inside_the_pull_when_the_remote_only_maps_tracking_refs()
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     let output = opened
-        .pull_with_output_prune(PullMode::Default, true)
+        .pull(PullMode::Default, true)
         .expect("pull with branch pruning");
 
     assert_eq!(
@@ -2493,7 +2505,7 @@ fn pruning_pull_branch_merges_the_pruned_tracking_ref_without_a_second_fetch() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     let output = opened
-        .pull_branch_with_output_prune("origin", "feature", true)
+        .pull_branch_with_output("origin", "feature", true)
         .expect("pull the named remote branch");
 
     assert_eq!(
@@ -2524,7 +2536,7 @@ fn pruning_pull_keeps_tags_when_the_remote_name_cannot_be_a_config_key() {
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
     opened
-        .pull_with_output_prune(PullMode::Default, true)
+        .pull(PullMode::Default, true)
         .expect("pull with branch pruning");
 
     assert!(
@@ -2614,11 +2626,9 @@ fn fetch_all_skips_git_annex_special_remotes_without_a_url() {
 
     let opened = GixBackend.open(&work_repo).expect("open work repo");
     for prune in [false, true] {
-        let output = opened
-            .fetch_all_with_output_prune(prune)
-            .unwrap_or_else(|e| {
-                panic!("fetch all (prune={prune}) must skip the special remote: {e}")
-            });
+        let output = opened.fetch_all(prune).unwrap_or_else(|e| {
+            panic!("fetch all (prune={prune}) must skip the special remote: {e}")
+        });
         assert!(
             output.command.starts_with("git fetch --multiple "),
             "{}",
@@ -2667,7 +2677,7 @@ fn review_fetch_all_respects_order_of_skip_aliases_for_annex_special_remote() {
         );
         let opened = GixBackend.open(&work_repo).unwrap();
         for prune in [false, true] {
-            let output = opened.fetch_all_with_output_prune(prune).expect("Fetch All must exclude the special remote even when the last skip setting is false");
+            let output = opened.fetch_all(prune).expect("Fetch All must exclude the special remote even when the last skip setting is false");
             assert!(
                 output.command.starts_with("git fetch --multiple "),
                 "{}",
@@ -2731,9 +2741,7 @@ fn fetch_streams_progress_but_returns_output_without_meters() {
     let opened = GixBackend.open(&work_repo).expect("open work repo");
     let output = {
         let _scope = git_operation::attach(&context);
-        opened
-            .fetch_all_with_output_prune(false)
-            .expect("fetch all")
+        opened.fetch_all(false).expect("fetch all")
     };
 
     let streamed = streamed.lock().unwrap().clone();

@@ -191,7 +191,9 @@ fn revert_needing_a_signing_passphrase_resumes_when_replayed() {
     };
     assert!(String::from_utf8_lossy(failure.stderr()).contains(SSH_PASSPHRASE_PROMPT_MARKER));
     assert_eq!(
-        open(&repo).sequencer_state().unwrap(),
+        open(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         SequencerState::Revert
     );
 
@@ -209,7 +211,12 @@ fn revert_needing_a_signing_passphrase_resumes_when_replayed() {
     assert_eq!(output.command, format!("git revert {change}"));
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
     assert!(git_stdout(&repo, &["cat-file", "-p", "HEAD"]).contains("gpgsig"));
-    assert_eq!(open(&repo).sequencer_state().unwrap(), SequencerState::None);
+    assert_eq!(
+        open(&repo)
+            .sequencer_state(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
+        SequencerState::None
+    );
 
     clear_session_passphrase();
 }

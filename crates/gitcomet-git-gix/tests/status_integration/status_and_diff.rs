@@ -24,7 +24,9 @@ fn status_separates_staged_and_unstaged() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     assert_eq!(status.staged.len(), 1);
     assert_eq!(status.staged[0].path, PathBuf::from("a.txt"));
@@ -60,13 +62,17 @@ fn repeated_status_on_same_repo_instance_reuses_staged_state_and_invalidates_on_
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let first = opened.status().unwrap();
+    let first = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(first.staged.len(), 1);
     assert_eq!(first.staged[0].path, PathBuf::from("a.txt"));
     assert!(first.unstaged.is_empty());
 
     write(repo, "b.txt", "base\nworktree\n");
-    let second = opened.status().unwrap();
+    let second = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(second.staged.len(), 1);
     assert_eq!(second.staged[0].path, PathBuf::from("a.txt"));
     assert_eq!(second.unstaged.len(), 1);
@@ -74,7 +80,9 @@ fn repeated_status_on_same_repo_instance_reuses_staged_state_and_invalidates_on_
     assert_eq!(second.unstaged[0].kind, FileStatusKind::Modified);
 
     run_git(repo, &["add", "b.txt"]);
-    let third = opened.status().unwrap();
+    let third = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(third.staged.len(), 2);
     assert!(
         third
@@ -115,7 +123,9 @@ fn status_does_not_rewrite_index_when_only_worktree_stat_is_stale() {
     set_fixed_mtime(&repo.join("a.txt"));
     let index_before = fs::read(repo.join(".git").join("index")).unwrap();
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 
@@ -147,14 +157,18 @@ fn repeated_status_does_not_rewrite_index_when_cached_staged_state_is_reused() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let first = opened.status().unwrap();
+    let first = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(first.staged.is_empty());
     assert!(first.unstaged.is_empty());
 
     set_fixed_mtime(&repo.join("a.txt"));
     let index_before = fs::read(repo.join(".git").join("index")).unwrap();
 
-    let second = opened.status().unwrap();
+    let second = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(second.staged.is_empty());
     assert!(second.unstaged.is_empty());
 
@@ -193,13 +207,17 @@ fn repeated_status_on_same_repo_instance_invalidates_when_head_moves_without_ind
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let clean = opened.status().unwrap();
+    let clean = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(clean.staged.is_empty());
     assert!(clean.unstaged.is_empty());
 
     run_git(repo, &["reset", "--soft", "HEAD~1"]);
 
-    let after_reset = opened.status().unwrap();
+    let after_reset = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(after_reset.staged.len(), 1);
     assert_eq!(after_reset.staged[0].path, Path::new("a.txt"));
     assert_eq!(after_reset.staged[0].kind, FileStatusKind::Modified);
@@ -219,7 +237,9 @@ fn status_lists_untracked_files_in_directories() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     assert_eq!(status.unstaged.len(), 2);
     assert!(
@@ -263,7 +283,9 @@ fn status_ignores_nested_target_directories_with_target_slash_pattern() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     assert!(
         status.unstaged.iter().all(|entry| !entry
@@ -355,7 +377,13 @@ fn diff_working_tree_unstaged_ignores_crlf_only_line_ending_changes() {
         "expected CRLF-only unstaged diff to be suppressed:\n{unified}"
     );
 
-    let parsed = opened.diff_parsed(&target).unwrap();
+    let parsed = opened
+        .diff_parsed(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert!(
         parsed.lines.is_empty(),
         "expected parsed diff to be empty for CRLF-only unstaged change: {parsed:?}"
@@ -386,10 +414,11 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
     let opened = backend.open(repo).unwrap();
 
     let unstaged = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for unstaged changes");
     assert_eq!(unstaged.path, PathBuf::from("a.txt"));
@@ -398,10 +427,11 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
     run_git(repo, &["add", "a.txt"]);
 
     let staged = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Staged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for staged changes");
     assert_file_diff_text_sources(&staged, Some("one\n"), Some("one\ntwo\n"));
@@ -420,10 +450,14 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
     let head = String::from_utf8(head.stdout).unwrap().trim().to_string();
 
     let commit = opened
-        .diff_file_text(&DiffTarget::commit(
-            gitcomet_core::domain::CommitId(head.into()),
-            PathBuf::from("a.txt"),
-        ))
+        .diff_file_text(
+            &DiffTarget::commit(
+                gitcomet_core::domain::CommitId(head.into()),
+                PathBuf::from("a.txt"),
+            ),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for commit");
     assert_file_diff_text_sources(&commit, Some("one\n"), Some("one\ntwo\n"));
@@ -453,10 +487,11 @@ fn diff_file_text_unstaged_uses_git_normalized_worktree_content() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let diff = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for unstaged crlf-only change");
 
@@ -492,10 +527,14 @@ fn diff_file_text_root_commit_has_no_parent_side() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let commit = opened
-        .diff_file_text(&DiffTarget::commit(
-            gitcomet_core::domain::CommitId(head.into()),
-            PathBuf::from("a.txt"),
-        ))
+        .diff_file_text(
+            &DiffTarget::commit(
+                gitcomet_core::domain::CommitId(head.into()),
+                PathBuf::from("a.txt"),
+            ),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for root commit");
     assert_file_diff_text_sources(&commit, None, Some("one\n"));
@@ -528,20 +567,22 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
     let opened = backend.open(repo).unwrap();
 
     let added = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("b.txt"),
-            DiffArea::Staged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("b.txt"), DiffArea::Staged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for staged added file");
     assert_eq!(added.path, PathBuf::from("b.txt"));
     assert_file_diff_text_sources(&added, None, Some("new\n"));
 
     let deleted = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Staged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for staged deleted file");
     assert_eq!(deleted.path, PathBuf::from("a.txt"));
@@ -573,6 +614,7 @@ fn diff_preview_text_file_commit_added_file_returns_new_side_blob_path() {
         .diff_preview_text_file(
             &DiffTarget::commit(commit_id, PathBuf::from("docs/added.txt")),
             DiffPreviewTextSide::New,
+            &gitcomet_core::services::CancellationToken::new(),
         )
         .unwrap()
         .expect("preview text file for committed added file");
@@ -614,6 +656,7 @@ fn diff_preview_text_file_commit_deleted_file_returns_old_side_blob_path() {
         .diff_preview_text_file(
             &DiffTarget::commit(commit_id, PathBuf::from("docs/delete-me.txt")),
             DiffPreviewTextSide::Old,
+            &gitcomet_core::services::CancellationToken::new(),
         )
         .unwrap()
         .expect("preview text file for committed deleted file");
@@ -650,6 +693,7 @@ fn diff_preview_text_file_staged_deleted_file_returns_head_blob_path() {
         .diff_preview_text_file(
             &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged),
             DiffPreviewTextSide::Old,
+            &gitcomet_core::services::CancellationToken::new(),
         )
         .unwrap()
         .expect("preview text file for staged deleted file");
@@ -674,20 +718,22 @@ fn diff_file_text_returns_none_for_directories() {
     let opened = backend.open(repo).unwrap();
 
     let result = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("dir"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("dir"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
 
     assert!(result.is_none());
 
     run_git(repo, &["add", "dir/a.txt"]);
     let staged_result = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("dir"),
-            DiffArea::Staged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("dir"), DiffArea::Staged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
 
     assert!(staged_result.is_none());
@@ -720,10 +766,10 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
     let opened = backend.open(repo).unwrap();
 
     let unstaged = opened
-        .diff_file_image(&DiffTarget::working_tree(
-            PathBuf::from("img.png"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_image(
+            &DiffTarget::working_tree(PathBuf::from("img.png"), DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("image diff for unstaged changes");
     assert_eq!(unstaged.path, PathBuf::from("img.png"));
@@ -733,10 +779,10 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
     run_git(repo, &["add", "img.png"]);
 
     let staged = opened
-        .diff_file_image(&DiffTarget::working_tree(
-            PathBuf::from("img.png"),
-            DiffArea::Staged,
-        ))
+        .diff_file_image(
+            &DiffTarget::working_tree(PathBuf::from("img.png"), DiffArea::Staged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("image diff for staged changes");
     assert_eq!(staged.old.as_deref(), Some(old_png.as_slice()));
@@ -756,10 +802,13 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
     let head = String::from_utf8(head.stdout).unwrap().trim().to_string();
 
     let commit = opened
-        .diff_file_image(&DiffTarget::commit(
-            gitcomet_core::domain::CommitId(head.into()),
-            PathBuf::from("img.png"),
-        ))
+        .diff_file_image(
+            &DiffTarget::commit(
+                gitcomet_core::domain::CommitId(head.into()),
+                PathBuf::from("img.png"),
+            ),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("image diff for commit");
     assert_eq!(commit.old.as_deref(), Some(old_png.as_slice()));
@@ -779,20 +828,20 @@ fn diff_file_image_returns_none_for_directories() {
     let opened = backend.open(repo).unwrap();
 
     let result = opened
-        .diff_file_image(&DiffTarget::working_tree(
-            PathBuf::from("dir"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_image(
+            &DiffTarget::working_tree(PathBuf::from("dir"), DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
 
     assert!(result.is_none());
 
     run_git(repo, &["add", "dir/a.png"]);
     let staged_result = opened
-        .diff_file_image(&DiffTarget::working_tree(
-            PathBuf::from("dir"),
-            DiffArea::Staged,
-        ))
+        .diff_file_image(
+            &DiffTarget::working_tree(PathBuf::from("dir"), DiffArea::Staged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
 
     assert!(staged_result.is_none());
@@ -825,10 +874,18 @@ fn gitlink_supplement_handles_literal_paths_dirty_children_and_staged_removal() 
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-qm", "parent"]);
     let opened = GixBackend.open(repo).unwrap();
-    assert!(opened.status().unwrap().unstaged.is_empty());
+    assert!(
+        opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
     for file in ["file.txt", "untracked.txt"] {
         write(&nested, file, "dirty\n");
-        let status = opened.status().unwrap();
+        let status = opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert!(
             status
                 .unstaged
@@ -837,7 +894,7 @@ fn gitlink_supplement_handles_literal_paths_dirty_children_and_staged_removal() 
         );
         assert!(
             opened
-                .worktree_status()
+                .worktree_status(&gitcomet_core::services::CancellationToken::new())
                 .unwrap()
                 .iter()
                 .any(|entry| entry.path == Path::new(name))
@@ -848,8 +905,14 @@ fn gitlink_supplement_handles_literal_paths_dirty_children_and_staged_removal() 
     }
     run_git(repo, &["rm", "--cached", "--", name]);
     for entries in [
-        opened.status().unwrap().staged.to_vec(),
-        opened.staged_status().unwrap(),
+        opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .to_vec(),
+        opened
+            .staged_status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
     ] {
         assert!(entries.iter().any(|entry| entry.path == Path::new(name) && entry.kind == FileStatusKind::Deleted));
     }
@@ -893,7 +956,9 @@ fn gitlink_added_and_unstaged_modified_reports_expected_status_and_diff() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .staged
@@ -921,10 +986,11 @@ fn gitlink_added_and_unstaged_modified_reports_expected_status_and_diff() {
     );
 
     let file_text = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("chess3"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("chess3"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert!(
         file_text.is_none(),
@@ -974,7 +1040,9 @@ fn committed_gitlink_unstaged_modified_reports_modified_status_and_diff() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .unstaged
@@ -1010,7 +1078,9 @@ fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let initial_status = opened.status().unwrap();
+    let initial_status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         initial_status.staged.is_empty() && initial_status.unstaged.is_empty(),
         "expected clean repo before adding gitlink; status={initial_status:?}"
@@ -1031,7 +1101,9 @@ fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
 
     run_git(repo, &["add", "chess3"]);
 
-    let staged_gitlink = opened.status().unwrap();
+    let staged_gitlink = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         staged_gitlink
             .staged
@@ -1047,7 +1119,9 @@ fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "nested c2"],
     );
 
-    let advanced_gitlink = opened.status().unwrap();
+    let advanced_gitlink = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         advanced_gitlink
             .unstaged
@@ -1112,7 +1186,11 @@ fn diff_parsed_outside_repository_path_returns_structured_git_error() {
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
     let err = opened
-        .diff_parsed(&DiffTarget::working_tree(outside, DiffArea::Unstaged))
+        .diff_parsed(
+            &DiffTarget::working_tree(outside, DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect_err("expected diff_parsed to fail for outside path");
     assert_git_failure(&err, "git diff", GitFailureId::CommandFailed);
     let ErrorKind::Git(failure) = err.kind() else {
@@ -1160,7 +1238,11 @@ fn diff_parsed_merge_commit_uses_first_parent() {
     let opened = backend.open(repo).unwrap();
     let merge_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
     let diff = opened
-        .diff_parsed(&DiffTarget::commit(merge_id, PathBuf::from("shared.txt")))
+        .diff_parsed(
+            &DiffTarget::commit(merge_id, PathBuf::from("shared.txt")),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("parse merge commit diff against its first parent");
 
     assert!(
@@ -1214,7 +1296,11 @@ fn diff_parsed_commit_rename_preserves_rename_headers_and_hunks() {
     let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
     let parent_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD~1"]).into());
     let diff = opened
-        .diff_parsed(&DiffTarget::commit_range(parent_id, Some(commit_id), None))
+        .diff_parsed(
+            &DiffTarget::commit_range(parent_id, Some(commit_id), None),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("parse rename commit diff");
 
     assert!(
@@ -1263,10 +1349,11 @@ fn diff_parsed_commit_added_file_matches_git_show_output() {
     let opened = backend.open(repo).unwrap();
     let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
     let diff = opened
-        .diff_parsed(&DiffTarget::commit(
-            commit_id.clone(),
-            PathBuf::from("docs/added.txt"),
-        ))
+        .diff_parsed(
+            &DiffTarget::commit(commit_id.clone(), PathBuf::from("docs/added.txt")),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("parse added file commit diff");
     let expected = run_git_output(
         repo,
@@ -1322,10 +1409,14 @@ fn diff_parsed_commit_added_binary_file_falls_back_to_git_diff() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let diff = opened
-        .diff_parsed(&DiffTarget::commit(
-            CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into()),
-            PathBuf::from("docs/logo.bin"),
-        ))
+        .diff_parsed(
+            &DiffTarget::commit(
+                CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into()),
+                PathBuf::from("docs/logo.bin"),
+            ),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("a binary blob must render through git diff");
     assert!(
         diff.lines
@@ -1369,24 +1460,20 @@ fn diff_parsed_commit_added_file_truncates_at_the_unified_line_limit() {
     );
 
     // Too large for the synthetic fast path: `git diff` renders it truncated.
-    for diff in [
-        opened.diff_parsed(&target).expect("regular"),
-        opened
-            .diff_parsed_cancellable(&target, &CancellationToken::new())
-            .expect("cancellable"),
-    ] {
-        assert_eq!(diff.lines.len(), Diff::MAX_UNIFIED_LINES + 1);
-        let notice = diff.lines.last().expect("notice row");
-        assert_eq!(notice.kind, DiffLineKind::Header);
-        assert!(
-            notice
-                .text
-                .as_ref()
-                .starts_with(Diff::TRUNCATION_NOTICE_PREFIX),
-            "{:?}",
-            notice.text.as_ref()
-        );
-    }
+    let diff = opened
+        .diff_parsed(&target, None, &CancellationToken::new())
+        .expect("parsed diff");
+    assert_eq!(diff.lines.len(), Diff::MAX_UNIFIED_LINES + 1);
+    let notice = diff.lines.last().expect("notice row");
+    assert_eq!(notice.kind, DiffLineKind::Header);
+    assert!(
+        notice
+            .text
+            .as_ref()
+            .starts_with(Diff::TRUNCATION_NOTICE_PREFIX),
+        "{:?}",
+        notice.text.as_ref()
+    );
 }
 
 #[test]
@@ -1416,10 +1503,11 @@ fn diff_parsed_commit_deleted_file_matches_git_show_output() {
     let opened = backend.open(repo).unwrap();
     let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
     let diff = opened
-        .diff_parsed(&DiffTarget::commit(
-            commit_id.clone(),
-            PathBuf::from("docs/delete-me.txt"),
-        ))
+        .diff_parsed(
+            &DiffTarget::commit(commit_id.clone(), PathBuf::from("docs/delete-me.txt")),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("parse deleted file commit diff");
     let expected = run_git_output(
         repo,
@@ -1479,16 +1567,20 @@ fn diff_working_tree_with_absolute_file_path_reads_current_file() {
     let opened = backend.open(repo).unwrap();
 
     let text = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            absolute.clone(),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(absolute.clone(), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("text diff for absolute path");
     assert_file_diff_text_sources(&text, Some("one\n"), Some("one\ntwo\n"));
 
     let image = opened
-        .diff_file_image(&DiffTarget::working_tree(absolute, DiffArea::Unstaged))
+        .diff_file_image(
+            &DiffTarget::working_tree(absolute, DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("image diff for absolute path");
     assert_eq!(image.old.as_deref(), Some("one\n".as_bytes()));
@@ -1524,16 +1616,20 @@ fn diff_working_tree_with_absolute_file_path_through_symlinked_repo_reads_curren
     let opened = backend.open(&repo).unwrap();
 
     let text = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            absolute.clone(),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(absolute.clone(), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("text diff for symlinked absolute path");
     assert_file_diff_text_sources(&text, Some("one\n"), Some("one\ntwo\n"));
 
     let image = opened
-        .diff_file_image(&DiffTarget::working_tree(absolute, DiffArea::Unstaged))
+        .diff_file_image(
+            &DiffTarget::working_tree(absolute, DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("image diff for symlinked absolute path");
     assert_eq!(image.old.as_deref(), Some("one\n".as_bytes()));
@@ -1551,19 +1647,20 @@ fn staged_diff_for_unmerged_conflict_prefers_ours_for_text_and_image() {
     let opened = backend.open(repo).unwrap();
 
     let text = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Staged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("staged text diff for conflict");
     assert_file_diff_text_sources(&text, Some("ours\n"), Some("ours\n"));
 
     let image = opened
-        .diff_file_image(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Staged,
-        ))
+        .diff_file_image(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Staged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("staged image diff for conflict");
     assert_eq!(image.old.as_deref(), Some("ours\n".as_bytes()));
@@ -1598,20 +1695,27 @@ fn diff_commit_with_unknown_revision_and_outside_conflict_path_are_handled() {
     );
 
     let text = opened
-        .diff_file_text(&unknown_target)
+        .diff_file_text(
+            &unknown_target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("text diff object for unknown revision");
     assert_file_diff_text_sources(&text, None, None);
 
     let image = opened
-        .diff_file_image(&unknown_target)
+        .diff_file_image(
+            &unknown_target,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("image diff object for unknown revision");
     assert_eq!(image.old, None);
     assert_eq!(image.new, None);
 
     let err = opened
-        .conflict_session(&outside)
+        .conflict_session(&outside, None)
         .expect_err("outside absolute path should be rejected");
     assert!(
         matches!(err.kind(), ErrorKind::Backend(_)),
@@ -1657,7 +1761,9 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(status.unstaged.len(), 1);
     assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
     assert_eq!(status.unstaged[0].kind, FileStatusKind::Conflicted);
@@ -1667,16 +1773,17 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
     );
 
     let diff = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("a.txt"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("a.txt"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("file diff for conflicted changes");
     assert_file_diff_text_sources(&diff, Some("ours\n"), Some("theirs\n"));
 
     let session = opened
-        .conflict_session(Path::new("a.txt"))
+        .conflict_session(Path::new("a.txt"), None)
         .unwrap()
         .expect("conflict session");
     assert_eq!(session.conflict_kind, FileConflictKind::BothModified);
@@ -1721,19 +1828,27 @@ fn diff_file_text_for_symlink_uses_link_text_not_target_bytes() {
     let opened = GixBackend.open(repo).unwrap();
     let target = DiffTarget::working_tree(PathBuf::from("link"), DiffArea::Unstaged);
     let text = opened
-        .diff_file_text(&target)
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("text diff for a symlink");
     assert_file_diff_text_sources(&text, Some("a.txt"), Some("b.txt"));
 
     let preview = opened
-        .diff_preview_text_file(&target, gitcomet_core::domain::DiffPreviewTextSide::New)
+        .diff_preview_text_file(
+            &target,
+            gitcomet_core::domain::DiffPreviewTextSide::New,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("preview path for a symlink");
     assert_eq!(fs::read_to_string(preview.path).unwrap(), "b.txt");
 
     let image = opened
-        .diff_file_image(&target)
+        .diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
         .unwrap()
         .expect("image diff for a symlink");
     assert_eq!(image.old.as_deref(), Some("a.txt".as_bytes()));
@@ -1751,10 +1866,11 @@ fn diff_file_text_for_dangling_symlink_reports_link_text() {
 
     let opened = GixBackend.open(repo).unwrap();
     let text = opened
-        .diff_file_text(&DiffTarget::working_tree(
-            PathBuf::from("link"),
-            DiffArea::Unstaged,
-        ))
+        .diff_file_text(
+            &DiffTarget::working_tree(PathBuf::from("link"), DiffArea::Unstaged),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .expect("text diff for a dangling symlink");
     assert_file_diff_text_sources(&text, Some("a.txt"), Some("missing.txt"));

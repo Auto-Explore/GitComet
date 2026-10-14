@@ -128,7 +128,7 @@ fn support_lists_repositories_special_remotes_and_numcopies() {
     run(&repo, LargeFileCommand::AnnexNumcopies { copies: 2 }).unwrap();
 
     let support = open(&repo)
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(support.annex.initialized() && support.annex.has_annex_branch);
     assert_eq!(support.annex.numcopies, Some(2));
@@ -186,7 +186,7 @@ fn copy_drop_get_and_refused_drop() {
     .unwrap();
     let key = git(&repo, &["annex", "lookupkey", "big.bin"]);
     let whereis = open(&repo)
-        .annex_whereis_cancellable(key.trim(), &CancellationToken::new())
+        .annex_whereis(key.trim(), &CancellationToken::new())
         .unwrap();
     let places: Vec<_> = whereis
         .copies
@@ -206,10 +206,7 @@ fn copy_drop_get_and_refused_drop() {
     .unwrap();
     assert!(!repo.join("big.bin").is_file(), "locked link now dangles");
     let files = open(&repo)
-        .uncommitted_large_files_for_status_cancellable(
-            &staged_row("big.bin"),
-            &CancellationToken::new(),
-        )
+        .uncommitted_large_files_for_status(&staged_row("big.bin"), &CancellationToken::new())
         .unwrap();
     // Staged rows describe the index; a committed file is not staged, so
     // check through the unstaged path instead.
@@ -257,10 +254,7 @@ fn unlocked_presence_comes_from_git_annex_find() {
     git(&repo, &["add", "other.bin"]);
 
     let files = open(&repo)
-        .uncommitted_large_files_for_status_cancellable(
-            &staged_row("other.bin"),
-            &CancellationToken::new(),
-        )
+        .uncommitted_large_files_for_status(&staged_row("other.bin"), &CancellationToken::new())
         .unwrap();
     let state = &files.staged[Path::new("other.bin")];
     assert_eq!(state.in_local_store, Some(true), "{state:?}");
@@ -302,10 +296,11 @@ fn unlocked_commit_diff_reads_content_from_the_annex() {
     let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
 
     let diff = open(&repo)
-        .diff_file_text(&DiffTarget::commit(
-            CommitId(head.into()),
-            PathBuf::from("notes.txt"),
-        ))
+        .diff_file_text(
+            &DiffTarget::commit(CommitId(head.into()), PathBuf::from("notes.txt")),
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .unwrap();
     let old = diff.old_large.clone().expect("old side is annexed");
@@ -534,7 +529,7 @@ fn sync_never_commits_and_describe_trust_apply() {
     )
     .unwrap();
     let support = open(&repo)
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     let find = |name: &str| {
         support
@@ -717,7 +712,7 @@ fn moved_locked_annex_content_is_found_by_key_regression() {
         .unwrap();
     assert_eq!(state.in_local_store, Some(true));
     let status = opened
-        .uncommitted_large_files_for_status_cancellable(
+        .uncommitted_large_files_for_status(
             &staged_row("moved/sub/pic.png"),
             &CancellationToken::new(),
         )
@@ -726,17 +721,31 @@ fn moved_locked_annex_content_is_found_by_key_regression() {
         status.staged[Path::new("moved/sub/pic.png")].in_local_store,
         Some(true)
     );
-    let text = opened.diff_file_text(&target).unwrap().unwrap();
+    let text = opened
+        .diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(text.new_large.unwrap().content, LargeFileContent::Available);
     let preview = opened
-        .diff_preview_text_file(&target, DiffPreviewTextSide::New)
+        .diff_preview_text_file(
+            &target,
+            DiffPreviewTextSide::New,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(
         preview.large_file.unwrap().content,
         LargeFileContent::Available
     );
-    let image = opened.diff_file_image(&target).unwrap().unwrap();
+    let image = opened
+        .diff_file_image(&target, &gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .unwrap();
     assert_eq!(
         image.new_large.unwrap().content,
         LargeFileContent::Available
@@ -827,7 +836,9 @@ fn status_and_line_stats_never_start_the_annex_filter() {
     git(&repo, &["config", "filter.annex.process", &wrapper]);
 
     let opened = open(&repo);
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(!log.exists(), "status started git-annex");
     assert_eq!(
         status.unstaged.len(),
@@ -835,7 +846,7 @@ fn status_and_line_stats_never_start_the_annex_filter() {
         "like `git status`, the stale file reads as modified until restaged"
     );
     let stats = opened
-        .uncommitted_line_stats_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_line_stats_for_status(&status, &CancellationToken::new())
         .unwrap();
     assert!(!log.exists(), "line stats started git-annex");
     let notes = stats.unstaged[Path::new("notes.txt")];
@@ -881,7 +892,11 @@ fn wait_out_racy_second(path: &Path) {
 
 #[cfg(unix)]
 fn modified_rows(repo: &Path) -> usize {
-    open(repo).status().unwrap().unstaged.len()
+    open(repo)
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .unstaged
+        .len()
 }
 
 #[cfg(unix)]
@@ -892,7 +907,7 @@ fn refresh_restages_files_left_stale_by_an_interrupted_command() {
     let repo = init_annex_repo(dir.path());
     make_stale_unlocked_file(&repo);
     let support = open(&repo)
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(support.annex.restage_pending);
     assert_eq!(modified_rows(&repo), 1, "stale file reads as modified");
@@ -901,7 +916,7 @@ fn refresh_restages_files_left_stale_by_an_interrupted_command() {
     assert_eq!(modified_rows(&repo), 0, "restage refreshes Git's index");
     assert!(
         !open(&repo)
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap()
             .annex
             .restage_pending
@@ -954,7 +969,7 @@ fn special_remote_types_come_from_the_annex_branch() {
     }
     let opened = open(&clone);
     let fresh = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(
         fresh.annex.in_use(),
@@ -987,7 +1002,7 @@ fn special_remote_types_come_from_the_annex_branch() {
         .unwrap();
 
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(
         support.annex.uuid.is_some(),
@@ -1018,7 +1033,7 @@ fn special_remote_types_come_from_the_annex_branch() {
     )])
     .unwrap();
     let enabled = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(enabled.annex.repositories.iter().any(|repo| {
         repo.remote_name.as_deref() == Some("backup")
@@ -1038,11 +1053,7 @@ fn unused_lists_old_versions_and_drop_unused_honours_numcopies() {
     require_annex!();
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
-    let unused = || {
-        open(&repo)
-            .annex_unused_cancellable(&CancellationToken::new())
-            .unwrap()
-    };
+    let unused = || open(&repo).annex_unused(&CancellationToken::new()).unwrap();
     assert!(unused().entries.is_empty());
 
     git(&repo, &["annex", "unlock", "-q", "big.bin"]);
@@ -1099,9 +1110,7 @@ fn unused_drop_refuses_a_listing_that_changed_after_confirmation() {
         git(&repo, &["commit", "-qm", "replace big.bin"]);
     };
     replace(8);
-    let listed = open(&repo)
-        .annex_unused_cancellable(&CancellationToken::new())
-        .unwrap();
+    let listed = open(&repo).annex_unused(&CancellationToken::new()).unwrap();
     assert_eq!(listed.entries.len(), 1);
     replace(9);
     let result = run(
@@ -1115,9 +1124,7 @@ fn unused_drop_refuses_a_listing_that_changed_after_confirmation() {
         result.is_err(),
         "a stale confirmation must not drop newly unused content"
     );
-    let remaining = open(&repo)
-        .annex_unused_cancellable(&CancellationToken::new())
-        .unwrap();
+    let remaining = open(&repo).annex_unused(&CancellationToken::new()).unwrap();
     assert_eq!(
         remaining.entries.len(),
         2,
@@ -1139,7 +1146,7 @@ fn describe_accepts_a_leading_dash() {
     )
     .unwrap();
     let support = open(&repo)
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(
         support
@@ -1157,7 +1164,7 @@ fn assistant_counts_as_running_only_while_its_process_lives() {
     let repo = init_annex_repo(dir.path());
     let running = || {
         open(&repo)
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap()
             .annex
             .assistant_running
@@ -1221,7 +1228,7 @@ fn support_load_never_merges_fetched_annex_branches() {
     );
     let config_before = fs::read(repo.join(".git/config")).unwrap();
     open(&repo)
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert_eq!(
         git(&repo, &["rev-parse", "refs/heads/git-annex"]),
@@ -1249,7 +1256,7 @@ fn support_load_does_not_consume_credentials_staged_for_a_command() {
         secret: "test-token".into(),
     });
     opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     let pending = take_staged_git_auth()
         .expect("the support probe must leave the retried command's credentials staged");
@@ -1489,16 +1496,18 @@ fn status_rows_never_run_git_annex() {
     let before = shim_calls(&shim, &repo).len();
 
     let opened = open(&repo);
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let files = opened
-        .uncommitted_large_files_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_large_files_for_status(&status, &CancellationToken::new())
         .unwrap();
     assert_eq!(
         files.staged[Path::new("other.bin")].in_local_store,
         Some(true)
     );
     opened
-        .uncommitted_line_stats_for_status_cancellable(&status, &CancellationToken::new())
+        .uncommitted_line_stats_for_status(&status, &CancellationToken::new())
         .unwrap();
     let calls = shim_calls(&shim, &repo);
     assert!(
@@ -1624,7 +1633,7 @@ fn repositories_read_from_logs_match_git_annex_info() {
     run(&repo, LargeFileCommand::AnnexNumcopies { copies: 3 }).unwrap();
 
     let support = open(&repo)
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     let ours: Vec<_> = support
         .annex
@@ -1675,7 +1684,7 @@ fn support_refresh_sees_new_special_remote_on_the_same_handle() {
         })
         .unwrap();
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     assert!(support.annex.repositories.iter().any(|repository| {
         repository.remote_name.as_deref() == Some("other")
@@ -1702,7 +1711,7 @@ fn all_annex_trust_levels_apply() {
             })
             .unwrap();
         let support = opened
-            .large_file_support_cancellable(&CancellationToken::new())
+            .large_file_support(&CancellationToken::new())
             .unwrap();
         assert_eq!(
             support
@@ -1728,7 +1737,7 @@ fn whereis_preserves_untrusted_and_empty_locations() {
     git(&repo, &["annex", "drop", "big.bin"]);
     git(&repo, &["annex", "untrust", "backup"]);
     let locations = opened
-        .annex_whereis_cancellable(key.trim(), &CancellationToken::new())
+        .annex_whereis(key.trim(), &CancellationToken::new())
         .unwrap();
     assert_eq!(locations.key, key.trim());
     assert!(locations.copies.is_empty());
@@ -1740,21 +1749,17 @@ fn whereis_preserves_untrusted_and_empty_locations() {
         &["annex", "drop", "--force", "--from", "backup", "big.bin"],
     );
     let locations = opened
-        .annex_whereis_cancellable(key.trim(), &CancellationToken::new())
+        .annex_whereis(key.trim(), &CancellationToken::new())
         .unwrap();
     assert!(locations.copies.is_empty() && locations.untrusted.is_empty());
     assert!(
         opened
-            .annex_whereis_cancellable("--invalid", &CancellationToken::new())
+            .annex_whereis("--invalid", &CancellationToken::new())
             .is_err()
     );
     let cancelled = CancellationToken::new();
     cancelled.cancel();
-    assert!(
-        opened
-            .annex_whereis_cancellable(key.trim(), &cancelled)
-            .is_err()
-    );
+    assert!(opened.annex_whereis(key.trim(), &cancelled).is_err());
 }
 
 #[test]
@@ -1774,7 +1779,7 @@ fn whereis_uses_historical_keys_after_the_path_is_deleted() {
     let opened = open(&repo);
     for (key, in_backup) in [(old.trim(), true), (new.trim(), false)] {
         let locations = opened
-            .annex_whereis_cancellable(key, &CancellationToken::new())
+            .annex_whereis(key, &CancellationToken::new())
             .unwrap();
         assert_eq!(locations.key, key);
         assert_eq!(
@@ -1808,8 +1813,10 @@ fn sha3_annex_backends_resolve_staged_content_when_locked_and_unlocked() {
                 git(&repo, &["annex", "unlock", &name]);
             }
             let files = opened
-                .uncommitted_large_files_for_status_cancellable(
-                    &opened.status().unwrap(),
+                .uncommitted_large_files_for_status(
+                    &opened
+                        .status(&gitcomet_core::services::CancellationToken::new())
+                        .unwrap(),
                     &CancellationToken::new(),
                 )
                 .unwrap();
@@ -1823,10 +1830,11 @@ fn sha3_annex_backends_resolve_staged_content_when_locked_and_unlocked() {
             assert_eq!(&*key.backend, backend);
             assert_eq!(state.in_local_store, Some(true));
             let diff = opened
-                .diff_file_text(&DiffTarget::working_tree(
-                    name.clone().into(),
-                    DiffArea::Staged,
-                ))
+                .diff_file_text(
+                    &DiffTarget::working_tree(name.clone().into(), DiffArea::Staged),
+                    None,
+                    &gitcomet_core::services::CancellationToken::new(),
+                )
                 .unwrap()
                 .unwrap();
             assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
@@ -1879,33 +1887,49 @@ fn escaped_annex_keys_resolve_unlocked_content_and_download_by_key() {
             CommitId(git(&repo, &["rev-parse", "HEAD"]).trim().into()),
             name.into(),
         );
-        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(diff.new_large.unwrap().content, LargeFileContent::Available);
         assert_eq!(
             fs::read_to_string(diff.new_source.unwrap().path).unwrap(),
             "escaped content\n"
         );
         let rows = opened
-            .uncommitted_large_files_for_status_cancellable(&staged_row(name), &cancellation)
+            .uncommitted_large_files_for_status(&staged_row(name), &cancellation)
             .unwrap();
         assert_eq!(rows.staged[Path::new(name)].in_local_store, Some(true));
         git(&repo, &["annex", "copy", "--to=backup", name]);
         git(&repo, &["annex", "drop", name]);
-        let diff = opened.diff_file_text(&target).unwrap().unwrap();
+        let diff = opened
+            .diff_file_text(
+                &target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .unwrap()
+            .unwrap();
         let key = match diff.new_large.unwrap().pointer {
             gitcomet_core::large_files::LargeFilePointer::Annex(key) => key.raw.to_string(),
             _ => unreachable!(),
         };
-        let locations = opened
-            .annex_whereis_cancellable(&key, &cancellation)
-            .unwrap();
+        let locations = opened.annex_whereis(&key, &cancellation).unwrap();
         assert!(!locations.copies.is_empty());
         opened
             .run_large_file_command(&LargeFileCommand::AnnexGetKeys { keys: vec![key] })
             .unwrap();
         assert_eq!(
             opened
-                .diff_file_text(&target)
+                .diff_file_text(
+                    &target,
+                    None,
+                    &gitcomet_core::services::CancellationToken::new()
+                )
                 .unwrap()
                 .unwrap()
                 .new_large
@@ -1956,7 +1980,7 @@ printf '{"command":"unused","unused-list":{"1":"WORM-s1-m1--old"},"success":true
         |repo| {
             git(repo, &["init", "-q"]);
             let listed = open(repo)
-                .annex_unused_cancellable(&CancellationToken::new())
+                .annex_unused(&CancellationToken::new())
                 .unwrap_or_else(|e| panic!("silent scan was cut off: {e}"));
             assert_eq!(listed.entries.len(), 1);
         },
@@ -2039,9 +2063,7 @@ esac
         |repo| {
             git(repo, &["init", "-q"]);
             let opened = open(repo);
-            let listed = opened
-                .annex_unused_cancellable(&CancellationToken::new())
-                .unwrap();
+            let listed = opened.annex_unused(&CancellationToken::new()).unwrap();
             assert_eq!(listed.entries.len(), 10_001);
             let (sender, receiver) = std::sync::mpsc::channel();
             let context = gitcomet_core::git_operation::GitOperationContext::new(
@@ -2150,7 +2172,7 @@ fn annex_descriptions_round_trip_without_local_remote_names() {
     git(&repo, &["annex", "describe", "backup", "usb"]);
     let opened = open(&repo);
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     let remote = support
         .annex
@@ -2167,7 +2189,7 @@ fn annex_descriptions_round_trip_without_local_remote_names() {
         })
         .unwrap();
     let support = opened
-        .large_file_support_cancellable(&CancellationToken::new())
+        .large_file_support(&CancellationToken::new())
         .unwrap();
     let refreshed = support
         .annex

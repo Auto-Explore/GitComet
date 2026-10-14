@@ -51,7 +51,9 @@ fn worktree_add_list_remove_round_trip() {
     let backend = GixBackend;
     let opened = backend.open(&repo).expect("open repository");
 
-    let before = opened.list_worktrees().expect("list initial worktrees");
+    let before = opened
+        .list_worktrees(&gitcomet_core::services::CancellationToken::new())
+        .expect("list initial worktrees");
     let primary = before
         .iter()
         .find(|worktree| same_path(&worktree.path, &repo))
@@ -75,7 +77,9 @@ fn worktree_add_list_remove_round_trip() {
         .expect("add linked worktree");
     assert_eq!(add_output.exit_code, Some(0));
 
-    let listed = opened.list_worktrees().expect("list worktrees after add");
+    let listed = opened
+        .list_worktrees(&gitcomet_core::services::CancellationToken::new())
+        .expect("list worktrees after add");
     let linked = listed
         .iter()
         .find(|worktree| same_path(&worktree.path, &linked_path))
@@ -90,7 +94,7 @@ fn worktree_add_list_remove_round_trip() {
     assert_eq!(remove_output.exit_code, Some(0));
 
     let after = opened
-        .list_worktrees()
+        .list_worktrees(&gitcomet_core::services::CancellationToken::new())
         .expect("list worktrees after remove");
     assert!(
         after

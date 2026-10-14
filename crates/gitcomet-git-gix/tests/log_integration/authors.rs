@@ -19,7 +19,12 @@ fn author_catalog_includes_unloaded_history_and_reuses_unchanged_inputs() {
         let repo = GixBackend.open(dir.path()).unwrap();
         let cancel = CancellationToken::new();
         let page = repo
-            .log_history_mode_page(HistoryMode::FullReachable, 200, None)
+            .log_history_mode_page(
+                HistoryMode::FullReachable,
+                200,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .unwrap();
         assert!(
             page.commits
@@ -36,6 +41,7 @@ fn author_catalog_includes_unloaded_history_and_reuses_unchanged_inputs() {
             Some("Recent author"),
             200,
             None,
+            &gitcomet_core::services::CancellationToken::new(),
         )
         .unwrap();
         let again = repo

@@ -153,7 +153,11 @@ fn a_trusted_ssh_signature_verifies_and_an_unsigned_commit_earns_no_entry() {
 
     let repo = open(&fixture.repo);
     let results = repo
-        .verify_commit_signatures(&[signed.clone(), unsigned.clone()])
+        .verify_commit_signatures(
+            &[signed.clone(), unsigned.clone()],
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("verify signatures");
 
     assert_eq!(
@@ -185,7 +189,11 @@ fn an_untrusted_ssh_signature_earns_no_entry() {
 
     let repo = open(&fixture.repo);
     let results = repo
-        .verify_commit_signatures(&[signed])
+        .verify_commit_signatures(
+            &[signed],
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("verify signatures");
 
     assert!(
@@ -204,14 +212,28 @@ fn verification_rechecks_a_key_added_to_the_trust_configuration() {
     let signed = commit(&fixture.repo, "signed.txt", true);
     let repo = open(&fixture.repo);
     let ids = [signed];
-    assert!(repo.verify_commit_signatures(&ids).unwrap().is_empty());
+    assert!(
+        repo.verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()
+        .is_empty()
+    );
 
     trust_signatures(&fixture);
     assert_eq!(
         git_stdout(&fixture.repo, &["log", "-1", "--format=%G?"]),
         "G"
     );
-    let results = repo.verify_commit_signatures(&ids).unwrap();
+    let results = repo
+        .verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
+        .unwrap();
     assert_eq!(results.len(), 1, "a missing key must not be cached forever");
     assert_eq!(results[0].1.status, SignatureStatus::Good);
 }
@@ -238,7 +260,14 @@ fn verification_rechecks_changes_to_an_existing_revocation_file() {
     let repo = open(&fixture.repo);
     let ids = [signed];
     assert_eq!(
-        repo.verify_commit_signatures(&ids).unwrap()[0].1.status,
+        repo.verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()[0]
+            .1
+            .status,
         SignatureStatus::Good
     );
 
@@ -249,13 +278,27 @@ fn verification_rechecks_changes_to_an_existing_revocation_file() {
         "B"
     );
     assert_eq!(
-        repo.verify_commit_signatures(&ids).unwrap()[0].1.status,
+        repo.verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()[0]
+            .1
+            .status,
         SignatureStatus::Bad
     );
 
     fs::write(&revoked, "").unwrap();
     assert_eq!(
-        repo.verify_commit_signatures(&ids).unwrap()[0].1.status,
+        repo.verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()[0]
+            .1
+            .status,
         SignatureStatus::Good
     );
 }
@@ -272,7 +315,14 @@ fn verification_drops_a_badge_when_verification_becomes_unavailable() {
     let repo = open(&fixture.repo);
     let ids = [signed];
     assert_eq!(
-        repo.verify_commit_signatures(&ids).unwrap()[0].1.status,
+        repo.verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()[0]
+            .1
+            .status,
         SignatureStatus::Good
     );
 
@@ -284,7 +334,15 @@ fn verification_drops_a_badge_when_verification_becomes_unavailable() {
         git_stdout(&fixture.repo, &["log", "-1", "--format=%G?"]).as_str(),
         "E" | "N"
     ));
-    assert!(repo.verify_commit_signatures(&ids).unwrap().is_empty());
+    assert!(
+        repo.verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()
+        .is_empty()
+    );
 }
 
 #[test]
@@ -304,7 +362,11 @@ fn results_preserve_input_order_across_repeat_verification() {
     let repo = open(&fixture.repo);
     let ids = [third.clone(), first.clone(), second.clone()];
     let results = repo
-        .verify_commit_signatures(&ids)
+        .verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("verify signatures");
 
     assert_eq!(
@@ -315,7 +377,11 @@ fn results_preserve_input_order_across_repeat_verification() {
 
     // Rechecking signed commits must preserve the same order and verdicts.
     let cached = repo
-        .verify_commit_signatures(&ids)
+        .verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("verify signatures again");
     assert_eq!(cached, results);
 }
@@ -364,7 +430,11 @@ fn a_tampered_commit_reports_a_bad_signature() {
 
     let repo = open(&fixture.repo);
     let results = repo
-        .verify_commit_signatures(&[tampered])
+        .verify_commit_signatures(
+            &[tampered],
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("verify signatures");
 
     assert_eq!(results.len(), 1, "a bad signature still earns a badge");
@@ -387,7 +457,11 @@ fn log_show_signature_does_not_corrupt_the_batch_parse() {
 
     let repo = open(&fixture.repo);
     let results = repo
-        .verify_commit_signatures(std::slice::from_ref(&signed))
+        .verify_commit_signatures(
+            std::slice::from_ref(&signed),
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("verify signatures");
 
     assert_eq!(
@@ -412,7 +486,11 @@ fn verification_forces_utf8_despite_log_output_encoding() {
         &["config", "i18n.logOutputEncoding", "UTF-16"],
     );
     let result = open(&fixture.repo)
-        .verify_commit_signatures(std::slice::from_ref(&signed))
+        .verify_commit_signatures(
+            std::slice::from_ref(&signed),
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(
         result.len(),
@@ -458,7 +536,11 @@ fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
             &["config", "gpg.ssh.program", program.to_str().unwrap()],
         );
         let result = repo
-            .verify_commit_signatures(&[signed.clone(), huge.clone()])
+            .verify_commit_signatures(
+                &[signed.clone(), huge.clone()],
+                gitcomet_core::domain::SignatureFormats::ALL,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .unwrap();
         assert!(
             result.is_empty(),
@@ -506,7 +588,11 @@ fn a_verifier_that_kills_git_costs_only_that_commits_badge() {
         &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
     );
     let result = open(&fixture.repo)
-        .verify_commit_signatures(&[before.clone(), huge, after.clone()])
+        .verify_commit_signatures(
+            &[before.clone(), huge, after.clone()],
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("one dead verifier must not fail the batch");
     assert_eq!(
         result
@@ -535,7 +621,11 @@ fn an_ssh_key_absent_from_allowed_signers_is_untrusted() {
         "U"
     );
     let result = open(&fixture.repo)
-        .verify_commit_signatures(&[signed])
+        .verify_commit_signatures(
+            &[signed],
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(result[0].1.status, SignatureStatus::GoodUncertified);
     assert!(!result[0].1.status.is_verified());
@@ -571,7 +661,11 @@ fn signature_verification_runs_in_bounded_batches() {
         &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
     );
     let result = open(&fixture.repo)
-        .verify_commit_signatures(&ids)
+        .verify_commit_signatures(
+            &ids,
+            gitcomet_core::domain::SignatureFormats::ALL,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("batched verification");
     assert_eq!(
         result.iter().map(|(id, _)| id).collect::<Vec<_>>(),
@@ -621,7 +715,7 @@ fn cancellation_stops_a_running_signature_verifier() {
     let worker_cancellation = cancellation.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        tx.send(repo.verify_commit_signatures_cancellable(
+        tx.send(repo.verify_commit_signatures(
             &[id],
             gitcomet_core::domain::SignatureFormats::ALL,
             &worker_cancellation,
@@ -673,7 +767,7 @@ fn a_format_without_a_verifier_is_skipped_without_running_one() {
 
     let gpg_only = SignatureFormats::NONE.with(SignatureFormat::OpenPgp);
     let skipped = repo
-        .verify_commit_signatures_cancellable(&ids, gpg_only, &cancellation)
+        .verify_commit_signatures(&ids, gpg_only, &cancellation)
         .unwrap();
     assert!(skipped.is_empty(), "got {skipped:?}");
     assert!(
@@ -682,7 +776,7 @@ fn a_format_without_a_verifier_is_skipped_without_running_one() {
     );
 
     let verified = repo
-        .verify_commit_signatures_cancellable(&ids, SignatureFormats::ALL, &cancellation)
+        .verify_commit_signatures(&ids, SignatureFormats::ALL, &cancellation)
         .unwrap();
     assert_eq!(verified.len(), 1, "got {verified:?}");
     assert_eq!(verified[0].1.status, SignatureStatus::Good);

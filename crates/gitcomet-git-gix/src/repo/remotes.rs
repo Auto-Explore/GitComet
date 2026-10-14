@@ -933,10 +933,6 @@ impl GixRepo {
         Ok(remotes)
     }
 
-    pub(super) fn list_remote_branches_impl(&self) -> Result<Vec<RemoteBranch>> {
-        self.list_remote_branches_cancellable_impl(&CancellationToken::new())
-    }
-
     pub(super) fn list_remote_branches_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
@@ -1228,11 +1224,6 @@ impl GixRepo {
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
 
-    pub(super) fn fetch_all_impl(&self, prune: bool) -> Result<()> {
-        self.fetch_all_with_optional_output_impl(prune, false)
-            .map(|_| ())
-    }
-
     pub(super) fn fetch_all_with_output_impl(&self, prune: bool) -> Result<CommandOutput> {
         self.fetch_all_with_optional_output_impl(prune, true)
     }
@@ -1475,15 +1466,6 @@ impl GixRepo {
             format!("git fetch {remote} --prune --no-prune-tags && {pull_label}"),
             &outputs,
         ))
-    }
-
-    pub(super) fn pull_impl(&self, mode: PullMode) -> Result<()> {
-        self.pull_with_optional_output_impl(mode, true, false)
-            .map(|_| ())
-    }
-
-    pub(super) fn pull_with_output_impl(&self, mode: PullMode) -> Result<CommandOutput> {
-        self.pull_with_optional_output_impl(mode, true, true)
     }
 
     pub(super) fn pull_with_output_prune_impl(
@@ -2008,14 +1990,6 @@ impl GixRepo {
         lease: &ForcePushLease,
     ) -> Result<CommandOutput> {
         self.push_head_to_branch_with_oid_lease_with_output_impl(lease)
-    }
-
-    pub(super) fn pull_branch_with_output_impl(
-        &self,
-        remote: &str,
-        branch: &str,
-    ) -> Result<CommandOutput> {
-        self.pull_branch_with_output_prune_impl(remote, branch, false)
     }
 
     pub(super) fn pull_branch_with_output_prune_impl(

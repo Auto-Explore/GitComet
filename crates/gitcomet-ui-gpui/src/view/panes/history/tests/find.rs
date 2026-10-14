@@ -1397,15 +1397,102 @@ impl GitRepository for IndexedFindRepo {
         })
     }
 
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Remote>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<gitcomet_core::domain::RepoStatus> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::StashEntry>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn pull(
+        &self,
+        _mode: gitcomet_core::services::PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
     not_needed! {
-        fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Arc<LogPage>;
+
         fn commit_details(&self, id: &CommitId) -> gitcomet_core::domain::CommitDetails;
         fn reflog_head(&self, limit: usize) -> Vec<gitcomet_core::domain::ReflogEntry>;
-        fn current_branch(&self) -> String;
-        fn list_branches(&self) -> Vec<Branch>;
-        fn list_remotes(&self) -> Vec<gitcomet_core::domain::Remote>;
-        fn list_remote_branches(&self) -> Vec<RemoteBranch>;
-        fn status(&self) -> gitcomet_core::domain::RepoStatus;
+
+
+
+
+
         fn diff_unified(&self, target: &gitcomet_core::domain::DiffTarget) -> String;
         fn create_branch(&self, name: &str, target: &CommitId) -> ();
         fn delete_branch(&self, name: &str) -> ();
@@ -1413,14 +1500,14 @@ impl GitRepository for IndexedFindRepo {
         fn checkout_commit(&self, id: &CommitId) -> ();
         fn cherry_pick(&self, id: &CommitId) -> ();
         fn stash_create(&self, message: &str, include_untracked: bool) -> ();
-        fn stash_list(&self) -> Vec<gitcomet_core::domain::StashEntry>;
+
         fn stash_apply(&self, index: usize) -> ();
         fn stash_drop(&self, index: usize) -> ();
         fn stage(&self, paths: &[&Path]) -> ();
         fn unstage(&self, paths: &[&Path]) -> ();
         fn commit(&self, message: &str) -> ();
-        fn fetch_all(&self) -> ();
-        fn pull(&self, mode: gitcomet_core::services::PullMode) -> ();
+
+
         fn push(&self) -> ();
         fn discard_worktree_changes(&self, paths: &[&Path]) -> ();
     }

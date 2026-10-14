@@ -232,7 +232,9 @@ fn exercise_with_failure(
         .unwrap();
     }
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let mut status = backend.status().unwrap();
+    let mut status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     if matches!(surface, Surface::PaletteRename) {
         // The status list shows only the destination, so unstaging its entries
         // one by one would leave the source's staged deletion behind.
@@ -923,7 +925,9 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
             }
 
             let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-            let status = backend.status().unwrap();
+            let status = backend
+                .status(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             let mut repo = opening_repo_state(REPO, dir.path());
             repo.open = Loadable::Ready(());
             repo.worktree_status = Loadable::Ready(status.unstaged.clone());
@@ -1139,7 +1143,9 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     conflicted_merge(dir.path());
     std::fs::write(dir.path().join("b.txt"), "base\nchanged\n").unwrap();
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let status = backend.status().unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .unstaged
@@ -1207,7 +1213,9 @@ fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let status = backend.status().unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());

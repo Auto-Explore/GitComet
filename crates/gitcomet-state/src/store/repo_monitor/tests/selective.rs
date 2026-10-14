@@ -1215,13 +1215,15 @@ fn native_real_lfs_status_does_not_requeue_refreshes() {
             .unwrap();
     }
     for _ in 0..3 {
-        let status = repo.status().unwrap();
+        let status = repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert!(
             status.staged.is_empty() && status.unstaged.is_empty(),
             "{status:?}"
         );
         let counts = repo
-            .uncommitted_line_stats_for_status_cancellable(
+            .uncommitted_line_stats_for_status(
                 &status,
                 &gitcomet_core::services::CancellationToken::new(),
             )
@@ -1272,11 +1274,13 @@ fn native_real_lfs_status_does_not_requeue_refreshes() {
             .iter()
             .any(|event| event.paths.contains(&root.join("asset.lfsbin")))
     );
-    let status = repo.status().unwrap();
+    let status = repo
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(!status.unstaged.is_empty());
     let token = gitcomet_core::services::CancellationToken::new();
     let supplied_counts = repo
-        .uncommitted_line_stats_for_status_cancellable(&status, &token)
+        .uncommitted_line_stats_for_status(&status, &token)
         .unwrap();
     assert!(
         supplied_counts
@@ -1285,7 +1289,7 @@ fn native_real_lfs_status_does_not_requeue_refreshes() {
     );
     assert_eq!(
         supplied_counts,
-        repo.uncommitted_line_stats_cancellable(&token).unwrap()
+        repo.uncommitted_line_stats(&token).unwrap()
     );
     let events = drain_monitor(&rx, Duration::from_secs(3));
     assert!(

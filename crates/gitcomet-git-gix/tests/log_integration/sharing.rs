@@ -402,8 +402,20 @@ fn linked_worktrees_keep_staging_previews_attributes_and_lfs_configuration_local
     std::fs::write(dir.path().join("file.txt"), "main edit\n").unwrap();
     std::fs::write(linked.join("file.txt"), "linked edit\n").unwrap();
     other.stage(&[Path::new("file.txt")]).unwrap();
-    assert!(main.status().unwrap().staged.is_empty());
-    assert_eq!(other.status().unwrap().staged.len(), 1);
+    assert!(
+        main.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .is_empty()
+    );
+    assert_eq!(
+        other
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .len(),
+        1
+    );
     let unstaged = DiffTarget::working_tree("file.txt".into(), DiffArea::Unstaged);
     let staged = DiffTarget::working_tree("file.txt".into(), DiffArea::Staged);
     assert!(main.diff_unified(&unstaged).unwrap().contains("+main edit"));
@@ -415,16 +427,22 @@ fn linked_worktrees_keep_staging_previews_attributes_and_lfs_configuration_local
     );
     main.stage(&[Path::new("file.txt")]).unwrap();
     other.unstage(&[Path::new("file.txt")]).unwrap();
-    assert_eq!(main.status().unwrap().staged.len(), 1);
-    assert!(other.status().unwrap().staged.is_empty());
-    let cancel = CancellationToken::new();
-    assert!(
-        !main
-            .large_file_support_cancellable(&cancel)
+    assert_eq!(
+        main.status(&gitcomet_core::services::CancellationToken::new())
             .unwrap()
-            .lfs
-            .in_use()
+            .staged
+            .len(),
+        1
     );
+    assert!(
+        other
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .is_empty()
+    );
+    let cancel = CancellationToken::new();
+    assert!(!main.large_file_support(&cancel).unwrap().lfs.in_use());
     let include = dir.path().join("linked-config");
     std::fs::write(
         &include,
@@ -441,11 +459,11 @@ fn linked_worktrees_keep_staging_previews_attributes_and_lfs_configuration_local
         ],
     );
     std::fs::write(linked.join(".gitattributes"), "*.bin filter=lfs -text\n").unwrap();
-    let support = other.large_file_support_cancellable(&cancel).unwrap();
+    let support = other.large_file_support(&cancel).unwrap();
     assert!(support.lfs.filter_configured);
     assert!(support.lfs.storage_dir.ends_with("linked-lfs"));
     assert_eq!(support.lfs.tracked_patterns.len(), 1);
-    let main_support = main.large_file_support_cancellable(&cancel).unwrap();
+    let main_support = main.large_file_support(&cancel).unwrap();
     assert!(!main_support.lfs.filter_configured);
     assert!(main_support.lfs.tracked_patterns.is_empty());
     assert!(

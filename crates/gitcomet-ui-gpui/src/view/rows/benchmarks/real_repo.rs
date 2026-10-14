@@ -257,17 +257,20 @@ impl RealRepoFixture {
             load_split_repo_status(self.repo.as_ref(), "real_repo monorepo status benchmark");
         let branches = self
             .repo
-            .list_branches()
+            .list_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("real_repo monorepo branches benchmark");
         let remotes = self
             .repo
-            .list_remotes()
+            .list_remotes(&gitcomet_core::services::CancellationToken::new())
             .expect("real_repo monorepo remotes benchmark");
         let remote_branches = self
             .repo
-            .list_remote_branches()
+            .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("real_repo monorepo remote branches benchmark");
-        let head_branch = self.repo.current_branch().ok();
+        let head_branch = self
+            .repo
+            .current_branch(&gitcomet_core::services::CancellationToken::new())
+            .ok();
         let (commits, next_cursor_present, log_pages_loaded) = load_log_commits(
             self.repo.as_ref(),
             self.history_limit,
@@ -414,11 +417,19 @@ impl RealRepoFixture {
             .expect("real_repo large diff target");
         let diff = self
             .repo
-            .diff_parsed(target)
+            .diff_parsed(
+                target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("real_repo large diff parsed benchmark");
         let file = self
             .repo
-            .diff_file_text(target)
+            .diff_file_text(
+                target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("real_repo large diff file text benchmark")
             .unwrap_or_else(|| panic!("real_repo large diff benchmark requires file text"));
 
@@ -467,7 +478,7 @@ impl RealRepoFixture {
     fn conflict_session_from_repo(&self, status: &RepoStatus, path: &Path) -> ConflictSession {
         if let Some(session) = self
             .repo
-            .conflict_session(path)
+            .conflict_session(path, None)
             .expect("real_repo conflict session benchmark")
         {
             return session;
@@ -658,7 +669,11 @@ fn load_log_commits(
     while commits.len() < limit {
         let remaining = limit.saturating_sub(commits.len()).max(1);
         let page = repo
-            .log_head_page(page_size.min(remaining), cursor.as_ref())
+            .log_head_page(
+                page_size.min(remaining),
+                cursor.as_ref(),
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("real_repo log load benchmark");
         pages = pages.saturating_add(1);
         let exhausted = page.commits.is_empty();

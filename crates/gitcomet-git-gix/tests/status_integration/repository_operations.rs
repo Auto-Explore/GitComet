@@ -25,7 +25,9 @@ fn stage_and_unstage_paths_update_status() {
     let opened = backend.open(repo).unwrap();
 
     opened.stage(&[Path::new("a.txt")]).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(status.staged.len(), 1);
     assert_eq!(status.staged[0].path, PathBuf::from("a.txt"));
     assert_eq!(status.staged[0].kind, FileStatusKind::Modified);
@@ -34,7 +36,9 @@ fn stage_and_unstage_paths_update_status() {
     assert_eq!(status.unstaged[0].kind, FileStatusKind::Untracked);
 
     opened.unstage(&[Path::new("a.txt")]).unwrap();
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert_eq!(status.unstaged.len(), 2);
     assert!(
@@ -193,7 +197,9 @@ fn commit_creates_new_commit_and_cleans_status() {
     assert!(msg.status.success());
     assert_eq!(String::from_utf8(msg.stdout).unwrap().trim(), "second");
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -242,7 +248,9 @@ fn reset_soft_moves_head_and_leaves_changes_staged() {
     assert_eq!(String::from_utf8(head.stdout).unwrap().trim(), c1);
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "two\n");
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(status.staged.len(), 1);
     assert_eq!(status.staged[0].path, PathBuf::from("a.txt"));
     assert_eq!(status.staged[0].kind, FileStatusKind::Modified);
@@ -293,7 +301,9 @@ fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
     assert_eq!(String::from_utf8(head.stdout).unwrap().trim(), c1);
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "two\n");
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert_eq!(status.unstaged.len(), 1);
     assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
@@ -346,7 +356,9 @@ fn reset_hard_moves_head_and_discards_changes() {
     assert_eq!(String::from_utf8(head.stdout).unwrap().trim(), c1);
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -391,7 +403,9 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 
@@ -479,7 +493,9 @@ fn amend_rewrites_head_commit_message_and_content() {
         "one\ntwo\n"
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -659,7 +675,9 @@ fn squash_ref_stages_changes_without_creating_merge_commit() {
 
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .staged
@@ -709,7 +727,7 @@ fn merge_commit_message_is_available_during_conflict() {
     assert!(opened.merge_ref_with_output("feature").is_err());
 
     let msg = opened
-        .merge_commit_message()
+        .merge_commit_message(&gitcomet_core::services::CancellationToken::new())
         .unwrap()
         .expect("merge commit message");
     assert_eq!(
@@ -722,7 +740,12 @@ fn merge_commit_message_is_available_during_conflict() {
     );
 
     run_git(repo, &["merge", "--abort"]);
-    assert!(opened.merge_commit_message().unwrap().is_none());
+    assert!(
+        opened
+            .merge_commit_message(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -766,7 +789,9 @@ fn commit_finishes_merge_when_resolved_tree_matches_head() {
     run_git(repo, &["checkout", "--ours", "a.txt"]);
     run_git(repo, &["add", "a.txt"]);
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty(), "expected no staged changes");
     assert!(status.unstaged.is_empty(), "expected no unstaged changes");
 
@@ -774,7 +799,12 @@ fn commit_finishes_merge_when_resolved_tree_matches_head() {
         .commit("Merge branch 'feature'")
         .expect("merge commit should succeed even without tree changes");
 
-    assert!(opened.merge_commit_message().unwrap().is_none());
+    assert!(
+        opened
+            .merge_commit_message(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .is_none()
+    );
 
     let parents = git_command()
         .arg("-C")
@@ -857,7 +887,9 @@ fn rebase_replays_commits_onto_target_branch() {
 
     assert!(repo.join("b.txt").exists());
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -897,7 +929,9 @@ fn rebase_replays_commits_onto_target_sha() {
 
     assert_eq!(run_git_output(repo, &["rev-parse", "HEAD^"]), target_sha);
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -941,12 +975,24 @@ fn rebase_in_progress_and_abort_round_trip() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    assert!(!opened.rebase_in_progress().unwrap());
+    assert!(
+        !opened
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
     assert!(opened.rebase_with_output("main").is_err());
-    assert!(opened.rebase_in_progress().unwrap());
+    assert!(
+        opened
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
 
     opened.rebase_abort_with_output().unwrap();
-    assert!(!opened.rebase_in_progress().unwrap());
+    assert!(
+        !opened
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
 }
 
 #[test]
@@ -1023,7 +1069,9 @@ fn rebase_continue_paused_at_next_conflict_is_ok() {
         "rebase --continue that pauses at the next conflict should be Ok, got {result:?}"
     );
     assert!(
-        opened.rebase_in_progress().unwrap(),
+        opened
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         "rebase should still be in progress after pausing at the next conflict"
     );
 }
@@ -1082,7 +1130,9 @@ fn rebase_abort_falls_back_to_git_am_abort() {
 
     assert!(opened.apply_patch_with_output(patch_file.path()).is_err());
     assert!(
-        opened.rebase_in_progress().unwrap(),
+        opened
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
         "expected apply-patch sequencer state to be in progress"
     );
 
@@ -1091,9 +1141,15 @@ fn rebase_abort_falls_back_to_git_am_abort() {
         abort_output.command, "git am --abort",
         "expected rebase abort fallback to use git am --abort"
     );
-    assert!(!opened.rebase_in_progress().unwrap());
+    assert!(
+        !opened
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+    );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "main\n");
@@ -1137,12 +1193,24 @@ fn merge_abort_with_output_clears_conflict_state() {
     let opened = backend.open(repo).unwrap();
 
     assert!(opened.merge_ref_with_output("feature").is_err());
-    assert!(opened.merge_commit_message().unwrap().is_some());
+    assert!(
+        opened
+            .merge_commit_message(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .is_some()
+    );
 
     opened.merge_abort_with_output().unwrap();
 
-    assert!(opened.merge_commit_message().unwrap().is_none());
-    let status = opened.status().unwrap();
+    assert!(
+        opened
+            .merge_commit_message(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .is_none()
+    );
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -2198,7 +2266,9 @@ fn cherry_pick_applies_commit_onto_current_branch() {
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -2468,7 +2538,9 @@ fn list_tags_returns_sorted_names_with_commit_targets() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
-    let tags = opened.list_tags().unwrap();
+    let tags = opened
+        .list_tags(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     let names = tags.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["a-first", "z-last"]);
@@ -2523,7 +2595,9 @@ fn list_remote_tags_collects_sorted_results_and_skips_unavailable_remote() {
 
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
-    let remote_tags = opened.list_remote_tags().unwrap();
+    let remote_tags = opened
+        .list_remote_tags(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let tuples = remote_tags
         .iter()
         .map(|tag| {
@@ -2848,7 +2922,9 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
 
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
-    let branches = opened.list_remote_branches().unwrap();
+    let branches = opened
+        .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
 
     assert!(
         branches
@@ -3572,7 +3648,7 @@ fn pull_with_output_fast_forwards_from_remote() {
     let backend = GixBackend;
     let opened_b = backend.open(&repo_b).unwrap();
     opened_b
-        .pull_with_output(gitcomet_core::services::PullMode::FastForwardOnly)
+        .pull(gitcomet_core::services::PullMode::FastForwardOnly, true)
         .unwrap();
 
     let head_b = git_command()
@@ -3651,7 +3727,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
     let backend = GixBackend;
     let opened_b = backend.open(&repo_b).unwrap();
     opened_b
-        .pull_with_output(gitcomet_core::services::PullMode::Merge)
+        .pull(gitcomet_core::services::PullMode::Merge, true)
         .unwrap();
 
     let head_b = git_command()

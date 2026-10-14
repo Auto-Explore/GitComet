@@ -272,7 +272,8 @@ impl GixRepo {
                     "MERGE_HEAD",
                 ]);
                 let marker = run_git_capture(marker_cmd, "git merge marker")?;
-                if repo.sequencer_state()? != gitcomet_core::services::SequencerState::None
+                if repo.sequencer_state(&gitcomet_core::services::CancellationToken::new())?
+                    != gitcomet_core::services::SequencerState::None
                     || Path::new(marker.trim()).exists()
                 {
                     return Err(failed("Finish the current Git operation before applying"));

@@ -236,16 +236,18 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let submodules = opened.list_submodules().unwrap();
+    let submodules = opened
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(submodules.len(), 1);
     assert_eq!(submodules[0].path, PathBuf::from("submod"));
     assert_eq!(submodules[0].status, SubmoduleStatus::MissingMapping);
     assert_eq!(submodules[0].recorded_head.as_ref(), submodule_head);
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::working_tree(
-            PathBuf::from("submod"),
-            DiffArea::Unstaged,
-        ))
+        .submodule_diff_summary(
+            &DiffTarget::working_tree(PathBuf::from("submod"), DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(summary.status, Some(SubmoduleStatus::MissingMapping));
     assert!(summary.checkout_available);
@@ -301,7 +303,7 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     fs::remove_dir_all(parent_repo.join(".git/modules/sm")).expect("remove submodule git dir");
 
     let not_initialized = opened
-        .list_submodules()
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
         .expect("list uninitialized submodule");
     assert_eq!(not_initialized.len(), 1);
     assert_eq!(not_initialized[0].path, PathBuf::from("sm"));
@@ -309,10 +311,10 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(not_initialized[0].recorded_head.as_ref(), original_head);
     assert_eq!(not_initialized[0].checked_out_head, None);
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::working_tree(
-            PathBuf::from("sm"),
-            DiffArea::Unstaged,
-        ))
+        .submodule_diff_summary(
+            &DiffTarget::working_tree(PathBuf::from("sm"), DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(summary.status, Some(SubmoduleStatus::NotInitialized));
     assert!(!summary.checkout_available);
@@ -364,7 +366,9 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
         String::from_utf8_lossy(&checkout_output.stderr)
     );
 
-    let head_mismatch = opened.list_submodules().expect("list mismatched submodule");
+    let head_mismatch = opened
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .expect("list mismatched submodule");
     assert_eq!(head_mismatch.len(), 1);
     assert_eq!(head_mismatch[0].path, PathBuf::from("sm"));
     assert_eq!(head_mismatch[0].status, SubmoduleStatus::HeadMismatch);
@@ -463,7 +467,9 @@ fn list_submodules_recurses_into_nested_submodules() {
 
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
-    let listed = opened.list_submodules().expect("list nested submodules");
+    let listed = opened
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .expect("list nested submodules");
 
     assert_eq!(listed.len(), 2);
     assert_eq!(
@@ -483,10 +489,10 @@ fn list_submodules_recurses_into_nested_submodules() {
     );
 
     let nested = opened
-        .submodule_diff_summary(&DiffTarget::working_tree(
-            PathBuf::from("mods/child/nested/grand"),
-            DiffArea::Unstaged,
-        ))
+        .submodule_diff_summary(
+            &DiffTarget::working_tree(PathBuf::from("mods/child/nested/grand"), DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("summarize the nested gitlink against its owning repository");
     assert_eq!(nested.path, PathBuf::from("mods/child/nested/grand"));
     assert!(nested.checkout_available);
@@ -520,24 +526,20 @@ fn submodule_summary_ignores_broken_sibling_indexes_and_honors_cancellation() {
 
     let repo = GixBackend.open(&parent).unwrap();
     let listed = repo
-        .list_submodules()
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
         .expect("one submodule with an unreadable index must not fail the whole enumeration");
     let paths: Vec<_> = listed.iter().map(|s| s.path.clone()).collect();
     assert!(paths.contains(&PathBuf::from("wanted")), "{paths:?}");
     assert!(paths.contains(&PathBuf::from("unrelated")), "{paths:?}");
     let target = DiffTarget::working_tree(PathBuf::from("wanted"), DiffArea::Unstaged);
     let token = gitcomet_core::services::CancellationToken::new();
-    let summary = repo
-        .submodule_diff_summary_cancellable(&target, &token)
-        .unwrap();
+    let summary = repo.submodule_diff_summary(&target, &token).unwrap();
     assert!(summary.checkout_available);
     assert_eq!(summary.live_unstaged.len(), 1);
     assert_eq!(summary.live_unstaged[0].path, PathBuf::from("file.txt"));
     assert_eq!(summary.live_unstaged[0].additions, Some(1));
     token.cancel();
-    let error = repo
-        .submodule_diff_summary_cancellable(&target, &token)
-        .unwrap_err();
+    let error = repo.submodule_diff_summary(&target, &token).unwrap_err();
     assert!(matches!(
         error.kind(),
         gitcomet_core::error::ErrorKind::Cancelled
@@ -682,7 +684,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         .open(&parent_repo)
         .expect("open conflicted parent repository");
     let listed = opened
-        .list_submodules()
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
         .expect("list conflicted submodules");
 
     assert_eq!(listed.len(), 1);
@@ -693,10 +695,10 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         "0".repeat(git_stdout(&parent_repo, &["rev-parse", "HEAD"]).len())
     );
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::working_tree(
-            PathBuf::from("sm"),
-            DiffArea::Unstaged,
-        ))
+        .submodule_diff_summary(
+            &DiffTarget::working_tree(PathBuf::from("sm"), DiffArea::Unstaged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert_eq!(summary.status, Some(SubmoduleStatus::MergeConflict));
     assert_eq!(
@@ -729,10 +731,10 @@ fn submodule_summary_keeps_head_pointer_after_gitlink_is_removed_from_index() {
     run_git(&parent, &["rm", "--cached", "sm"]);
     let repo = GixBackend.open(&parent).unwrap();
     let summary = repo
-        .submodule_diff_summary(&DiffTarget::working_tree(
-            PathBuf::from("sm"),
-            DiffArea::Staged,
-        ))
+        .submodule_diff_summary(
+            &DiffTarget::working_tree(PathBuf::from("sm"), DiffArea::Staged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .unwrap();
     assert!(summary.checkout_available);
     assert_eq!(
@@ -764,10 +766,10 @@ fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
         .open(&parent_repo)
         .expect("open parent repository with staged submodule");
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::working_tree(
-            submodule_path.to_path_buf(),
-            DiffArea::Staged,
-        ))
+        .submodule_diff_summary(
+            &DiffTarget::working_tree(submodule_path.to_path_buf(), DiffArea::Staged),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("load staged added submodule summary");
     let staged_range = summary
         .ranges
@@ -836,10 +838,10 @@ fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
         .open(&parent_repo)
         .expect("open parent repository with missing submodule commit");
     let summary = opened
-        .submodule_diff_summary(&DiffTarget::commit(
-            CommitId(parent_commit.into()),
-            submodule_path.to_path_buf(),
-        ))
+        .submodule_diff_summary(
+            &DiffTarget::commit(CommitId(parent_commit.into()), submodule_path.to_path_buf()),
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("load committed submodule summary");
     let range = summary
         .ranges
@@ -881,7 +883,11 @@ fn submodule_add_update_remove_round_trip() {
 
     let submodule_path = Path::new("mods/sub-one");
     let approved_sources = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -895,6 +901,7 @@ fn submodule_add_update_remove_round_trip() {
             None,
             false,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect("add submodule");
     assert_eq!(add_output.exit_code, Some(0));
@@ -910,7 +917,9 @@ fn submodule_add_update_remove_round_trip() {
         ],
     );
 
-    let listed = opened.list_submodules().expect("list submodules after add");
+    let listed = opened
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .expect("list submodules after add");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].path, PathBuf::from("mods/sub-one"));
     assert_eq!(
@@ -931,13 +940,13 @@ fn submodule_add_update_remove_round_trip() {
 
     assert_eq!(
         opened
-            .check_submodule_update_trust()
+            .check_submodule_update_trust(gitcomet_core::remote_url::RemoteUrlPolicy::default())
             .expect("check update trust after approval"),
         SubmoduleTrustDecision::Proceed
     );
 
     let update_output = opened
-        .update_submodules_with_output(&[])
+        .update_submodules_with_output(&[], gitcomet_core::remote_url::RemoteUrlPolicy::default())
         .expect("update submodules");
     assert_eq!(update_output.exit_code, Some(0));
 
@@ -948,7 +957,7 @@ fn submodule_add_update_remove_round_trip() {
     assert!(remove_output.command.contains("Remove submodule"));
 
     let listed_after_remove = opened
-        .list_submodules()
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
         .expect("list submodules after remove");
     assert!(listed_after_remove.is_empty());
     assert!(!parent_repo.join("mods/sub-one").exists());
@@ -973,7 +982,15 @@ fn add_submodule_does_not_restrict_https_or_ssh_transports() {
         ("ssh://git@127.0.0.1:1/repo.git", "ssh"),
     ] {
         let err = opened
-            .add_submodule_with_output(url, Path::new("mods/sub-one"), None, None, false, &[])
+            .add_submodule_with_output(
+                url,
+                Path::new("mods/sub-one"),
+                None,
+                None,
+                false,
+                &[],
+                gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+            )
             .expect_err("dummy remote should fail without a reachable server");
         let rendered = err.to_string();
         assert!(
@@ -1002,7 +1019,11 @@ fn add_local_submodule_requires_explicit_trust() {
 
     let submodule_path = Path::new("mods/sub");
     let trust = opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust");
     let approved_sources = match trust {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1017,6 +1038,7 @@ fn add_local_submodule_requires_explicit_trust() {
             None,
             false,
             &[],
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect_err("local submodule should fail without trust");
     assert!(
@@ -1032,6 +1054,7 @@ fn add_local_submodule_requires_explicit_trust() {
             None,
             false,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect("add trusted local submodule");
     assert_eq!(add_output.exit_code, Some(0));
@@ -1056,7 +1079,11 @@ fn add_submodule_supports_branch_selection() {
     let opened = backend.open(&parent_repo).expect("open parent repository");
     let submodule_path = Path::new("mods/sub");
     let approved_sources = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1071,6 +1098,7 @@ fn add_submodule_supports_branch_selection() {
             None,
             false,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect("add submodule with branch");
     assert_eq!(add_output.exit_code, Some(0));
@@ -1117,7 +1145,11 @@ fn add_submodule_supports_multiple_branches_from_same_source() {
 
     let main_path = Path::new("mods/main");
     let approved_main = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), main_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            main_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust for main")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1131,13 +1163,18 @@ fn add_submodule_supports_multiple_branches_from_same_source() {
             None,
             false,
             &approved_main,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect("add default-branch submodule");
     assert_eq!(main_output.exit_code, Some(0));
 
     let feature_path = Path::new("mods/feature");
     let approved_feature = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), feature_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            feature_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust for feature")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1151,11 +1188,14 @@ fn add_submodule_supports_multiple_branches_from_same_source() {
             None,
             false,
             &approved_feature,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect("add feature-branch submodule");
     assert_eq!(feature_output.exit_code, Some(0));
 
-    let listed = opened.list_submodules().expect("list added submodules");
+    let listed = opened
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .expect("list added submodules");
     assert_eq!(listed.len(), 2);
     assert_eq!(
         git_stdout(
@@ -1195,7 +1235,11 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
     let opened = backend.open(&parent_repo).expect("open parent repository");
     let submodule_path = Path::new("mods/sub");
     let approved_sources = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1210,6 +1254,7 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
             None,
             false,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect_err("add with missing branch should fail");
     let rendered = err.to_string();
@@ -1237,7 +1282,7 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
     );
     assert!(
         opened
-            .list_submodules()
+            .list_submodules(&gitcomet_core::services::CancellationToken::new())
             .expect("list submodules")
             .is_empty(),
         "expected failed submodule add not to be listed"
@@ -1262,7 +1307,11 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_with_custom_name() 
     let opened = backend.open(&parent_repo).expect("open parent repository");
     let submodule_path = Path::new("mods/sub");
     let approved_sources = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1277,6 +1326,7 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_with_custom_name() 
             Some("custom-name"),
             false,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect_err("add with missing branch and custom name should fail");
     let rendered = err.to_string();
@@ -1324,7 +1374,11 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
     let approved_sources = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1339,6 +1393,7 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
             None,
             false,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect_err("add without custom name or force should fail");
     let rendered = err.to_string();
@@ -1357,6 +1412,7 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
             Some("sm-renamed"),
             false,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect("add submodule with custom logical name");
     assert_eq!(add_output.exit_code, Some(0));
@@ -1386,7 +1442,11 @@ fn add_submodule_supports_force_for_local_git_dir_collision() {
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
     let approved_sources = match opened
-        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .check_submodule_add_trust(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
         .expect("check local submodule trust")
     {
         SubmoduleTrustDecision::Prompt { sources } => sources,
@@ -1401,6 +1461,7 @@ fn add_submodule_supports_force_for_local_git_dir_collision() {
             None,
             true,
             &approved_sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
         )
         .expect("add submodule with force");
     assert_eq!(add_output.exit_code, Some(0));
@@ -1484,19 +1545,37 @@ fn submodule_update_refuses_remote_helper_urls_from_gitmodules() {
     for (label, result) in [
         (
             "update",
-            opened.update_submodules_with_output(&[]).map(|_| ()),
+            opened
+                .update_submodules_with_output(
+                    &[],
+                    gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+                )
+                .map(|_| ()),
         ),
         (
             "load",
-            opened.load_submodule_with_output(path, &[]).map(|_| ()),
+            opened
+                .load_submodule_with_output(
+                    path,
+                    &[],
+                    gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+                )
+                .map(|_| ()),
         ),
         (
             "check update trust",
-            opened.check_submodule_update_trust().map(|_| ()),
+            opened
+                .check_submodule_update_trust(gitcomet_core::remote_url::RemoteUrlPolicy::default())
+                .map(|_| ()),
         ),
         (
             "check load trust",
-            opened.check_submodule_load_trust(path).map(|_| ()),
+            opened
+                .check_submodule_load_trust(
+                    path,
+                    gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+                )
+                .map(|_| ()),
         ),
     ] {
         let err = result.expect_err(label);
@@ -1541,7 +1620,9 @@ fn list_submodules_keeps_a_broken_submodules_own_row_and_prunes_only_its_childre
     );
 
     let repo = GixBackend.open(&parent).unwrap();
-    let healthy = repo.list_submodules().expect("list nested submodules");
+    let healthy = repo
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .expect("list nested submodules");
     assert_eq!(
         healthy.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
         vec![
@@ -1560,7 +1641,7 @@ fn list_submodules_keeps_a_broken_submodules_own_row_and_prunes_only_its_childre
 
     let repo = GixBackend.open(&parent).unwrap();
     let listed = repo
-        .list_submodules()
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
         .expect("a broken nested index must not fail the whole enumeration");
     assert_eq!(
         listed.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
@@ -1588,14 +1669,16 @@ fn checked_out_submodules_always_report_checkout_available() {
     fs::write(parent.join("moved/file.txt"), "changed\n").unwrap();
 
     let repo = GixBackend.open(&parent).unwrap();
-    let listed = repo.list_submodules().expect("list submodules");
+    let listed = repo
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .expect("list submodules");
     assert_eq!(listed.len(), 2);
     for submodule in &listed {
         let summary = repo
-            .submodule_diff_summary(&DiffTarget::working_tree(
-                submodule.path.clone(),
-                DiffArea::Unstaged,
-            ))
+            .submodule_diff_summary(
+                &DiffTarget::working_tree(submodule.path.clone(), DiffArea::Unstaged),
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("summarize a configured submodule");
         assert_eq!(summary.status, Some(submodule.status));
         assert!(

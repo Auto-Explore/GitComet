@@ -317,7 +317,7 @@ fn native_sync_ntfs_cookies_cover_all_roots_without_git_or_callback_noise() {
     let status = gitcomet_git_gix::GixBackend
         .open(&linked)
         .unwrap()
-        .status()
+        .status(&gitcomet_core::services::CancellationToken::new())
         .unwrap();
     assert_eq!(
         status.unstaged.len(),

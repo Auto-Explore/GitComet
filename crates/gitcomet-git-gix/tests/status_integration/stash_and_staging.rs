@@ -26,7 +26,9 @@ fn stash_create_list_apply_and_drop_work() {
     opened.stash_create("wip", false).unwrap();
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
 
-    let stashes = opened.stash_list().unwrap();
+    let stashes = opened
+        .stash_list(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(!stashes.is_empty());
     assert_eq!(stashes[0].index, 0);
     assert!(stashes[0].message.contains("wip"));
@@ -38,7 +40,9 @@ fn stash_create_list_apply_and_drop_work() {
     );
 
     opened.stash_drop(0).unwrap();
-    let stashes = opened.stash_list().unwrap();
+    let stashes = opened
+        .stash_list(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(stashes.is_empty());
 }
 
@@ -88,7 +92,9 @@ fn stash_apply_conflict_is_mergeable() {
         "unexpected error: {err}"
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let conflict_entry = status
         .unstaged
         .iter()
@@ -145,7 +151,9 @@ fn stash_apply_still_errors_when_merge_does_not_start() {
         "unexpected error: {err}"
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -199,7 +207,9 @@ fn stash_apply_tracked_payload_overwriting_untracked_file_is_worktree_overwrite(
         fs::read_to_string(repo.join("new.txt")).unwrap(),
         "local untracked\n"
     );
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -241,7 +251,9 @@ fn stash_apply_staged_overlap_still_merges_into_conflict() {
         .expect_err("stash apply should report a conflict when only the index overlaps");
     assert_git_failure(&err, "git stash apply", GitFailureId::StashApplyConflict);
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -305,7 +317,9 @@ fn stash_apply_allows_merge_when_only_untracked_restore_fails() {
     assert!(untracked_merged.contains("from stash"));
     assert!(untracked_merged.contains(">>>>>>> Stashed file"));
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let tracked = status
         .unstaged
         .iter()
@@ -434,7 +448,9 @@ fn stash_apply_allows_untracked_restore_failure_when_stash_has_tracked_payload()
     assert!(untracked_merged.contains("from stash"));
     assert!(untracked_merged.contains(">>>>>>> Stashed file"));
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .unstaged
@@ -495,7 +511,9 @@ fn stash_apply_merges_when_only_untracked_restore_fails_without_tracked_changes(
     assert!(contents.contains("from stash"));
     assert!(contents.contains(">>>>>>> Stashed file"));
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.unstaged.iter().any(|entry| {
         entry.path == Path::new("Cargo.toml.orig") && entry.kind == FileStatusKind::Untracked
     }));
@@ -527,14 +545,18 @@ fn stash_list_reports_reflog_indices_for_drop() {
     write(repo, "a.txt", "one\nthree\n");
     opened.stash_create("wip-2", false).unwrap();
 
-    let stashes = opened.stash_list().unwrap();
+    let stashes = opened
+        .stash_list(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(stashes.len(), 2);
     assert_eq!(stashes[0].index, 0);
     assert_eq!(stashes[1].index, 1);
 
     // Drop the older stash by the index returned from `stash_list`.
     opened.stash_drop(stashes[1].index).unwrap();
-    let stashes = opened.stash_list().unwrap();
+    let stashes = opened
+        .stash_list(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(stashes.len(), 1);
     assert_eq!(stashes[0].index, 0);
     assert!(stashes[0].message.contains("wip-2"));
@@ -626,7 +648,9 @@ fn discard_worktree_changes_reverts_to_index_version() {
         "one\ntwo\n"
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .staged
@@ -664,7 +688,9 @@ fn discard_worktree_changes_reverts_modified_file_to_head() {
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -698,7 +724,9 @@ fn discard_worktree_changes_removes_staged_new_file() {
         .unwrap();
 
     assert!(!repo.join("new.txt").exists());
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(!status.staged.iter().any(|e| e.path == Path::new("new.txt")));
     assert!(
         !status
@@ -736,7 +764,9 @@ fn discard_worktree_changes_removes_untracked_file() {
         .unwrap();
 
     assert!(!repo.join("untracked.txt").exists());
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status
             .unstaged
@@ -778,7 +808,9 @@ fn discard_worktree_changes_supports_mixed_selection() {
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "two\n");
     assert!(!repo.join("c.txt").exists());
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 }
@@ -1069,7 +1101,9 @@ fn unstage_all_leaves_conflicted_paths_and_the_merge_alone() {
         "unstage-all must not abort the merge"
     );
 
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .unstaged
@@ -1366,7 +1400,9 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
     let opened = backend.open(repo).unwrap();
 
     // 1. Verify file is in conflict status
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -1377,7 +1413,7 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
 
     // 2. Load conflict session via backend API
     let session = opened
-        .conflict_session(Path::new("doc.txt"))
+        .conflict_session(Path::new("doc.txt"), None)
         .unwrap()
         .expect("conflict session");
     assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
@@ -1434,7 +1470,9 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
     opened.stage(&[Path::new("doc.txt")]).unwrap();
 
     // 6. Verify conflict is resolved — no more conflict status
-    let status_after = opened.status().unwrap();
+    let status_after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status_after
             .unstaged
@@ -1454,7 +1492,9 @@ fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    let before = opened.status().unwrap();
+    let before = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let conflict_entry = before
         .unstaged
         .iter()
@@ -1470,7 +1510,7 @@ fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
     );
 
     let session = opened
-        .conflict_session(Path::new("new.txt"))
+        .conflict_session(Path::new("new.txt"), None)
         .unwrap()
         .expect("conflict session for both-added path");
     assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
@@ -1486,7 +1526,9 @@ fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
     assert!(!validation.has_conflict_markers);
     assert_eq!(validation.marker_lines, 0);
 
-    let after = opened.status().unwrap();
+    let after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         after
             .unstaged
@@ -1571,7 +1613,7 @@ fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
     let opened = backend.open(repo).unwrap();
 
     let mut session = opened
-        .conflict_session(Path::new("multi.txt"))
+        .conflict_session(Path::new("multi.txt"), None)
         .unwrap()
         .expect("stage-backed conflict session");
 
@@ -1643,7 +1685,7 @@ fn conflict_session_modify_delete_keep_resolves_conflict() {
 
     // Verify conflict session for modify/delete
     let session = opened
-        .conflict_session(Path::new("a.txt"))
+        .conflict_session(Path::new("a.txt"), None)
         .unwrap()
         .expect("conflict session for modify/delete");
     assert_eq!(
@@ -1680,7 +1722,9 @@ fn conflict_session_modify_delete_keep_resolves_conflict() {
         fs::read_to_string(repo.join("a.txt")).unwrap(),
         "modified by feature\n"
     );
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status
             .unstaged
@@ -1760,7 +1804,7 @@ fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
 
     // Verify conflict session
     let session = opened
-        .conflict_session(Path::new("removed.txt"))
+        .conflict_session(Path::new("removed.txt"), None)
         .unwrap()
         .expect("conflict session for BothDeleted");
     assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
@@ -1782,7 +1826,9 @@ fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
         .unwrap();
 
     // Verify conflict is resolved
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status
             .unstaged
@@ -1816,7 +1862,7 @@ fn both_deleted_decoded_base_keeps_original_stage_bytes() {
         set_unmerged_stages(repo, "removed.txt", Some(&blob), None, None);
         let opened = GixBackend.open(repo).unwrap();
         let session = opened
-            .conflict_session(Path::new("removed.txt"))
+            .conflict_session(Path::new("removed.txt"), None)
             .unwrap()
             .unwrap();
         assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
@@ -1857,7 +1903,9 @@ fn conflict_session_added_by_us_keep_resolves_conflict() {
     let opened = backend.open(repo).unwrap();
 
     // Verify status
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -1868,7 +1916,7 @@ fn conflict_session_added_by_us_keep_resolves_conflict() {
 
     // Verify conflict session
     let session = opened
-        .conflict_session(Path::new("new.txt"))
+        .conflict_session(Path::new("new.txt"), None)
         .unwrap()
         .expect("conflict session for AddedByUs");
     assert_eq!(session.conflict_kind, FileConflictKind::AddedByUs);
@@ -1892,7 +1940,9 @@ fn conflict_session_added_by_us_keep_resolves_conflict() {
         fs::read_to_string(repo.join("new.txt")).unwrap(),
         "added by us\n"
     );
-    let status_after = opened.status().unwrap();
+    let status_after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status_after
             .unstaged
@@ -1944,7 +1994,9 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
     let opened = backend.open(repo).unwrap();
 
     // Verify status
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -1955,7 +2007,7 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
 
     // Verify conflict session
     let session = opened
-        .conflict_session(Path::new("their_new.txt"))
+        .conflict_session(Path::new("their_new.txt"), None)
         .unwrap()
         .expect("conflict session for AddedByThem");
     assert_eq!(session.conflict_kind, FileConflictKind::AddedByThem);
@@ -1981,7 +2033,9 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
         fs::read_to_string(repo.join("their_new.txt")).unwrap(),
         "added by them\n"
     );
-    let status_after = opened.status().unwrap();
+    let status_after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status_after
             .unstaged
@@ -2042,7 +2096,9 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
     let opened = backend.open(repo).unwrap();
 
     // Verify status shows DeletedByThem
-    let status = opened.status().unwrap();
+    let status = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let entry = status
         .unstaged
         .iter()
@@ -2052,7 +2108,7 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
 
     // Verify conflict session
     let session = opened
-        .conflict_session(Path::new("a.txt"))
+        .conflict_session(Path::new("a.txt"), None)
         .unwrap()
         .expect("conflict session for DeletedByThem");
     assert_eq!(session.conflict_kind, FileConflictKind::DeletedByThem);
@@ -2080,7 +2136,9 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
         fs::read_to_string(repo.join("a.txt")).unwrap(),
         "modified by us\n"
     );
-    let status_after = opened.status().unwrap();
+    let status_after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         !status_after
             .unstaged

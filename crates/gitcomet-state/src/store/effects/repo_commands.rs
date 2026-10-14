@@ -767,7 +767,7 @@ fn schedule_add_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.add_submodule_with_output_and_policy(
+                repo.add_submodule_with_output(
                     &url,
                     &path,
                     branch.as_deref(),
@@ -801,7 +801,7 @@ fn schedule_update_submodules(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.update_submodules_with_output_and_policy(&approved_sources, remote_url_policy)
+                repo.update_submodules_with_output(&approved_sources, remote_url_policy)
             })
         },
     );
@@ -823,7 +823,7 @@ fn schedule_check_submodule_add_trust(
         remote_url_policy,
     } = request;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_add_trust_with_policy(&url, &path, remote_url_policy);
+        let result = repo.check_submodule_add_trust(&url, &path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
@@ -847,7 +847,7 @@ fn schedule_check_submodule_update_trust(
     remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_update_trust_with_policy(remote_url_policy);
+        let result = repo.check_submodule_update_trust(remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }),
@@ -864,7 +864,7 @@ fn schedule_check_submodule_load_trust(
     remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_load_trust_with_policy(&path, remote_url_policy);
+        let result = repo.check_submodule_load_trust(&path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
@@ -899,11 +899,7 @@ fn schedule_load_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.load_submodule_with_output_and_policy(
-                    &path,
-                    &approved_sources,
-                    remote_url_policy,
-                )
+                repo.load_submodule_with_output(&path, &approved_sources, remote_url_policy)
             })
         },
     );
@@ -1032,7 +1028,7 @@ fn schedule_fetch_all(
         msg_tx,
         repo_id,
         RepoCommandKind::FetchAll,
-        move |repo| run_with_git_auth(auth, || repo.fetch_all_with_output_prune(prune)),
+        move |repo| run_with_git_auth(auth, || repo.fetch_all(prune)),
     );
 }
 
@@ -1172,7 +1168,7 @@ fn schedule_pull(
         repo_id,
         command,
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull_with_output_prune(mode, prune)),
+        move |repo| run_with_git_auth(auth, || repo.pull(mode, prune)),
     );
 }
 
@@ -1202,7 +1198,7 @@ fn schedule_pull_branch(
         context,
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.pull_branch_with_output_prune(&remote, &branch, prune)
+                repo.pull_branch_with_output(&remote, &branch, prune)
             })
         },
     );
@@ -1947,7 +1943,7 @@ fn schedule_add_remote(
             name: command_name,
             url: command_url,
         },
-        move |repo| repo.add_remote_with_output_and_policy(&name, &url, remote_url_policy),
+        move |repo| repo.add_remote_with_output(&name, &url, remote_url_policy),
     );
 }
 
@@ -1991,9 +1987,7 @@ fn schedule_set_remote_url(
             url: command_url,
             kind,
         },
-        move |repo| {
-            repo.set_remote_url_with_output_and_policy(&name, &url, kind, remote_url_policy)
-        },
+        move |repo| repo.set_remote_url_with_output(&name, &url, kind, remote_url_policy),
     );
 }
 

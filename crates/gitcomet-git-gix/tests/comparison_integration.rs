@@ -70,7 +70,11 @@ fn change<'a>(files: &'a [CommitFileChange], path: &str) -> &'a CommitFileChange
 
 fn old_side_text(repo: &dyn GitRepository, target: &DiffTarget) -> Option<String> {
     let text = repo
-        .diff_file_text(target)
+        .diff_file_text(
+            target,
+            None,
+            &gitcomet_core::services::CancellationToken::new(),
+        )
         .expect("load file text")
         .expect("a file target has text");
     text.old_source
