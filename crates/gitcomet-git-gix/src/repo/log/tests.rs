@@ -659,7 +659,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     assert_eq!(page1.commits.len(), 1);
     assert!(page1.next_cursor.is_some());
     assert!(
-        repo.log_file_follow_cache
+        repo.history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache")
             .is_empty(),
@@ -674,7 +675,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
 
     let cached_commits = {
         let cache = repo
-            .log_file_follow_cache
+            .history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache");
         assert_eq!(cache.len(), 1);
@@ -689,7 +691,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     assert_eq!(page3.commits.len(), 1);
 
     let cache = repo
-        .log_file_follow_cache
+        .history_cache
+        .file_follow
         .lock()
         .expect("log file follow cache");
     assert_eq!(cache.len(), 1);
@@ -798,7 +801,7 @@ fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
 
     let key = repo.log_page_cache_key(
         HistoryMode::AllBranches,
-        super::super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
+        super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
         &shallow,
         10,
         None,
@@ -838,7 +841,7 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
     for limit in [4000, 4001, 4002, 20_000] {
         let key = repo.log_page_cache_key(
             HistoryMode::AllBranches,
-            super::super::LogPageSeed::Tips(Arc::from(Vec::new())),
+            super::LogPageSeed::Tips(Arc::from(Vec::new())),
             &shallow,
             limit,
             None,
@@ -852,7 +855,8 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
             }),
         );
         let rows: usize = repo
-            .log_page_cache
+            .history_cache
+            .pages
             .lock()
             .unwrap()
             .iter()
@@ -891,14 +895,14 @@ fn a_cached_page_keeps_the_page_that_follows_it_from_being_evicted() {
     let shallow = shallow_snapshot(&local_repo).expect("shallow snapshot");
     let second_key = repo.log_page_cache_key(
         mode,
-        super::super::LogPageSeed::Head(head),
+        super::LogPageSeed::Head(head),
         &shallow,
         4,
         Some(&cursor),
         None,
     );
 
-    for round in 0..super::super::LOG_PAGE_CACHE_LIMIT + 4 {
+    for round in 0..super::LOG_PAGE_CACHE_LIMIT + 4 {
         repo.log_history_mode_page_impl(mode, 5 + round, None)
             .expect("filler page");
         repo.log_history_mode_page_impl(mode, 4, None)
@@ -2205,7 +2209,7 @@ fn reopen_object_store_drops_old_store_handles() {
     let first_page = repo
         .log_history_mode_page_impl(HistoryMode::FullReachable, 1, None)
         .expect("first page");
-    assert_eq!(repo.log_paged_walk_cache.lock().unwrap().entries.len(), 1);
+    assert_eq!(repo.history_cache.walks.lock().unwrap().entries.len(), 1);
     repo.range_reader_repo().expect("range reader");
 
     let active_reader = repo.repo();
@@ -2213,8 +2217,8 @@ fn reopen_object_store_drops_old_store_handles() {
     let old_generation = repo.store_generation();
     repo.reopen_object_store().expect("reopen");
 
-    assert!(repo.log_paged_walk_cache.lock().unwrap().entries.is_empty());
-    assert!(repo.range_reader.lock().unwrap().is_none());
+    assert!(repo.history_cache.walks.lock().unwrap().entries.is_empty());
+    assert!(repo.history_cache.range_reader.lock().unwrap().is_none());
     let (store, generation) = repo.thread_safe_repo();
     assert!(generation > old_generation);
     let config_store = repo

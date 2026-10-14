@@ -169,13 +169,6 @@ struct TreeIndexCacheEntry {
     staged: Vec<gitcomet_core::domain::FileStatus>,
 }
 
-/// What a cached log page was walked from.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum LogPageSeed {
-    Head(Option<gix::ObjectId>),
-    Tips(Arc<[gix::ObjectId]>),
-}
-
 /// An exact, parsed snapshot of the repository's shallow boundary.
 ///
 /// The shallow file is tiny and its object ids are the state that affects a
@@ -195,104 +188,6 @@ impl ShallowSnapshot {
     fn is_shallow(&self) -> bool {
         !self.0.is_empty()
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct LogPageCacheKey {
-    generation: u64,
-    mode: HistoryMode,
-    seed: LogPageSeed,
-    /// Invalidates cached pages when a shallow repository is deepened or its
-    /// boundary is otherwise replaced without moving a ref.
-    shallow: ShallowSnapshot,
-    limit: usize,
-    last_seen: Option<CommitId>,
-    resume_from: Option<CommitId>,
-    /// Author filter, or `None` for the unfiltered walk.
-    author: Option<log::AuthorFilter>,
-}
-
-#[derive(Clone, Debug)]
-struct LogPageCacheEntry {
-    key: LogPageCacheKey,
-    page: Arc<LogPage>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct LogFileFollowCacheKey {
-    head_oid: Option<gix::ObjectId>,
-    path: PathBuf,
-}
-
-#[derive(Clone, Debug)]
-struct LogFileFollowCacheEntry {
-    key: LogFileFollowCacheKey,
-    commits: Arc<Vec<Commit>>,
-}
-
-/// The paged walk's commit filter. Boxed rather than a plain `fn` because a
-/// shallow repository needs one that carries state — the grafted parents still
-/// to be skipped — and the walk it belongs to is parked in [`LogPagedWalkCache`],
-/// so it can borrow nothing.
-type LogPagedWalkFilter = Box<dyn FnMut(&gix::oid) -> bool + Send>;
-
-enum LogPagedWalk {
-    CommitTime(gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>),
-    DateOrder(gix::traverse::commit::Topo<log::CancellableLogWalkFind, LogPagedWalkFilter>),
-    CachedDateOrder(log::TopologyWalk),
-}
-
-impl LogPagedWalk {
-    fn is_date_order(&self) -> bool {
-        matches!(self, Self::DateOrder(_) | Self::CachedDateOrder(_))
-    }
-}
-
-impl Iterator for LogPagedWalk {
-    type Item = std::result::Result<
-        gix::traverse::commit::Info,
-        Box<dyn std::error::Error + Send + Sync + 'static>,
-    >;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::CommitTime(walk) => walk.next().map(|info| info.map_err(Into::into)),
-            Self::DateOrder(walk) => walk.next().map(|info| info.map_err(Into::into)),
-            Self::CachedDateOrder(walk) => walk.next().map(Ok),
-        }
-    }
-}
-
-struct LogPagedWalkState {
-    pending: std::collections::VecDeque<gix::traverse::commit::Info>,
-    walk: LogPagedWalk,
-    cancellation: log::LogWalkCancellation,
-}
-
-struct LogPagedWalkCacheEntry {
-    token: Arc<str>,
-    mode: HistoryMode,
-    /// The commits the walk was seeded from — one head for most modes, every
-    /// ref for `AllBranches`. A walk started from different tips covers a
-    /// different history, so a token minted for one must not resume the other.
-    tips: Arc<[gix::ObjectId]>,
-    /// The exact shallow boundary the walk was built against. A cursor minted
-    /// before a deepen must not resume the old, truncated walk.
-    shallow: ShallowSnapshot,
-    /// Author filter the walk was started with, or `None` for the unfiltered
-    /// walk. The walk's *position* depends on the filter — every non-matching
-    /// commit was already consumed — so resuming one walk under a different
-    /// filter would silently skip whatever the first pass rejected.
-    author: Option<log::AuthorFilter>,
-    state: LogPagedWalkState,
-    /// The store generation the walk reads from; see [`GixRepo::reopen_object_store`].
-    generation: u64,
-}
-
-#[derive(Default)]
-struct LogPagedWalkCache {
-    next_id: u64,
-    entries: Vec<LogPagedWalkCacheEntry>,
 }
 
 /// Decoded-object cache for handles that re-read objects; see [`with_object_cache`].
@@ -497,18 +392,6 @@ struct WorktreeSourceMemoEntry {
 
 const TEMP_FILE_MEMO_LIMIT: usize = 256;
 
-#[derive(Clone, Debug)]
-struct AllBranchesTipsCacheEntry {
-    fingerprint: u64,
-    tips: Arc<[gix::ObjectId]>,
-}
-const LOG_PAGE_CACHE_LIMIT: usize = 32;
-const LOG_PAGE_CACHE_ROW_LIMIT: usize = 10_000;
-const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
-const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
-/// Date-order walks retain in-degree state for the reachable history.
-const LOG_PAGED_TOPO_WALK_CACHE_LIMIT: usize = 4;
-
 /// The store every handle comes from, swapped by [`GixRepo::reopen_object_store`].
 struct RepoStore {
     repo: gix::ThreadSafeRepository,
@@ -530,10 +413,7 @@ pub(crate) struct GixRepo {
     /// Shared by row, diff and preview readers; refreshed with support metadata.
     large_file_scan: std::sync::Mutex<Option<Arc<large_files::CommittedPointerScan>>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
-    log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
-    history_authors_cache: std::sync::Mutex<Option<log::HistoryAuthorsCache>>,
-    range_reader: std::sync::Mutex<Option<RangeReader>>,
-    all_branches_tips: std::sync::Mutex<Option<AllBranchesTipsCacheEntry>>,
+    history_cache: log::cache::HistoryCache,
     divergence_cache: DivergenceCache,
     /// `list_ref_metadata` output keyed by the ref namespace fingerprint; the
     /// `git for-each-ref` spawn and parse only rerun when a ref moved.
@@ -543,8 +423,6 @@ pub(crate) struct GixRepo {
     /// Keyed by source identity, attributes and encoding choice.
     text_format_memo:
         std::sync::Mutex<rustc_hash::FxHashMap<u64, text_decode::TextFormatMemoEntry>>,
-    log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
-    log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
     line_stats_memo: std::sync::Mutex<line_stats::LineStatsMemo>,
     /// Stats the worktree walk found stale but content-clean; see
     /// [`status::StatRefreshedIndex`].
@@ -589,17 +467,12 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             large_file_scan: Default::default(),
             tree_index_cache: std::sync::Mutex::new(None),
-            log_page_cache: std::sync::Mutex::new(Vec::new()),
-            history_authors_cache: Default::default(),
-            range_reader: Default::default(),
-            all_branches_tips: std::sync::Mutex::new(None),
+            history_cache: Default::default(),
             divergence_cache: DivergenceCache::default(),
             ref_metadata_cache: std::sync::Mutex::new(None),
             preview_blob_verified: std::sync::Mutex::default(),
             worktree_source_memo: std::sync::Mutex::default(),
             text_format_memo: std::sync::Mutex::default(),
-            log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
-            log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
             line_stats_memo: std::sync::Mutex::default(),
             stat_refreshed_index: std::sync::Mutex::new(None),
             staged_line_stats_cache: std::sync::Mutex::new(None),
@@ -711,15 +584,7 @@ impl GixRepo {
                 .lock()
                 .expect("config repository")
                 .share_objects(&fresh);
-            *self.range_reader.lock().expect("range reader") = None;
-            self.log_paged_walk_cache
-                .lock()
-                .expect("log paged walk cache")
-                .entries
-                .clear();
-            self.log_page_cache.lock().expect("log page cache").clear();
-            *self.all_branches_tips.lock().expect("all branches tips") = None;
-            *self.history_authors_cache.lock().expect("history authors") = None;
+            self.history_cache.invalidate_store();
         }
         (fresh, shared)
     }
@@ -759,42 +624,10 @@ impl GixRepo {
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo", &self.spec.workdir))
     }
 
-    /// The object store for indexed range reads, re-opened every
-    /// [`RANGE_READER_REOPEN_BLOCKS`] blocks. Range reads touch commit objects
-    /// across the whole pack set, and every page of a mapped pack they touch
-    /// stays resident until the mapping is dropped; scrolling a large history
-    /// this way grew resident memory by gigabytes. A fresh open costs a config
-    /// parse and releases the mappings, so the store's footprint stays bounded
-    /// by the blocks read since.
     pub(super) fn range_reader_repo(&self) -> Result<gix::Repository> {
-        let mut slot = self.range_reader.lock().expect("range reader");
-        if slot
-            .as_ref()
-            .is_none_or(|reader| reader.blocks >= RANGE_READER_REOPEN_BLOCKS)
-        {
-            gitcomet_core::history_perf::record(
-                gitcomet_core::history_perf::Work::RangeStoreReopen,
-            );
-            *slot = Some(RangeReader {
-                repo: self.reopen_repo()?.into_sync(),
-                blocks: 0,
-            });
-        }
-        let reader = slot.as_mut().expect("range reader is open");
-        reader.blocks += 1;
-        Ok(reader.repo.to_thread_local())
+        self.history_cache.range_reader_repo(|| self.reopen_repo())
     }
 }
-
-/// See [`GixRepo::range_reader_repo`].
-struct RangeReader {
-    repo: gix::ThreadSafeRepository,
-    blocks: usize,
-}
-
-/// Blocks of 256 commits read through one range-reader store before it is
-/// re-opened. On chromium a block touches roughly 0.2 MiB of pack pages.
-const RANGE_READER_REOPEN_BLOCKS: usize = 64;
 
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     mergetool::allow_test_repo_local_mergetool_command(workdir, tool_name);

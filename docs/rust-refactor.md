@@ -27,7 +27,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [ ] Group persistence/control, status, reference metadata and repository-command effects; each family owns runtime requirements and completion construction.
 - [ ] Centralize repository runtime resources and accepted close/shutdown handling, keeping refresh cancellation distinct from closure.
 - [ ] Prepare filesystem/Git inputs outside the state write lock while preserving synchronous worker ordering.
-- [ ] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
+- [x] Encapsulate backend history cache construction/invalidation without changing locks, keys, bounds or sharing.
 - [ ] Establish one document owner per window with stable BufferId, load/save generations, disk versions, encoding, dirty state and retention.
 - [ ] Connect sidebar/close guards directly to document ownership and emit dirty changes at mutation time.
 - [ ] Extract a root-independent DiffRenderer after document ownership; preserve MainPaneView composition.
@@ -93,6 +93,10 @@ failed against the original behavior before their fixes. The UI baseline passed
 platform skips. The baseline release app and backend probe are built, and the
 native history-selection driver passed. Matched performance comparisons follow
 the implementation. The work is on the existing `refactor` branch.
+
+The backend now groups history cache construction and object-store invalidation
+in a private `HistoryCache` owner. Its six independent locks, cache keys and
+bounds, range-reader recycling and shared history-store behavior remain unchanged.
 
 ## Migration notes
 

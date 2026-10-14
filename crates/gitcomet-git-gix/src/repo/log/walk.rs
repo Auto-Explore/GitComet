@@ -1,3 +1,4 @@
+use super::topology::TopologyWalk;
 use super::*;
 
 pub(crate) fn empty_log_page() -> LogPage {
@@ -137,7 +138,7 @@ pub(crate) fn log_paged_walk_filter(
     filter
 }
 
-pub(crate) fn new_commit_time_walk(
+pub(super) fn new_commit_time_walk(
     repo: &gix::ThreadSafeRepository,
     tips: &[gix::ObjectId],
     parents: gix::traverse::commit::Parents,
@@ -166,7 +167,7 @@ pub(crate) fn new_commit_time_walk(
     ))
 }
 
-pub(crate) fn new_log_paged_walk(
+pub(super) fn new_log_paged_walk(
     repo: &gix::ThreadSafeRepository,
     tips: impl IntoIterator<Item = gix::ObjectId>,
     mode: HistoryMode,
@@ -557,7 +558,7 @@ impl DecodeWorkers {
 /// Returns the commits found and whether the walk still has more to give; the
 /// caller parks `walk_state` in the walk cache so the next page picks up where
 /// this one stopped instead of re-traversing from the tip.
-pub(crate) fn log_page_from_paged_walk_state(
+pub(super) fn log_page_from_paged_walk_state(
     repo: &gix::ThreadSafeRepository,
     walk_state: &mut super::LogPagedWalkState,
     limit: usize,

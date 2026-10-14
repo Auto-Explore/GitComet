@@ -24,7 +24,7 @@ impl GixRepo {
 
     /// Serves a cached page and refreshes its successor's LRU position.
     pub(super) fn cached_log_page(&self, key: &super::LogPageCacheKey) -> Option<Arc<LogPage>> {
-        let mut cache = self.log_page_cache.lock().expect("log page cache");
+        let mut cache = self.history_cache.pages.lock().expect("log page cache");
         let index = cache.iter().position(|entry| &entry.key == key)?;
         let entry = cache.remove(index);
         let page = Arc::clone(&entry.page);
@@ -69,11 +69,11 @@ impl GixRepo {
     }
 
     pub(super) fn store_log_page(&self, key: super::LogPageCacheKey, page: &Arc<LogPage>) {
-        let row_limit = super::super::LOG_PAGE_CACHE_ROW_LIMIT;
+        let row_limit = super::LOG_PAGE_CACHE_ROW_LIMIT;
         if page.commits.len() > row_limit {
             return;
         }
-        let mut cache = self.log_page_cache.lock().expect("log page cache");
+        let mut cache = self.history_cache.pages.lock().expect("log page cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
             cache.remove(index);
         }
@@ -107,7 +107,8 @@ impl GixRepo {
         key: &super::LogFileFollowCacheKey,
     ) -> Option<Arc<Vec<Commit>>> {
         let mut cache = self
-            .log_file_follow_cache
+            .history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache");
         let index = cache.iter().position(|entry| &entry.key == key)?;
@@ -123,7 +124,8 @@ impl GixRepo {
         commits: Arc<Vec<Commit>>,
     ) {
         let mut cache = self
-            .log_file_follow_cache
+            .history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
@@ -145,7 +147,8 @@ impl GixRepo {
         generation: u64,
     ) -> Option<super::LogPagedWalkState> {
         let mut cache = self
-            .log_paged_walk_cache
+            .history_cache
+            .walks
             .lock()
             .expect("log paged walk cache");
         // A walk from a replaced store would keep that store's packs mapped.
@@ -172,7 +175,8 @@ impl GixRepo {
         generation: u64,
     ) -> Arc<str> {
         let mut cache = self
-            .log_paged_walk_cache
+            .history_cache
+            .walks
             .lock()
             .expect("log paged walk cache");
         let current = self.store_generation();
@@ -750,7 +754,8 @@ impl GixRepo {
         let fingerprint = hasher.finish();
 
         if let Some(cached) = self
-            .all_branches_tips
+            .history_cache
+            .tips
             .lock()
             .expect("all branches tips cache")
             .as_ref()
@@ -801,7 +806,8 @@ impl GixRepo {
         tips.sort_unstable();
 
         let mut cached = self
-            .all_branches_tips
+            .history_cache
+            .tips
             .lock()
             .expect("all branches tips cache");
         // Keep the previous allocation when the tips are unchanged so page
@@ -812,7 +818,7 @@ impl GixRepo {
             }
             _ => Arc::from(tips),
         };
-        *cached = Some(crate::repo::AllBranchesTipsCacheEntry {
+        *cached = Some(super::AllBranchesTipsCacheEntry {
             fingerprint,
             tips: Arc::clone(&tips),
         });

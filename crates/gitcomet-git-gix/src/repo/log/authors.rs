@@ -1,7 +1,7 @@
 use super::*;
 use gitcomet_core::services::HistorySnapshot;
 
-pub(in super::super) struct HistoryAuthorsCache {
+pub(super) struct HistoryAuthorsCache {
     snapshot: HistorySnapshot,
     names: Arc<[Arc<str>]>,
 }
@@ -28,7 +28,8 @@ impl GixRepo {
         let tips = query.tips;
         let shallow = query.shallow;
         if let Some(cached) = self
-            .history_authors_cache
+            .history_cache
+            .authors
             .lock()
             .expect("history authors cache")
             .as_ref()
@@ -75,7 +76,8 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let names: Arc<[Arc<str>]> = names.into();
         *self
-            .history_authors_cache
+            .history_cache
+            .authors
             .lock()
             .expect("history authors cache") = Some(HistoryAuthorsCache {
             snapshot,
