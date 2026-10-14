@@ -165,6 +165,7 @@ fn effect_requires_available_git(effect: &Effect) -> bool {
             | Effect::PersistRecentRepo { .. }
             | Effect::PersistRepoHistoryMode { .. }
             | Effect::PersistRepoHistoryModesBatch { .. }
+            | Effect::PersistRepoHistoryAuthorFilter { .. }
             | Effect::PersistRepoMaintenanceSnooze { .. }
             | Effect::CancelRepoLoads { .. }
             | Effect::CancelGitOperation { .. }
