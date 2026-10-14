@@ -181,7 +181,7 @@ fn ignored_directory_replaced_by_file_keeps_creation_and_edits_visible() {
             monitor.expect_change(&boundary, || fs::rename(&replacement, &boundary).unwrap())
         };
         assert!(created.worktree);
-        let status = Command::new("git")
+        let status = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(&root)
             .args([

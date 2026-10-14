@@ -23,7 +23,6 @@ use gitcomet_core::merge_extraction::{
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Invariant validation
@@ -411,7 +410,7 @@ fn extraction_finds_nontrivial_conflict() {
     run_git(repo, &["commit", "-m", "change B"]);
 
     // Merge — expect conflict
-    let merge_output = Command::new("git")
+    let merge_output = gitcomet_core::test_support::git_fixture::git_command()
         .args(["merge", "branch-a", "--no-edit"])
         .current_dir(repo)
         .output()
@@ -558,7 +557,7 @@ fn extraction_skips_binary_files() {
     run_git(repo, &["commit", "-m", "change B"]);
 
     // Force merge with conflict resolution
-    let _ = Command::new("git")
+    let _ = gitcomet_core::test_support::git_fixture::git_command()
         .args(["merge", "branch-a", "--no-edit"])
         .current_dir(repo)
         .output();
@@ -649,7 +648,7 @@ fn extraction_handles_multifile_merge() {
     run_git(repo, &["commit", "-m", "change B"]);
 
     // Merge
-    let _ = Command::new("git")
+    let _ = gitcomet_core::test_support::git_fixture::git_command()
         .args(["merge", "branch-a", "--no-edit"])
         .current_dir(repo)
         .output();
@@ -804,7 +803,7 @@ fn generate_fixtures_from_repo() {
 // ---------------------------------------------------------------------------
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         // Keep fixture-driven tests portable even when the host has
         // `commit.gpgsign=true` globally.
         .arg("-c")

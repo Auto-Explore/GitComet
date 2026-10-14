@@ -326,7 +326,7 @@ fn hook_free_commands_do_not_enable_trace2() {
         vec!["--no-optional-locks", "config", "--get", "core.editor"],
         vec!["config", "get", "user.name"],
     ] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.args(args);
         assert!(Trace2Monitor::start(&mut cmd, Some(&operation), &LivenessClock::new()).is_none());
         assert!(!cmd.get_envs().any(|(key, _)| key == "GIT_TRACE2_EVENT"));
@@ -341,7 +341,7 @@ fn hook_free_commands_do_not_enable_trace2() {
         vec!["custom-alias"],
         vec!["-C"],
     ] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.args(args);
         assert!(!command_is_known_hook_free(&cmd));
         assert!(Trace2Monitor::start(&mut cmd, Some(&operation), &LivenessClock::new()).is_some());
@@ -399,7 +399,7 @@ fn trace2_monitor_finish_and_drop_drain_the_final_unterminated_event() {
         let context = GitOperationContext::new("trace drain", move |_, event| {
             sender.send(event).unwrap();
         });
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         let monitor =
             Trace2Monitor::start(&mut cmd, Some(&context), &LivenessClock::new()).unwrap();
         std::fs::write(
@@ -745,7 +745,7 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
     let dir = tempfile::tempdir().unwrap();
     let workdir = dir.path();
     let git = |args: &[&str]| {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
@@ -798,7 +798,7 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
 #[test]
 fn submodule_and_worktree_checkouts_may_transfer_lfs_content() {
     for args in [["submodule", "update"], ["worktree", "add"]] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.args(args);
         assert!(may_transfer_lfs_content(&cmd), "{args:?}");
     }
@@ -839,7 +839,7 @@ fn lfs_progress_monitor_reports_lines_and_keeps_the_command_alive() {
         sender.send(event).unwrap();
     });
     let liveness = LivenessClock::new();
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.args(["lfs", "pull"]);
     let mut monitor = LfsProgressMonitor::start(&mut cmd, Some(&context), &liveness)
         .expect("lfs commands are monitored");
@@ -859,7 +859,7 @@ fn lfs_progress_monitor_reports_lines_and_keeps_the_command_alive() {
         "{events:?}"
     );
 
-    let mut status = Command::new("git");
+    let mut status = gitcomet_core::test_support::git_fixture::git_command();
     status.arg("status");
     assert!(LfsProgressMonitor::start(&mut status, None, &liveness).is_none());
 }
@@ -1075,27 +1075,27 @@ fn parse_remote_branches_handles_pull_ref_prefixes_from_gitpython_fixture() {
 
 #[test]
 fn command_may_require_auth_detects_auth_related_git_commands() {
-    let mut push = Command::new("git");
+    let mut push = gitcomet_core::test_support::git_fixture::git_command();
     push.args(["-C", "/tmp/repo", "push", "origin", "main"]);
     assert!(command_may_require_auth(&push));
 
-    let mut fetch = Command::new("git");
+    let mut fetch = gitcomet_core::test_support::git_fixture::git_command();
     fetch.args(["-c", "color.ui=false", "fetch", "--all"]);
     assert!(command_may_require_auth(&fetch));
 
-    let mut ls_remote = Command::new("git");
+    let mut ls_remote = gitcomet_core::test_support::git_fixture::git_command();
     ls_remote.args(["ls-remote", "origin"]);
     assert!(command_may_require_auth(&ls_remote));
 
-    let mut commit = Command::new("git");
+    let mut commit = gitcomet_core::test_support::git_fixture::git_command();
     commit.args(["commit", "-m", "msg"]);
     assert!(command_may_require_auth(&commit));
 
-    let mut status = Command::new("git");
+    let mut status = gitcomet_core::test_support::git_fixture::git_command();
     status.args(["-C", "/tmp/repo", "status", "--short"]);
     assert!(!command_may_require_auth(&status));
 
-    let mut log = Command::new("git");
+    let mut log = gitcomet_core::test_support::git_fixture::git_command();
     log.args(["log", "--oneline", "-n", "1"]);
     assert!(!command_may_require_auth(&log));
 }
@@ -1113,7 +1113,7 @@ fn command_may_require_auth_covers_ssh_signing_commands() {
         vec!["commit", "--no-verify", "-F", "MERGE_MSG"],
         vec!["am", "--3way"],
     ] {
-        let mut cmd = Command::new("git");
+        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.arg("-C").arg("/tmp/repo").args(&args);
         assert!(
             command_may_require_auth(&cmd),
@@ -1265,7 +1265,7 @@ fn repository_config_cannot_reenable_the_ext_protocol() {
 #[test]
 fn configure_git_auth_prompt_sets_username_password_env() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     let auth = PromptAuth::Explicit(StagedGitAuth {
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
@@ -1327,7 +1327,7 @@ fn configure_git_auth_prompt_sets_username_password_env() {
 #[test]
 fn configure_git_auth_prompt_sets_passphrase_env_and_removes_username() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::Explicit(StagedGitAuth {
         kind: GitAuthKind::Passphrase,
@@ -1351,7 +1351,7 @@ fn configure_git_auth_prompt_sets_passphrase_env_and_removes_username() {
 #[test]
 fn configure_git_auth_prompt_sets_cached_passphrase_env_and_removes_username() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::CachedPassphrases(vec![
         CachedPassphraseEntry {
@@ -1397,7 +1397,7 @@ fn configure_git_auth_prompt_sets_cached_passphrase_env_and_removes_username() {
 #[test]
 fn configure_git_auth_prompt_sets_host_verification_env_and_removes_username() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::Explicit(StagedGitAuth {
         kind: GitAuthKind::HostVerification,
@@ -1421,7 +1421,7 @@ fn configure_git_auth_prompt_sets_host_verification_env_and_removes_username() {
 #[test]
 fn configure_git_auth_prompt_without_staged_auth_clears_auth_env() {
     let askpass = create_askpass_script().expect("askpass script creation");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_KIND_ENV, "legacy-kind");
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     cmd.env(GITCOMET_AUTH_SECRET_ENV, "legacy-secret");

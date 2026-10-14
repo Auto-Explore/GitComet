@@ -117,7 +117,7 @@ fn set_repo_local_mergetool_cmd_with_consent(repo: &Path, tool_name: &str, comma
 
 fn git_command() -> Command {
     let env = ensure_isolated_git_test_env();
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     // Keep integration tests deterministic by isolating from host git config.
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
     cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);

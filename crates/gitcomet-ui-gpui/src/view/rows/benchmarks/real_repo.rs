@@ -528,6 +528,7 @@ fn resolve_snapshot_source(case_dir: &Path, source: &str) -> PathBuf {
 
 fn clone_snapshot_source(source: &Path, worktree: &Path) -> Result<(), String> {
     let output = Command::new("git")
+        .args(["-c", "maintenance.auto=false"])
         .arg("clone")
         .arg("--quiet")
         .arg(source)

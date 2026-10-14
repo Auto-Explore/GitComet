@@ -79,15 +79,34 @@ fn clean_repository_template() -> &'static Vec<(PathBuf, Vec<u8>)> {
         git(dir.path(), &["add", "."]);
         commit(dir.path(), "base");
         fn collect(root: &Path, path: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
-            for entry in std::fs::read_dir(path).unwrap() {
-                let entry = entry.unwrap();
+            let entries = std::fs::read_dir(path).unwrap_or_else(|error| {
+                panic!(
+                    "list repository template directory {}: {error}",
+                    path.display()
+                )
+            });
+            for entry in entries {
+                let entry = entry.unwrap_or_else(|error| {
+                    panic!(
+                        "read repository template entry in {}: {error}",
+                        path.display()
+                    )
+                });
                 let path = entry.path();
-                if entry.file_type().unwrap().is_dir() {
+                let file_type = entry.file_type().unwrap_or_else(|error| {
+                    panic!(
+                        "inspect repository template entry {}: {error}",
+                        path.display()
+                    )
+                });
+                if file_type.is_dir() {
                     collect(root, &path, files);
                 } else {
                     files.push((
                         path.strip_prefix(root).unwrap().to_path_buf(),
-                        std::fs::read(path).unwrap(),
+                        std::fs::read(&path).unwrap_or_else(|error| {
+                            panic!("read repository template file {}: {error}", path.display())
+                        }),
                     ));
                 }
             }
@@ -1148,7 +1167,7 @@ fn conflicted_merge(dir: &Path) {
     git(dir, &["checkout", "-q", "main"]);
     std::fs::write(dir.join("a.txt"), "ours\n").unwrap();
     commit(dir, "ours");
-    let merge = std::process::Command::new("git")
+    let merge = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(dir)
         // Merge checks the committer identity even with --no-commit.

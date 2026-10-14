@@ -169,7 +169,7 @@ fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
     let nested = outer.join("nested");
     let linked = directory.path().join("linked");
     fn git(directory: &Path, arguments: &[&std::ffi::OsStr]) {
-        let result = std::process::Command::new("git")
+        let result = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(directory)
             .args([

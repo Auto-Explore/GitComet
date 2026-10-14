@@ -2253,7 +2253,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
         let git = |args: &[&str]| {
-            std::process::Command::new("git")
+            gitcomet_core::test_support::git_fixture::git_command()
                 .current_dir(path)
                 .args(["-c", "user.name=T", "-c", "user.email=t@e.st"])
                 .args(["-c", "commit.gpgsign=false"])

@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -33,7 +33,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 fn git_annex_available() -> bool {
-    Command::new("git")
+    gitcomet_core::test_support::git_fixture::git_command()
         .args(["annex", "version", "--raw"])
         .output()
         .is_ok_and(|output| output.status.success())

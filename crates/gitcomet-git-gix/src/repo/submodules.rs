@@ -1965,7 +1965,7 @@ mod tests {
     }
 
     fn run_git(workdir: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(args)

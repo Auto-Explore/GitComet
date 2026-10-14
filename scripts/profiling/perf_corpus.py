@@ -11,7 +11,7 @@ SOURCES = {name: str(Path.home() / path) for name, path in
 
 
 def git(path, *args, env=None):
-    return subprocess.run(["git", "-C", str(path), *map(str, args)], env=env,
+    return subprocess.run(["git", "-c", "maintenance.auto=false", "-C", str(path), *map(str, args)], env=env,
                           capture_output=True, check=True).stdout
 
 
@@ -94,7 +94,7 @@ def prepare(root, suite, live, sources=None, real=False, sizes=None):
             if mirror.exists() or checkout.exists():
                 raise ValueError(f"destination already exists for {name}")
             print(f"Snapshotting {source} at {before['head']}", flush=True)
-            subprocess.run(["git", "clone", "--quiet", "--mirror", "--no-hardlinks", str(source), str(mirror)],
+            subprocess.run(["git", "-c", "maintenance.auto=false", "clone", "--quiet", "--mirror", "--no-hardlinks", str(source), str(mirror)],
                            env=live.fixture_env(), check=True)
             live.clone_fixture(mirror, checkout, before["head"])
             if identity(source) != before:

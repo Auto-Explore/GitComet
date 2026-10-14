@@ -3,13 +3,12 @@ use gitcomet_core::commit_identity::CommitIdentity;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::path::Path;
-use std::process::Command;
 
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
 
 fn git(path: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
+    let mut command = gitcomet_core::test_support::git_fixture::git_command();
     command.arg("-C").arg(path).args(args);
     test_git_env::apply(&mut command);
     let output = command.output().unwrap();

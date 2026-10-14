@@ -60,7 +60,7 @@ fn attribute_refresh_redecodes_staged_and_commit_diffs() {
     repos.insert(repo_id, repo.clone());
     let executor = super::super::executor::TaskExecutor::new(1);
     let resolve_commit = |revision: &str| {
-        let output = Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["rev-parse", revision])
@@ -2470,7 +2470,7 @@ fn apply_file_change_fixture(repo: &Path) -> String {
     run_git(repo, &["checkout", "-q", "-b", "feature"]);
     fs::write(repo.join("a.txt"), "one\nTWO\n").expect("write feature");
     run_git(repo, &["commit", "-q", "-am", "feature subject\n\nbody"]);
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])

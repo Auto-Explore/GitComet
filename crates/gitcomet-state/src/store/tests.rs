@@ -11,7 +11,6 @@ use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, Result
 use gitcomet_core::test_support::UnconfiguredRepository;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -48,7 +47,7 @@ impl GitBackend for FailingBackend {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = gitcomet_core::test_support::git_fixture::git_command()
         .arg("-C")
         .arg(repo)
         .args(args)

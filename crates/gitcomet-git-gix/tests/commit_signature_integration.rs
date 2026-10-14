@@ -16,7 +16,7 @@ use std::process::Command;
 mod test_git_env;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.arg("-C").arg(repo).args(args);
     test_git_env::apply(&mut cmd);
     let output = cmd.output().expect("run git command");
@@ -28,7 +28,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.arg("-C").arg(repo).args(args);
     test_git_env::apply(&mut cmd);
     let output = cmd.output().expect("run git command");
@@ -336,7 +336,7 @@ fn a_tampered_commit_reports_a_bad_signature() {
     // signature header: the payload no longer matches what was signed.
     let raw = git_stdout(&fixture.repo, &["cat-file", "commit", signed.as_ref()]);
     let tampered_raw = format!("{raw}\ntampered\n");
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.arg("-C")
         .arg(&fixture.repo)
         .args(["hash-object", "-t", "commit", "-w", "--stdin"])

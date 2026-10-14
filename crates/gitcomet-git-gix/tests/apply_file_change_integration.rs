@@ -9,7 +9,6 @@ use gitcomet_git_gix::GixBackend;
 mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 fn run_git(repo: &Path, args: &[&str]) {
@@ -24,7 +23,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> std::process::Output {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     cmd.arg("-C")
         .arg(repo)

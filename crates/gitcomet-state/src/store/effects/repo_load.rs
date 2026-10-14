@@ -3444,7 +3444,7 @@ mod worktree_dirty_files_tests {
         let (dir, own, linked) = crate::store::tests::repo_with_linked_worktree();
         std::fs::write(linked.join("a.txt"), "linked checkout edit\n").unwrap();
         let cached_path = dir.path().join("cached-worktree");
-        let output = std::process::Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(&own)
             .args(["worktree", "add", "--detach"])
@@ -3547,7 +3547,7 @@ mod worktree_dirty_files_tests {
                             cached_handle.upgrade().is_none(),
                             "a panicking scan must release its cached checkout handles"
                         );
-                        let output = std::process::Command::new("git")
+                        let output = gitcomet_core::test_support::git_fixture::git_command()
                             .arg("-C")
                             .arg(&linked)
                             .args(["branch", "-m", "after-panic"])
@@ -3612,7 +3612,7 @@ mod worktree_dirty_files_tests {
 
         let (dir, own, _) = repo_with_linked_worktree();
         let missing = dir.path().join("missing");
-        let output = std::process::Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(&own)
             .args(["worktree", "add", "--detach"])
@@ -3704,7 +3704,7 @@ mod worktree_dirty_files_tests {
         }
         let (dir, own, selected) = repo_with_linked_worktree();
         let other = dir.path().join("other");
-        let output = std::process::Command::new("git")
+        let output = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(&own)
             .args(["worktree", "add", "-q", "-b", "other"])

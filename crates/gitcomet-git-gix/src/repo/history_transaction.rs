@@ -412,9 +412,8 @@ fn sync_tree(path: &Path, old: &CommitId, new: &CommitId, dry: bool) -> Result<C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
     fn git(root: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = gitcomet_core::test_support::git_fixture::git_command()
             .current_dir(root)
             .args(args)
             .output()
@@ -539,7 +538,7 @@ mod tests {
         ];
         assert!(repo.update_refs_with_output(&updates).is_err());
         assert!(
-            !Command::new("git")
+            !gitcomet_core::test_support::git_fixture::git_command()
                 .current_dir(d.path())
                 .args(["show-ref", "--verify", "refs/heads/created"])
                 .output()
@@ -714,7 +713,7 @@ mod tests {
         ];
         assert!(repo.apply_branch_updates_with_output(&updates).is_err());
         assert!(
-            !std::process::Command::new("git")
+            !gitcomet_core::test_support::git_fixture::git_command()
                 .current_dir(d.path())
                 .args(["show-ref", "--verify", "refs/heads/created"])
                 .output()

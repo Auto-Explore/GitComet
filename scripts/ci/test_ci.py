@@ -1481,8 +1481,8 @@ class RuntimeTests(unittest.TestCase):
                     patch.dict(os.environ, env, clear=True):
                 root = Path(directory)
                 repo = root / "repo"
-                git = ["git", "-C", str(repo), "-c", "user.name=CI", "-c", "user.email=ci@example.invalid"]
-                subprocess.run(["git", "init", "-q", str(repo)], check=True)
+                git = ["git", "-c", "maintenance.auto=false", "-C", str(repo), "-c", "user.name=CI", "-c", "user.email=ci@example.invalid"]
+                subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", str(repo)], check=True)
                 subprocess.run([*git, "config", "core.autocrlf", "false"], check=True)
                 (repo / "notes.txt").write_bytes(b"base\n")
                 subprocess.run([*git, "add", "notes.txt"], check=True)
@@ -1687,7 +1687,7 @@ const ESCAPED: &str = "a \\" quote // GitComet";
             (source / "smoke_tests/child.rs").write_text('const TEST: &str = "GitComet";')
             (source / "relocated.rs").write_text('const TEST: &str = "GitComet";')
             (source / "simple_tests.rs").write_text('const TEST: &str = "GitComet";')
-            subprocess.run(["git", "init", "-q", directory], check=True)
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", directory], check=True)
             strip = identity_literals.strip_comments_and_test_modules
             with patch.object(identity_literals, "ROOT", root), \
                     patch.object(identity_literals, "strip_comments_and_test_modules", wraps=strip) as lexical_pass:
@@ -1705,8 +1705,8 @@ const ESCAPED: &str = "a \\" quote // GitComet";
             source.mkdir(parents=True)
             deleted = source / "deleted.rs"
             deleted.write_text('const NAME: &str = "GitComet";')
-            subprocess.run(["git", "init", "-q", directory], check=True)
-            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", directory], check=True)
+            subprocess.run(["git", "-c", "maintenance.auto=false", "add", "."], cwd=root, check=True)
             deleted.unlink()
             (source / "new.rs").write_text('const NAME: &str = "GitComet";')
             with patch.object(identity_literals, "ROOT", root):

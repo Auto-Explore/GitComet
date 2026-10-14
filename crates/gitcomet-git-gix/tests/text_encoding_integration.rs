@@ -11,11 +11,10 @@ use gitcomet_git_gix::GixBackend;
 mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 fn git(repo: &Path, args: &[&str]) -> Vec<u8> {
-    let mut cmd = Command::new("git");
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -783,7 +782,7 @@ fn latin1_merge_conflict_decodes_every_side_and_remembers_the_file_encoding() {
     )
     .unwrap();
     commit_all(repo_dir, "ours");
-    let mut merge = Command::new("git");
+    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut merge);
     let status = merge
         .arg("-C")
@@ -849,7 +848,7 @@ fn mixed_encoding_conflict_can_save_either_decoded_stage() {
     )
     .unwrap();
     commit_all(root, "latin1");
-    let mut merge = Command::new("git");
+    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut merge);
     assert!(
         !merge
@@ -956,7 +955,7 @@ fn review_conflict_stages_share_legacy_detection_evidence() {
         fs::write(root.join("menu.txt"), bytes).unwrap();
         commit_all(root, branch);
     }
-    let mut merge = Command::new("git");
+    let mut merge = gitcomet_core::test_support::git_fixture::git_command();
     test_git_env::apply(&mut merge);
     assert!(
         !merge

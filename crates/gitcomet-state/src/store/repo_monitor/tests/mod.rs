@@ -6,7 +6,6 @@ use super::*;
 use notify::EventKind;
 use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind};
 use std::fs;
-use std::process::Command;
 use std::sync::{OnceLock, atomic::AtomicBool, mpsc};
 
 struct IsolatedGitConfigEnv {
@@ -47,7 +46,7 @@ fn run_git(repo: &Path, args: &[&str]) {
         args.first().copied().unwrap_or("git"),
     );
     let env = isolated_git_config_env();
-    let output = Command::new("git")
+    let output = gitcomet_core::test_support::git_fixture::git_command()
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &env.global_config)
         .env("HOME", &env.home_dir)

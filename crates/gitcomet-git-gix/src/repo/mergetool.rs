@@ -926,7 +926,7 @@ mod tests {
         // Create a temporary git repo
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -942,7 +942,7 @@ mod tests {
     fn test_git_config_get_existing_key() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -950,7 +950,7 @@ mod tests {
             .unwrap();
 
         // Set a config value
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -968,19 +968,19 @@ mod tests {
     fn test_git_config_get_with_scope_local_ignores_worktree_config() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "extensions.worktreeConfig", "true"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "--worktree", "mergetool.fake.cmd", "worktree-cmd"])
@@ -1002,7 +1002,7 @@ mod tests {
     fn test_read_index_stage_bytes_optional_no_conflict() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1311,7 +1311,7 @@ mod tests {
     fn test_git_config_get_bool_nonexistent_key_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1327,14 +1327,14 @@ mod tests {
     fn test_git_config_get_bool_parses_variants() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -1348,7 +1348,7 @@ mod tests {
             Some(true)
         );
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -1367,14 +1367,14 @@ mod tests {
     fn test_git_config_get_bool_invalid_value_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
@@ -1396,7 +1396,7 @@ mod tests {
     fn test_git_config_get_bool_bare_key_is_true() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1419,38 +1419,38 @@ mod tests {
     fn test_resolve_mergetool_config_prefers_guitool_and_reads_path_override() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.guitool", "gui"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.guiDefault", "true"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.gui.path", "/opt/fake-gui-tool"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.gui.trustExitCode", "yes"])
@@ -1474,26 +1474,26 @@ mod tests {
     fn test_resolve_mergetool_config_auto_without_display_uses_merge_tool() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.guitool", "gui"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.guiDefault", "auto"])
@@ -1515,20 +1515,20 @@ mod tests {
     fn test_resolve_mergetool_config_trust_exit_code_falls_back_to_global_setting() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.trustExitCode", "true"])
@@ -1547,26 +1547,26 @@ mod tests {
     fn test_resolve_mergetool_config_tool_specific_trust_exit_overrides_global() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.trustExitCode", "true"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.cli.trustExitCode", "false"])
@@ -1585,20 +1585,20 @@ mod tests {
     fn test_resolve_mergetool_config_reads_write_to_temp() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.writeToTemp", "true"])
@@ -1618,20 +1618,20 @@ mod tests {
     fn test_resolve_mergetool_config_reads_keep_temporaries() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
             .output()
             .unwrap();
 
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
             .output()
             .unwrap();
-        Command::new("git")
+        gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .args(["config", "mergetool.keepTemporaries", "true"])
@@ -1648,7 +1648,7 @@ mod tests {
     }
 
     fn init_repo(workdir: &Path) {
-        let status = Command::new("git")
+        let status = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("init")
@@ -1660,7 +1660,7 @@ mod tests {
     }
 
     fn git_config(workdir: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = gitcomet_core::test_support::git_fixture::git_command()
             .arg("-C")
             .arg(workdir)
             .arg("config")
