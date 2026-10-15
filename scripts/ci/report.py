@@ -133,8 +133,6 @@ def cache_context(key):
     if key.startswith("gitcomet-ci-v2-sources-"):
         # Also parses pre-layout keys (os-deps), so new bundles retire those.
         return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 2)[0]
-    if key.startswith("gitcomet-ci-v1-"):
-        return "deps/" + key.removeprefix("gitcomet-ci-v1-").rsplit("-", 1)[0]
     if key.startswith("gitcomet-ci-audit-"):
         return "gitcomet-ci-audit"
     return None
@@ -250,11 +248,7 @@ def git_trace2(path):
 
 def obsolete_caches(caches):
     seen, obsolete = set(), []
-    # Prefer a published v2 replacement over v1 regardless of creation order.
-    ordered = sorted(caches, key=lambda item: (item["key"].startswith("gitcomet-ci-v2-"), item["created_at"]), reverse=True)
-    source_refs = {(cache.get("ref", ""), cache_context(cache["key"]).removeprefix("sources/"))
-                   for cache in caches if cache["key"].startswith("gitcomet-ci-v2-sources-")}
-    for cache in ordered:
+    for cache in sorted(caches, key=lambda item: item["created_at"], reverse=True):
         context = cache_context(cache["key"])
         if context is None:
             continue
@@ -263,12 +257,6 @@ def obsolete_caches(caches):
         if cache["key"].startswith("gitcomet-ci-v2-deps-") and context.removeprefix("deps/") not in COMPILED_BUDGETS_MIB:
             obsolete.append(cache)
             continue
-        # Retire the former source-only allocations only after the OS fallback exists.
-        if cache["key"].startswith("gitcomet-ci-v1-") and ("benchmarks-ci-bench" in context or context.endswith("-clippy")):
-            os_family = "windows" if "windows" in context else "darwin" if "macos" in context else "linux"
-            if (scope, os_family) in source_refs:
-                obsolete.append(cache)
-                continue
         identity = (scope, context)
         if identity in seen:
             obsolete.append(cache)

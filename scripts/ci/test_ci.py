@@ -501,21 +501,19 @@ class CacheTests(unittest.TestCase):
                 cache.report_restore()
                 self.assertEqual(json.loads((reports / "cache-restore.json").read_text())["mode"], "bypassed")
 
-    def test_cache_migration_waits_for_replacements_in_the_same_scope(self):
-        def entry(key, scope="refs/heads/dev"):
-            return {"key": key, "ref": scope, "created_at": "2026-09-19"}
-        native = entry("gitcomet-ci-v1-windows-x64-workspace-ci-test-old")
-        bench = entry("gitcomet-ci-v1-windows-x64-benchmarks-ci-bench-old")
-        unrelated = entry("release-cache")
-        other_scope = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new", "refs/heads/main")
-        self.assertEqual(report.obsolete_caches([native, bench, unrelated, other_scope]), [])
-        replacement = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new")
-        sources = entry("gitcomet-ci-v2-sources-windows-new")
-        obsolete = report.obsolete_caches([native, bench, unrelated, other_scope, replacement, sources])
-        self.assertCountEqual(obsolete, [native, bench])
-        layout = dict(entry("gitcomet-ci-v2-sources-windows-layout-new"), created_at="2026-09-20")
-        obsolete = report.obsolete_caches([native, bench, unrelated, other_scope, replacement, sources, layout])
-        self.assertCountEqual(obsolete, [native, bench, sources])
+    def test_pruning_keeps_the_newest_bundle_per_scope_and_context(self):
+        def entry(key, created_at, scope="refs/heads/dev"):
+            return {"key": key, "ref": scope, "created_at": created_at}
+        with patch.object(report, "COMPILED_BUDGETS_MIB", {"windows-x64-workspace-ci-test": 1}):
+            older = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-old", "2026-09-19")
+            newer = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new", "2026-09-20")
+            other_scope = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-old", "2026-09-19",
+                                "refs/heads/main")
+            sources = entry("gitcomet-ci-v2-sources-windows-layout1-deps", "2026-09-19")
+            relaid_sources = entry("gitcomet-ci-v2-sources-windows-layout2-deps", "2026-09-20")
+            unrelated = entry("release-cache", "2026-09-18")
+            obsolete = report.obsolete_caches([older, newer, other_scope, sources, relaid_sources, unrelated])
+        self.assertCountEqual(obsolete, [older, sources])
 
     def test_roundtrip_preserves_dependency_and_source_but_no_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -763,15 +761,6 @@ class CacheTests(unittest.TestCase):
         with patch.object(report, "COMPILED_BUDGETS_MIB", {"fixture-workspace-ci-test": 1}):
             obsolete = report.obsolete_caches([budgeted_old, budgeted_new, orphaned, sources])
         self.assertCountEqual(obsolete, [budgeted_old, orphaned])
-
-    def test_pruning_only_retires_owned_superseded_contexts(self):
-        caches = [
-            {"key": "gitcomet-ci-v1-macos15-arm-test-aaa", "created_at": "2026-09-18"},
-            {"key": "gitcomet-ci-v1-macos15-arm-test-bbb", "created_at": "2026-09-19"},
-            {"key": "gitcomet-ci-v1-macos26-arm-test-ccc", "created_at": "2026-09-18"},
-            {"key": "unrelated-release-cache", "created_at": "2026-09-17"},
-        ]
-        self.assertEqual(report.obsolete_caches(caches), [caches[0]])
 
 
 class RunnerTests(unittest.TestCase):
