@@ -281,25 +281,26 @@ impl MainPaneView {
 
         let mut handled = false;
 
-        // While the editable buffer has focus every keystroke belongs to it, with
-        // one exception: Ctrl/Cmd+S saves and returns to the originating view.
-        // Outside the editor that chord stages the file, and both meanings can
-        // coexist precisely because they are separated by focus.
-        if self
+        let buffer_focused = self
             .file_editor_input
             .read(cx)
             .focus_handle()
-            .is_focused(window)
+            .is_focused(window);
+        // While the editor is open, Ctrl/Cmd+S is its Save wherever focus is,
+        // and returns to the originating view. Outside the editor it stages.
+        if (buffer_focused || self.is_file_editor_active())
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.shift
+            && !mods.function
+            && key == "s"
         {
-            if (mods.control || mods.platform)
-                && !mods.alt
-                && !mods.shift
-                && !mods.function
-                && key == "s"
-            {
-                self.save_file_editor_buffer_and_exit(window, cx);
-                return true;
-            }
+            self.save_file_editor_buffer_and_exit(window, cx);
+            return true;
+        }
+
+        // While the editable buffer has focus every other keystroke belongs to it.
+        if buffer_focused {
             if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
                 self.toggle_file_editor(window, cx);
                 return true;
@@ -451,12 +452,14 @@ impl MainPaneView {
             handled = true;
         }
 
+        // Stage leaves the bar while editing, and its key goes with it.
         if !handled
             && key == "space"
             && !mods.control
             && !mods.alt
             && !mods.platform
             && !mods.function
+            && !self.is_file_editor_active()
             && !self
                 .diff_raw_input
                 .read(cx)
