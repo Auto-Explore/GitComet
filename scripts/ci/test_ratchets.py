@@ -49,9 +49,9 @@ TEXTS = {
 
 class Classification(unittest.TestCase):
     def test_test_paths_follow_the_size_guard(self):
-        for path in ("a/tests/b.rs", "a/benches/b.rs", "a/tests.rs", "a/b_tests.rs"):
+        for path in ("a/tests/b.rs", "a/benches/b.rs", "a/benchmarks/b.rs", "a/tests.rs", "a/b_tests.rs"):
             self.assertTrue(ratchets.is_test_path(path), path)
-        for path in ("a/test_support.rs", "a/testing.rs", "a/benchmarks/b.rs"):
+        for path in ("a/test_support.rs", "a/testing.rs", "a/benchmarks.rs"):
             self.assertFalse(ratchets.is_test_path(path), path)
 
     def test_production_excludes_benchmarks_and_smoke_tests(self):

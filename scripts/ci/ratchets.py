@@ -31,12 +31,13 @@ def is_test_path(path):
     """The classification of scripts/check-rust-source-size.sh."""
     parts = path.split("/")
     name = parts[-1]
-    return "tests" in parts or "benches" in parts or name == "tests.rs" or name.endswith("_tests.rs")
+    return ("tests" in parts or "benches" in parts or "benchmarks" in parts or name == "tests.rs"
+            or name.endswith("_tests.rs"))
 
 
 def is_production(path):
     parts = path.split("/")
-    return not is_test_path(path) and "benchmarks" not in parts and "smoke_tests" not in parts
+    return not is_test_path(path) and "smoke_tests" not in parts
 
 
 def lines(text):
