@@ -1128,11 +1128,6 @@ pub struct GitCometView {
     pub(super) terminal_panel_height: Pixels,
     pub(super) terminal_panel_resize: Option<TerminalPanelResizeState>,
     pub(super) next_terminal_session_seq: u64,
-    pub(super) terminal_cursor_blink_visible: bool,
-    pub(super) terminal_cursor_blink_hold_until: Instant,
-    pub(super) terminal_cursor_blink_active: bool,
-    pub(super) terminal_cursor_blink_task_scheduled: bool,
-    pub(super) terminal_cursor_blink_seq: u64,
     /// The reflog panel. It owns its own per-repository state (filter text,
     /// scroll, selection) — a separate entity so that hovering one of its rows
     /// repaints the panel instead of the whole application window.

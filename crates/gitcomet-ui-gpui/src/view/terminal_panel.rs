@@ -111,57 +111,6 @@ impl GitCometView {
         })
     }
 
-    fn deactivate_terminal_cursor_blink(&mut self) {
-        self.terminal_cursor_blink_active = false;
-        self.terminal_cursor_blink_task_scheduled = false;
-        self.terminal_cursor_blink_seq = self.terminal_cursor_blink_seq.wrapping_add(1);
-        self.terminal_cursor_blink_visible = true;
-        self.terminal_cursor_blink_hold_until = Instant::now();
-    }
-
-    fn schedule_terminal_cursor_blink_tick(&mut self, cx: &mut gpui::Context<Self>) {
-        if !crate::ui_runtime::current().uses_cursor_blink()
-            || !self.terminal_cursor_blink_active
-            || self.terminal_cursor_blink_task_scheduled
-        {
-            return;
-        }
-        self.terminal_cursor_blink_task_scheduled = true;
-        let blink_seq = self.terminal_cursor_blink_seq;
-        cx.spawn(
-            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS)).await;
-                let _ = view.update(cx, |this, cx| {
-                    this.advance_terminal_cursor_blink(blink_seq, cx)
-                });
-            },
-        )
-        .detach();
-    }
-
-    fn advance_terminal_cursor_blink(&mut self, blink_seq: u64, cx: &mut gpui::Context<Self>) {
-        if self.terminal_cursor_blink_seq != blink_seq {
-            return;
-        }
-        self.terminal_cursor_blink_task_scheduled = false;
-        if !self.terminal_cursor_blink_active {
-            self.terminal_cursor_blink_visible = true;
-            return;
-        }
-        let now = Instant::now();
-        if now < self.terminal_cursor_blink_hold_until {
-            if !self.terminal_cursor_blink_visible {
-                self.terminal_cursor_blink_visible = true;
-                cx.notify();
-            }
-            self.schedule_terminal_cursor_blink_tick(cx);
-            return;
-        }
-        self.terminal_cursor_blink_visible = !self.terminal_cursor_blink_visible;
-        cx.notify();
-        self.schedule_terminal_cursor_blink_tick(cx);
-    }
-
     pub(in crate::view) fn apply_terminal_preferences(
         &mut self,
         next: TerminalPreferences,
@@ -211,21 +160,6 @@ impl GitCometView {
                     self.open_external_terminal_for_repo(repo_id, cx);
                 }
             }
-        }
-    }
-
-    fn reset_terminal_cursor_blink(&mut self, cx: &mut gpui::Context<Self>) {
-        let was_visible = self.terminal_cursor_blink_visible;
-        self.terminal_cursor_blink_visible = true;
-        self.terminal_cursor_blink_hold_until =
-            Instant::now() + Duration::from_millis(TERMINAL_CARET_RESUME_DELAY_MS);
-        if !crate::ui_runtime::current().uses_cursor_blink() {
-            self.terminal_cursor_blink_active = false;
-            self.terminal_cursor_blink_task_scheduled = false;
-        }
-        self.schedule_terminal_cursor_blink_tick(cx);
-        if !was_visible {
-            cx.notify();
         }
     }
 
@@ -285,9 +219,6 @@ impl GitCometView {
                 }
             }
         }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        }
         self.sync_terminal_indicator_views(cx);
         cx.notify();
     }
@@ -321,7 +252,6 @@ impl GitCometView {
         );
 
         self.spawn_terminal_event_task(repo_id, session_seq, cx);
-        self.reset_terminal_cursor_blink(cx);
         self.sync_terminal_indicator_views(cx);
         self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
@@ -352,7 +282,6 @@ impl GitCometView {
         session.active_index = session.instances.len() - 1;
 
         self.spawn_terminal_event_task(repo_id, session_seq, cx);
-        self.reset_terminal_cursor_blink(cx);
         self.sync_terminal_indicator_views(cx);
         self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
@@ -514,9 +443,6 @@ impl GitCometView {
                 shutdown_terminal_instance(instance, false);
             }
         }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        }
         self.sync_terminal_indicator_views(cx);
         cx.notify();
     }
@@ -565,9 +491,10 @@ impl GitCometView {
         if session_emptied {
             self.terminal_sessions.remove(&repo_id);
         }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        } else if focus_surviving_tab && self.active_repo_id() == Some(repo_id) {
+        if focus_surviving_tab
+            && self.active_repo_id() == Some(repo_id)
+            && self.active_repo_has_open_terminal()
+        {
             self.focus_terminal_view(repo_id, window, cx);
         }
         self.sync_terminal_indicator_views(cx);
@@ -646,7 +573,6 @@ impl GitCometView {
             return;
         };
         window.focus(&focus_handle, cx);
-        self.reset_terminal_cursor_blink(cx);
     }
 
     pub(crate) fn running_terminal_summary(&self) -> TerminalShutdownSummary {
