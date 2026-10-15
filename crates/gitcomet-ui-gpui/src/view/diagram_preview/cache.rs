@@ -10,17 +10,47 @@ use std::sync::{
 pub(super) const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_RASTER_BYTES: usize = 64 * 1024 * 1024;
 
-#[derive(Clone, Eq, PartialEq)]
-pub(super) struct CacheKey(DiagramKind, Arc<str>, u64);
-impl CacheKey {
-    pub(super) fn new(kind: DiagramKind, source: Arc<str>) -> Self {
+/// A diagram's identity: its kind and source, hashed once.
+#[derive(Clone, Debug)]
+pub(in crate::view) struct DiagramKey(DiagramKind, Arc<str>, u64);
+impl PartialEq for DiagramKey {
+    fn eq(&self, other: &Self) -> bool {
+        // A frame compares the same parsed source with itself.
+        self.0 == other.0
+            && self.2 == other.2
+            && (Arc::ptr_eq(&self.1, &other.1) || self.1 == other.1)
+    }
+}
+impl Eq for DiagramKey {}
+#[cfg(test)]
+thread_local! {
+    // Diagram sources hashed since the last take.
+    static SOURCES_HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Diagram sources hashed into cache keys since the last call.
+#[cfg(test)]
+pub(in crate::view) fn take_sources_hashed_for_tests() -> usize {
+    SOURCES_HASHED.with(|hashed| hashed.replace(0))
+}
+
+impl DiagramKey {
+    pub(in crate::view) fn new(kind: DiagramKind, source: Arc<str>) -> Self {
         use std::hash::{Hash, Hasher};
+        #[cfg(test)]
+        SOURCES_HASHED.with(|hashed| hashed.set(hashed.get() + 1));
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
         Self(kind, source, hasher.finish())
     }
+    pub(in crate::view) fn kind(&self) -> DiagramKind {
+        self.0
+    }
+    pub(in crate::view) fn source(&self) -> &Arc<str> {
+        &self.1
+    }
 }
-impl std::hash::Hash for CacheKey {
+impl std::hash::Hash for DiagramKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
         self.2.hash(state);
@@ -52,15 +82,15 @@ struct Flight {
     ready: Condvar,
 }
 pub(super) struct CacheInner {
-    pub(super) entries: lru::LruCache<CacheKey, RasterResult>,
-    flights: HashMap<CacheKey, Arc<Flight>>,
+    pub(super) entries: lru::LruCache<DiagramKey, RasterResult>,
+    flights: HashMap<DiagramKey, Arc<Flight>>,
     tile_locks: HashMap<TileKey, std::sync::Weak<Mutex<()>>>,
     pub(super) bytes: usize,
     pub(super) tiles: lru::LruCache<TileKey, Arc<gpui::RenderImage>>,
     pub(super) dropped: VecDeque<Arc<gpui::RenderImage>>,
 }
 impl CacheInner {
-    pub(super) fn insert(&mut self, key: CacheKey, result: RasterResult) {
+    pub(super) fn insert(&mut self, key: DiagramKey, result: RasterResult) {
         let bytes = result.as_ref().map_or(0, |value| value.bytes);
         if bytes > MAX_SCENE_BYTES {
             return;
@@ -138,16 +168,14 @@ impl Default for DiagramCache {
 impl DiagramCache {
     #[cfg(any(test, feature = "benchmarks"))]
     pub(super) fn render(&self, kind: DiagramKind, source: Arc<str>) -> RasterResult {
-        self.render_current(kind, source, &AtomicU64::new(0), 0)
+        self.render_current(DiagramKey::new(kind, source), &AtomicU64::new(0), 0)
     }
     pub(super) fn render_current(
         &self,
-        kind: DiagramKind,
-        source: Arc<str>,
+        key: DiagramKey,
         generation: &AtomicU64,
         expected: u64,
     ) -> RasterResult {
-        let key = CacheKey::new(kind, source.clone());
         let (flight, owner) = {
             let mut inner = self.inner.lock().unwrap();
             if let Some(result) = inner.entries.get(&key) {
@@ -175,7 +203,7 @@ impl DiagramCache {
                 .is_err_and(|e| e == "Obsolete diagram request.")
                 && generation.load(Ordering::Relaxed) == expected
             {
-                return self.render_current(kind, source, generation, expected);
+                return self.render_current(key, generation, expected);
             }
             return result;
         }
@@ -183,7 +211,7 @@ impl DiagramCache {
             let _permit = self.work.acquire(false);
             if generation.load(Ordering::Relaxed) == expected {
                 self.preparations.fetch_add(1, Ordering::Relaxed);
-                gitcomet_diagrams::render(kind, &source).and_then(|output| {
+                gitcomet_diagrams::render(key.kind(), key.source()).and_then(|output| {
                     let page = output
                         .pages
                         .into_iter()
@@ -212,6 +240,14 @@ impl DiagramCache {
         }
         flight.ready.notify_all();
         result
+    }
+    /// The height of `key`'s scene at 100% and its diagnostic count, when it
+    /// is prepared.
+    pub(super) fn scene_facts(&self, key: &DiagramKey) -> Option<(f32, usize)> {
+        match self.inner.lock().unwrap().entries.peek(key) {
+            Some(Ok(diagram)) => Some((diagram.scene.height(), diagram.diagnostics.len())),
+            Some(Err(_)) | None => None,
+        }
     }
     pub(super) fn peek_tile(&self, key: TileKey) -> Option<Arc<gpui::RenderImage>> {
         self.inner.lock().unwrap().tiles.get(&key).cloned()
@@ -298,8 +334,7 @@ mod tests {
         let worker = std::thread::spawn(move || {
             started.send(()).unwrap();
             worker_cache.render_current(
-                DiagramKind::Mermaid,
-                "flowchart LR;A-->B".into(),
+                DiagramKey::new(DiagramKind::Mermaid, "flowchart LR;A-->B".into()),
                 &worker_generation,
                 0,
             )

@@ -55,11 +55,12 @@ impl DiagramState {
         }));
     }
 
+    /// A `height` of `None` fills the pane.
     pub(super) fn render_viewport(
         &mut self,
         diagram: Arc<RasterDiagram>,
         theme: AppTheme,
-        embedded: bool,
+        height: Option<f32>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let state = cx.entity();
@@ -77,7 +78,22 @@ impl DiagramState {
                         this.invalidate_tiles();
                     }
                     let dpr = window.scale_factor();
-                    let keys = this.viewport.keys(diagram.id, dpr);
+                    // The document's clip: the viewport sets none of its own.
+                    let mask = window.content_mask().bounds;
+                    this.hidden_above = f32::from((mask.top() - bounds.top()).max(px(0.0)));
+                    // The box on screen, plus a tile row past the screen's top
+                    // and bottom where the box goes on, so the rows a scroll
+                    // brings in are already drawn.
+                    let margin = px(TILE_SIZE as f32 / dpr);
+                    let top = (mask.top() - margin).max(bounds.top());
+                    let bottom = (mask.bottom() + margin).min(bounds.bottom());
+                    let left = mask.left().max(bounds.left());
+                    let right = mask.right().min(bounds.right());
+                    let visible = (
+                        f32::from(left - bounds.left())..f32::from(right - bounds.left()),
+                        f32::from(top - bounds.top())..f32::from(bottom - bounds.top()),
+                    );
+                    let keys = this.viewport.keys(diagram.id, dpr, visible);
                     this.request_tiles(diagram.clone(), keys.clone(), cx);
                     let pan = this.viewport.pan;
                     keys.into_iter()
@@ -99,16 +115,24 @@ impl DiagramState {
                 (hitbox, tiles)
             },
             move |bounds, (hitbox, tiles), window, _cx| {
-                for (image_bounds, image) in tiles {
-                    let _ = window.paint_image(
-                        bounds,
-                        image_bounds,
-                        gpui::Corners::default(),
-                        image,
-                        0,
-                        false,
-                    );
-                }
+                // Clip whole tiles to the box rather than mapping a clipped
+                // part of each, which rounds texture coordinates.
+                let mask = gpui::ContentMask {
+                    bounds,
+                    ..Default::default()
+                };
+                window.with_content_mask(Some(mask), |window| {
+                    for (image_bounds, image) in tiles {
+                        let _ = window.paint_image(
+                            image_bounds,
+                            image_bounds,
+                            gpui::Corners::default(),
+                            image,
+                            0,
+                            false,
+                        );
+                    }
+                });
                 let state = state_for_paint.clone();
                 crate::view::zoom_wheel::on_zoom_wheel(window, hitbox, move |event, _, cx| {
                     state.update(cx, |this, cx| {
@@ -161,10 +185,11 @@ impl DiagramState {
             .debug_selector(|| "diagram_viewport".into())
             .w_full()
             .min_w(px(0.0))
-            .overflow_hidden()
             .bg(gpui::white())
-            .when(embedded, |d| d.h(px(320.0)).flex_shrink_0())
-            .when(!embedded, |d| d.flex_1().min_h(px(160.0)))
+            .map(|d| match height {
+                Some(height) => d.h(px(height)).flex_shrink_0(),
+                None => d.flex_1().min_h(px(160.0)),
+            })
             .cursor(if self.viewport.dragging.is_some() {
                 gpui::CursorStyle::ClosedHand
             } else {

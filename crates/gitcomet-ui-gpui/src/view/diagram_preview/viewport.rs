@@ -1,8 +1,18 @@
 use super::cache::TileKey;
 use crate::view::zoom_wheel::{ZoomStep, ZoomWheel};
 use gitcomet_diagrams::scene::TILE_SIZE;
+use std::ops::Range;
 
 pub(super) const ZOOM_STEPS: [f32; 8] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
+/// The 100% step a viewport opens and resets at.
+const DEFAULT_ZOOM: u8 = 2;
+/// Room a reset leaves around a diagram.
+const PADDING: f32 = 16.0;
+
+/// The viewport height that shows the whole diagram at 100%.
+pub(super) fn full_height(natural_height: f32) -> f32 {
+    natural_height * ZOOM_STEPS[DEFAULT_ZOOM as usize] + 2.0 * PADDING
+}
 #[derive(Clone, Debug)]
 pub(super) struct Viewport {
     pub(super) zoom: u8,
@@ -16,7 +26,7 @@ pub(super) struct Viewport {
 impl Default for Viewport {
     fn default() -> Self {
         Self {
-            zoom: 2,
+            zoom: DEFAULT_ZOOM,
             pan: (0.0, 0.0),
             size: (0.0, 0.0),
             natural: (0.0, 0.0),
@@ -28,15 +38,15 @@ impl Default for Viewport {
 }
 impl Viewport {
     pub(super) fn reset(&mut self) {
-        self.zoom = 2;
+        self.zoom = DEFAULT_ZOOM;
         self.dragging = None;
         self.zoom_wheel = ZoomWheel::default();
         self.initialized = true;
         let position = |view: f32, graph: f32| {
-            if graph + 32.0 <= view {
+            if graph + 2.0 * PADDING <= view {
                 (view - graph) / 2.0
             } else {
-                16.0
+                PADDING
             }
         };
         self.pan = (
@@ -97,17 +107,31 @@ impl Viewport {
             self.clamp();
         }
     }
-    pub(super) fn keys(&self, scene: u64, dpr: f32) -> Vec<TileKey> {
+    /// Tiles under `visible`: the on-screen part of the viewport, horizontal
+    /// then vertical, relative to its top-left corner.
+    pub(super) fn keys(
+        &self,
+        scene: u64,
+        dpr: f32,
+        visible: (Range<f32>, Range<f32>),
+    ) -> Vec<TileKey> {
+        if visible.0.is_empty() || visible.1.is_empty() {
+            return Vec::new();
+        }
         let scale = ZOOM_STEPS[self.zoom as usize] * dpr;
-        let axis = |pan: f32, view: f32, graph: f32| {
-            let start = (-pan * dpr / TILE_SIZE as f32).floor().max(0.0) as u32;
-            let end = (((view - pan) * dpr / TILE_SIZE as f32).ceil().max(0.0) as u32)
+        let axis = |pan: f32, visible: Range<f32>, graph: f32| {
+            let start = ((visible.start - pan) * dpr / TILE_SIZE as f32)
+                .floor()
+                .max(0.0) as u32;
+            let end = (((visible.end - pan) * dpr / TILE_SIZE as f32)
+                .ceil()
+                .max(0.0) as u32)
                 .min((graph * scale / TILE_SIZE as f32).ceil() as u32);
             start..end
         };
         let mut keys = Vec::new();
-        for row in axis(self.pan.1, self.size.1, self.natural.1) {
-            for column in axis(self.pan.0, self.size.0, self.natural.0) {
+        for row in axis(self.pan.1, visible.1, self.natural.1) {
+            for column in axis(self.pan.0, visible.0.clone(), self.natural.0) {
                 keys.push(TileKey {
                     scene,
                     zoom: self.zoom,

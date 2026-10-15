@@ -2346,6 +2346,10 @@ impl MainPaneView {
                                                     .base_handle
                                                     .clone(),
                                             ),
+                                            diagram_heights:
+                                                crate::view::diagram_preview::DiagramHeights::new(
+                                                    cx,
+                                                ),
                                         },
                                     );
                                     self.watch_pending_markdown_preview_images(

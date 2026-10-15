@@ -1,10 +1,13 @@
 use super::*;
-use gitcomet_diagrams::scene::PreparedScene;
+use gitcomet_diagrams::scene::{PreparedScene, TILE_SIZE};
 
 fn render(cache: &DiagramCache, source: &str) -> Arc<RasterDiagram> {
     cache
         .render(DiagramKind::Mermaid, Arc::from(source))
         .unwrap()
+}
+fn whole(view: &Viewport) -> (std::ops::Range<f32>, std::ops::Range<f32>) {
+    (0.0..view.size.0, 0.0..view.size.1)
 }
 fn tile_key(scene: u64, zoom: u8, dpr: f32, column: u32, row: u32) -> TileKey {
     TileKey {
@@ -108,7 +111,7 @@ fn scene_cache_evicts_by_retained_svg_bytes_and_entry_count() {
     let mut inner = cache.inner.lock().unwrap();
     inner.entries.clear();
     inner.bytes = 0;
-    let key = |s: &str| CacheKey::new(DiagramKind::Mermaid, Arc::from(s));
+    let key = |s: &str| DiagramKey::new(DiagramKind::Mermaid, Arc::from(s));
     inner.insert(key("old"), weighted(10 * 1024 * 1024));
     inner.insert(key("new"), weighted(10 * 1024 * 1024));
     assert!(!inner.entries.contains(&key("old")));
@@ -130,7 +133,10 @@ fn file_inputs_enforce_budget_utf8_and_revision_identity() {
         revision: "first".into(),
     };
     std::fs::write(file.path(), "flowchart LR;A-->B").unwrap();
-    assert_eq!(input.read().unwrap().1.as_ref(), "flowchart LR;A-->B");
+    assert_eq!(
+        input.read().unwrap().source().as_ref(),
+        "flowchart LR;A-->B"
+    );
     let other = DiagramInput::File {
         kind: DiagramKind::Mermaid,
         path: file.path().into(),
@@ -163,7 +169,7 @@ fn viewport_defaults_centers_fitting_graphs_and_pads_overflow() {
     viewport.natural = (100000.0, 10000.0);
     viewport.reset();
     assert_eq!(viewport.pan, (16.0, 16.0));
-    assert!(viewport.keys(1, 2.0).len() <= 6);
+    assert!(viewport.keys(1, 2.0, whole(&viewport)).len() <= 6);
 }
 #[test]
 fn viewport_zoom_preserves_center_and_clamps_pan_reset_and_steps() {
@@ -189,6 +195,96 @@ fn viewport_zoom_preserves_center_and_clamps_pan_reset_and_steps() {
     assert_eq!(view.pan, (16.0, 16.0));
     assert!(view.dragging.is_none());
 }
+/// A full-height block can be far taller than the window; asking for its
+/// off-screen tiles would overrun the 64-tile cache and re-raster forever.
+#[test]
+fn viewport_keys_cover_only_the_visible_part() {
+    let mut view = Viewport::default();
+    view.resize(600.0, full_height(4000.0), (500.0, 4000.0));
+    assert_eq!(view.pan, (50.0, 16.0));
+    let rows = |keys: Vec<TileKey>| keys.iter().map(|key| key.row).collect::<Vec<_>>();
+    assert_eq!(
+        rows(view.keys(1, 1.0, whole(&view))),
+        (0..8).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        rows(view.keys(1, 1.0, (0.0..600.0, 1000.0..1300.0))),
+        [1, 2]
+    );
+    assert!(view.keys(1, 1.0, (0.0..600.0, 700.0..700.0)).is_empty());
+    assert!(view.keys(1, 1.0, (0.0..0.0, 0.0..300.0)).is_empty());
+}
+/// A block not drawn yet holds its diagram's real height once the scene is
+/// prepared, as the reader collapsed it, with its diagnostics; the collapsed
+/// box before that.
+#[test]
+fn block_estimate_follows_the_prepared_scene() {
+    let cache = Arc::new(DiagramCache::default());
+    let heights = DiagramHeights {
+        cache: cache.clone(),
+        choices: BlockChoices::default(),
+    };
+    let key = |source: &str| DiagramKey::new(DiagramKind::Mermaid, source.into());
+    let short = key("flowchart LR;A-->B");
+    let tall = key("flowchart TD;A-->B;B-->C;C-->D;D-->E;E-->F");
+    let diagnosed = key("%%{init: {\"notASetting\": 1}}%%\nflowchart LR;A-->B");
+    let scale = crate::ui_scale::UiScale::from_percent(100);
+    let estimate = |key: &DiagramKey| heights.estimate_block(key, scale, 0.0);
+    let row = block_control_row(scale);
+    assert_eq!(estimate(&short), row + COLLAPSED_HEIGHT);
+    assert_eq!(
+        DiagramHeights::default().estimate_block(&short, scale, 0.0),
+        row + COLLAPSED_HEIGHT
+    );
+
+    let height = |key: &DiagramKey| {
+        cache
+            .render(key.kind(), key.source().clone())
+            .unwrap()
+            .scene
+            .height()
+    };
+    let (short_height, tall_height) = (height(&short), height(&tall));
+    assert_eq!(estimate(&short), row + full_height(short_height));
+    assert!(full_height(tall_height) > COLLAPSED_HEIGHT);
+    assert_eq!(
+        estimate(&tall),
+        2.0 * row + full_height(tall_height),
+        "a tall block also has its bar"
+    );
+    heights
+        .choices
+        .update(&tall, |choice| choice.height = BlockHeight::Collapsed);
+    assert_eq!(estimate(&tall), 2.0 * row + COLLAPSED_HEIGHT);
+    heights
+        .choices
+        .update(&tall, |choice| choice.mode = RenderedPreviewMode::Source);
+    assert_eq!(
+        heights.estimate_block(&tall, scale, 123.0),
+        row + 123.0,
+        "a block showing its source is its header and the listing"
+    );
+
+    let status = f32::from(scale.ui_text(STATUS_LINE) + scale.px(BLOCK_GAP));
+    let diagnosed_height = height(&diagnosed);
+    assert_eq!(
+        estimate(&diagnosed),
+        row + full_height(diagnosed_height) + status,
+        "one diagnostic line"
+    );
+}
+/// Choices are remembered by diagram source; one back at the default lets its
+/// source go.
+#[test]
+fn a_choice_back_at_the_default_is_forgotten() {
+    let choices = BlockChoices::default();
+    let key = DiagramKey::new(DiagramKind::Mermaid, "flowchart LR;A-->B".into());
+    choices.update(&key, |choice| choice.height = BlockHeight::Collapsed);
+    assert_eq!(choices.0.borrow().len(), 1);
+    assert!(choices.get(&key).height == BlockHeight::Collapsed);
+    choices.update(&key, |choice| choice.height = BlockHeight::Full);
+    assert!(choices.0.borrow().is_empty());
+}
 #[test]
 fn pan_zoom_and_dpr_changes_reuse_layout_but_request_new_tiles() {
     let cache = DiagramCache::default();
@@ -198,7 +294,7 @@ fn pan_zoom_and_dpr_changes_reuse_layout_but_request_new_tiles() {
     let generation = AtomicU64::new(0);
     for (delta, dpr) in [(0, 1.0), (1, 1.0), (0, 2.0), (-1, 1.0)] {
         view.zoom_by(delta);
-        for key in view.keys(scene.id, dpr) {
+        for key in view.keys(scene.id, dpr, whole(&view)) {
             cache.tile(&scene, key, &generation, 0).unwrap();
         }
     }
@@ -211,6 +307,7 @@ fn stale_completion_cannot_replace_current_source_or_scene() {
     let mut state = DiagramState {
         cache,
         viewport: Viewport::default(),
+        hidden_above: 0.0,
         generation: Arc::new(AtomicU64::new(0)),
         source_generation: Arc::new(AtomicU64::new(0)),
         tile_task: None,
@@ -223,7 +320,7 @@ fn stale_completion_cannot_replace_current_source_or_scene() {
         result: Loadable::Loading,
         seq: 2,
         task: None,
-        preview_mode: RenderedPreviewMode::Source,
+        choices: BlockChoices::default(),
     };
     assert!(!state.complete(1, Err("old error".into())));
     assert!(matches!(state.result, Loadable::Loading));
@@ -238,18 +335,28 @@ fn stale_completion_cannot_replace_current_source_or_scene() {
     );
 }
 struct Harness {
-    input: DiagramInput,
+    key: DiagramKey,
     force_source: bool,
 }
 
 struct InteractionHarness {
     state: Entity<DiagramState>,
     scroll: gpui::ScrollHandle,
+    key: DiagramKey,
 }
 impl Render for InteractionHarness {
     fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let preview = self.state.update(cx, |state, cx| {
-            state.render(AppTheme::gitcomet_dark(), None, false, true, cx)
+            state.render(
+                AppTheme::gitcomet_dark(),
+                None,
+                false,
+                &DiagramPlacement::Block {
+                    key: self.key.clone(),
+                    scroll: None,
+                },
+                cx,
+            )
         });
         div()
             .id("diagram_outer_scroll")
@@ -283,6 +390,7 @@ fn open_interaction_harness(
                 )
             }),
             scroll: gpui::ScrollHandle::new(),
+            key: DiagramKey::new(DiagramKind::Mermaid, "flowchart LR;A-->B".into()),
         }
     });
     let state = cx.update(|_, app| view.read(app).state.clone());
@@ -370,6 +478,81 @@ fn smooth_ctrl_scroll_steps_the_diagram_zoom_once_per_40_px(cx: &mut gpui::TestA
     assert_eq!(zoom(cx), 3);
 }
 
+struct PaneHarness {
+    state: Entity<DiagramState>,
+    input: DiagramInput,
+}
+impl Render for PaneHarness {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let preview = self.state.update(cx, |state, cx| {
+            state.render(
+                AppTheme::gitcomet_dark(),
+                None,
+                false,
+                &DiagramPlacement::Pane(self.input.clone()),
+                cx,
+            )
+        });
+        div().size_full().flex().flex_col().child(preview)
+    }
+}
+
+/// Rows above and below a viewport are never seen: its own box clips them. A
+/// zoomed diagram that overflows its pane asked for one more row on each side,
+/// enough for two side-by-side panes to outgrow the tile cache.
+#[gpui::test]
+fn a_zoomed_pane_requests_only_the_rows_inside_it(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let input = DiagramInput::Text {
+        kind: DiagramKind::Mermaid,
+        text: "flowchart TD;A-->B;B-->C;C-->D;D-->E;E-->F;F-->G;G-->H;H-->I;I-->J".into(),
+    };
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let cache = cache(cx);
+        PaneHarness {
+            state: cx.new(|cx| DiagramState::new(input.clone(), cache, cx)),
+            input: input.clone(),
+        }
+    });
+    let state = cx.update(|_, app| view.read(app).state.clone());
+    crate::view::test_support::redraw(cx);
+    let center = cx.debug_bounds("diagram_viewport").unwrap().center();
+    for _ in 0..4 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: center,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(40.0))),
+            modifiers: gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+    }
+    crate::view::test_support::redraw(cx);
+    let dpr = cx.update(|window, _| window.scale_factor());
+    cx.update(|_, app| {
+        let state = state.read(app);
+        let viewport = &state.viewport;
+        assert_eq!(viewport.zoom, 6);
+        let tile = TILE_SIZE as f32 / dpr;
+        let scale = ZOOM_STEPS[viewport.zoom as usize];
+        assert!(
+            viewport.natural.1 * scale > viewport.size.1 + 2.0 * tile,
+            "the zoomed diagram overflows the pane by more than a row each way"
+        );
+        assert!(!state.requested.is_empty());
+        for key in &state.requested {
+            let top = viewport.pan.1 + key.row as f32 * tile;
+            assert!(
+                top < viewport.size.1 && top + tile > 0.0,
+                "row {} at {top} lies outside the {} px pane",
+                key.row,
+                viewport.size.1
+            );
+        }
+    });
+}
+
 #[test]
 fn shared_scenes_keep_independent_preview_viewports() {
     let cache = DiagramCache::default();
@@ -390,7 +573,6 @@ impl Render for Harness {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         div().size_full().child(DiagramPreview {
             id: "test_diagram".into(),
-            input: self.input.clone(),
             theme: AppTheme::gitcomet_dark(),
             source_element: Some(
                 div()
@@ -399,7 +581,10 @@ impl Render for Harness {
                     .into_any_element(),
             ),
             force_source: self.force_source,
-            embedded: true,
+            placement: DiagramPlacement::Block {
+                key: self.key.clone(),
+                scroll: None,
+            },
         })
     }
 }
@@ -409,10 +594,7 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
     let _visual_guard = crate::test_support::lock_visual_test();
     let source: Arc<str> = "flowchart LR\nA-->B".into();
     let (view, cx) = cx.add_window_view(|_, _| Harness {
-        input: DiagramInput::Text {
-            kind: DiagramKind::Mermaid,
-            text: source.clone(),
-        },
+        key: DiagramKey::new(DiagramKind::Mermaid, source.clone()),
         force_source: false,
     });
     let wait = |cx: &mut gpui::VisualTestContext, source: Arc<str>, success: bool| {
@@ -430,7 +612,7 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
                         .lock()
                         .unwrap()
                         .entries
-                        .peek(&CacheKey::new(DiagramKind::Mermaid, source.clone()))
+                        .peek(&DiagramKey::new(DiagramKind::Mermaid, source.clone()))
                         .is_some_and(|result| result.is_ok() == success)
                 })
             });
@@ -450,7 +632,16 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
     };
     wait(cx, source.clone(), true);
     let bounds = cx.debug_bounds("diagram_viewport").unwrap();
-    assert_eq!(f32::from(bounds.size.height), 320.0);
+    let (scene_height, _) = cx.update(|_, app| {
+        app.global::<AppDiagramCache>()
+            .0
+            .scene_facts(&DiagramKey::new(DiagramKind::Mermaid, source.clone()))
+            .unwrap()
+    });
+    // A short diagram takes its own height, with nothing to collapse.
+    assert_eq!(f32::from(bounds.size.height), full_height(scene_height));
+    assert!(f32::from(bounds.size.height) < COLLAPSED_HEIGHT);
+    assert!(cx.debug_bounds("diagram_block_height_toggle").is_none());
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: bounds.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(60.0))),
@@ -469,7 +660,9 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
         let ready = cx.update(|_, app| {
             let cache = &app.global::<AppDiagramCache>().0;
             assert_eq!(cache.preparations.load(Ordering::Relaxed), 1);
-            cached_tile_zooms_for_tests(app).contains(&3)
+            cached_tiles_for_tests(app)
+                .iter()
+                .any(|(zoom, _)| *zoom == 3)
         });
         if ready {
             break;
@@ -529,10 +722,7 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
     let invalid: Arc<str> = "invalid diagram".into();
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.input = DiagramInput::Text {
-                kind: DiagramKind::Mermaid,
-                text: invalid.clone(),
-            };
+            view.key = DiagramKey::new(DiagramKind::Mermaid, invalid.clone());
             cx.notify();
         })
     });

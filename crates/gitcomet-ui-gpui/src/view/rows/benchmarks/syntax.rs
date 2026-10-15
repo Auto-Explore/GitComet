@@ -1872,6 +1872,7 @@ fn render_markdown_preview_window(
             query: None,
             reveal: Default::default(),
             scroll: None,
+            diagram_heights: Default::default(),
             hovered_link: None,
             change_extents: None,
             tasks_editable: false,

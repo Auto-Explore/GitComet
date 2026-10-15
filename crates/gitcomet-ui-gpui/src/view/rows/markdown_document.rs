@@ -72,6 +72,8 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) reveal: crate::view::rows::MarkdownPreviewRevealRequest,
     /// The container the document scrolls in, which the reveal moves.
     pub(in crate::view) scroll: Option<gpui::ScrollHandle>,
+    /// Diagram heights already known, for sizing diagram blocks not yet drawn.
+    pub(in crate::view) diagram_heights: crate::view::diagram_preview::DiagramHeights,
     /// The link under the pointer.
     pub(in crate::view) hovered_link: Option<crate::view::rows::MarkdownPreviewHoveredLink>,
     /// Where changed blocks were laid out, for the diff's scrollbar markers.
@@ -408,6 +410,9 @@ fn estimated_block_height(
         (text.chars().count() as f32 / per_line).ceil().max(1.0)
     };
     let rows = RowRun::new(document, block.row_range());
+    let listing = || {
+        rows.iter().count() as f32 * line + 2.0 * f32::from(scaled(CODE_BLOCK_PAD_Y_PX, context))
+    };
     let height = match block {
         MarkdownBlock::Heading { level, row_ix } => {
             let size = match level {
@@ -435,11 +440,18 @@ fn estimated_block_height(
             .iter()
             .map(|(_, row)| lines(&row.text, 40.0 * f32::from(row.indent_level)) * line)
             .sum(),
-        MarkdownBlock::Code(_) => {
-            rows.iter().count() as f32 * line
-                + 2.0 * f32::from(scaled(CODE_BLOCK_PAD_Y_PX, context))
-        }
-        MarkdownBlock::Diagram(_) => 360.0,
+        MarkdownBlock::Code(_) => listing(),
+        MarkdownBlock::Diagram(_) => rows
+            .first()
+            .and_then(|(_, row)| row.diagram.as_ref())
+            .map_or(0.0, |diagram| {
+                context.diagram_heights.estimate_block(
+                    &diagram.key,
+                    crate::ui_scale::UiScale::from_percent(context.ui_scale_percent)
+                        .with_appearance(context.theme.metrics),
+                    listing(),
+                )
+            }),
         MarkdownBlock::Table(_) => {
             rows.iter().count() as f32
                 * (line + 2.0 * f32::from(scaled(TABLE_CELL_PAD_Y_PX, context)))
@@ -1410,12 +1422,11 @@ fn render_block(
                         range.start,
                     )
                         .into(),
-                    input: crate::view::diagram_preview::DiagramInput::Text {
-                        kind: diagram.kind,
-                        text: diagram.source.clone(),
-                    },
                     theme: context.theme,
-                    embedded: true,
+                    placement: crate::view::diagram_preview::DiagramPlacement::Block {
+                        key: diagram.key.clone(),
+                        scroll: context.scroll.clone(),
+                    },
                     source_element: Some(render_code(tab_width, rows, context)),
                     force_source: context
                         .reveal
@@ -2786,6 +2797,7 @@ mod tests {
                 query,
                 reveal: Default::default(),
                 scroll: None,
+                diagram_heights: Default::default(),
                 hovered_link: None,
                 change_extents: None,
                 layout: Default::default(),

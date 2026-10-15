@@ -130,9 +130,9 @@ impl MarkdownPreviewDiff {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MarkdownDiagramSource {
-    pub(super) kind: gitcomet_diagrams::DiagramKind,
+    /// The diagram's kind and source, hashed once here rather than per frame.
+    pub(super) key: crate::view::diagram_preview::DiagramKey,
     pub(super) info: Arc<str>,
-    pub(super) source: Arc<str>,
     pub(super) fence_lines: Range<usize>,
 }
 
