@@ -428,12 +428,19 @@ mod tests {
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
-        git(dir.path(), &["config", "user.name", "Test"]);
-        git(
+        // Fixture Git reads system config (Git for Windows sets autocrlf=true),
+        // but once another test installs the isolated environment the backend
+        // does not. Pin line endings so both see the same checkout.
+        gitcomet_core::test_support::git_fixture::append_config(
             dir.path(),
-            &["config", "user.email", "test@example.invalid"],
+            &[
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+                ("user.name", "Test"),
+                ("user.email", "test@example.invalid"),
+                ("commit.gpgsign", "false"),
+            ],
         );
-        git(dir.path(), &["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.path().join("file"), "base\n").unwrap();
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-m", "base"]);
