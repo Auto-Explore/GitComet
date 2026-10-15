@@ -639,3 +639,70 @@ fn a_prepared_diagram_draws_in_the_first_frame_of_its_block(cx: &mut gpui::TestA
     assert!(cx.debug_bounds("diagram_viewport").is_some());
     fixture.cleanup();
 }
+
+/// A diagram that fails to render draws as its error and its source listing,
+/// and is sized so before drawing: the same as that listing in a plain code
+/// block, plus the header and the error line. It used to be the 320 px box.
+#[gpui::test]
+fn a_failed_diagram_is_sized_as_its_error_and_source(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let broken: String = std::iter::once("flowchart TD".to_string())
+        .chain((0..30).map(|row| format!("A{row} -->")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(9718),
+        "markdown_diagram_failed",
+        &format!("```mermaid\n{broken}\n```\n\n```text\n{broken}\n```\n"),
+    );
+    for _ in 0..20 {
+        draw_frames(cx, 1);
+        if cx.debug_bounds("diagram_error").is_some() {
+            break;
+        }
+    }
+    assert!(
+        cx.debug_bounds("diagram_error").is_some(),
+        "the fixture fails"
+    );
+    let (document, theme, percent) = cx.update(|_, app| {
+        let view = view.read(app);
+        let document = match &view.main_pane.read(app).worktree_markdown.document {
+            gitcomet_state::model::Loadable::Ready(document) => document.clone(),
+            other => panic!("a parsed document, not {other:?}"),
+        };
+        (document, view.theme, view.ui_scale_percent)
+    });
+    let blocks = crate::view::markdown_preview::markdown_document_blocks(&document);
+    let estimate = |cx: &mut gpui::VisualTestContext, block: usize| {
+        cx.update(|_, app| {
+            crate::view::rows::markdown_block_estimate_for_tests(
+                &document, block, theme, percent, app,
+            )
+        })
+    };
+    let (diagram_estimate, listing_estimate) = (estimate(cx, 0), estimate(cx, 1));
+    let diagram = f32::from(cx.debug_bounds("diagram_preview").unwrap().size.height);
+    let listing = f32::from(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_shell_{}",
+            blocks[1].row_range().start
+        )))
+        .unwrap()
+        .size
+        .height,
+    );
+    assert!(
+        ((diagram_estimate - listing_estimate) - (diagram - listing)).abs() <= 1.0,
+        "the diagram adds {} over its listing, estimated {}",
+        diagram - listing,
+        diagram_estimate - listing_estimate
+    );
+    fixture.cleanup();
+}

@@ -1100,12 +1100,18 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
     };
     wait(cx, source.clone(), true);
     let bounds = cx.debug_bounds("diagram_viewport").unwrap();
-    let (scene_height, _) = cx.update(|_, app| {
+    let facts = cx.update(|_, app| {
         app.global::<AppDiagramCache>()
             .0
             .scene_facts(&DiagramKey::new(DiagramKind::Mermaid, source.clone()))
-            .unwrap()
     });
+    let Some(SceneFacts::Drawn {
+        height: scene_height,
+        ..
+    }) = facts
+    else {
+        panic!("a prepared scene, not {facts:?}");
+    };
     // A short diagram takes its own height, with nothing to collapse.
     assert_eq!(f32::from(bounds.size.height), full_height(scene_height));
     assert!(f32::from(bounds.size.height) < COLLAPSED_HEIGHT);

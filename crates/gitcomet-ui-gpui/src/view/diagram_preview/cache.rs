@@ -65,6 +65,15 @@ pub(super) struct RasterDiagram {
 }
 pub(super) type RasterResult = Result<Arc<RasterDiagram>, String>;
 
+/// A prepared diagram, as the size of its block depends on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SceneFacts {
+    /// The scene's height at 100%, and how many diagnostics show under it.
+    Drawn { height: f32, diagnostics: usize },
+    /// It failed: the block shows the error and its source.
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct TileKey {
     pub(super) scene: u64,
@@ -250,13 +259,17 @@ impl DiagramCache {
     pub(super) fn prepared(&self, key: &DiagramKey) -> Option<RasterResult> {
         self.inner.lock().unwrap().entries.get(key).cloned()
     }
-    /// The height of `key`'s scene at 100% and its diagnostic count, when it
-    /// is prepared.
-    pub(super) fn scene_facts(&self, key: &DiagramKey) -> Option<(f32, usize)> {
-        match self.inner.lock().unwrap().entries.peek(key) {
-            Some(Ok(diagram)) => Some((diagram.scene.height(), diagram.diagnostics.len())),
-            Some(Err(_)) | None => None,
-        }
+    /// What a block needs to know of `key`'s preparation to size itself,
+    /// when it is prepared.
+    pub(super) fn scene_facts(&self, key: &DiagramKey) -> Option<SceneFacts> {
+        let inner = self.inner.lock().unwrap();
+        Some(match inner.entries.peek(key)? {
+            Ok(diagram) => SceneFacts::Drawn {
+                height: diagram.scene.height(),
+                diagnostics: diagram.diagnostics.len(),
+            },
+            Err(_) => SceneFacts::Failed,
+        })
     }
     /// A new id for a viewport's `show_tiles` reports.
     pub(super) fn viewport_id(&self) -> u64 {

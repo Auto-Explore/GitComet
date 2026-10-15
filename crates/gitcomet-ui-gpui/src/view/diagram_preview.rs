@@ -271,7 +271,7 @@ impl DiagramHeights {
 
     /// A block's height before it is drawn, as the reader left it: its source
     /// listing (`listing` tall), or its diagram once the scene is prepared,
-    /// else the collapsed viewport.
+    /// or its error and listing if that failed, else the collapsed viewport.
     pub(in crate::view) fn estimate_block(
         &self,
         key: &DiagramKey,
@@ -280,11 +280,22 @@ impl DiagramHeights {
     ) -> f32 {
         // The controls scale with the UI; the diagram is drawn at its own size.
         let row = block_control_row(scale);
+        let status = f32::from(scale.ui_text(STATUS_LINE) + scale.px(BLOCK_GAP));
+        // As the block draws: a failed diagram shows its error whatever the
+        // reader chose, then the source.
+        let facts = self.cache.scene_facts(key);
+        if facts == Some(SceneFacts::Failed) {
+            return row + status + listing;
+        }
         let choice = self.choices.get(key);
         if choice.mode == RenderedPreviewMode::Source {
             return row + listing;
         }
-        let Some((scene, diagnostics)) = self.cache.scene_facts(key) else {
+        let Some(SceneFacts::Drawn {
+            height: scene,
+            diagnostics,
+        }) = facts
+        else {
             return row + COLLAPSED_HEIGHT;
         };
         let full = full_height(scene);
@@ -293,7 +304,6 @@ impl DiagramHeights {
             BlockHeight::Collapsed => full.min(COLLAPSED_HEIGHT),
         };
         let bar = if full > COLLAPSED_HEIGHT { row } else { 0.0 };
-        let status = f32::from(scale.ui_text(STATUS_LINE) + scale.px(BLOCK_GAP));
         row + viewport + bar + diagnostics as f32 * status
     }
 }
@@ -468,11 +478,10 @@ impl DiagramState {
                 }
             }
             Loadable::Error(error) => {
+                let scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
                 body = body.child(
-                    div()
-                        .debug_selector(|| "diagram_error".into())
-                        .text_color(theme.colors.status.warning.foreground)
-                        .child(error.clone()),
+                    status_line(error.clone(), theme, scale)
+                        .debug_selector(|| "diagram_error".into()),
                 );
                 if !embedded {
                     body = body.child("Choose Code to view the file source.");

@@ -468,6 +468,48 @@ fn estimated_block_height(
     px(height)
 }
 
+/// The height the document reserves for its `block_ix`th block before drawing
+/// it, for tests that compare it with the drawn block.
+#[cfg(test)]
+pub(in crate::view) fn markdown_block_estimate_for_tests(
+    document: &MarkdownPreviewDocument,
+    block_ix: usize,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    cx: &mut App,
+) -> f32 {
+    let blocks = markdown_document_blocks(document);
+    let context = MarkdownDocumentContext {
+        theme,
+        ui_scale_percent,
+        editor_font_family: "monospace".into(),
+        image_root: None,
+        remote_image_access: Default::default(),
+        picture_sizes: Default::default(),
+        drawn_pictures: None,
+        row_boxes: Default::default(),
+        block_scrolls: Default::default(),
+        blocks: Default::default(),
+        view: None,
+        text_region: DiffTextRegion::Inline,
+        change_bar_color: None,
+        query: None,
+        reveal: Default::default(),
+        scroll: None,
+        diagram_heights: crate::view::diagram_preview::DiagramHeights::new(cx),
+        hovered_link: None,
+        change_extents: None,
+        layout: Default::default(),
+        tasks_editable: false,
+    };
+    f32::from(estimated_block_height(
+        document,
+        &blocks[block_ix],
+        &context,
+        None,
+    ))
+}
+
 /// The gap a column opens above `block` when another block precedes it.
 fn gap_above(block: &MarkdownBlock, context: &MarkdownDocumentContext) -> Pixels {
     scaled(
