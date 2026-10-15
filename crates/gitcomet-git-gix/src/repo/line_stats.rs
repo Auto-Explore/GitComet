@@ -701,6 +701,47 @@ mod tests {
         assert!(!ran.exists(), "the LFS clean filter must not run");
     }
 
+    /// `git lfs track` leaves `.gitattributes` uncommitted at first; the
+    /// worktree copy already decides which reads would start the filter.
+    #[test]
+    fn an_uncommitted_lfs_track_keeps_the_clean_filter_from_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "asset.bin", "base\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, ".gitattributes", "*.bin filter=lfs\n");
+        let ran = dir.join("clean-filter-ran");
+        git_success(
+            dir,
+            &[
+                "config",
+                "filter.lfs.clean",
+                &format!("touch '{}'; cat", ran.display()),
+            ],
+        );
+        write_file(dir, "asset.bin", "base\nedited\n");
+        write_file(dir, "new.bin", "payload\n");
+
+        let stats = open_repo(dir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap();
+
+        for path in ["asset.bin", "new.bin"] {
+            assert_eq!(
+                stats.unstaged[std::path::Path::new(path)],
+                LineStats::UNKNOWN,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            counts(stats.unstaged.get(std::path::Path::new(".gitattributes"))),
+            Some((Some(1), Some(0)))
+        );
+        assert!(!ran.exists(), "the LFS clean filter must not run");
+    }
+
     #[test]
     fn lfs_pointer_counts_stay_known_where_no_clean_filter_runs() {
         let tmp = tempfile::tempdir().unwrap();
