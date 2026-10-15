@@ -37,7 +37,9 @@ pub(super) struct RangeStatusChange {
 
 impl RangeStatusChange {
     /// numstat's counts for this change. A gitlink's numstat counts its
-    /// "Subproject commit" line, not content, so a submodule has none.
+    /// "Subproject commit" line, not content, so a submodule has none. The
+    /// numstat runs here ignore submodules, which leaves out pointer moves
+    /// but not a gitlink replaced by a file, so the row decides.
     pub(super) fn line_counts(&self, counts: &NumstatCounts) -> NumstatLineCounts {
         if self.is_submodule {
             return (None, None);

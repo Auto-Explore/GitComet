@@ -2081,6 +2081,34 @@ mod tests {
         assert_eq!(pointer_counts(&staged), (None, None));
     }
 
+    /// numstat still counts a gitlink replaced by a file, submodules ignored
+    /// or not; that change is a submodule's, so it has no counts either.
+    #[test]
+    fn a_nested_pointer_replaced_by_a_file_has_no_line_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let (_, second) = nested_pointer_moves(dir);
+        run_git(dir, &["rm", "--cached", "-q", "vendor/x"]);
+        std::fs::create_dir_all(dir.join("vendor")).unwrap();
+        std::fs::write(dir.join("vendor/x"), "a\nb\nc\n").unwrap();
+        run_git(dir, &["add", "vendor/x"]);
+        run_git(dir, &["commit", "-q", "-m", "third"]);
+        let third = CommitId(
+            gix::open(dir)
+                .unwrap()
+                .head_id()
+                .unwrap()
+                .to_string()
+                .into(),
+        );
+
+        let changes =
+            submodule_range_changes_from_commits(dir, &second, &third, &CancellationToken::new())
+                .unwrap();
+
+        assert_eq!(pointer_counts(&changes), (None, None));
+    }
+
     #[test]
     fn submodule_add_args_separate_positionals_from_options() {
         let mut cmd = Command::new("git");
