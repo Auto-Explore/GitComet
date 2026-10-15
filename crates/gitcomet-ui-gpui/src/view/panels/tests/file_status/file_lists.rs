@@ -1414,6 +1414,72 @@ fn the_untracked_section_shows_line_stats_that_arrive_without_a_status_change(
     assert_eq!(folder_additions(cx), Some(5));
 }
 
+/// The Untracked section orders its files by their counts under an
+/// edit-size sort, rather than falling back to path order.
+#[gpui::test]
+fn the_untracked_section_sorts_by_edit_size(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(652);
+    let added = [("a.rs", 2), ("b.rs", 5), ("c.rs", 1)];
+    let paths = added.map(|(path, _)| path);
+    let mut repo = repo_with_unstaged_paths(repo_id, &paths);
+    repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
+        paths
+            .iter()
+            .map(|path| gitcomet_core::domain::FileStatus {
+                path: (*path).into(),
+                kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                conflict: None,
+            })
+            .collect(),
+    ));
+    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::UncommittedLineStats {
+            staged: Default::default(),
+            unstaged: added
+                .iter()
+                .map(|(path, additions)| {
+                    (
+                        std::path::PathBuf::from(path),
+                        gitcomet_core::domain::LineStats::from((Some(*additions), Some(0))),
+                    )
+                })
+                .collect(),
+        },
+    ));
+    repo.unstaged_line_stats_rev = 1;
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.set_change_tracking_view(ChangeTrackingView::SplitUntracked, cx);
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_status_file_sort(
+                    StatusSection::Untracked,
+                    crate::view::rows::CommitFileSort::EditSizeDescending,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let displayed = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .status_display_order_paths(repo_id, StatusSection::Untracked)
+    });
+    assert_eq!(
+        displayed,
+        ["b.rs", "a.rs", "c.rs"].map(std::path::PathBuf::from)
+    );
+}
+
 /// A tree hoists directories above files, so a range computed in ordinal space
 /// skips files displayed between the clicks — and those files then get staged.
 #[gpui::test]
