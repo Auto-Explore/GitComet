@@ -470,6 +470,8 @@ struct Filters<'repo> {
     /// `filter` and `working-tree-encoding`, in that order.
     selected: gix::attrs::search::Outcome,
     lfs_driver: bool,
+    /// A file's raw sniff window, reused across files.
+    window: Vec<u8>,
 }
 
 impl<'repo> WorktreeReader<'repo> {
@@ -495,6 +497,7 @@ impl<'repo> WorktreeReader<'repo> {
                     index,
                     attributes,
                     lfs_driver,
+                    window: Vec::with_capacity(COMMIT_STATS_BINARY_SNIFF_BYTES),
                 })
             });
         Self {
@@ -547,6 +550,7 @@ impl<'repo> WorktreeReader<'repo> {
             attributes,
             selected,
             lfs_driver,
+            window,
         }) = self.filters.as_mut()
         else {
             return false;
@@ -580,22 +584,29 @@ impl<'repo> WorktreeReader<'repo> {
                 return !commit_stats_looks_binary(out);
             }
         }
-        let Ok(file) = std::fs::File::open(&full) else {
+        let Ok(mut file) = std::fs::File::open(&full) else {
             return false;
         };
-        let Ok(converted) = pipeline.convert_to_git(file, relative, index) else {
+        // Without a filter or working-tree-encoding, conversion only drops CRs
+        // and shortens `$Id$`: a NUL in the raw sniff window stays binary, so
+        // such a file is not read past it.
+        window.clear();
+        if matches!(filter, Some(StateRef::Unspecified | StateRef::Unset))
+            && !matches!(encoding, Some(StateRef::Value(_)))
+            && ((&mut file)
+                .take(COMMIT_STATS_BINARY_SNIFF_BYTES as u64)
+                .read_to_end(window)
+                .is_err()
+                || commit_stats_looks_binary(window))
+        {
+            return false;
+        }
+        let source = std::io::Cursor::new(window.as_slice()).chain(file);
+        let Ok(converted) = pipeline.convert_to_git(source, relative, index) else {
             return false;
         };
         let read = match converted {
-            // A binary file is not read past the sniff window.
-            ToGitOutcome::Unchanged(mut file) => {
-                (&mut file)
-                    .take(COMMIT_STATS_BINARY_SNIFF_BYTES as u64)
-                    .read_to_end(out)
-                    .is_ok()
-                    && !commit_stats_looks_binary(out)
-                    && file.read_to_end(out).is_ok()
-            }
+            ToGitOutcome::Unchanged(mut source) => source.read_to_end(out).is_ok(),
             ToGitOutcome::Process(mut stream) => stream.read_to_end(out).is_ok(),
             ToGitOutcome::Buffer(bytes) => {
                 out.extend_from_slice(bytes);
@@ -905,6 +916,8 @@ mod tests {
         let dir = tmp.path();
         init_test_repo(dir);
         write_file(dir, "seed.txt", "seed\n");
+        // As in most repositories: end-of-line conversion may apply.
+        write_file(dir, ".gitattributes", "* text=auto\n");
         git_success(dir, &["add", "."]);
         git_success(dir, &["commit", "-q", "-m", "seed"]);
         for ix in 0..200u32 {
