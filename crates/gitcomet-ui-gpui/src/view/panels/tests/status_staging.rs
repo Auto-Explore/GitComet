@@ -1197,7 +1197,6 @@ enum EditorKeyFocus {
 /// so no key may stage the on-disk file underneath unsaved edits.
 #[gpui::test]
 fn editing_keys_save_the_buffer_and_never_stage(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for focus in [EditorKeyFocus::Panel, EditorKeyFocus::Search] {
         press_editor_keys(cx, focus);
     }
