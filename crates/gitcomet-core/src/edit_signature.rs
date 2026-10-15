@@ -65,9 +65,12 @@ impl EditSignatureBuilder {
 /// `text` split the way a line diff tokenizes it: on `\n`, with a last line
 /// that has no newline still a line.
 fn lines(text: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let text = text.strip_suffix(b"\n").unwrap_or(text);
     (!text.is_empty())
-        .then(|| text.split(|byte| *byte == b'\n'))
+        .then(|| {
+            text.strip_suffix(b"\n")
+                .unwrap_or(text)
+                .split(|byte| *byte == b'\n')
+        })
         .into_iter()
         .flatten()
 }
@@ -124,5 +127,13 @@ mod tests {
         let mut blank_kept = EditSignatureBuilder::default();
         blank_kept.removed_lines(b"a\n\nb\n");
         assert_eq!(blank_kept.finish(), signature(&["a", "", "b"], &[]));
+    }
+
+    /// A file holding one empty line is a one-line file, as its count says.
+    #[test]
+    fn a_lone_newline_is_one_blank_line() {
+        let mut blank = EditSignatureBuilder::default();
+        blank.added_lines(b"\n");
+        assert_eq!(blank.finish(), signature(&[], &[""]));
     }
 }
