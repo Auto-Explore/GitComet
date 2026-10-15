@@ -727,7 +727,7 @@ class CacheTests(unittest.TestCase):
     def test_only_budgeted_contexts_restore_compiled_bundles(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True), \
-                patch.dict(os.environ, {}, clear=True):
+                patch.dict(os.environ, {"GITHUB_OUTPUT": ""}):
             root = Path(directory)
             (root / "Cargo.lock").write_text("lock")
             with patch.object(cache.platform, "platform", return_value="test-platform"):
@@ -738,7 +738,7 @@ class CacheTests(unittest.TestCase):
 
     def test_ci_finish_packs_only_after_the_whole_job_succeeded(self):
         # Inside a composite, success() sees only the action's steps; a skipped compile would pack a partial bundle.
-        finish = (Path(__file__).resolve().parents[2] / ".github/actions/ci-finish/action.yml").read_text()
+        finish = (Path(__file__).resolve().parents[2] / ".github/actions/ci-finish/action.yml").read_text(encoding="utf-8")
         gates = re.findall(r"^      if: (.*)\n      shell: bash\n      run: python3 scripts/ci/cache\.py pack", finish,
                            re.MULTILINE)
         self.assertEqual(len(gates), 2)
@@ -748,14 +748,14 @@ class CacheTests(unittest.TestCase):
     def test_every_python_setup_pins_the_same_version(self):
         github = Path(__file__).resolve().parents[2] / ".github"
         pins = {(path.name, version) for path in sorted(github.rglob("*.yml"))
-                for version in re.findall(r'python-version: "([^"]+)"', path.read_text())}
+                for version in re.findall(r'python-version: "([^"]+)"', path.read_text(encoding="utf-8"))}
         self.assertGreaterEqual(len(pins), 3)
         self.assertEqual(len({version for _, version in pins}), 1, pins)
 
     def test_every_job_running_ci_helpers_sets_up_their_python(self):
         # The runners' system Python 3.10 has no tomllib, which cache.py (and report.py through it) imports.
         for workflow in sorted((Path(__file__).resolve().parents[2] / ".github/workflows").glob("*.yml")):
-            jobs = re.split(r"^  (?=[\w-]+:\n)", workflow.read_text().split("\njobs:\n", 1)[-1], flags=re.MULTILINE)
+            jobs = re.split(r"^  (?=[\w-]+:\n)", workflow.read_text(encoding="utf-8").split("\njobs:\n", 1)[-1], flags=re.MULTILINE)
             for job in jobs:
                 for helper in re.finditer(r"scripts/ci/(?:report|cache)\.py", job):
                     with self.subTest(workflow=workflow.name, job=job.split(":", 1)[0]):
@@ -763,7 +763,7 @@ class CacheTests(unittest.TestCase):
                         self.assertTrue(setup and setup.start() < helper.start())
 
     def test_compiled_lanes_exist_and_fit_the_cache_allowance(self):
-        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/cross-platform-tests.yml").read_text()
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/cross-platform-tests.yml").read_text(encoding="utf-8")
         self.assertIn("context: ${{ matrix.name }}-workspace-ci-test", workflow)
         lanes = set(re.findall(r"^\s+- name: ([\w-]+)$", workflow, re.MULTILINE))
         for context in cache.COMPILED_BUDGETS_MIB:
@@ -781,7 +781,7 @@ class CacheTests(unittest.TestCase):
             (root / "Cargo.lock").write_text("lock")
             budgets = root / "scripts/ci/cache-budgets.toml"
             budgets.parent.mkdir(parents=True)
-            budgets.write_text((Path(cache.__file__).with_name("cache-budgets.toml")).read_text())
+            budgets.write_text((Path(cache.__file__).with_name("cache-budgets.toml")).read_text(encoding="utf-8"))
             before = cache.cache_keys("windows-x64-workspace-ci-test")
             budgets.write_text(budgets.read_text().replace("sources_mib = 600", "sources_mib = 700"))
             self.assertEqual(cache.cache_keys("windows-x64-workspace-ci-test"), before)
@@ -797,10 +797,10 @@ class CacheTests(unittest.TestCase):
 
     def test_ci_finish_reads_only_the_cache_state_ci_setup_exports(self):
         actions = Path(__file__).resolve().parents[2] / ".github/actions"
-        setup = (actions / "ci-setup/action.yml").read_text()
+        setup = (actions / "ci-setup/action.yml").read_text(encoding="utf-8")
         exported = set(re.search(r"for name in ([A-Z_ ]+); do\n\s+echo \"\$name=\$\{!name\}\" >> \"\$GITHUB_ENV\"",
                                  setup)[1].split())
-        finish = (actions / "ci-finish/action.yml").read_text()
+        finish = (actions / "ci-finish/action.yml").read_text(encoding="utf-8")
         read = set(re.findall(r"env\.(CI_[A-Z_]+)", finish)) | set(re.findall(r"\$(CI_[A-Z_]+)", finish))
         self.assertTrue({"CI_CACHE_COMPILED", "CI_CACHE_KEY", "CI_SOURCE_KEY"} <= read)
         self.assertEqual(read - exported, set())
