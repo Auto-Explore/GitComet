@@ -491,9 +491,9 @@ impl<'repo> WorktreeReader<'repo> {
         line_stats_from_bytes(&[], buf)
     }
 
-    /// Replaces `out` with the file at `relative`. `false` means over the
-    /// size cap, unreadable, or left to the LFS clean filter; binary is left
-    /// to `line_stats_from_bytes`.
+    /// Replaces `out` with the file at `relative`. `false` means gone, over
+    /// the size cap, unreadable, or left to the LFS clean filter; binary is
+    /// left to `line_stats_from_bytes`.
     fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
         use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
         use std::io::Read as _;
@@ -501,8 +501,7 @@ impl<'repo> WorktreeReader<'repo> {
         out.clear();
         let full = self.workdir.join(relative);
         let Ok(metadata) = std::fs::symlink_metadata(&full) else {
-            // Vanished between the status walk and here; empty diffs as a deletion.
-            return true;
+            return false;
         };
         if metadata.file_type().is_symlink() {
             let Ok(target) = std::fs::read_link(&full) else {
@@ -1472,6 +1471,44 @@ mod tests {
             counts(stats.staged.get(std::path::Path::new("first.txt"))),
             Some((Some(4), Some(0)))
         );
+    }
+
+    /// A file the status walk listed but that is gone when read has no counts
+    /// until the next walk: a gone untracked file is not an empty one, and the
+    /// next walk lists a gone tracked file as deleted.
+    #[test]
+    fn a_file_gone_before_its_read_has_unknown_counts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "tracked.txt", &lines("base", 3));
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-m", "seed"]);
+        std::fs::remove_file(workdir.join("tracked.txt")).expect("remove");
+        let entries = [
+            FileStatus {
+                path: "tracked.txt".into(),
+                kind: FileStatusKind::Modified,
+                conflict: None,
+            },
+            FileStatus {
+                path: "untracked.txt".into(),
+                kind: FileStatusKind::Untracked,
+                conflict: None,
+            },
+        ];
+
+        let stats = open_repo(workdir)
+            .line_stats_for_entries_impl(&entries, &CancellationToken::new())
+            .expect("line stats");
+
+        for path in ["tracked.txt", "untracked.txt"] {
+            assert_eq!(
+                stats.unstaged[std::path::Path::new(path)],
+                LineStats::UNKNOWN,
+                "{path}"
+            );
+        }
     }
 
     #[test]
