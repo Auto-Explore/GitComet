@@ -436,7 +436,6 @@ fn write_text_to_x11(_text: &str) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use super::PasteReceipt;
     use super::{
         ClipboardBackend, clipboard_backend, copy_diagnostics_enabled, replace_clipboard_owner,
