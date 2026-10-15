@@ -1248,6 +1248,51 @@ fn status_shift_click_range_follows_the_sorted_display_order(cx: &mut gpui::Test
     });
 }
 
+/// `repo_with_unstaged_paths` with every path untracked.
+fn repo_with_untracked_paths(
+    repo_id: gitcomet_state::model::RepoId,
+    paths: &[&str],
+) -> gitcomet_state::model::RepoState {
+    let mut repo = repo_with_unstaged_paths(repo_id, paths);
+    repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
+        paths
+            .iter()
+            .map(|path| gitcomet_core::domain::FileStatus {
+                path: (*path).into(),
+                kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                conflict: None,
+            })
+            .collect(),
+    ));
+    repo
+}
+
+/// Loads the unstaged lane's counts as a finished scan does: the map and a
+/// new revision, which every cache of the counts keys on.
+fn load_unstaged_line_stats(
+    repo: &mut gitcomet_state::model::RepoState,
+    counts: &[(&str, u32, u32)],
+) {
+    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::UncommittedLineStats {
+            staged: Default::default(),
+            unstaged: counts
+                .iter()
+                .map(|(path, additions, deletions)| {
+                    (
+                        std::path::PathBuf::from(path),
+                        gitcomet_core::domain::LineStats::from((
+                            Some(*additions),
+                            Some(*deletions),
+                        )),
+                    )
+                })
+                .collect(),
+        },
+    ));
+    repo.unstaged_line_stats_rev += 1;
+}
+
 /// Counts arrive on their own effect, after the list is drawn and without
 /// `worktree_status_rev` moving. Keyed on the status rev alone, the cache would
 /// keep serving pre-stats rows until some unrelated change shifted the key.
@@ -1299,20 +1344,7 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
     assert_eq!(folder_additions(cx), None, "no counts before they load");
 
     // The same repository and status rev: only the stats lane moves.
-    let mut unstaged = rustc_hash::FxHashMap::default();
-    for (ix, path) in paths.iter().enumerate() {
-        unstaged.insert(
-            std::path::PathBuf::from(path),
-            gitcomet_core::domain::LineStats::from((Some(ix as u32 + 1), Some(1))),
-        );
-    }
-    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
-        gitcomet_core::domain::UncommittedLineStats {
-            staged: Default::default(),
-            unstaged,
-        },
-    ));
-    repo.unstaged_line_stats_rev = 1;
+    load_unstaged_line_stats(&mut repo, &[("src/a.rs", 1, 1), ("src/b.rs", 2, 1)]);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
@@ -1340,18 +1372,7 @@ fn the_untracked_section_shows_line_stats_that_arrive_without_a_status_change(
     });
 
     let repo_id = gitcomet_state::model::RepoId(651);
-    let paths = ["new/a.rs", "new/b.rs"];
-    let mut repo = repo_with_unstaged_paths(repo_id, &paths);
-    repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
-        paths
-            .iter()
-            .map(|path| gitcomet_core::domain::FileStatus {
-                path: (*path).into(),
-                kind: gitcomet_core::domain::FileStatusKind::Untracked,
-                conflict: None,
-            })
-            .collect(),
-    ));
+    let mut repo = repo_with_untracked_paths(repo_id, &["new/a.rs", "new/b.rs"]);
     let folder_additions = |cx: &mut gpui::VisualTestContext| -> Option<u64> {
         cx.update(|_window, app| {
             let pane = view.read(app).details_pane.read(app);
@@ -1387,23 +1408,7 @@ fn the_untracked_section_shows_line_stats_that_arrive_without_a_status_change(
     assert_eq!(folder_additions(cx), None, "no counts before they load");
 
     // The same repository and status rev: only the stats lane moves.
-    let unstaged = paths
-        .iter()
-        .enumerate()
-        .map(|(ix, path)| {
-            (
-                std::path::PathBuf::from(path),
-                gitcomet_core::domain::LineStats::from((Some(ix as u32 + 2), Some(0))),
-            )
-        })
-        .collect();
-    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
-        gitcomet_core::domain::UncommittedLineStats {
-            staged: Default::default(),
-            unstaged,
-        },
-    ));
-    repo.unstaged_line_stats_rev = 1;
+    load_unstaged_line_stats(&mut repo, &[("new/a.rs", 2, 0), ("new/b.rs", 3, 0)]);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
@@ -1425,34 +1430,8 @@ fn the_untracked_section_sorts_by_edit_size(cx: &mut gpui::TestAppContext) {
     });
 
     let repo_id = gitcomet_state::model::RepoId(652);
-    let added = [("a.rs", 2), ("b.rs", 5), ("c.rs", 1)];
-    let paths = added.map(|(path, _)| path);
-    let mut repo = repo_with_unstaged_paths(repo_id, &paths);
-    repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
-        paths
-            .iter()
-            .map(|path| gitcomet_core::domain::FileStatus {
-                path: (*path).into(),
-                kind: gitcomet_core::domain::FileStatusKind::Untracked,
-                conflict: None,
-            })
-            .collect(),
-    ));
-    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
-        gitcomet_core::domain::UncommittedLineStats {
-            staged: Default::default(),
-            unstaged: added
-                .iter()
-                .map(|(path, additions)| {
-                    (
-                        std::path::PathBuf::from(path),
-                        gitcomet_core::domain::LineStats::from((Some(*additions), Some(0))),
-                    )
-                })
-                .collect(),
-        },
-    ));
-    repo.unstaged_line_stats_rev = 1;
+    let mut repo = repo_with_untracked_paths(repo_id, &["a.rs", "b.rs", "c.rs"]);
+    load_unstaged_line_stats(&mut repo, &[("a.rs", 2, 0), ("b.rs", 5, 0), ("c.rs", 1, 0)]);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
