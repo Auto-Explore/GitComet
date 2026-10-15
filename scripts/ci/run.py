@@ -1003,7 +1003,7 @@ def main():
             # UI's default features and its complete test suite.
             for target in ("mergetool_git_integration", "difftool_git_integration"):
                 smoke("app", target, "gui_default", env=env)
-            smoke("workspace", "gitcomet_ui_gpui", "smoke_tests::smoke_view_renders_without_panicking", exact=True, env=env)
+            smoke("workspace", "gitcomet_ui_gpui", "smoke_tests::component_rendering::smoke_view_renders_without_panicking", exact=True, env=env)
     elif args.phase == "cmd-smoke":
         smoke("app", "standalone_tool_mode_integration", "help_flag_exits_zero", exact=True)
     else:
