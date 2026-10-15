@@ -217,9 +217,9 @@ fn untracked_paths(workdir: &Path, cancellation: &CancellationToken) -> Result<V
         .collect()
 }
 
-/// The files that differ between commit `from` and the live working tree
-/// (`git diff <from>`). Untracked files are listed only when asked for.
-pub(super) fn commit_to_worktree_files(
+/// What `git diff <from>` lists against the live working tree, with
+/// numstat's counts. Untracked files, listed only when asked for, have none.
+fn git_worktree_changes(
     workdir: &Path,
     from: &CommitId,
     include_untracked: bool,
@@ -248,7 +248,6 @@ pub(super) fn commit_to_worktree_files(
         })
         .collect();
     if include_untracked {
-        // Counted by `GixRepo::add_worktree_line_stats`, as the status list counts them.
         files.extend(
             untracked_paths(workdir, cancellation)?
                 .into_iter()
@@ -259,6 +258,21 @@ pub(super) fn commit_to_worktree_files(
 }
 
 impl GixRepo {
+    /// The files that differ between commit `from` and the live working tree
+    /// (`git diff <from>`), with their line stats. Untracked files are listed
+    /// only when asked for.
+    pub(super) fn commit_to_worktree_files(
+        &self,
+        from: &CommitId,
+        include_untracked: bool,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<CommitFileChange>> {
+        let mut files =
+            git_worktree_changes(&self.spec.workdir, from, include_untracked, cancellation)?;
+        self.add_worktree_line_stats(&mut files, cancellation)?;
+        Ok(files)
+    }
+
     pub(super) fn compare_files_impl(
         &self,
         from: &CommitId,
@@ -291,14 +305,7 @@ impl GixRepo {
         let files = match to {
             Some(to) => diff_range_files(self, &self.repo(), &base, to)?,
             None => {
-                let mut files = commit_to_worktree_files(
-                    &self.spec.workdir,
-                    &base,
-                    options.include_untracked,
-                    cancellation,
-                )?;
-                self.add_worktree_line_stats(&mut files, cancellation)?;
-                files
+                self.commit_to_worktree_files(&base, options.include_untracked, cancellation)?
             }
         };
         cancellation.check_cancelled()?;
@@ -385,13 +392,13 @@ mod tests {
         let head = super::super::history::gix_head_id_or_none(&repo.repo())
             .unwrap()
             .unwrap();
-        let files = commit_to_worktree_files(
-            dir,
-            &CommitId(head.to_string().into()),
-            false,
-            &CancellationToken::new(),
-        )
-        .unwrap();
+        let files = repo
+            .commit_to_worktree_files(
+                &CommitId(head.to_string().into()),
+                false,
+                &CancellationToken::new(),
+            )
+            .unwrap();
         let listed: Vec<_> = files
             .iter()
             .map(|file| {

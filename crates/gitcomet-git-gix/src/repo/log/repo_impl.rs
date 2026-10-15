@@ -991,17 +991,7 @@ impl GixRepo {
             // Working-tree tip: the newer side is the live worktree, which has no
             // tree object, so shell out to `git diff <from>` for the file list
             // (consistent with the unified diff shown in the main pane).
-            None => {
-                let cancellation = CancellationToken::new();
-                let mut files = super::super::comparison::commit_to_worktree_files(
-                    &self.spec.workdir,
-                    from,
-                    false,
-                    &cancellation,
-                )?;
-                self.add_worktree_line_stats(&mut files, &cancellation)?;
-                Ok(files)
-            }
+            None => self.commit_to_worktree_files(from, false, &CancellationToken::new()),
         }
     }
 
