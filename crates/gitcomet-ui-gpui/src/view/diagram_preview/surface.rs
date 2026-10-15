@@ -14,6 +14,7 @@ impl DiagramState {
         keys: Vec<TileKey>,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.cache.show_tiles(self.viewport_id, keys.len());
         if self.requested == keys
             && (self.tile_task.is_some()
                 || self.tile_error.is_some()

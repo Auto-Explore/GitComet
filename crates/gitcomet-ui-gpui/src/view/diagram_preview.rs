@@ -322,6 +322,8 @@ impl DiagramPlacement {
 
 struct DiagramState {
     cache: Arc<DiagramCache>,
+    /// This viewport's id in the cache's count of the tiles shown.
+    viewport_id: u64,
     choices: BlockChoices,
     viewport: Viewport,
     /// How far the viewport's top was above the visible area when last drawn.
@@ -340,6 +342,7 @@ struct DiagramState {
 impl DiagramState {
     fn new(input: DiagramInput, cache: Arc<DiagramCache>, cx: &mut gpui::Context<Self>) -> Self {
         let mut state = Self {
+            viewport_id: cache.viewport_id(),
             cache: cache.clone(),
             viewport: Viewport::default(),
             hidden_above: 0.0,
@@ -567,6 +570,7 @@ impl DiagramState {
 
 impl Drop for DiagramState {
     fn drop(&mut self) {
+        self.cache.show_tiles(self.viewport_id, 0);
         self.generation.fetch_add(1, Ordering::Relaxed);
         self.source_generation.fetch_add(1, Ordering::Relaxed);
     }

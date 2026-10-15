@@ -8,7 +8,8 @@ use std::sync::{
 };
 
 pub(super) const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
-pub(super) const MAX_RASTER_BYTES: usize = 64 * 1024 * 1024;
+/// The tile cache's size until the viewports show more than half of it.
+pub(super) const MIN_TILE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 /// A diagram's identity: its kind and source, hashed once.
 #[derive(Clone, Debug)]
@@ -87,6 +88,9 @@ pub(super) struct CacheInner {
     tile_locks: HashMap<TileKey, std::sync::Weak<Mutex<()>>>,
     pub(super) bytes: usize,
     pub(super) tiles: lru::LruCache<TileKey, Arc<gpui::RenderImage>>,
+    /// The tiles each live viewport shows, by viewport id: `tiles` holds
+    /// twice their sum.
+    pub(super) shown: HashMap<u64, usize>,
     pub(super) dropped: VecDeque<Arc<gpui::RenderImage>>,
 }
 impl CacheInner {
@@ -153,9 +157,10 @@ impl Default for DiagramCache {
                 tile_locks: HashMap::new(),
                 bytes: 0,
                 tiles: lru::LruCache::new(
-                    NonZeroUsize::new(MAX_RASTER_BYTES / (TILE_SIZE * TILE_SIZE * 4) as usize)
+                    NonZeroUsize::new(MIN_TILE_CACHE_BYTES / (TILE_SIZE * TILE_SIZE * 4) as usize)
                         .unwrap(),
                 ),
+                shown: HashMap::new(),
                 dropped: VecDeque::new(),
             }),
             work: WorkGate::default(),
@@ -251,6 +256,29 @@ impl DiagramCache {
         match self.inner.lock().unwrap().entries.peek(key) {
             Some(Ok(diagram)) => Some((diagram.scene.height(), diagram.diagnostics.len())),
             Some(Err(_)) | None => None,
+        }
+    }
+    /// A new id for a viewport's `show_tiles` reports.
+    pub(super) fn viewport_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+    /// Records that `viewport` shows `tiles` tiles, and grows the tile cache
+    /// to twice what all viewports show together: tiles on screen are used
+    /// every frame, so under LRU they then never evict one another. It never
+    /// shrinks, so a viewport that stops showing for a moment (a Code toggle,
+    /// a scroll out and back) keeps its tiles.
+    pub(super) fn show_tiles(&self, viewport: u64, tiles: usize) {
+        let mut inner = self.inner.lock().unwrap();
+        if tiles == 0 {
+            inner.shown.remove(&viewport);
+        } else {
+            inner.shown.insert(viewport, tiles);
+        }
+        let shown: usize = inner.shown.values().sum();
+        if let Some(needed) = NonZeroUsize::new(2 * shown)
+            && needed > inner.tiles.cap()
+        {
+            inner.tiles.resize(needed);
         }
     }
     pub(super) fn peek_tile(&self, key: TileKey) -> Option<Arc<gpui::RenderImage>> {

@@ -285,6 +285,24 @@ fn a_choice_back_at_the_default_is_forgotten() {
     choices.update(&key, |choice| choice.height = BlockHeight::Full);
     assert!(choices.0.borrow().is_empty());
 }
+/// The tile cache holds twice the tiles every live viewport shows, and never
+/// shrinks.
+#[test]
+fn the_tile_cache_grows_to_twice_what_is_shown() {
+    let cache = DiagramCache::default();
+    let capacity = || cache.inner.lock().unwrap().tiles.cap().get();
+    let (a, b) = (cache.viewport_id(), cache.viewport_id());
+    cache.show_tiles(a, 30);
+    assert_eq!(capacity(), 64, "the floor holds twice 30");
+    cache.show_tiles(b, 40);
+    assert_eq!(capacity(), 2 * (30 + 40));
+    cache.show_tiles(a, 50);
+    assert_eq!(capacity(), 2 * (50 + 40));
+    cache.show_tiles(a, 0);
+    cache.show_tiles(b, 0);
+    assert_eq!(capacity(), 2 * (50 + 40));
+    assert!(cache.inner.lock().unwrap().shown.is_empty());
+}
 #[test]
 fn pan_zoom_and_dpr_changes_reuse_layout_but_request_new_tiles() {
     let cache = DiagramCache::default();
@@ -306,6 +324,7 @@ fn stale_completion_cannot_replace_current_source_or_scene() {
     let cache = Arc::new(DiagramCache::default());
     let mut state = DiagramState {
         cache,
+        viewport_id: 0,
         viewport: Viewport::default(),
         hidden_above: 0.0,
         generation: Arc::new(AtomicU64::new(0)),
@@ -591,6 +610,99 @@ fn ctrl_scroll_keeps_the_point_under_the_pointer(cx: &mut gpui::TestAppContext) 
     assert!(
         (after.0 - before.0).abs() < 0.01 && (after.1 - before.1).abs() < 0.01,
         "the scene point under the pointer moved: {before:?} -> {after:?}"
+    );
+}
+
+struct SplitHarness {
+    sides: [Entity<DiagramState>; 3],
+    inputs: [DiagramInput; 3],
+}
+impl Render for SplitHarness {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let sides = [0, 1, 2].map(|pane| {
+            let preview = self.sides[pane].update(cx, |state, cx| {
+                state.render(
+                    AppTheme::gitcomet_dark(),
+                    None,
+                    false,
+                    &DiagramPlacement::Pane(self.inputs[pane].clone()),
+                    cx,
+                )
+            });
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .flex()
+                .flex_col()
+                .child(preview)
+        });
+        div().size_full().flex().children(sides)
+    }
+}
+
+/// Three large diagrams side by side on a 2560×1440 HiDPI window show more
+/// tiles than the 64 the cache held, so each evicted the others' and all
+/// re-rastered on every frame, forever.
+#[gpui::test]
+fn side_by_side_diagrams_settle_on_a_large_screen(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    // A grid of boxes large enough to overflow both panes at 100%.
+    let mut source = String::from("flowchart TD\n");
+    for row in 0..12 {
+        for column in 0..12 {
+            if column < 11 {
+                source.push_str(&format!("R{row}C{column}-->R{row}C{}\n", column + 1));
+            }
+            if row < 11 {
+                source.push_str(&format!("R{row}C{column}-->R{}C{column}\n", row + 1));
+            }
+        }
+    }
+    // A different diagram per pane: equal ones would share their tiles.
+    let inputs = [0, 1, 2].map(|pane| DiagramInput::Text {
+        kind: DiagramKind::Mermaid,
+        text: format!("{source}Pane{pane}\n").into(),
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let cache = cache(cx);
+        SplitHarness {
+            sides: inputs
+                .clone()
+                .map(|input| cx.new(|cx| DiagramState::new(input, cache.clone(), cx))),
+            inputs: inputs.clone(),
+        }
+    });
+    cx.simulate_resize(gpui::size(px(2560.0), px(1440.0)));
+    let rasterized = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            app.global::<AppDiagramCache>()
+                .0
+                .rasterizations
+                .load(Ordering::Relaxed)
+        })
+    };
+    for _ in 0..2 {
+        crate::view::test_support::redraw(cx);
+    }
+    let settled = rasterized(cx);
+    let requested = cx.update(|_, app| {
+        view.read(app)
+            .sides
+            .each_ref()
+            .map(|side| side.read(app).requested.len())
+    });
+    assert!(
+        requested.iter().sum::<usize>() > 64,
+        "the panes show more tiles than the old cache held: {requested:?}"
+    );
+    for _ in 0..2 {
+        crate::view::test_support::redraw(cx);
+    }
+    assert_eq!(
+        rasterized(cx),
+        settled,
+        "no tile is drawn twice once settled"
     );
 }
 
