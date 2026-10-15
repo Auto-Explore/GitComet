@@ -684,3 +684,26 @@ recording PTY sender compiles under `test-support`. A narrower test surface
 belongs with the terminal panel entity in 3.2. The crate's 104 tests run in
 their own libtest process (`GPUI_PACKAGES`); one tab-title test moved back to
 the host with the policy it covers.
+
+### 2.5 `gitcomet-ui-media`
+
+Image inspection, diagram previews and the source/rendered toggle (3.3k
+production and 2.4k test lines) are now `crates/gitcomet-ui-media`, on the kit,
+`gitcomet-base` and `gitcomet-diagrams`. The diff pane's three `impl
+DiffRenderer` blocks went to the host's `panes/diff/media.rs`, together with
+saving sampling preferences to the session. The crate owns the preference value
+and its global; the host reads the session and passes it in.
+
+Three cuts the plan did not name:
+
+- The toolbar callback receives an `ImageMenu` and the chip's id instead of a
+  host popover request. The host maps it to its text-format menu in one place.
+- `Loadable` moved from state to `gitcomet-base`, and state re-exports it, so
+  the diagram surface keeps its loading type without depending on state.
+- The rendered-preview mode types moved into the crate's `rendered_preview`,
+  next to the toggle that renders them.
+
+Three tests moved to the host with the code they exercise: the conflict
+image fallback drives the diff renderer, and two SVG text tests check the host's
+rasterizers. They read `Group` through two `test-support` accessors. The crate's
+55 tests run in their own libtest process.

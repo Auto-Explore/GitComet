@@ -1,13 +1,17 @@
-//! Product identity, per-user directories, platform detection, file utilities
-//! and instrumentation shared by every GitComet layer. It holds no Git domain
-//! types, so the UI kit builds on it rather than on `gitcomet-core`.
+//! Product identity, per-user directories, platform detection, file utilities,
+//! the background loading state and instrumentation shared by every GitComet
+//! layer. It holds no Git domain types, so the UI kit builds on it rather than
+//! on `gitcomet-core`.
 
 pub mod environment;
 pub mod fs_utils;
 pub mod history_perf;
 pub mod identity;
+mod loadable;
 pub mod op_trace;
 pub mod platform;
+
+pub use loadable::Loadable;
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};

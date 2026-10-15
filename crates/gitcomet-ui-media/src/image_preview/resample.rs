@@ -186,7 +186,7 @@ pub(super) fn tile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::image_preview::filter::ImageSmoothFilter;
+    use crate::image_preview::filter::ImageSmoothFilter;
     #[test]
     fn bounded_memory_accumulation_matches_convolution() {
         let source = image::RgbaImage::from_fn(100, 83, |x, y| {

@@ -1,5 +1,13 @@
 use super::*;
+use gitcomet_ui_kit::theme::AppTheme;
+use gpui::Entity;
+use gpui::IntoElement;
+use gpui::Render;
+use gpui::Window;
+use gpui::div;
+use gpui::px;
 use std::io::Cursor;
+use std::sync::Arc;
 
 mod controls;
 mod painting;
@@ -71,19 +79,16 @@ fn linked_cameras_share_source_coordinates_and_refresh_preserves_zoom(
 #[gpui::test]
 fn preferences_initialize_once_and_notify_all_window_groups(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        Preferences::initialize(
-            &session::UiSession {
-                image_sampling_mode: Some("smooth".into()),
-                image_smooth_filter: Some("hann".into()),
-                ..Default::default()
-            },
-            cx,
-        )
+        Preferences {
+            mode: ImageSamplingMode::parse(Some("smooth")),
+            filter: ImageSmoothFilter::parse(Some("hann")),
+        }
+        .initialize(cx)
     });
     let first = cx.new(Group::new);
     let second = cx.new(Group::new);
     cx.update(|cx| {
-        Preferences::initialize(&session::UiSession::default(), cx);
+        Preferences::default().initialize(cx);
         assert_eq!(
             Preferences::current(cx),
             Preferences {
@@ -262,32 +267,6 @@ fn svg_text_survives_detailed_image_preview() {
     }
 }
 
-#[test]
-fn svg_text_survives_bounded_image_preview() {
-    for family in [
-        "IBM Plex Sans",
-        "Lilex",
-        "sans-serif",
-        "monospace",
-        "system-ui",
-    ] {
-        let tree = svg::parse(&text_svg(family)).unwrap();
-        let preview = panes::diff::diff_cache::render_svg_image_diff_preview(&tree).unwrap();
-        assert!(
-            preview
-                .as_bytes(0)
-                .unwrap()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .filter(|p| p[0] < 128)
-                .count()
-                > 100,
-            "bounded SVG preview lost font-family={family}"
-        );
-    }
-}
-
 pub(super) const OFFSET_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="300">
             <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="1100" height="300">
             <feOffset dx="1000"/></filter></defs>
@@ -373,108 +352,8 @@ impl Render for Harness {
 }
 
 #[gpui::test]
-fn image_preview_regression_svg_conflict_keeps_encoded_fallback(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
-    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="300">
-        <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
-        <rect width="1100" height="300" fill="#c86432" filter="url(#blur)"/>
-    </svg>"##;
-    let source = Source::new(gpui::ImageFormat::Svg, svg, 128 * 1024 * 1024).unwrap();
-    let decoded = source.decode(0, &AtomicU64::new(0), 0).unwrap().unwrap();
-    assert!(
-        decoded.for_output((4400, 1200)).is_err(),
-        "400% exceeds the SVG detail limit"
-    );
-    let encoded = Arc::new(gpui::Image::from_bytes(
-        gpui::ImageFormat::Png,
-        crate::view::diff_utils::rasterize_svg_preview_png(svg).unwrap(),
-    ));
-    let expected = image::load_from_memory(encoded.bytes()).unwrap().to_rgba8();
-    let mut expected_center = expected.get_pixel(550, 150).0;
-    expected_center.swap(0, 2);
-    assert!(expected_center[0] < 128 && expected_center[3] == 255);
-    let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
-    let (root, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    // Let the encoded asset finish loading before checking the handoff to
-    // the image viewport, so a missing fallback fails deterministically.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        let ready =
-            cx.update(|window, app| encoded.clone().get_render_image(window, app).is_some());
-        if ready {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "encoded preview did not load"
-        );
-        cx.run_until_parked();
-        crate::view::test_support::redraw(cx);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let group = cx.update(|window, app| {
-        root.read(app)
-            .diff_renderer
-            .clone()
-            .update(app, |pane, cx| {
-                pane.conflict_resolver.image_preview.sources[0] = Some(source);
-                pane.conflict_resolver.image_preview.images.base =
-                    Loadable::Ready(Some(ConflictPreviewImage::Encoded(encoded)));
-                pane.prepare_conflict_image_preview(window, cx)
-            })
-    });
-    cx.update(|window, app| {
-        window.replace_root(app, |_, _| Harness {
-            group: group.clone(),
-        });
-        group.update(app, |group, cx| group.zoom(Zoom::Scale(4.0), None, cx));
-        let preview = group.read(app).sides[0].input.preview.as_ref().expect(
-            "encoded SVG conflict preview must remain renderable when detail rendering fails",
-        );
-        assert_eq!(
-            preview.size(0),
-            gpui::size(gpui::DevicePixels(1100), gpui::DevicePixels(300))
-        );
-    });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        crate::view::test_support::redraw(cx);
-        cx.run_until_parked();
-        if cx.update(|_, app| group.read(app).sides[0].error.is_some()) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "SVG detail request did not finish"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    cx.update(|_, app| {
-        let side = &group.read(app).sides[0];
-        assert!(
-            side.error
-                .as_ref()
-                .unwrap()
-                .contains("detailed preview limit")
-        );
-        let preview = side
-            .input
-            .preview
-            .as_ref()
-            .expect("fallback survives the detail error");
-        let center = (150 * 1100 + 550) * 4;
-        assert_eq!(
-            &preview.as_bytes(0).unwrap()[center..center + 4],
-            &expected_center,
-            "fallback preserves the encoded, filtered preview pixels"
-        );
-    });
-}
-
-#[gpui::test]
 fn viewport_wheel_zoom_pan_drag_and_keyboard(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
+    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let input = source(1000, 1000);
     let (view, cx) = cx.add_window_view(|_, cx| Harness {
         group: cx.new(|cx| {
@@ -495,11 +374,11 @@ fn viewport_wheel_zoom_pan_drag_and_keyboard(cx: &mut gpui::TestAppContext) {
             group
         }),
     });
-    crate::view::test_support::redraw(cx);
+    gitcomet_ui_kit::test_support::redraw(cx);
     let group = cx.update(|_, app| view.read(app).group.clone());
     let bounds = cx.debug_bounds("image_viewport").unwrap();
     cx.update(|_, app| group.update(app, |group, cx| group.zoom(Zoom::Scale(4.0), None, cx)));
-    crate::view::test_support::redraw(cx);
+    gitcomet_ui_kit::test_support::redraw(cx);
     let before = cx.update(|_, app| group.read(app).sides[0].camera.center);
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: bounds.center(),
@@ -607,7 +486,7 @@ fn clamped_pan_keeps_fit(cx: &mut gpui::TestAppContext) {
 /// went from 100% to 6400%.
 #[gpui::test]
 fn trackpad_ctrl_scroll_steps_by_distance(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
+    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let input = source(1000, 1000);
     let (view, cx) = cx.add_window_view(|_, cx| Harness {
         group: cx.new(|cx| {
@@ -628,11 +507,11 @@ fn trackpad_ctrl_scroll_steps_by_distance(cx: &mut gpui::TestAppContext) {
             group
         }),
     });
-    crate::view::test_support::redraw(cx);
+    gitcomet_ui_kit::test_support::redraw(cx);
     let group = cx.update(|_, app| view.read(app).group.clone());
     let bounds = cx.debug_bounds("image_viewport").unwrap();
     cx.update(|_, app| group.update(app, |group, cx| group.zoom(Zoom::Scale(1.0), None, cx)));
-    crate::view::test_support::redraw(cx);
+    gitcomet_ui_kit::test_support::redraw(cx);
     let ctrl = gpui::Modifiers {
         control: true,
         ..Default::default()
@@ -655,26 +534,6 @@ fn trackpad_ctrl_scroll_steps_by_distance(cx: &mut gpui::TestAppContext) {
         touch_phase: gpui::TouchPhase::Moved,
     });
     cx.update(|_, app| assert_eq!(group.read(app).zoom_label(), "200%"));
-}
-
-/// Conflict previews parsed SVG without fonts, so their text disappeared
-/// until detail tiles arrived.
-#[test]
-fn svg_text_survives_conflict_preview() {
-    for family in [
-        "IBM Plex Sans",
-        "Lilex",
-        "sans-serif",
-        "monospace",
-        "system-ui",
-    ] {
-        let png = crate::view::diff_utils::rasterize_svg_preview_png(&text_svg(family)).unwrap();
-        let image = image::load_from_memory(&png).unwrap().to_rgba8();
-        assert!(
-            image.pixels().filter(|p| p[0] < 128).count() > 100,
-            "conflict SVG preview lost font-family={family}"
-        );
-    }
 }
 
 /// Each pane decoded and kept its own copy of the same image.

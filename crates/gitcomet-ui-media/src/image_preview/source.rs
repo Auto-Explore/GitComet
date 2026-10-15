@@ -13,7 +13,7 @@ use std::{
 static IDS: LazyLock<std::hash::RandomState> = LazyLock::new(std::hash::RandomState::new);
 
 #[derive(Debug)]
-pub(crate) struct Source {
+pub struct Source {
     pub id: u64,
     pub dimensions: (u32, u32),
     pub vector: bool,
@@ -41,7 +41,7 @@ pub(super) struct DecodeGate {
     pub resume: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
 }
 
-pub(super) enum Decoded {
+pub enum Decoded {
     Raster(image::RgbaImage),
     Vector(Arc<usvg::Tree>, usize),
 }
@@ -67,7 +67,7 @@ impl Decoded {
 }
 
 /// The `image` codec for a raster format; `None` for SVG.
-pub(in crate::view) fn raster_format(format: gpui::ImageFormat) -> Option<image::ImageFormat> {
+pub fn raster_format(format: gpui::ImageFormat) -> Option<image::ImageFormat> {
     match format {
         gpui::ImageFormat::Png => Some(image::ImageFormat::Png),
         gpui::ImageFormat::Jpeg => Some(image::ImageFormat::Jpeg),
@@ -82,7 +82,7 @@ pub(in crate::view) fn raster_format(format: gpui::ImageFormat) -> Option<image:
 }
 
 /// Bound a decode by its input and RGBA output allocations.
-pub(in crate::view) fn limit_decoder(
+pub fn limit_decoder(
     decoder: &mut impl image::ImageDecoder,
     max_alloc: u64,
 ) -> image::ImageResult<()> {
@@ -161,14 +161,14 @@ impl Source {
     }
 
     /// The parsed SVG behind a vector source.
-    pub(in crate::view) fn svg(&self) -> Option<&usvg::Tree> {
+    pub fn svg(&self) -> Option<&usvg::Tree> {
         match &self.content {
             Content::Vector(tree, _) => Some(tree),
             Content::Raster { .. } => None,
         }
     }
 
-    pub(super) fn decode(
+    pub fn decode(
         &self,
         frame: usize,
         generation: &AtomicU64,

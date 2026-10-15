@@ -256,10 +256,12 @@ mod conflict_markers;
 pub(crate) use gitcomet_conflict_resolver as conflict_resolver;
 mod conflict_style_cache;
 mod date_time;
-mod diagram_preview;
-mod image_preview;
 #[cfg(feature = "benchmarks")]
 pub use diagram_preview::benchmarks::MermaidPreviewFixture;
+use gitcomet_ui_media::rendered_preview::{
+    RenderedPreviewKind, RenderedPreviewMode, RenderedPreviewModes,
+};
+use gitcomet_ui_media::{diagram_preview, image_preview, rendered_preview};
 #[cfg(feature = "benchmarks")]
 pub use image_preview::benchmarks::ImageInspectionFixture;
 mod diff_commands;
@@ -307,7 +309,6 @@ mod pop_out;
 mod preference_sync;
 mod preferences;
 mod reflog_panel;
-mod rendered_preview;
 mod repo_open;
 mod repository_views;
 mod reveal_commit;

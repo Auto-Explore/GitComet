@@ -15,6 +15,7 @@ benchmarks = []
 test-support = []
 
 [dependencies]
+gitcomet-base = { workspace = true }
 gitcomet-core = { workspace = true }
 notify = { workspace = true }
 rustfs-mimalloc = { workspace = true }

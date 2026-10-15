@@ -141,7 +141,8 @@ impl StandaloneBuffer {
             group.clone(),
             self.theme,
             cx,
-            |this, request, position, window, cx| {
+            |this, menu, invoker, position, window, cx| {
+                let request = crate::view::panes::diff::image_menu_request(menu, invoker);
                 let _ = this.root.update(cx, |root, cx| {
                     root.open_popover_at(request, position, window, cx)
                 });

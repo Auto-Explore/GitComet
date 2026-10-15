@@ -1,5 +1,16 @@
 use super::*;
+use crate::rendered_preview::RenderedPreviewMode;
+use gitcomet_base::Loadable;
 use gitcomet_diagrams::scene::PreparedScene;
+use gitcomet_ui_kit::theme::AppTheme;
+use gpui::Entity;
+use gpui::IntoElement;
+use gpui::Render;
+use gpui::Window;
+use gpui::div;
+use gpui::px;
+use std::sync::Arc;
+use std::time::Duration;
 
 fn render(cache: &DiagramCache, source: &str) -> Arc<RasterDiagram> {
     cache
@@ -265,7 +276,7 @@ impl Render for InteractionHarness {
 fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
+    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let (view, cx) = cx.add_window_view(|_, cx| {
         let cache = cache(cx);
         InteractionHarness {
@@ -285,7 +296,7 @@ fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
     let state = cx.update(|_, app| view.read(app).state.clone());
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
-        crate::view::test_support::redraw(cx);
+        gitcomet_ui_kit::test_support::redraw(cx);
         if cx.update(|_, app| state.read(app).viewport.initialized) {
             break;
         }
@@ -299,7 +310,7 @@ fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
         modifiers: Default::default(),
         touch_phase: gpui::TouchPhase::Moved,
     });
-    crate::view::test_support::redraw(cx);
+    gitcomet_ui_kit::test_support::redraw(cx);
     cx.update(|_, app| {
         assert!(view.read(app).scroll.offset().y < px(0.0));
         assert_eq!(state.read(app).viewport.zoom, 2);
@@ -364,7 +375,7 @@ impl Render for Harness {
 
 #[gpui::test]
 fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
+    let _visual_guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let source: Arc<str> = "flowchart LR\nA-->B".into();
     let (view, cx) = cx.add_window_view(|_, _| Harness {
         input: DiagramInput::Text {
@@ -478,7 +489,7 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
             cx.notify();
         });
     });
-    crate::view::test_support::redraw(cx);
+    gitcomet_ui_kit::test_support::redraw(cx);
     assert!(cx.debug_bounds("diagram_test_source").is_some());
     assert!(cx.debug_bounds("diagram_viewport").is_none());
     cx.update(|_, app| {
@@ -487,7 +498,7 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
             cx.notify();
         });
     });
-    crate::view::test_support::redraw(cx);
+    gitcomet_ui_kit::test_support::redraw(cx);
     assert!(cx.debug_bounds("diagram_test_source").is_none());
     assert!(cx.debug_bounds("diagram_viewport").is_some());
     let invalid: Arc<str> = "invalid diagram".into();

@@ -1,118 +1,26 @@
 use super::*;
-use crate::kit::interaction::ControlActivation;
-use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use gitcomet_ui_kit::interaction::ControlActivation;
+use gitcomet_ui_kit::interaction::{ControlInteractionExt, InteractionState, InteractionStyle};
+use gitcomet_ui_kit::theme::AppTheme;
+use gitcomet_ui_kit::tooltip::GitCometTooltipExt as _;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::ClickEvent;
+use gpui::Entity;
+use gpui::Pixels;
+use gpui::Point;
+use gpui::SharedString;
+use gpui::WeakEntity;
+use gpui::Window;
+use gpui::div;
+use gpui::px;
 
 #[derive(Clone, Copy)]
 enum Control {
-    Menu(TextFormatMenuSection),
+    Menu(ImageMenu),
     Zoom(Zoom),
     Link,
     Pause,
-}
-
-impl DiffRenderer {
-    fn image_target(&self) -> String {
-        format!(
-            "{:?}:{:?}",
-            self.active_repo_id(),
-            self.rendered_diff_target()
-        )
-    }
-
-    pub(in crate::view) fn begin_image_preview_frame(&mut self, cx: &mut gpui::Context<Self>) {
-        self.image_preview_active = false;
-        let target = self.image_target();
-        self.image_preview_group.update(cx, |group, cx| {
-            if group.target != target {
-                group.set_inputs(target, Default::default(), false, cx);
-            }
-        });
-    }
-
-    pub(in crate::view) fn prepare_image_preview(
-        &mut self,
-        inputs: [Input; 3],
-        cap_fit: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<Group> {
-        let group = self.image_preview_group.clone();
-        self.image_preview_active = inputs.iter().any(|input| input.source.is_some());
-        let target = self.image_target();
-        group.update(cx, |group, cx| {
-            group.set_inputs(target, inputs, cap_fit, cx)
-        });
-        group
-    }
-
-    pub(in crate::view) fn prepare_conflict_image_preview(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<Group> {
-        let preview = &self.conflict_resolver.image_preview;
-        let inputs = std::array::from_fn(|index| {
-            let side = ThreeWayColumn::ALL[index];
-            Input {
-                source: preview.sources[index].clone(),
-                preview: match preview.image(side) {
-                    Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
-                        Some(image.clone())
-                    }
-                    Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
-                        image.clone().use_render_image(window, cx)
-                    }
-                    _ => None,
-                },
-                frame: 0,
-            }
-        });
-        let cap = self
-            .conflict_resolver
-            .path
-            .as_deref()
-            .is_some_and(preview_path_uses_scale_down);
-        self.prepare_image_preview(inputs, cap, cx)
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn image_zoom(&self, zoom: Zoom, cx: &mut App) {
-        self.image_preview_group
-            .update(cx, |group, cx| group.zoom(zoom, None, cx));
-    }
-
-    pub(in crate::view) fn image_format_chips(
-        &self,
-        cx: &mut gpui::Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.image_preview_active {
-            return None;
-        }
-        Some(toolbar(
-            self.image_preview_group.clone(),
-            self.theme,
-            cx,
-            |this, request, position, window, cx| {
-                this.open_popover_at(request, position, window, cx);
-            },
-        ))
-    }
-
-    pub(in crate::view) fn image_preview_viewport(
-        &self,
-        group: Entity<Group>,
-        side: usize,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        viewport(
-            group,
-            side,
-            self.theme,
-            cx,
-            |this, request, position, window, cx| {
-                this.open_popover_at(request, position, window, cx);
-            },
-        )
-    }
 }
 
 #[derive(Clone)]
@@ -126,7 +34,7 @@ struct ZoomMenuTarget {
 struct MenuTarget(std::collections::HashMap<gpui::WindowId, ZoomMenuTarget>);
 impl gpui::Global for MenuTarget {}
 
-pub(in crate::view) fn apply_menu_zoom(zoom: Zoom, window: &Window, cx: &mut App) {
+pub fn apply_menu_zoom(zoom: Zoom, window: &Window, cx: &mut App) {
     if let Some(target) = cx
         .try_global::<MenuTarget>()
         .and_then(|target| target.0.get(&window.window_handle().window_id()))
@@ -141,7 +49,9 @@ pub(in crate::view) fn apply_menu_zoom(zoom: Zoom, window: &Window, cx: &mut App
     }
 }
 
-type OpenMenu<V> = fn(&mut V, PopoverRequest, Point<Pixels>, &mut Window, &mut gpui::Context<V>);
+/// Opens `menu` for the chip `invoker` at `position`.
+pub type OpenMenu<V> =
+    fn(&mut V, ImageMenu, SharedString, Point<Pixels>, &mut Window, &mut gpui::Context<V>);
 
 struct Controls<V: 'static> {
     group: Entity<Group>,
@@ -167,7 +77,9 @@ impl<V: 'static> Controls<V> {
             .map_or_else(|| name.to_string(), |side| format!("{name}_{side}"))
             .into();
         let selector = id.clone();
-        let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::current(cx).percent());
+        let scaled_px = gitcomet_ui_kit::ui_scale::scaler(
+            gitcomet_ui_kit::ui_scale::UiScale::current(cx).percent(),
+        );
         div()
             .id(id.clone())
             .debug_selector(move || selector.to_string())
@@ -185,7 +97,7 @@ impl<V: 'static> Controls<V> {
             .whitespace_nowrap()
             .child(label)
             .when(matches!(action, Control::Menu(_)), |d| {
-                d.child(svg_icon(
+                d.child(gitcomet_ui_kit::icons::svg_icon(
                     "icons/chevron_down.svg",
                     theme.colors.foreground.secondary,
                     scaled_px(10.0),
@@ -211,13 +123,7 @@ impl<V: 'static> Controls<V> {
                                 .0
                                 .insert(window.window_handle().window_id(), zoom_target);
                         });
-                        open_menu(
-                            this,
-                            PopoverKind::TextFormatMenu { section }.invoked_by(id.clone()),
-                            event.position(),
-                            window,
-                            cx,
-                        );
+                        open_menu(this, section, id.clone(), event.position(), window, cx);
                     }
                     Control::Zoom(zoom) => group.update(cx, |group, cx| {
                         group.zoom_side(side.unwrap_or(group.active), zoom, cx);
@@ -236,7 +142,9 @@ impl<V: 'static> Controls<V> {
         let zoom = self
             .side
             .map_or_else(|| state.zoom_label(), |side| state.zoom_label_for(side));
-        let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::current(cx).percent());
+        let scaled_px = gitcomet_ui_kit::ui_scale::scaler(
+            gitcomet_ui_kit::ui_scale::UiScale::current(cx).percent(),
+        );
         let zoom_controls = div()
             .flex()
             .flex_none()
@@ -253,7 +161,7 @@ impl<V: 'static> Controls<V> {
                 "image_zoom",
                 zoom,
                 "Choose zoom level · 100% is one image pixel per screen pixel",
-                Control::Menu(TextFormatMenuSection::ImageZoom),
+                Control::Menu(ImageMenu::Zoom),
                 cx,
             ))
             .child(self.chip(
@@ -296,7 +204,7 @@ impl<V: 'static> Controls<V> {
     }
 }
 
-pub(super) fn viewport<V: 'static>(
+pub fn viewport<V: 'static>(
     group: Entity<Group>,
     side: usize,
     theme: AppTheme,
@@ -340,7 +248,7 @@ pub(super) fn viewport<V: 'static>(
         .into_any_element()
 }
 
-pub(in crate::view) fn toolbar<V: 'static>(
+pub fn toolbar<V: 'static>(
     group: Entity<Group>,
     theme: AppTheme,
     cx: &mut gpui::Context<V>,
@@ -360,7 +268,9 @@ pub(in crate::view) fn toolbar<V: 'static>(
         theme,
         open_menu,
     };
-    let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::current(cx).percent());
+    let scaled_px = gitcomet_ui_kit::ui_scale::scaler(
+        gitcomet_ui_kit::ui_scale::UiScale::current(cx).percent(),
+    );
     let mut strip = div()
         .id("image_format_strip")
         .debug_selector(|| "image_format_strip".into())
@@ -378,7 +288,7 @@ pub(in crate::view) fn toolbar<V: 'static>(
             "image_sampling",
             Preferences::current(cx).label(),
             "Image sampling · Saved for all files and windows",
-            Control::Menu(TextFormatMenuSection::ImageSampling),
+            Control::Menu(ImageMenu::Sampling),
             cx,
         ));
     }

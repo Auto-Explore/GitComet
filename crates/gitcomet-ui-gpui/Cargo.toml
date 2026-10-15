@@ -24,6 +24,7 @@ benchmarks = [
     "dep:gitcomet-perf",
     "gitcomet-conflict-resolver/benchmarks",
     "gitcomet-markdown/benchmarks",
+    "gitcomet-ui-media/benchmarks",
     "gitcomet-syntax/benchmarks",
     "gpui/test-support",
 ]
@@ -44,6 +45,7 @@ gitcomet-syntax = { workspace = true }
 gitcomet-text = { workspace = true }
 gitcomet-tree-sitter-alloc = { workspace = true }
 gitcomet-ui-kit = { workspace = true }
+gitcomet-ui-media = { workspace = true }
 gitcomet-ui-terminal = { workspace = true }
 # `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
 gpui = { workspace = true, features = ["profiler"] }
@@ -108,6 +110,7 @@ gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 gitcomet-extension-example = { path = "../gitcomet-extension-example" }
 gitcomet-state = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
+gitcomet-ui-media = { workspace = true, features = ["test-support"] }
 gitcomet-ui-terminal = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }

@@ -1217,7 +1217,15 @@ impl GitCometView {
                 ui_session.active_repo = None;
             }
         }
-        image_preview::Preferences::initialize(&ui_session, cx);
+        image_preview::Preferences {
+            mode: image_preview::ImageSamplingMode::parse(
+                ui_session.image_sampling_mode.as_deref(),
+            ),
+            filter: image_preview::ImageSmoothFilter::parse(
+                ui_session.image_smooth_filter.as_deref(),
+            ),
+        }
+        .initialize(cx);
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);

@@ -1,7 +1,9 @@
 use super::*;
 use gitcomet_diagrams::scene::{PreparedScene, TILE_SIZE};
+use gpui::App;
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::sync::{
     Condvar, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -137,7 +139,7 @@ impl Default for DiagramCache {
 }
 impl DiagramCache {
     #[cfg(any(test, feature = "benchmarks"))]
-    pub(super) fn render(&self, kind: DiagramKind, source: Arc<str>) -> RasterResult {
+    pub fn render(&self, kind: DiagramKind, source: Arc<str>) -> RasterResult {
         self.render_current(kind, source, &AtomicU64::new(0), 0)
     }
     pub(super) fn render_current(

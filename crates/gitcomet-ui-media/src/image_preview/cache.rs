@@ -1,4 +1,6 @@
 use super::*;
+use gpui::App;
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     num::NonZeroUsize,

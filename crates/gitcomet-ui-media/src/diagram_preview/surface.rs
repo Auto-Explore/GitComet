@@ -1,5 +1,12 @@
 use super::*;
 use gitcomet_diagrams::scene::TILE_SIZE;
+use gitcomet_ui_kit::theme::AppTheme;
+use gitcomet_ui_kit::tooltip::GitCometTooltipExt as _;
+use gpui::AnyElement;
+use gpui::IsZero;
+use gpui::div;
+use gpui::px;
+use std::sync::Arc;
 impl DiagramState {
     pub(super) fn invalidate_tiles(&mut self) {
         self.generation.fetch_add(1, Ordering::Relaxed);
@@ -30,7 +37,7 @@ impl DiagramState {
             return;
         }
         self.tile_task = Some(cx.spawn(async move |view, cx| {
-            let error = crate::ui_runtime::background_compute(move || {
+            let error = gitcomet_ui_kit::ui_runtime::background_compute(move || {
                 for key in keys {
                     if generation.load(Ordering::Relaxed) != expected {
                         break;

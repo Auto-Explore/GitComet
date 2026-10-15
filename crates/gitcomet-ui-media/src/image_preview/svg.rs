@@ -9,13 +9,13 @@ const MAX_RASTER_BYTES: u64 = 16 * 1024 * 1024;
 static FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fonts = usvg::fontdb::Database::new();
     fonts.load_system_fonts();
-    crate::bundled_fonts::load_into_fontdb(&mut fonts);
-    let sans = crate::bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY;
+    gitcomet_ui_kit::bundled_fonts::load_into_fontdb(&mut fonts);
+    let sans = gitcomet_ui_kit::bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY;
     fonts.set_sans_serif_family(sans);
     fonts.set_serif_family(sans);
     fonts.set_cursive_family(sans);
     fonts.set_fantasy_family(sans);
-    fonts.set_monospace_family(crate::bundled_fonts::LILEX_FONT_FAMILY);
+    fonts.set_monospace_family(gitcomet_ui_kit::bundled_fonts::LILEX_FONT_FAMILY);
     Arc::new(fonts)
 });
 
@@ -42,12 +42,12 @@ static OPTIONS: LazyLock<usvg::Options<'static>> = LazyLock::new(|| {
     }
 });
 
-pub(in crate::view) fn parse(bytes: &[u8]) -> Result<usvg::Tree, usvg::Error> {
+pub fn parse(bytes: &[u8]) -> Result<usvg::Tree, usvg::Error> {
     usvg::Tree::from_data(bytes, &OPTIONS)
 }
 
 /// Opaque RGBA in global device-pixel coordinates.
-pub(in crate::view) fn raster_region(
+pub fn raster_region(
     tree: &usvg::Tree,
     output: (u32, u32),
     region: (u32, u32, u32, u32),

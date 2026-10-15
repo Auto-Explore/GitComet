@@ -1,9 +1,18 @@
 //! Device-pixel image inspection shared by files, diffs and conflict previews.
-use super::*;
+use gitcomet_ui_kit::theme::AppTheme;
+use gpui::App;
+use gpui::Entity;
+use gpui::IntoElement;
+use gpui::Pixels;
+use gpui::Point;
+use gpui::WeakEntity;
+use gpui::Window;
+use gpui::prelude::*;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "benchmarks")]
-pub(crate) mod benchmarks;
+pub mod benchmarks;
 mod cache;
 mod controls;
 mod filter;
@@ -11,25 +20,32 @@ mod preferences;
 mod resample;
 mod source;
 mod surface;
-pub(in crate::view) mod svg;
+pub mod svg;
 mod viewport;
 use cache::{Cache, TileKey};
-pub(in crate::view) use controls::{apply_menu_zoom, toolbar};
-pub(crate) use filter::{ImageSamplingMode, ImageSmoothFilter};
-pub(crate) use preferences::Preferences;
-pub(crate) use source::Source;
-pub(in crate::view) use source::{limit_decoder, raster_format};
+pub use controls::{OpenMenu, apply_menu_zoom, toolbar, viewport};
+pub use filter::{ImageSamplingMode, ImageSmoothFilter};
+pub use preferences::Preferences;
+pub use source::Source;
+pub use source::{limit_decoder, raster_format};
 use viewport::Camera;
 
 #[derive(Clone, Default)]
-pub(in crate::view) struct Input {
+pub struct Input {
     pub source: Option<Arc<Source>>,
     pub preview: Option<Arc<gpui::RenderImage>>,
     pub frame: usize,
 }
 
+/// A toolbar menu the host opens on the chip's behalf.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageMenu {
+    Sampling,
+    Zoom,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Zoom {
+pub enum Zoom {
     Fit,
     Scale(f64),
     In,
@@ -55,8 +71,8 @@ impl Side {
     }
 }
 
-pub(in crate::view) struct Group {
-    target: String,
+pub struct Group {
+    pub target: String,
     sides: [Side; 3],
     cache: Arc<Cache>,
     owns_cache: bool,
@@ -71,7 +87,7 @@ pub(in crate::view) struct Group {
 
 /// Re-renders an owner when its next animation frame is due.
 #[derive(Default)]
-pub(in crate::view) struct FrameTimer {
+pub struct FrameTimer {
     deadline: Option<std::time::Instant>,
     task: Option<gpui::Task<()>>,
 }
@@ -102,7 +118,7 @@ impl FrameTimer {
 }
 
 /// Whether owners advance animation frames; the viewport shows detail otherwise.
-pub(in crate::view) fn animates(window: &Window, cx: &App) -> bool {
+pub fn animates(window: &Window, cx: &App) -> bool {
     window.is_window_active() && !cx.reduce_motion()
 }
 
@@ -386,14 +402,27 @@ impl Group {
             format!("{:.0}%", camera.scale * 100.0)
         }
     }
-    #[cfg(test)]
-    pub(in crate::view) fn requested_tiles(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn requested_tiles(&self) -> usize {
         self.sides.iter().map(|side| side.requested.len()).sum()
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl Group {
+    /// The decoded preview `side` shows while its detailed tiles load.
+    pub fn side_preview(&self, side: usize) -> Option<&Arc<gpui::RenderImage>> {
+        self.sides[side].input.preview.as_ref()
+    }
+
+    /// Why `side`'s last detail request failed, if it did.
+    pub fn side_error(&self, side: usize) -> Option<&str> {
+        self.sides[side].error.as_deref()
+    }
+}
+
 #[derive(gpui::IntoElement)]
-pub(in crate::view) struct ImageViewport {
+pub struct ImageViewport {
     pub group: Entity<Group>,
     pub side: usize,
     pub theme: AppTheme,

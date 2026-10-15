@@ -21,6 +21,7 @@ members = [
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
+  "crates/gitcomet-ui-media",
   "crates/gitcomet-ui-terminal",
 ]
 exclude = [
@@ -82,6 +83,7 @@ default-members = [
   "crates/gitcomet-text",
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
+  "crates/gitcomet-ui-media",
   "crates/gitcomet-ui-terminal",
 ]
 
@@ -115,6 +117,7 @@ gitcomet-text = { path = "crates/gitcomet-text" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
+gitcomet-ui-media = { path = "crates/gitcomet-ui-media" }
 gitcomet-ui-terminal = { path = "crates/gitcomet-ui-terminal" }
 
 # External crates

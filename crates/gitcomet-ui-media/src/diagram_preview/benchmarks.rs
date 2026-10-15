@@ -1,6 +1,12 @@
 //! The production preparation/cache/tile/frame path, exposed only to benches.
 use super::*;
+use gitcomet_ui_kit::theme::AppTheme;
+use gpui::IntoElement;
+use gpui::Render;
+use gpui::Window;
+use gpui::div;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 pub struct MermaidPreviewFixture {
     cache: Arc<DiagramCache>,
@@ -123,7 +129,7 @@ flowchart LR;A-->B
 ```
 "
         .repeat(100);
-        let document = crate::view::markdown_preview::parse_markdown(&source).unwrap();
+        let document = gitcomet_markdown::parse_markdown(&source).unwrap();
         let mut diagrams = 0;
         for row in &document.rows {
             if let Some(source) = &row.diagram {

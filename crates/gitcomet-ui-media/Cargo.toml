@@ -1,0 +1,36 @@
+[package]
+name = "gitcomet-ui-media"
+description = "GPUI image and diagram previews: device-pixel image inspection, SVG rasterization and asynchronous diagram surfaces."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Accessors the host's preview tests read. Adds functions only.
+test-support = []
+# Fixtures the host's benchmarks drive.
+benchmarks = ["dep:gitcomet-markdown"]
+
+# No dependency on gitcomet-core, gitcomet-state or the UI host:
+# scripts/ci/boundaries.py enforces it.
+[dependencies]
+fast_image_resize = { workspace = true }
+gitcomet-base = { workspace = true }
+gitcomet-diagrams = { workspace = true }
+gitcomet-markdown = { workspace = true, optional = true }
+gitcomet-ui-kit = { workspace = true }
+gpui = { workspace = true }
+image = { workspace = true }
+lru = { workspace = true }
+resvg = { workspace = true }
+
+[dev-dependencies]
+gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = { workspace = true }

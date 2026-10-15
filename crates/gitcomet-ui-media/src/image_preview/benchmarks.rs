@@ -1,5 +1,6 @@
 //! Exercise the same source decoding, resampler and tile cache as the viewer.
 use super::*;
+use std::sync::Arc;
 
 pub struct ImageInspectionFixture {
     source: Arc<Source>,

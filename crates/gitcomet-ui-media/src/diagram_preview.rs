@@ -1,11 +1,23 @@
 //! The same asynchronous diagram surface is used by files and Markdown blocks.
-use super::*;
+use crate::rendered_preview::RenderedPreviewKind;
+use crate::rendered_preview::RenderedPreviewMode;
+use gitcomet_base::Loadable;
 use gitcomet_diagrams::DiagramKind;
+use gitcomet_ui_kit::theme::AppTheme;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::ElementId;
+use gpui::IntoElement;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use gpui::px;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) enum DiagramInput {
+pub enum DiagramInput {
     TooLarge {
         revision: Arc<str>,
     },
@@ -21,24 +33,6 @@ pub(in crate::view) enum DiagramInput {
 }
 
 impl DiagramInput {
-    pub(in crate::view) fn from_side(
-        kind: DiagramKind,
-        source: Option<&gitcomet_core::domain::FileDiffTextSource>,
-        text: Option<&Arc<str>>,
-    ) -> Option<Self> {
-        if let Some(text) = text {
-            return Some(Self::Text {
-                kind,
-                text: text.clone(),
-            });
-        }
-        source.map(|source| Self::File {
-            kind,
-            path: source.path.clone(),
-            revision: source.identity.clone(),
-        })
-    }
-
     fn read(&self) -> Result<(DiagramKind, Arc<str>), String> {
         match self {
             Self::TooLarge { .. } => Err("Diagram exceeds the 1 MiB preview limit.".into()),
@@ -57,114 +51,6 @@ impl DiagramInput {
                 Ok((*kind, text.into()))
             }
         }
-    }
-}
-
-impl DiffRenderer {
-    fn diagram_kind(&self) -> Option<DiagramKind> {
-        let path = match self.rendered_diff_target()? {
-            DiffTarget::WorkingTree { path, .. }
-            | DiffTarget::Commit { path, .. }
-            | DiffTarget::CommitRange {
-                path: Some(path), ..
-            } => path,
-            _ => return None,
-        };
-        DiagramKind::for_path(path)
-    }
-
-    fn diagram_inputs(&self, kind: DiagramKind) -> (Option<DiagramInput>, Option<DiagramInput>) {
-        if self.diff_surface().file_preview {
-            let input = matches!(self.worktree_preview, Loadable::Ready(_))
-                .then(|| {
-                    if !self.worktree_preview_text.is_empty()
-                        || self.worktree_preview_source_len == 0
-                    {
-                        Some(DiagramInput::Text {
-                            kind,
-                            text: Arc::from(self.worktree_preview_text.as_ref()),
-                        })
-                    } else if let Some(path) = self.worktree_preview_source_path.as_ref() {
-                        Some(DiagramInput::File {
-                            kind,
-                            path: path.clone(),
-                            revision: format!(
-                                "{}:{}",
-                                self.worktree_preview_content_rev, self.worktree_preview_source_len
-                            )
-                            .into(),
-                        })
-                    } else {
-                        Some(DiagramInput::Text {
-                            kind,
-                            text: Arc::from(self.worktree_preview_text.as_ref()),
-                        })
-                    }
-                })
-                .flatten();
-            return if self.diff_preview_is_new_file {
-                (None, input)
-            } else {
-                (input, None)
-            };
-        }
-        match self.rendered_file_diff_loadable() {
-            Some(Loadable::Ready(Some(file))) => (
-                DiagramInput::from_side(kind, file.old_source.as_ref(), file.old.as_ref()),
-                DiagramInput::from_side(kind, file.new_source.as_ref(), file.new.as_ref()),
-            ),
-            _ => (None, None),
-        }
-    }
-
-    pub(in crate::view) fn ensure_diagram_search_source(&mut self, _cx: &mut gpui::Context<Self>) {
-        let search_target = self.diagram_kind().and_then(|kind| {
-            Some((
-                self.active_repo_id()?,
-                self.rendered_diff_target()?.clone(),
-                kind,
-            ))
-        });
-        if self.diagram_search_target != search_target {
-            self.diagram_search_target = search_target;
-            if self.diff_search_active && self.diagram_search_target.is_some() {
-                self.rendered_preview_modes
-                    .set(RenderedPreviewKind::Diagram, RenderedPreviewMode::Source);
-            }
-        }
-    }
-
-    pub(in crate::view) fn render_diagram_file(
-        &self,
-        theme: AppTheme,
-        ui_scale_percent: u32,
-    ) -> AnyElement {
-        let Some(kind) = self.diagram_kind() else {
-            return components::empty_state(theme, "Preview", "No diagram selected.")
-                .into_any_element();
-        };
-        let (old, new) = self.diagram_inputs(kind);
-        let preview = |id: &'static str, input: Option<DiagramInput>| match input {
-            Some(input) => DiagramPreview {
-                id: id.into(),
-                input,
-                theme,
-                source_element: None,
-                force_source: false,
-                embedded: false,
-            }
-            .into_any_element(),
-            None => components::empty_state_message(theme, "No diagram").into_any_element(),
-        };
-        let content = if self.diff_surface().file_preview {
-            super::rendered_preview::PreviewContent::File(preview("diagram_file", new.or(old)))
-        } else {
-            super::rendered_preview::PreviewContent::Diff {
-                old: preview("diagram_file_old", old),
-                new: preview("diagram_file_new", new),
-            }
-        };
-        super::rendered_preview::render("diff_diagram", content, theme, ui_scale_percent)
     }
 }
 
@@ -219,11 +105,12 @@ impl DiagramState {
         self.result = Loadable::Loading;
         let input = self.input.clone();
         self.task = Some(cx.spawn(async move |view, cx| {
-            let result = crate::ui_runtime::background_compute(move || match input.read() {
-                Ok((kind, source)) => cache.render_current(kind, source, &generation, seq),
-                Err(error) => Err(error),
-            })
-            .await;
+            let result =
+                gitcomet_ui_kit::ui_runtime::background_compute(move || match input.read() {
+                    Ok((kind, source)) => cache.render_current(kind, source, &generation, seq),
+                    Err(error) => Err(error),
+                })
+                .await;
             let _ = view.update(cx, |this, cx| {
                 if this.complete(seq, result) {
                     cx.notify();
@@ -336,13 +223,13 @@ impl Drop for DiagramState {
 mod surface;
 
 #[derive(gpui::IntoElement)]
-pub(in crate::view) struct DiagramPreview {
-    pub(in crate::view) id: ElementId,
-    pub(in crate::view) input: DiagramInput,
-    pub(in crate::view) theme: AppTheme,
-    pub(in crate::view) source_element: Option<AnyElement>,
-    pub(in crate::view) force_source: bool,
-    pub(in crate::view) embedded: bool,
+pub struct DiagramPreview {
+    pub id: ElementId,
+    pub input: DiagramInput,
+    pub theme: AppTheme,
+    pub source_element: Option<AnyElement>,
+    pub force_source: bool,
+    pub embedded: bool,
 }
 
 impl gpui::RenderOnce for DiagramPreview {
@@ -379,4 +266,4 @@ impl gpui::RenderOnce for DiagramPreview {
 mod tests;
 
 #[cfg(feature = "benchmarks")]
-pub(crate) mod benchmarks;
+pub mod benchmarks;

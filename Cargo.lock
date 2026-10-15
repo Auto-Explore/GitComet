@@ -2576,6 +2576,7 @@ dependencies = [
 name = "gitcomet-state"
 version = "0.3.0"
 dependencies = [
+ "gitcomet-base",
  "gitcomet-core",
  "gitcomet-fs-watch",
  "gitcomet-git-gix",
@@ -2728,6 +2729,7 @@ dependencies = [
  "gitcomet-text",
  "gitcomet-tree-sitter-alloc",
  "gitcomet-ui-kit",
+ "gitcomet-ui-media",
  "gitcomet-ui-terminal",
  "gitcomet-win32-window-utils",
  "gpui-ce",
@@ -2788,6 +2790,22 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "x11-clipboard",
+]
+
+[[package]]
+name = "gitcomet-ui-media"
+version = "0.3.0"
+dependencies = [
+ "fast_image_resize",
+ "gitcomet-base",
+ "gitcomet-diagrams",
+ "gitcomet-markdown",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "image",
+ "lru",
+ "resvg",
+ "tempfile",
 ]
 
 [[package]]

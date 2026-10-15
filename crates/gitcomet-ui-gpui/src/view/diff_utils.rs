@@ -1270,6 +1270,61 @@ mod tests {
         assert!(patch.contains(" line3_mod"));
     }
 
+    fn text_svg(family: &str) -> Vec<u8> {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80">
+            <text x="10" y="55" font-family="{family}" font-size="40">Labels</text></svg>"#
+        )
+        .into_bytes()
+    }
+
+    /// Conflict previews parsed SVG without fonts, so their text disappeared
+    /// until detail tiles arrived.
+    #[test]
+    fn svg_text_survives_conflict_preview() {
+        for family in [
+            "IBM Plex Sans",
+            "Lilex",
+            "sans-serif",
+            "monospace",
+            "system-ui",
+        ] {
+            let png = rasterize_svg_preview_png(&text_svg(family)).unwrap();
+            let image = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert!(
+                image.pixels().filter(|p| p[0] < 128).count() > 100,
+                "conflict SVG preview lost font-family={family}"
+            );
+        }
+    }
+
+    #[test]
+    fn svg_text_survives_bounded_image_preview() {
+        for family in [
+            "IBM Plex Sans",
+            "Lilex",
+            "sans-serif",
+            "monospace",
+            "system-ui",
+        ] {
+            let tree = crate::view::image_preview::svg::parse(&text_svg(family)).unwrap();
+            let preview =
+                crate::view::panes::diff::diff_cache::render_svg_image_diff_preview(&tree).unwrap();
+            assert!(
+                preview
+                    .as_bytes(0)
+                    .unwrap()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[0] < 128)
+                    .count()
+                    > 100,
+                "bounded SVG preview lost font-family={family}"
+            );
+        }
+    }
+
     #[test]
     fn rasterize_svg_preview_png_scales_small_previews_to_2x_floor() {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8">

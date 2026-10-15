@@ -1,4 +1,13 @@
 use super::*;
+use gitcomet_ui_kit::theme::AppTheme;
+use gpui::Bounds;
+use gpui::Entity;
+use gpui::IntoElement;
+use gpui::Render;
+use gpui::Window;
+use gpui::div;
+use gpui::px;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 // Capture GPUI's actual scene and atlas rectangles without requiring a GPU.
@@ -91,7 +100,7 @@ impl Render for CloseCacheOnDraw {
 
 #[test]
 fn image_preview_lifecycle_evicted_and_closed_tiles_leave_the_window_atlas() {
-    let _guard = crate::test_support::lock_visual_test();
+    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     for close in [false, true] {
         let capture = SceneCapture::default();
         let renderer = capture.clone();
@@ -207,7 +216,7 @@ impl Render for ZoomLabelProbe {
                 self.group.clone(),
                 AppTheme::gitcomet_dark(),
                 cx,
-                |_, _, _, _, _| {},
+                |_, _, _, _, _, _| {},
             ))
             .child(div().flex_1().min_h(px(0.0)).child(ImageViewport {
                 group: self.group.clone(),
@@ -219,10 +228,10 @@ impl Render for ZoomLabelProbe {
 
 #[test]
 fn image_preview_lifecycle_cached_fit_updates_the_rendered_zoom_label() {
-    let _guard = crate::test_support::lock_visual_test();
+    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let mut cx = gpui::TestApp::with_text_system_and_assets(
         Arc::new(gpui::TestTextSystem),
-        Arc::new(crate::assets::GitCometAssets::default()),
+        Arc::new(gitcomet_ui_kit::assets::KitAssets),
     );
     cx.set_global(Preferences {
         mode: ImageSamplingMode::Pixels,
@@ -319,7 +328,7 @@ fn image_preview_lifecycle_cached_fit_updates_the_rendered_zoom_label() {
 
 #[test]
 fn playing_image_preview_preserves_texture_mapping_across_tiles_and_panning() {
-    let _guard = crate::test_support::lock_visual_test();
+    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let capture = SceneCapture::default();
     let renderer = capture.clone();
     let mut cx = gpui::HeadlessAppContext::with_platform(

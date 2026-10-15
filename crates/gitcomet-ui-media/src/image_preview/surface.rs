@@ -1,4 +1,11 @@
 use super::*;
+use gitcomet_ui_kit::theme::AppTheme;
+use gitcomet_ui_kit::tooltip::GitCometTooltipExt as _;
+use gpui::AnyElement;
+use gpui::Bounds;
+use gpui::div;
+use gpui::px;
+use std::sync::Arc;
 
 fn visible_keys(
     source: &Source,
@@ -72,7 +79,7 @@ impl Group {
         let expected = generation.load(Ordering::Relaxed);
         let cache = self.cache.clone();
         side.task = Some(cx.spawn(async move |group, cx| {
-            let result = crate::ui_runtime::background_compute(move || {
+            let result = gitcomet_ui_kit::ui_runtime::background_compute(move || {
                 cache.render(&source, &keys, &generation, expected)
             })
             .await;

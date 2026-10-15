@@ -2,7 +2,7 @@
 use fast_image_resize::{Filter, FilterType, ResizeAlg};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-pub(crate) enum ImageSamplingMode {
+pub enum ImageSamplingMode {
     #[default]
     Auto,
     Smooth,
@@ -10,7 +10,7 @@ pub(crate) enum ImageSamplingMode {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-pub(crate) enum ImageSmoothFilter {
+pub enum ImageSmoothFilter {
     #[default]
     Spline36,
     Robidoux,
@@ -20,10 +20,10 @@ pub(crate) enum ImageSmoothFilter {
 macro_rules! names {
     ($ty:ty, $( $variant:ident => ($key:literal, $label:literal) ),+ $(,)?) => {
         impl $ty {
-            pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),+];
-            pub(crate) fn key(self) -> &'static str { match self { $(Self::$variant => $key),+ } }
-            pub(crate) fn label(self) -> &'static str { match self { $(Self::$variant => $label),+ } }
-            pub(crate) fn parse(value: Option<&str>) -> Self {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub fn key(self) -> &'static str { match self { $(Self::$variant => $key),+ } }
+            pub fn label(self) -> &'static str { match self { $(Self::$variant => $label),+ } }
+            pub fn parse(value: Option<&str>) -> Self {
                 match value { $(Some($key) => Self::$variant),+, _ => Self::default() }
             }
         }

@@ -16,6 +16,8 @@ pub(in crate::view) mod helpers;
 mod hosted_binding;
 pub(in crate::view) mod input;
 mod markdown_state;
+mod media;
+pub(in crate::view) use media::image_menu_request;
 mod preview;
 pub(in crate::view) mod services;
 pub(in crate::view) use preview::{

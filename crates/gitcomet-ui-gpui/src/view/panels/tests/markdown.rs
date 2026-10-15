@@ -493,8 +493,8 @@ fn file_history_controls_live_in_the_bottom_bar(cx: &mut gpui::TestAppContext) {
             .diff_renderer
             .read(app)
             .rendered_preview_modes
-            .get(crate::view::mod_helpers::RenderedPreviewKind::Markdown)),
-        crate::view::mod_helpers::RenderedPreviewMode::Source
+            .get(crate::view::RenderedPreviewKind::Markdown)),
+        crate::view::RenderedPreviewMode::Source
     );
     fixture.cleanup();
 }
