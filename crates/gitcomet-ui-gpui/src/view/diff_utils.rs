@@ -755,11 +755,7 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
                     UnselectedHunkLineBehavior::KeepAsContext => SelectionPatchRole::Context,
                 }
             }
-            K::Context | K::Header | K::Hunk => match raw.first() {
-                Some(b'-') => SelectionPatchRole::Remove,
-                Some(b'+') => SelectionPatchRole::Add,
-                _ => SelectionPatchRole::Context,
-            },
+            K::Context | K::Header | K::Hunk => SelectionPatchRole::Context,
         };
         body.push(SelectionPatchLine {
             role,
@@ -1375,6 +1371,22 @@ mod tests {
             }
             LineAction::Discard => std::fs::read_to_string(repo.join("f.txt")).expect("worktree"),
         }
+    }
+
+    /// A removed `-- comment` line reads `--- comment` in the diff. Parsed as a
+    /// file header, it was hidden from the view and staged along with any
+    /// selected line of its hunk.
+    #[test]
+    fn staging_a_line_leaves_an_unselected_removed_dash_dash_line_alone() {
+        assert_eq!(
+            apply_line_action(
+                "select 1;\n-- old comment\nselect 2;\n",
+                "select 1;\nselect 2;\nselect 3;\n",
+                "+select 3;",
+                LineAction::Stage,
+            ),
+            "select 1;\n-- old comment\nselect 2;\nselect 3;\n"
+        );
     }
 
     /// An edited last line without a trailing newline shows as `-b`, `\ No

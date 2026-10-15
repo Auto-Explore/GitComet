@@ -1,4 +1,4 @@
-use crate::domain::{Diff, DiffLineKind, SharedLineText};
+use crate::domain::{Diff, DiffLineKind, SharedLineText, parse_unified_hunk_header};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnnotatedDiffLine {
@@ -16,9 +16,11 @@ pub fn annotate_unified(diff: &Diff) -> Vec<AnnotatedDiffLine> {
     for line in &diff.lines {
         match line.kind {
             DiffLineKind::Hunk => {
-                if let Some((old_start, new_start)) = parse_unified_hunk_header(&line.text) {
-                    old_line = Some(old_start);
-                    new_line = Some(new_start);
+                if let Some(header) = parse_unified_hunk_header(line.text.as_bytes())
+                    && let [old] = header.parents.as_slice()
+                {
+                    old_line = Some(old.start);
+                    new_line = Some(header.result.start);
                 } else {
                     old_line = None;
                     new_line = None;
@@ -81,28 +83,6 @@ pub fn annotate_unified(diff: &Diff) -> Vec<AnnotatedDiffLine> {
     }
 
     out
-}
-
-fn parse_unified_hunk_header(text: &str) -> Option<(u32, u32)> {
-    // Formats:
-    // @@ -l,s +l,s @@
-    // @@ -l +l @@
-    // @@ -l,0 +l,0 @@
-    let text = text.strip_prefix("@@")?.trim_start();
-    let text = text.split("@@").next()?.trim();
-
-    let mut it = text.split_whitespace();
-    let old = it.next()?;
-    let new = it.next()?;
-
-    let old_start = parse_range_start(old.strip_prefix('-')?)?;
-    let new_start = parse_range_start(new.strip_prefix('+')?)?;
-    Some((old_start, new_start))
-}
-
-fn parse_range_start(s: &str) -> Option<u32> {
-    let start = s.split(',').next()?;
-    start.parse::<u32>().ok()
 }
 
 /// Post-image path of the file section whose `diff --git` line is the first of
@@ -328,12 +308,36 @@ index 1111111..2222222 100644
 
     #[test]
     fn parse_hunk_header_variants() {
-        assert_eq!(parse_unified_hunk_header("@@ -1 +2 @@"), Some((1, 2)));
-        assert_eq!(parse_unified_hunk_header("@@ -1,0 +2,10 @@"), Some((1, 2)));
+        let range = |start, count| crate::domain::UnifiedHunkRange { start, count };
+        let starts_and_counts = |text: &str| {
+            parse_unified_hunk_header(text.as_bytes())
+                .map(|header| (header.parents.to_vec(), header.result))
+        };
         assert_eq!(
-            parse_unified_hunk_header("@@ -42,7 +100,8 @@ fn x"),
-            Some((42, 100))
+            starts_and_counts("@@ -1 +2 @@"),
+            Some((vec![range(1, 1)], range(2, 1)))
         );
+        assert_eq!(
+            starts_and_counts("@@ -1,0 +2,10 @@"),
+            Some((vec![range(1, 0)], range(2, 10)))
+        );
+        assert_eq!(
+            starts_and_counts("@@ -42,7 +100,8 @@ fn x"),
+            Some((vec![range(42, 7)], range(100, 8)))
+        );
+        assert_eq!(
+            starts_and_counts("@@@ -1,2 -3,4 +5,6 @@@"),
+            Some((vec![range(1, 2), range(3, 4)], range(5, 6)))
+        );
+        for malformed in [
+            "@@ -1 @@",
+            "@@ +1 -2 @@",
+            "@@ -1 +2",
+            "@@@ -1 +2 @@@",
+            "@ -1 +1 @",
+        ] {
+            assert_eq!(starts_and_counts(malformed), None, "{malformed:?}");
+        }
     }
 
     fn file_path_of(section: &str) -> Option<String> {
