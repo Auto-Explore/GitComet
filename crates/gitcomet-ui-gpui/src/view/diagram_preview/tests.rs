@@ -261,11 +261,14 @@ impl Render for InteractionHarness {
     }
 }
 
-#[gpui::test]
-fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
+/// A drawn diagram inside a scrolling document, ready for pointer input.
+fn open_interaction_harness(
     cx: &mut gpui::TestAppContext,
+) -> (
+    Entity<InteractionHarness>,
+    Entity<DiagramState>,
+    &mut gpui::VisualTestContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = cx.add_window_view(|_, cx| {
         let cache = cache(cx);
         InteractionHarness {
@@ -292,6 +295,15 @@ fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
     }
+    (view, state, cx)
+}
+
+#[gpui::test]
+fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, state, cx) = open_interaction_harness(cx);
     let bounds = cx.debug_bounds("diagram_viewport").unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: bounds.center(),
@@ -326,6 +338,36 @@ fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
             1
         );
     });
+}
+
+/// A trackpad sends Ctrl/Cmd+scroll as many small pixel deltas; stepping on
+/// each one ran a single gesture through every zoom level.
+#[gpui::test]
+fn smooth_ctrl_scroll_steps_the_diagram_zoom_once_per_40_px(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, state, cx) = open_interaction_harness(cx);
+    let center = cx.debug_bounds("diagram_viewport").unwrap().center();
+    let wheel = |cx: &mut gpui::VisualTestContext, dy: f32| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: center,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(dy))),
+            modifiers: gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+    };
+    let zoom = |cx: &mut gpui::VisualTestContext| cx.update(|_, app| state.read(app).viewport.zoom);
+    for _ in 0..8 {
+        wheel(cx, 15.0);
+    }
+    assert_eq!(zoom(cx), 4, "120 px of smooth scrolling is two steps");
+    wheel(cx, -15.0);
+    wheel(cx, -15.0);
+    assert_eq!(zoom(cx), 4, "reversing drops the unspent distance");
+    wheel(cx, -15.0);
+    assert_eq!(zoom(cx), 3);
 }
 
 #[test]

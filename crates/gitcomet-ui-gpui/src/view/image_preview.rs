@@ -65,8 +65,7 @@ pub(in crate::view) struct Group {
     active: usize,
     cap_fit: bool,
     dragging: Option<(usize, Point<Pixels>)>,
-    // Ctrl/Cmd+scroll distance not yet spent on a zoom step.
-    zoom_scroll: f32,
+    zoom_wheel: crate::view::zoom_wheel::ZoomWheel,
 }
 
 /// Re-renders an owner when its next animation frame is due.
@@ -163,7 +162,7 @@ impl Group {
             active: 0,
             cap_fit: false,
             dragging: None,
-            zoom_scroll: 0.0,
+            zoom_wheel: Default::default(),
         }
     }
 
@@ -180,7 +179,7 @@ impl Group {
             self.linked = true;
             self.paused = false;
             self.dragging = None;
-            self.zoom_scroll = 0.0;
+            self.zoom_wheel = Default::default();
             self.active = inputs.iter().position(|i| i.source.is_some()).unwrap_or(0);
         }
         let mut changed = reset;
@@ -299,8 +298,6 @@ impl Group {
         cx.notify();
     }
 
-    /// Ctrl/Cmd+scroll: one step per wheel notch or per 40 px of smooth
-    /// scrolling, so a trackpad gesture does not run through every level.
     fn wheel_zoom(
         &mut self,
         index: usize,
@@ -310,23 +307,11 @@ impl Group {
         cx: &mut gpui::Context<Self>,
     ) {
         self.active = index;
-        let (delta, step) = match event.delta {
-            gpui::ScrollDelta::Lines(lines) => (lines.y, 1.0),
-            gpui::ScrollDelta::Pixels(pixels) => (f32::from(pixels.y), 40.0),
+        let zoom = match self.zoom_wheel.step(event) {
+            Some(crate::view::zoom_wheel::ZoomStep::In) => Zoom::In,
+            Some(crate::view::zoom_wheel::ZoomStep::Out) => Zoom::Out,
+            None => return,
         };
-        if event.touch_phase == gpui::TouchPhase::Started || delta * self.zoom_scroll < 0.0 {
-            self.zoom_scroll = 0.0;
-        }
-        self.zoom_scroll += delta;
-        if self.zoom_scroll.abs() < step {
-            return;
-        }
-        let zoom = if self.zoom_scroll > 0.0 {
-            Zoom::In
-        } else {
-            Zoom::Out
-        };
-        self.zoom_scroll = 0.0;
         self.zoom(
             zoom,
             Some((

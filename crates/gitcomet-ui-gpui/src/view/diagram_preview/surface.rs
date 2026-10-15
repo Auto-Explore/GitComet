@@ -110,15 +110,12 @@ impl DiagramState {
                     );
                 }
                 let state = state_for_paint.clone();
-                crate::view::zoom_wheel::on_zoom_wheel(window, hitbox, move |event, window, cx| {
-                    let delta = event.delta.pixel_delta(window.line_height()).y;
-                    if delta.is_zero() {
-                        return;
-                    }
+                crate::view::zoom_wheel::on_zoom_wheel(window, hitbox, move |event, _, cx| {
                     state.update(cx, |this, cx| {
-                        this.viewport.zoom_by(if delta > px(0.0) { 1 } else { -1 });
-                        this.invalidate_tiles();
-                        cx.notify();
+                        if this.viewport.wheel_zoom(event) {
+                            this.invalidate_tiles();
+                            cx.notify();
+                        }
                     });
                 });
                 // Window listeners retain a drag outside the viewport and clear it

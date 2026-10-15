@@ -1,4 +1,5 @@
 use super::cache::TileKey;
+use crate::view::zoom_wheel::{ZoomStep, ZoomWheel};
 use gitcomet_diagrams::scene::TILE_SIZE;
 
 pub(super) const ZOOM_STEPS: [f32; 8] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
@@ -10,6 +11,7 @@ pub(super) struct Viewport {
     pub(super) natural: (f32, f32),
     pub(super) initialized: bool,
     pub(super) dragging: Option<(f32, f32)>,
+    zoom_wheel: ZoomWheel,
 }
 impl Default for Viewport {
     fn default() -> Self {
@@ -20,6 +22,7 @@ impl Default for Viewport {
             natural: (0.0, 0.0),
             initialized: false,
             dragging: None,
+            zoom_wheel: ZoomWheel::default(),
         }
     }
 }
@@ -27,6 +30,7 @@ impl Viewport {
     pub(super) fn reset(&mut self) {
         self.zoom = 2;
         self.dragging = None;
+        self.zoom_wheel = ZoomWheel::default();
         self.initialized = true;
         let position = |view: f32, graph: f32| {
             if graph + 32.0 <= view {
@@ -73,6 +77,17 @@ impl Viewport {
             self.size.1 / 2.0 - (self.size.1 / 2.0 - self.pan.1) * ratio,
         );
         self.clamp();
+    }
+    /// Ctrl/Cmd+scroll; whether it took a zoom step.
+    pub(super) fn wheel_zoom(&mut self, event: &gpui::ScrollWheelEvent) -> bool {
+        let Some(step) = self.zoom_wheel.step(event) else {
+            return false;
+        };
+        self.zoom_by(match step {
+            ZoomStep::In => 1,
+            ZoomStep::Out => -1,
+        });
+        true
     }
     pub(super) fn drag_to(&mut self, position: (f32, f32)) {
         if let Some(previous) = self.dragging {
