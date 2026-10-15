@@ -295,7 +295,10 @@ pub fn create_askpass_script() -> std::io::Result<AskPassScript> {
     let prompt_input_path = dir.path().join("gitcomet-askpass-prompt-input.txt");
     let host_prompt_log_path = dir.path().join("gitcomet-askpass-host-prompt.log");
     let passphrase_prompt_log_path = dir.path().join("gitcomet-askpass-passphrase-prompt.log");
-    let response_log_path = dir.path().join("gitcomet-askpass-responses.log");
+    let response_log_path = dir.path().join(format!(
+        "{}-askpass-responses.log",
+        crate::identity::current().executable_name(),
+    ));
 
     fs::write(&path, askpass_script_contents())?;
     fs::write(&prompt_input_path, b"")?;

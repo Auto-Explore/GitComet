@@ -65,10 +65,9 @@ fn key_path_from_prompt(prompt: &str) -> Option<PathBuf> {
             return None;
         }
         raw
-    } else if let Some(raw) = prompt.strip_prefix("Enter passphrase for ") {
-        raw.strip_suffix(':')?
     } else {
-        return None;
+        let raw = prompt.strip_prefix("Enter passphrase for ")?;
+        raw.strip_suffix(':')?
     };
     if raw.contains(['\n', '\r', '\0']) {
         return None;
