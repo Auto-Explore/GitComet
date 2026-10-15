@@ -19,17 +19,17 @@ ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "target/ci-reports"
 PREFIX = "gitcomet-ci-v2-"
 MIB = 1024**2
-# report.py fails a dev push whose CI caches exceed this; GitHub itself evicts beyond 10 GB.
-CACHE_ALLOWANCE_BYTES = 8_000_000_000
-# Compiled bundles for the three longest jobs. Measured bundles (2026-10-15): macos15-x64 1454 MiB,
-# ubuntu22-arm64 1497 MiB, ubuntu22-x64 1640 MiB with its app context, which Windows also builds.
-COMPILED_BUDGETS_MIB = {
-    "macos15-x64-workspace-ci-test": 1664,
-    "windows-x64-workspace-ci-test": 2048,
-    "windows-arm64-workspace-ci-test": 2048,
-}
-# One per OS family: crate files, the sparse index and git databases (522 MiB on Linux).
-SOURCES_BUDGET_MIB = 600
+
+
+def load_budgets(path):
+    budgets = tomllib.loads(path.read_text(encoding="utf-8"))
+    if set(budgets) != {"allowance_bytes", "sources_mib", "compiled_mib"}:
+        raise ValueError(f"{path.name} must define exactly allowance_bytes, sources_mib and [compiled_mib]")
+    return budgets["allowance_bytes"], budgets["sources_mib"], budgets["compiled_mib"]
+
+
+CACHE_ALLOWANCE_BYTES, SOURCES_BUDGET_MIB, COMPILED_BUDGETS_MIB = load_budgets(
+    Path(__file__).with_name("cache-budgets.toml"))
 UNIT_HASH = re.compile(r"-([0-9a-f]{16})(?:\..*)?$")
 PACKAGE_ID = re.compile(r"(registry|sparse|git|path)\+[^#]+#(?:([^@#]+)@)?(\S+)")
 
@@ -203,7 +203,7 @@ def pack(destination, entries, *, mode, budget_mib):
     if size > budget:
         destination.unlink()
         raise RuntimeError(f"{mode} cache bundle is {size // MIB} MiB, over its {budget_mib} MiB budget; "
-                           "raise it in scripts/ci/cache.py within the repository cache limit")
+                           "raise it in scripts/ci/cache-budgets.toml within the repository cache allowance")
     print(f"Packed {mode} cache: {size // MIB} of {budget_mib} MiB")
 
 
@@ -277,7 +277,7 @@ def main():
              budget_mib=SOURCES_BUDGET_MIB)
     elif args.operation == "pack-compiled":
         if args.context not in COMPILED_BUDGETS_MIB:
-            parser.error(f"{args.context} has no compiled bundle budget in COMPILED_BUDGETS_MIB")
+            parser.error(f"{args.context} has no compiled bundle budget in cache-budgets.toml")
         units, built_crates = build_record()
         metadata = cargo_metadata()
         checkouts = git_checkouts(args.cargo_home, metadata)

@@ -766,6 +766,28 @@ class CacheTests(unittest.TestCase):
         budgets = sum(cache.COMPILED_BUDGETS_MIB.values()) + 3 * cache.SOURCES_BUDGET_MIB
         self.assertLessEqual(budgets * 1024**2 + 64 * 1024**2, cache.CACHE_ALLOWANCE_BYTES)
 
+    def test_budget_changes_keep_every_cache_key(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache.platform, "platform", return_value="test-platform"), \
+                patch.object(cache.subprocess, "check_output", return_value=b"rustc test"):
+            root = Path(directory)
+            (root / "Cargo.lock").write_text("lock")
+            budgets = root / "scripts/ci/cache-budgets.toml"
+            budgets.parent.mkdir(parents=True)
+            budgets.write_text((Path(cache.__file__).with_name("cache-budgets.toml")).read_text())
+            before = cache.cache_keys("windows-x64-workspace-ci-test")
+            budgets.write_text(budgets.read_text().replace("sources_mib = 600", "sources_mib = 700"))
+            self.assertEqual(cache.cache_keys("windows-x64-workspace-ci-test"), before)
+
+    def test_misspelled_budget_tables_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budgets = Path(directory) / "cache-budgets.toml"
+            budgets.write_text('allowance_bytes = 1\nsources_mib = 1\n[compiled_mb]\nfixture-workspace-ci-test = 1\n')
+            with self.assertRaisesRegex(ValueError, "exactly allowance_bytes, sources_mib and \\[compiled_mib\\]"):
+                cache.load_budgets(budgets)
+            budgets.write_text(budgets.read_text().replace("[compiled_mb]", "[compiled_mib]"))
+            self.assertEqual(cache.load_budgets(budgets), (1, 1, {"fixture-workspace-ci-test": 1}))
+
     def test_ci_finish_reads_only_the_cache_state_ci_setup_exports(self):
         actions = Path(__file__).resolve().parents[2] / ".github/actions"
         setup = (actions / "ci-setup/action.yml").read_text()
