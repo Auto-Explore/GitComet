@@ -469,7 +469,8 @@ struct Filters<'repo> {
     attributes: gix::AttributeStack<'repo>,
     /// `filter` and `working-tree-encoding`, in that order.
     selected: gix::attrs::search::Outcome,
-    lfs_driver: bool,
+    /// Filter drivers with a clean or process program configured.
+    cleaning_drivers: Vec<gix::bstr::BString>,
     /// A file's raw sniff window, reused across files.
     window: Vec<u8>,
 }
@@ -486,17 +487,20 @@ impl<'repo> WorktreeReader<'repo> {
                         gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
                     )
                     .ok()?;
-                let config = repo.config_snapshot();
-                let lfs_driver = ["filter.lfs.process", "filter.lfs.clean"]
+                let cleaning_drivers = gix::filter::Pipeline::options(repo)
+                    .ok()?
+                    .drivers
                     .into_iter()
-                    .any(|key| config.string(key).is_some());
+                    .filter(|driver| driver.clean.is_some() || driver.process.is_some())
+                    .map(|driver| driver.name)
+                    .collect();
                 Some(Filters {
                     selected: attributes
                         .selected_attribute_matches(["filter", "working-tree-encoding"]),
                     pipeline,
                     index,
                     attributes,
-                    lfs_driver,
+                    cleaning_drivers,
                     window: Vec::with_capacity(COMMIT_STATS_BINARY_SNIFF_BYTES),
                 })
             });
@@ -549,7 +553,7 @@ impl<'repo> WorktreeReader<'repo> {
             index,
             attributes,
             selected,
-            lfs_driver,
+            cleaning_drivers,
             window,
         }) = self.filters.as_mut()
         else {
@@ -566,8 +570,13 @@ impl<'repo> WorktreeReader<'repo> {
             .iter_selected()
             .map(|matched| matched.assignment.state);
         let (filter, encoding) = (states.next(), states.next());
-        if *lfs_driver && matches!(filter, Some(StateRef::Value(value)) if value.as_bstr() == "lfs")
-        {
+        let driver = match filter {
+            Some(StateRef::Value(name)) => cleaning_drivers
+                .iter()
+                .find(|driver| **driver == name.as_bstr()),
+            _ => None,
+        };
+        if driver.is_some_and(|driver| *driver == "lfs") {
             return false;
         }
         #[cfg(test)]
@@ -588,11 +597,11 @@ impl<'repo> WorktreeReader<'repo> {
         let Ok(mut file) = std::fs::File::open(&full) else {
             return false;
         };
-        // Without a filter or working-tree-encoding, conversion only drops CRs
-        // and shortens `$Id$`: a NUL in the raw sniff window stays binary, so
-        // such a file is not read past it.
+        // Without a cleaning driver or working-tree-encoding, conversion only
+        // drops CRs and shortens `$Id$`: a NUL in the raw sniff window stays
+        // binary, so such a file is not read past it.
         window.clear();
-        if matches!(filter, Some(StateRef::Unspecified | StateRef::Unset))
+        if driver.is_none()
             && !matches!(encoding, Some(StateRef::Value(_)))
             && ((&mut file)
                 .take(COMMIT_STATS_BINARY_SNIFF_BYTES as u64)
