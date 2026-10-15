@@ -45,6 +45,7 @@ repository lifetimes, and document ownership.
 - `crates/gitcomet-diagrams`: offline Mermaid recognition and rendering, independent of GPUI.
 - `crates/gitcomet-fonts`: bundled font assets shared by diagram rendering and the UI kit.
 - `crates/gitcomet-tree-sitter-alloc`: installs the allocator hooks used by tree-sitter.
+- `crates/gitcomet-perf`: performance measurement records (sidecars) written by benchmarks and probes, and the `perf_budget_report` binary that checks them against budgets.
 - `crates/gitcomet-ui-kit`: GPUI foundations reusable without the app: runtime policy (`ui_runtime`, installed live by the app at launch, deterministic otherwise), appearance, UI scale, themes, fonts, interaction primitives, text inputs, tooltips, icons, and components (buttons, pickers, menus, settings rows, navigation tabs, interstitials). No dependency on state, the application, or the UI host.
 - `crates/gitcomet-extension-api`: the contract for compiled-in extensions: contributions (repository views, status items, settings pages, commands, key bindings, menu entries, assets, entry gates, close guards), weak window and repository handles, and per-extension session/workspace storage. Depends on core, state, and the UI kit, never on the UI host.
 - `crates/gitcomet-ui-gpui`: the GitComet window: views, panes, panels (focused diff/merge windows, conflict resolver, word diff); `UiLaunch` opens the browser window and hosts extensions (`view/extension_host.rs`). With none registered it installs nothing.

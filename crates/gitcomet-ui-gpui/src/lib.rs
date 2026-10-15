@@ -20,8 +20,6 @@ mod menu_labels;
 pub mod perf_alloc;
 #[doc(hidden)]
 pub mod perf_ram_guard;
-#[doc(hidden)]
-pub mod perf_sidecar;
 mod preference_writer;
 #[cfg(test)]
 mod render_guards;

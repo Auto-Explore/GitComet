@@ -224,7 +224,7 @@ else
   if [[ ${report_status} -eq 0 ]]; then
     if [[ ! -x "${report_cmd[0]}" ]]; then
       # --skip-report runs freeze no report binary.
-      report_cmd=(cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- "${report_cmd[@]:1}")
+      report_cmd=(cargo run -p gitcomet-perf --bin perf_budget_report -- "${report_cmd[@]:1}")
     fi
     set +e
     "${report_cmd[@]}" 2>&1 | tee "${budget_report}"

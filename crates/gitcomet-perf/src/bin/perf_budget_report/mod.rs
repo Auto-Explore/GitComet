@@ -1,4 +1,4 @@
-pub(crate) use gitcomet_ui_gpui::perf_sidecar::{
+pub(crate) use gitcomet_perf::sidecar::{
     PerfSidecarReport, criterion_sidecar_path, measurement_kind_for_bench, read_sidecar,
 };
 pub(crate) use serde::Deserialize;

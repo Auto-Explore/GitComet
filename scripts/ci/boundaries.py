@@ -18,6 +18,8 @@ APPLICATION = ("gitcomet", "gitcomet-app")
 
 RULES = (
     ("gitcomet-diagrams", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Measurement records and their report: serde only.
+    ("gitcomet-perf", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     ("gitcomet-core", (), ("gitcomet-state", *GPUI, *UI_HOST, *APPLICATION)),
     ("gitcomet-state", (), (*GPUI, "gitcomet-ui-kit", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-ui-kit", (), ("gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),

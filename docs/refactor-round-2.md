@@ -514,3 +514,14 @@ The splash backdrops stay rasterized at build time. The dark backdrop draws 148
 circles over 10 radial gradients at 960 px; rasterizing it while the first
 window opens would cost every launch, while the build-time `resvg` copy costs
 only a clean build.
+
+### 0.3 Perf report out of the UI host
+
+`crates/gitcomet-perf` now holds the sidecar record format (`gitcomet_perf::sidecar`,
+formerly `gitcomet_ui_gpui::perf_sidecar`) and the `perf_budget_report` binary.
+One crate replaces the two the plan named: the report and the format change
+together, and every writer needs only the format. Its dependencies are serde and
+serde_json, enforced by a boundary rule. The UI crate loses 8,218 production
+lines and its test builds no longer link a second full UI binary for the report.
+All 117 moved tests (111 report, 6 sidecar) pass in the new crate. Workflows and
+profiling scripts run the binary with `-p gitcomet-perf`.

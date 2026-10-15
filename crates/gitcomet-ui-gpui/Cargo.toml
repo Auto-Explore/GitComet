@@ -21,6 +21,7 @@ benchmarks = [
     "gitcomet-state/test-support",
     "gitcomet-git-gix/benchmarks",
     "dep:gitcomet-git-gix",
+    "dep:gitcomet-perf",
     "gpui/test-support",
 ]
 
@@ -33,6 +34,7 @@ gitcomet-core = { workspace = true }
 gitcomet-diagrams = { workspace = true }
 gitcomet-extension-api = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
+gitcomet-perf = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-tree-sitter-alloc = { workspace = true }
 gitcomet-ui-kit = { workspace = true }
@@ -164,6 +166,8 @@ gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 [dev-dependencies]
 # Activate the optional backend for history activation tests with real Git data.
 gitcomet-git-gix = { workspace = true }
+# Activate the optional sidecar writer for the measurement tests.
+gitcomet-perf = { workspace = true }
 # Only entries that add features over `[dependencies]` belong here — a plain
 # restatement is dead weight, since tests already see every regular dependency.
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }

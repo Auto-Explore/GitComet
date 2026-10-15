@@ -2360,6 +2360,7 @@ dependencies = [
  "gitcomet-app",
  "gitcomet-core",
  "gitcomet-git-gix",
+ "gitcomet-perf",
  "gitcomet-ui-gpui",
  "process-wrap",
  "rustfs-mimalloc",
@@ -2525,6 +2526,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-perf"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "gitcomet-state"
 version = "0.3.0"
 dependencies = [
@@ -2569,6 +2579,7 @@ dependencies = [
  "gitcomet-extension-api",
  "gitcomet-extension-example",
  "gitcomet-git-gix",
+ "gitcomet-perf",
  "gitcomet-state",
  "gitcomet-tree-sitter-alloc",
  "gitcomet-ui-kit",

@@ -2536,7 +2536,7 @@ fn write_sidecar_file(root: &Path, bench: &str, metrics: &[(&str, serde_json::Va
     }
     let report = PerfSidecarReport::new(bench, payload);
     let path = criterion_sidecar_path(root, bench);
-    gitcomet_ui_gpui::perf_sidecar::write_sidecar(&report, &path).expect("write sidecar");
+    gitcomet_perf::sidecar::write_sidecar(&report, &path).expect("write sidecar");
 }
 
 fn set_file_modified(path: &Path, modified: SystemTime) {

@@ -96,5 +96,5 @@ pub(crate) fn is_truthy(value: &str) -> bool {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- [--criterion-root PATH]... [--strict] [--skip-missing] [--fresh-reference PATH] [--summary-json PATH]"
+    "Usage: cargo run -p gitcomet-perf --bin perf_budget_report -- [--criterion-root PATH]... [--strict] [--skip-missing] [--fresh-reference PATH] [--summary-json PATH]"
 }

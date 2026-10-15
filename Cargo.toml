@@ -10,6 +10,7 @@ members = [
   "crates/gitcomet-extension-example",
   "crates/gitcomet-extension-example-app",
   "crates/gitcomet-git-gix",
+  "crates/gitcomet-perf",
   "crates/gitcomet-state",
   "crates/gitcomet-fs-watch",
   "crates/gitcomet-tree-sitter-alloc",
@@ -66,6 +67,7 @@ default-members = [
   "crates/gitcomet-app",
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
+  "crates/gitcomet-perf",
   "crates/gitcomet-state",
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
@@ -91,6 +93,7 @@ gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
 gitcomet-fonts = { path = "crates/gitcomet-fonts" }
 gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
+gitcomet-perf = { path = "crates/gitcomet-perf" }
 gitcomet-state = { path = "crates/gitcomet-state" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
