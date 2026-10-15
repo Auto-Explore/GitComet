@@ -328,6 +328,7 @@ pub(crate) mod test_support;
 mod toast_host;
 mod ui_persistence;
 mod window_gates;
+mod zoom_wheel;
 pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};
 mod update_check;
 mod workspace_picker;
@@ -687,12 +688,7 @@ impl Element for UiScaleScrollCapture {
 
         let view = self.view.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            let zoom_modifier = event.modifiers.secondary() || event.modifiers.control;
-            if phase != DispatchPhase::Capture
-                || !zoom_modifier
-                || event.modifiers.alt
-                || event.modifiers.function
-            {
+            if phase != DispatchPhase::Capture || !zoom_wheel::is_zoom_wheel(&event.modifiers) {
                 return;
             }
 

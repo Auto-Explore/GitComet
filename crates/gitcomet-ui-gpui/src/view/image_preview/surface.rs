@@ -230,23 +230,16 @@ impl Group {
                 }
                 if let Some(hitbox) = hitbox {
                     let state = painted_state.clone();
-                    // Capture phase: ahead of the window zoom, which is painted last.
-                    // Anything drawn over the image takes the hit test, and the
-                    // window zoom then applies there as it does elsewhere.
-                    window.on_mouse_event(
-                        move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
-                            if phase != gpui::DispatchPhase::Capture
-                                || !(event.modifiers.secondary() || event.modifiers.control)
-                                || !hitbox.should_handle_scroll(window)
-                            {
-                                return;
-                            }
-                            let pointer = event.position - hitbox.origin;
+                    let origin = hitbox.origin;
+                    crate::view::zoom_wheel::on_zoom_wheel(
+                        window,
+                        hitbox,
+                        move |event, window, cx| {
+                            let pointer = event.position - origin;
                             let dpr = f64::from(window.scale_factor());
                             state.update(cx, |this, cx| {
                                 this.wheel_zoom(index, event, pointer, dpr, cx)
                             });
-                            cx.stop_propagation();
                         },
                     );
                 }
@@ -329,7 +322,7 @@ impl Group {
             .on_scroll_wheel(cx.listener(
                 move |this, event: &gpui::ScrollWheelEvent, window, cx| {
                     // Zooming is the capture-phase listener's.
-                    if event.modifiers.secondary() || event.modifiers.control {
+                    if crate::view::zoom_wheel::is_zoom_wheel(&event.modifiers) {
                         return;
                     }
                     let delta = event.delta.pixel_delta(window.line_height());

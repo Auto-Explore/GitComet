@@ -451,6 +451,7 @@ fn open_conflict_markdown_preview(
     draw_frames(cx, 3);
 }
 
+mod diagrams;
 mod images;
 mod links;
 mod rendering;

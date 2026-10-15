@@ -66,7 +66,8 @@ impl DiagramState {
         let state_for_paint = state.clone();
         let canvas = gpui::canvas(
             move |bounds, window, cx| {
-                state.update(cx, |this, cx| {
+                let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
+                let tiles = state.update(cx, |this, cx| {
                     let natural = (diagram.scene.width(), diagram.scene.height());
                     if this.viewport.resize(
                         bounds.size.width.into(),
@@ -94,9 +95,10 @@ impl DiagramState {
                             ))
                         })
                         .collect::<Vec<_>>()
-                })
+                });
+                (hitbox, tiles)
             },
-            move |bounds, tiles, window, _cx| {
+            move |bounds, (hitbox, tiles), window, _cx| {
                 for (image_bounds, image) in tiles {
                     let _ = window.paint_image(
                         bounds,
@@ -107,6 +109,18 @@ impl DiagramState {
                         false,
                     );
                 }
+                let state = state_for_paint.clone();
+                crate::view::zoom_wheel::on_zoom_wheel(window, hitbox, move |event, window, cx| {
+                    let delta = event.delta.pixel_delta(window.line_height()).y;
+                    if delta.is_zero() {
+                        return;
+                    }
+                    state.update(cx, |this, cx| {
+                        this.viewport.zoom_by(if delta > px(0.0) { 1 } else { -1 });
+                        this.invalidate_tiles();
+                        cx.notify();
+                    });
+                });
                 // Window listeners retain a drag outside the viewport and clear it
                 // when the primary button comes up, including outside releases.
                 let state = state_for_paint.clone();
@@ -162,21 +176,6 @@ impl DiagramState {
             .gitcomet_tooltip(
                 theme,
                 "Drag to pan · Ctrl/Cmd+scroll to zoom · Double-click to reset".into(),
-            )
-            .on_scroll_wheel(
-                cx.listener(|this, event: &gpui::ScrollWheelEvent, window, cx| {
-                    if !event.modifiers.control && !event.modifiers.platform {
-                        return;
-                    }
-                    let delta = event.delta.pixel_delta(window.line_height()).y;
-                    if delta.is_zero() {
-                        return;
-                    }
-                    this.viewport.zoom_by(if delta > px(0.0) { 1 } else { -1 });
-                    this.invalidate_tiles();
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
             )
             .on_mouse_down(
                 gpui::MouseButton::Left,

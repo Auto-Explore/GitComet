@@ -375,6 +375,13 @@ impl gpui::RenderOnce for DiagramPreview {
     }
 }
 
+/// Zoom steps of every rasterized tile, for tests that drive the real window.
+#[cfg(test)]
+pub(in crate::view) fn cached_tile_zooms_for_tests(cx: &App) -> Vec<u8> {
+    let inner = cx.global::<AppDiagramCache>().0.inner.lock().unwrap();
+    inner.tiles.iter().map(|(key, _)| key.zoom).collect()
+}
+
 #[cfg(test)]
 mod tests;
 

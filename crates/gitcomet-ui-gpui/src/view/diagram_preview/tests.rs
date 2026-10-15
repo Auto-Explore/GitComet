@@ -427,13 +427,7 @@ fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui
         let ready = cx.update(|_, app| {
             let cache = &app.global::<AppDiagramCache>().0;
             assert_eq!(cache.preparations.load(Ordering::Relaxed), 1);
-            cache
-                .inner
-                .lock()
-                .unwrap()
-                .tiles
-                .iter()
-                .any(|(key, _)| key.zoom == 3)
+            cached_tile_zooms_for_tests(app).contains(&3)
         });
         if ready {
             break;
