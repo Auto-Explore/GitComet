@@ -892,6 +892,14 @@ impl DiffRenderer {
                 conflict_resolver_visible_match_indices_with_matcher(matcher, &context)
             })));
         }
+        let collapsed = (!source_lines && self.is_collapsed_diff_projection_active())
+            .then(|| self.collapsed_diff_visible_rows.clone());
+        // Collapsed hunks list file-diff rows, as the full file view does.
+        let file_view = if source_lines {
+            self.rendered_file_diff_cache_is_current()
+        } else {
+            self.is_file_diff_view_active() || collapsed.is_some()
+        };
         let (len, columns, text): (usize, usize, RowText) = if !source_lines
             && self.is_file_preview_active()
         {
@@ -919,11 +927,6 @@ impl DiffRenderer {
                 }),
             )
         } else {
-            let file_view = if source_lines {
-                self.rendered_file_diff_cache_is_current()
-            } else {
-                self.is_file_diff_view_active()
-            };
             let view = if source_lines {
                 DiffViewMode::Inline
             } else {
@@ -938,8 +941,6 @@ impl DiffRenderer {
             let map = (!source_lines)
                 .then(|| self.diff_visible_inline_map.clone())
                 .flatten();
-            let collapsed = (!source_lines && self.is_collapsed_diff_projection_active())
-                .then(|| self.collapsed_diff_visible_rows.clone());
             // Only the sources this mode reads: the rest would be cloned or
             // pinned for nothing.
             let split_view = view == DiffViewMode::Split;
@@ -1115,8 +1116,7 @@ impl DiffRenderer {
         let streamed = self.is_file_preview_active()
             && self.worktree_preview_source_len > 0
             && self.worktree_preview_text.is_empty()
-            || self.is_file_diff_view_active()
-                && (source_lines || self.diff_view == DiffViewMode::Inline);
+            || file_view && (source_lines || self.diff_view == DiffViewMode::Inline);
         SearchDocument(DocumentSource::Rows(RowDocument {
             len,
             columns,
