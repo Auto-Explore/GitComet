@@ -468,6 +468,37 @@ fn estimated_block_height(
     px(height)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
+impl MarkdownDocumentContext {
+    /// A context for a document drawn outside any pane, for tests and
+    /// benchmarks: no view to report to, nothing scrolled, nothing searched.
+    pub(in crate::view) fn detached(theme: AppTheme, ui_scale_percent: u32) -> Self {
+        Self {
+            theme,
+            ui_scale_percent,
+            editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.into(),
+            image_root: None,
+            remote_image_access: Default::default(),
+            picture_sizes: Default::default(),
+            drawn_pictures: None,
+            row_boxes: Default::default(),
+            block_scrolls: Default::default(),
+            blocks: Default::default(),
+            layout: Default::default(),
+            view: None,
+            text_region: DiffTextRegion::Inline,
+            change_bar_color: None,
+            query: None,
+            reveal: Default::default(),
+            scroll: None,
+            diagram_heights: Default::default(),
+            hovered_link: None,
+            change_extents: None,
+            tasks_editable: false,
+        }
+    }
+}
+
 /// The height the document reserves for its `block_ix`th block before drawing
 /// it, for tests that compare it with the drawn block.
 #[cfg(test)]
@@ -480,27 +511,8 @@ pub(in crate::view) fn markdown_block_estimate_for_tests(
 ) -> f32 {
     let blocks = markdown_document_blocks(document);
     let context = MarkdownDocumentContext {
-        theme,
-        ui_scale_percent,
-        editor_font_family: "monospace".into(),
-        image_root: None,
-        remote_image_access: Default::default(),
-        picture_sizes: Default::default(),
-        drawn_pictures: None,
-        row_boxes: Default::default(),
-        block_scrolls: Default::default(),
-        blocks: Default::default(),
-        view: None,
-        text_region: DiffTextRegion::Inline,
-        change_bar_color: None,
-        query: None,
-        reveal: Default::default(),
-        scroll: None,
         diagram_heights: crate::view::diagram_preview::DiagramHeights::new(cx),
-        hovered_link: None,
-        change_extents: None,
-        layout: Default::default(),
-        tasks_editable: false,
+        ..MarkdownDocumentContext::detached(theme, ui_scale_percent)
     };
     f32::from(estimated_block_height(
         document,
@@ -2823,27 +2835,8 @@ mod tests {
         let document = Arc::new(parse_markdown(&source).expect("parses"));
         for (label, query) in [("idle", None), ("search", Some(query))] {
             let context = MarkdownDocumentContext {
-                theme,
-                ui_scale_percent: 100,
-                editor_font_family: "monospace".into(),
-                image_root: None,
-                remote_image_access: Default::default(),
-                picture_sizes: Default::default(),
-                drawn_pictures: None,
-                row_boxes: Default::default(),
-                block_scrolls: Default::default(),
-                blocks: Default::default(),
-                view: None,
-                text_region: DiffTextRegion::Inline,
-                change_bar_color: None,
                 query,
-                reveal: Default::default(),
-                scroll: None,
-                diagram_heights: Default::default(),
-                hovered_link: None,
-                change_extents: None,
-                layout: Default::default(),
-                tasks_editable: false,
+                ..MarkdownDocumentContext::detached(theme, 100)
             };
             let start = std::time::Instant::now();
             for _ in 0..FRAMES {
