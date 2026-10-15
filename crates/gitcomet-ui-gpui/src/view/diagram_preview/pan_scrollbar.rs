@@ -27,10 +27,8 @@ impl ScrollbarDriver for PanScrollDriver {
             .scroll_to(axis, f32::from(offset).abs());
     }
 
+    // The next prepaint asks for the tiles the new pan shows.
     fn interaction_changed(&self, cx: &mut App) {
-        let _ = self.state.update(cx, |this, cx| {
-            this.invalidate_tiles();
-            cx.notify();
-        });
+        let _ = self.state.update(cx, |_, cx| cx.notify());
     }
 }

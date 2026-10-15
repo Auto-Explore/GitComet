@@ -162,14 +162,12 @@ impl DiagramState {
                         }
                         if !event.dragging() {
                             viewport.dragging = None;
-                            drop(viewport);
                         } else {
+                            // The next prepaint asks for the tiles the new pan
+                            // shows, as for the wheel and the scrollbars.
                             viewport.drag_to((event.position.x.into(), event.position.y.into()));
-                            drop(viewport);
-                            // Invalidate immediately, even if the canvas was virtualized
-                            // out between this event and the next frame.
-                            this.invalidate_tiles();
                         }
+                        drop(viewport);
                         cx.notify();
                     });
                 });
@@ -230,8 +228,9 @@ impl DiagramState {
                     let taken = viewport.wheel_pan(event, height.is_none(), window.line_height());
                     let moved = viewport.pan != before;
                     drop(viewport);
+                    // The next prepaint asks for the tiles the new pan shows,
+                    // and lets a raster still drawing them finish.
                     if moved {
-                        this.invalidate_tiles();
                         cx.notify();
                     }
                     if taken {
