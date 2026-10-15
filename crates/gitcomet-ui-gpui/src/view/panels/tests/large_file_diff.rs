@@ -4256,7 +4256,7 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
 }
 
 /// Writes both sides to disk and shows them as a source-backed file diff,
-/// the shape the backend hands the pane, without a patch to align them.
+/// the shape the backend hands the pane; an empty `patch` aligns nothing.
 fn seed_source_backed_file_diff(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -4264,6 +4264,7 @@ fn seed_source_backed_file_diff(
     workdir: &std::path::Path,
     old_text: &str,
     new_text: &str,
+    patch: &str,
 ) {
     let source_dir = workdir.join(".source-backed");
     std::fs::create_dir_all(&source_dir).expect("create source-backed fixture");
@@ -4288,7 +4289,7 @@ fn seed_source_backed_file_diff(
                 .expect("test file status should select a diff target");
             repo.diff_state.diff_rev = 1;
             repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
-                gitcomet_core::domain::Diff::from_unified(target, ""),
+                gitcomet_core::domain::Diff::from_unified(target, patch),
             ));
             repo.diff_state.diff_file_rev = 1;
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
@@ -4347,6 +4348,7 @@ fn source_backed_whole_view_passes_read_each_side_once(cx: &mut gpui::TestAppCon
         &workdir,
         &old_text,
         &new_text,
+        "",
     );
 
     let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
@@ -4413,6 +4415,7 @@ fn source_backed_long_lines_are_not_reread_every_frame(cx: &mut gpui::TestAppCon
         &workdir,
         &format!("{streamed}\n{unretained}\nshort old\n"),
         &format!("{streamed}\n{unretained}\nshort new\n"),
+        "",
     );
 
     let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
@@ -4436,6 +4439,97 @@ fn source_backed_long_lines_are_not_reread_every_frame(cx: &mut gpui::TestAppCon
             "{mode:?}: a redraw read {read} bytes of the source files"
         );
     }
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// With unchanged lines collapsed, a pass over the visible rows reads those
+/// rows, not both whole files, on every word-wrap layout and search rescan.
+#[gpui::test]
+fn collapsed_source_backed_passes_read_only_visible_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_collapsed_source_backed_passes",
+        std::process::id()
+    ));
+    const LINES: usize = 60_000;
+    const CHANGED: usize = 30_000;
+    let line = |ix: usize, new: bool| {
+        if ix == CHANGED {
+            format!("row {ix:05} needle {}", if new { "new" } else { "old" })
+        } else {
+            format!("row {ix:05} plain content")
+        }
+    };
+    let text = |new: bool| -> String { (0..LINES).map(|ix| line(ix, new) + "\n").collect() };
+    let context = |range: std::ops::Range<usize>| -> String {
+        range.map(|ix| format!(" {}\n", line(ix, false))).collect()
+    };
+    let patch = format!(
+        "@@ -{start},7 +{start},7 @@\n{before}-{old}\n+{new}\n{after}",
+        start = CHANGED - 2,
+        before = context(CHANGED - 3..CHANGED),
+        old = line(CHANGED, false),
+        new = line(CHANGED, true),
+        after = context(CHANGED + 1..CHANGED + 4),
+    );
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, _cx| {
+            pane.diff_content_mode = DiffContentMode::Collapsed;
+            pane.diff_view = DiffViewMode::Inline;
+        });
+    });
+    seed_source_backed_file_diff(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(886),
+        &workdir,
+        &text(false),
+        &text(true),
+        &patch,
+    );
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    let (search_read, matches) = cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            assert!(pane.is_collapsed_diff_projection_active());
+            pane.diff_search_active = true;
+            pane.diff_search_query = "needle".into();
+            pane.diff_search_input
+                .update(cx, |input, cx| input.set_text("needle", cx));
+            let _ = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+            pane.diff_search_recompute_matches_and_scroll_to_first();
+            (
+                gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests(),
+                pane.diff_search_matches.len(),
+            )
+        })
+    });
+    assert_eq!(matches, 2, "the changed row's old and new lines");
+    assert!(
+        search_read < 64 * 1024,
+        "a collapsed search rescan read {search_read} bytes"
+    );
+
+    let wrap_read = cx.update(|window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.diff_search_active = false;
+            pane.set_diff_word_wrap(true, cx);
+            let _ = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+            pane.ensure_diff_wrap_visible_rows(window, cx);
+            assert!(!pane.diff_wrap_visible_rows.is_empty());
+            gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests()
+        })
+    });
+    assert!(
+        wrap_read < 64 * 1024,
+        "a collapsed word-wrap layout read {wrap_read} bytes"
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
