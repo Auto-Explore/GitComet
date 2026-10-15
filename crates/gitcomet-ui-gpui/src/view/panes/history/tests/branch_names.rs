@@ -104,8 +104,6 @@ fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::
             workdir: PathBuf::from("/tmp/history-author-deterministic"),
         },
     );
-    // An opening repository's tab spinner requests frames of its own.
-    repo.open = Loadable::Ready(());
     repo.log = Loadable::Ready(page.clone());
     repo.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
@@ -119,7 +117,6 @@ fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::
     wait_until(cx, "history rows", |cx| {
         cx.debug_bounds("history_row_4").is_some()
     });
-    // Other panes' spinners request frames too; count the history view's own.
     let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
     let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let _observer = cx.update(|_, app| {
