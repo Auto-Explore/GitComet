@@ -66,6 +66,11 @@ impl HistoryView {
             history_scope_shows_graph_color_marker(repo.history_state.history_scope);
 
         let theme = this.theme;
+        let graph_fade_opacity = if this.history_show_graph_gradient {
+            theme.graph_fade_opacity
+        } else {
+            0.0
+        };
         let col_branch = this.history_ref_column_width();
         let branch_names = this.history_branch_names;
         let col_graph = this.history_col_graph;
@@ -148,6 +153,7 @@ impl HistoryView {
                             connect_from_top_col,
                             selected_lane,
                             show_graph_color_marker,
+                            graph_fade_opacity,
                             repo.id,
                             list_ix,
                             selected,
@@ -179,6 +185,7 @@ impl HistoryView {
                             worktree_node_color_ix,
                             selected_lane,
                             show_graph_color_marker,
+                            graph_fade_opacity,
                             repo.id,
                             selected,
                             find_query.is_some() && !selected,
@@ -271,6 +278,7 @@ impl HistoryView {
                         show_date,
                         show_sha,
                         show_graph_color_marker,
+                        graph_fade_opacity,
                         list_ix,
                         repo.id,
                         commit,
@@ -497,6 +505,7 @@ fn history_table_row(
     show_date: bool,
     show_sha: bool,
     show_graph_color_marker: bool,
+    graph_fade_opacity: f32,
     ix: usize,
     repo_id: RepoId,
     commit: &Commit,
@@ -564,6 +573,7 @@ fn history_table_row(
         show_date,
         show_sha,
         show_graph_color_marker,
+        graph_fade_opacity,
         is_stash_node,
         selected,
         connect_from_top_col,
@@ -667,6 +677,7 @@ fn worktree_uncommitted_history_row(
     connect_from_top_col: Option<usize>,
     selected_lane: Option<super::history_graph_paint::SelectedLane>,
     show_graph_color_marker: bool,
+    graph_fade_opacity: f32,
     repo_id: RepoId,
     list_ix: usize,
     selected: bool,
@@ -734,6 +745,7 @@ fn worktree_uncommitted_history_row(
                     exit_col: node_exit_col,
                 },
                 show_graph_color_marker,
+                graph_fade_opacity,
                 row_background,
                 selection,
                 bounds,
@@ -942,6 +954,7 @@ fn working_tree_summary_history_row(
     node_color_ix: history_graph::LaneColorIx,
     selected_lane: Option<super::history_graph_paint::SelectedLane>,
     show_graph_color_marker: bool,
+    graph_fade_opacity: f32,
     repo_id: RepoId,
     selected: bool,
     find_dimmed: bool,
@@ -1016,6 +1029,7 @@ fn working_tree_summary_history_row(
                     node_color,
                     bounds,
                     scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+                    graph_fade_opacity,
                     window,
                 );
             }

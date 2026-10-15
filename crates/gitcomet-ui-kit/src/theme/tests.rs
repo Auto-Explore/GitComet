@@ -90,6 +90,45 @@ fn test_theme_bundle_json(name: &str, themes: Vec<serde_json::Value>) -> String 
     .expect("theme fixture should serialize")
 }
 
+#[test]
+fn graph_fade_opacity_accepts_zero_and_custom_values() {
+    for opacity in [0.0, 0.35, 1.0] {
+        let mut entry = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+        entry["graph_fade_opacity"] = serde_json::json!(opacity);
+        let json = test_theme_bundle_json("Graph fade", vec![entry]);
+        let theme = AppTheme::from_json_str(&json).expect("valid graph fade opacity");
+        assert_eq!(theme.graph_fade_opacity, opacity as f32);
+    }
+}
+
+#[test]
+fn graph_fade_opacity_defaults_preserve_existing_themes() {
+    for key in [DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY] {
+        let json = test_theme_bundle_json("Default graph fade", vec![test_theme_entry(key)]);
+        let theme = AppTheme::from_json_str(&json).expect("existing theme should load");
+        assert_eq!(theme.graph_fade_opacity, 0.10);
+    }
+}
+
+#[test]
+fn graph_fade_opacity_rejects_invalid_values() {
+    for opacity in [
+        serde_json::json!(-0.1),
+        serde_json::json!(1.1),
+        serde_json::json!(1.0000000001),
+        serde_json::json!(-1e-50),
+        serde_json::json!(1e100),
+        serde_json::json!("0.10"),
+        serde_json::json!(false),
+        serde_json::Value::Null,
+    ] {
+        let mut entry = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+        entry["graph_fade_opacity"] = opacity.clone();
+        let json = test_theme_bundle_json("Invalid graph fade", vec![entry]);
+        assert!(AppTheme::from_json_str(&json).is_err(), "{opacity}");
+    }
+}
+
 fn themes_markdown_example() -> String {
     let markdown = fs::read_to_string(themes_markdown_path())
         .expect("THEMES.md should be readable for theme docs tests");

@@ -60,6 +60,7 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
       "key": "my_theme_dark",
       "name": "My Theme Dark",
       "appearance": "dark",
+      "graph_fade_opacity": 0.10,                         // Optional
       "colors": {
         "surface": {
           "canvas": "#10131aff",
@@ -249,6 +250,17 @@ The bundle root supports:
 | `name` | string | Required. Bundle name |
 | `author` | string | Optional |
 | `themes` | array | Required. One or more theme entries |
+
+## Graph gradient
+
+Each theme entry accepts an optional `graph_fade_opacity` number from `0` to `1`.
+Omitting it preserves the default opacity of `0.10`. Set it to `0` for a flat
+graph background while keeping graph lines, commit dots, lane colors, and commit
+color borders. Invalid values reject the theme with a diagnostic in Settings.
+
+**Settings → Git Log → Show graph gradient** must be on for the theme's opacity
+to apply. Turning it off disables the gradient for every theme, including
+workspace theme overrides. This token is independent of `colors.shadow`.
 
 ## Colors Schema
 

@@ -3925,6 +3925,86 @@ fn signature_verification_is_discoverable_in_settings_search() {
 }
 
 #[gpui::test]
+fn graph_gradient_toggle_updates_every_main_window(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    for query in ["graph gradient", "fade", "glow"] {
+        assert!(SettingsCategory::GitLog.matches_query(query));
+    }
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (first, first_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    first_cx.update(|_, app| open_settings_window(app));
+    first_cx.run_until_parked();
+    let settings_window = first_cx.update(|_, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .unwrap()
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (second, second_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    second_cx.update(|_, app| {
+        for (view, opacity) in [(&first, 0.35), (&second, 0.0)] {
+            view.update(app, |view, cx| {
+                view.set_theme(
+                    AppTheme {
+                        graph_fade_opacity: opacity,
+                        ..view.theme
+                    },
+                    cx,
+                );
+            });
+        }
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), second_cx);
+    settings_cx.simulate_resize(size(px(720.0), px(1200.0)));
+    settings_window
+        .update(&mut settings_cx, |settings, _, cx| {
+            settings.select_category(SettingsCategory::GitLog, cx);
+            settings.set_history_show_graph_gradient(true, cx);
+        })
+        .unwrap();
+    settings_cx.run_until_parked();
+    for enabled in [false, true] {
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let toggle = settings_cx
+            .debug_bounds("settings_window_git_log_show_graph_gradient")
+            .expect("graph gradient toggle");
+        settings_cx.simulate_click(toggle.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_window
+            .update(&mut settings_cx, |settings, _, _| {
+                assert_eq!(settings.history_show_graph_gradient, enabled);
+                assert_eq!(
+                    settings.preference_settings().history_show_graph_gradient,
+                    Some(enabled)
+                );
+            })
+            .unwrap();
+        settings_cx.update(|_, app| {
+            for (view, opacity) in [(&first, 0.35), (&second, 0.0)] {
+                let root = view.read(app);
+                assert_eq!(
+                    root.ui_model
+                        .read(app)
+                        .preferences
+                        .history
+                        .show_graph_gradient,
+                    enabled
+                );
+                let history = root.main_pane.read(app).history_view.read(app);
+                assert_eq!(history.history_show_graph_gradient, enabled);
+                assert_eq!(history.theme.graph_fade_opacity, opacity);
+                assert!(history.history_show_graph);
+            }
+        });
+    }
+}
+
+#[gpui::test]
 fn history_branch_names_options_update_every_main_window(cx: &mut gpui::TestAppContext) {
     let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

@@ -294,6 +294,7 @@ mod base_cache;
 mod branch_names;
 mod columns;
 mod find;
+mod graph_gradient;
 mod interaction;
 mod lane_attribution;
 mod navigation;

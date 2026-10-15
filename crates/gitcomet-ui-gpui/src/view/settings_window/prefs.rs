@@ -75,6 +75,7 @@ impl SettingsWindowView {
             untracked_height: None,
             history_branch_names: Some(self.history_branch_names.key().to_string()),
             history_show_graph: Some(self.history_show_graph),
+            history_show_graph_gradient: Some(self.history_show_graph_gradient),
             history_show_author: Some(self.history_show_author),
             history_show_date: Some(self.history_show_date),
             history_show_sha: Some(self.history_show_sha),
@@ -997,6 +998,22 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_history_highlight_commit_chain(enabled, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_history_show_graph_gradient(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_show_graph_gradient == enabled {
+            return;
+        }
+        self.history_show_graph_gradient = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_show_graph_gradient(enabled, cx);
         });
         cx.notify();
     }

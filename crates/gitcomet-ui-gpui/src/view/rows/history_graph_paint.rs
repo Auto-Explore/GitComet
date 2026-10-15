@@ -440,9 +440,10 @@ pub(super) fn paint_graph_fade(
     color: gpui::Rgba,
     graph_bounds: Bounds<Pixels>,
     fade_width: Pixels,
+    opacity: f32,
     window: &mut Window,
 ) {
-    if graph_bounds.size.width <= px(0.0) {
+    if graph_bounds.size.width <= px(0.0) || opacity <= 0.0 {
         return;
     }
     let fade_w = graph_bounds.size.width.min(fade_width);
@@ -454,7 +455,7 @@ pub(super) fn paint_graph_fade(
         gpui::linear_gradient(
             90.0,
             gpui::linear_color_stop(with_alpha(color, 0.0), 0.0),
-            gpui::linear_color_stop(with_alpha(color, HISTORY_GRAPH_FADE_ALPHA), 1.0),
+            gpui::linear_color_stop(with_alpha(color, opacity), 1.0),
         ),
     ));
 }
@@ -816,6 +817,7 @@ pub(super) fn paint_history_graph_band(
     selected_lane: Option<SelectedLane>,
     node: BandNodePaint,
     show_graph_color_marker: bool,
+    graph_fade_opacity: f32,
     // What the row is painted over, so the node's middle -- which has to be
     // opaque, or the lane through its column shows inside it -- matches. The
     // caller resolves the row state and hover with the common interaction policy.
@@ -852,6 +854,7 @@ pub(super) fn paint_history_graph_band(
             node.color,
             bounds,
             scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+            graph_fade_opacity,
             window,
         );
     }
@@ -2328,6 +2331,7 @@ mod coalescing_regressions {
                                                 exit_col: None,
                                             },
                                             false,
+                                            theme.graph_fade_opacity,
                                             background,
                                             0.0,
                                             bounds,
