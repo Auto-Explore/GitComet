@@ -3336,6 +3336,74 @@ fn redo_is_noop_when_input_is_read_only(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn platform_typing_after_undo_discards_redo(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha", cx);
+            input.replace_text_in_range(Some(0..5), "beta", window, cx);
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.text(), "alpha");
+
+            input.replace_text_in_range(Some(0..5), "gamma", window, cx);
+            input.redo(&Redo, window, cx);
+            assert_eq!(input.text(), "gamma");
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.text(), "alpha");
+        });
+    });
+}
+
+#[gpui::test]
+fn platform_composition_after_undo_discards_redo(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha", cx);
+            input.replace_text_in_range(Some(0..5), "beta", window, cx);
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.text(), "alpha");
+
+            input.replace_and_mark_text_in_range(Some(0..5), "猫", None, window, cx);
+            input.redo(&Redo, window, cx);
+            assert_eq!(input.text(), "猫");
+            assert_eq!(input.marked_text_range(window, cx), Some(0..1));
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.text(), "alpha");
+        });
+    });
+}
+
+#[gpui::test]
+fn platform_composition_selection_uses_replacement_local_utf16(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            for (before, replaced, inserted, selected, after, bytes, marked) in [
+                ("world", 0..5, "猫", 0..1, "猫", 0..3, 0..1),
+                ("😀old!", 2..5, "猫犬", 1..2, "😀猫犬!", 7..10, 2..4),
+                ("aold!", 1..4, "😀猫", 2..3, "a😀猫!", 5..8, 1..4),
+                ("猫old!", 1..4, "😀", 2..2, "猫😀!", 7..7, 1..3),
+            ] {
+                input.set_text(before, cx);
+                input.replace_and_mark_text_in_range(
+                    Some(replaced),
+                    inserted,
+                    Some(selected),
+                    window,
+                    cx,
+                );
+                assert_eq!(input.text(), after);
+                assert_eq!(input.selected_range(), bytes);
+                assert_eq!(input.marked_text_range(window, cx), Some(marked));
+                assert!(input.text().is_char_boundary(input.selected_range().start));
+                assert!(input.text().is_char_boundary(input.selected_range().end));
+            }
+        });
+    });
+}
+
+#[gpui::test]
 fn replace_text_in_range_keeps_cached_provider_highlights_and_interpolates(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -3377,6 +3445,54 @@ fn replace_text_in_range_keeps_cached_provider_highlights_and_interpolates(
                     .collect::<Vec<_>>(),
                 vec![(2..6, Some(dp.first_color))],
             );
+        });
+    });
+}
+
+#[gpui::test]
+fn rejected_composition_preserves_content_history_and_protected_ranges(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("old\nlocked\n", cx);
+            input.replace_text_in_range(Some(0..3), "new", window, cx);
+            input.undo(&Undo, window, cx);
+            input.drain_recent_utf8_edit_deltas();
+            input.set_protected_ranges(Arc::from([4..11]));
+
+            input.replace_and_mark_text_in_range(Some(4..10), "猫", Some(0..1), window, cx);
+            assert_eq!(input.text(), "old\nlocked\n");
+            assert_eq!(input.protected_ranges(), &[4..11]);
+            assert_eq!(input.marked_text_range(window, cx), None);
+            assert!(input.drain_recent_utf8_edit_deltas().is_empty());
+
+            input.redo(&Redo, window, cx);
+            assert_eq!(input.text(), "new\nlocked\n");
+        });
+    });
+}
+
+#[gpui::test]
+fn programmatic_replacement_can_update_protected_content_without_moving_the_view(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("old\nlocked\ntail", cx);
+            input.set_protected_ranges(Arc::from([4..11]));
+            input.set_selected_range(11..15, false, window, cx);
+            input.layout.scroll_x = px(24.0);
+            input.interaction.pending_cursor_autoscroll = false;
+            let inserted = input.replace_utf8_range_preserving_view(4..10, "resolved", cx);
+            assert_eq!(inserted, 4..12);
+            assert_eq!(input.text(), "old\nresolved\ntail");
+            assert_eq!(input.selected_text(), Some("tail".to_string()));
+            assert!(input.protected_ranges().is_empty());
+            assert_eq!(input.layout.scroll_x, px(24.0));
+            assert!(!input.interaction.pending_cursor_autoscroll);
         });
     });
 }

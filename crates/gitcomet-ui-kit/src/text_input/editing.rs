@@ -5,6 +5,12 @@ use super::wrap::*;
 use super::*;
 use crate::interaction::ControlInteractionExt as _;
 
+enum EditSelection {
+    AfterInsertion,
+    Preserve,
+    Composition(Option<Range<usize>>),
+}
+
 /// The single replaced span between two texts, as `(old_range, new_range)`.
 ///
 /// Both ranges share a start and land on character boundaries, so the pair is
@@ -2312,7 +2318,7 @@ impl TextInput {
         new_text: &str,
         cx: &mut Context<Self>,
     ) -> Range<usize> {
-        self.replace_utf8_range_internal_with_view(range, new_text, false, cx)
+        self.apply_edit(range, new_text, EditSelection::AfterInsertion, cx)
     }
 
     /// Shift one caret/selection endpoint across an edit that replaced
@@ -2337,11 +2343,11 @@ impl TextInput {
         }
     }
 
-    fn replace_utf8_range_internal_with_view(
+    fn apply_edit(
         &mut self,
         range: Range<usize>,
         new_text: &str,
-        preserve_view: bool,
+        selection: EditSelection,
         cx: &mut Context<Self>,
     ) -> Range<usize> {
         let undo_snapshot = self.current_undo_snapshot();
@@ -2355,28 +2361,50 @@ impl TextInput {
         self.selection
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
-        let cursor = inserted.end;
-        if preserve_view {
-            let start = self.clamp_to_char_boundary(
-                Self::shift_offset_across_edit(previous_selection.start, &range, &inserted)
-                    .min(self.content.len()),
-            );
-            let end = self.clamp_to_char_boundary(
-                Self::shift_offset_across_edit(previous_selection.end, &range, &inserted)
-                    .min(self.content.len()),
-            );
-            self.selection.range = start.min(end)..start.max(end);
-            self.selection.reversed = previous_reversed;
-        } else {
-            self.selection.range = cursor..cursor;
-            self.selection.reversed = false;
+        self.selection.marked_range = None;
+        match &selection {
+            EditSelection::Preserve => {
+                let start = self.clamp_to_char_boundary(
+                    Self::shift_offset_across_edit(previous_selection.start, &range, &inserted)
+                        .min(self.content.len()),
+                );
+                let end = self.clamp_to_char_boundary(
+                    Self::shift_offset_across_edit(previous_selection.end, &range, &inserted)
+                        .min(self.content.len()),
+                );
+                self.selection.range = start.min(end)..start.max(end);
+                self.selection.reversed = previous_reversed;
+            }
+            EditSelection::AfterInsertion => {
+                self.selection.range = inserted.end..inserted.end;
+                self.selection.reversed = false;
+            }
+            EditSelection::Composition(selected_utf16) => {
+                self.selection.marked_range = (!inserted.is_empty()).then(|| inserted.clone());
+                self.selection.range = selected_utf16
+                    .as_ref()
+                    .map(|selected| {
+                        let origin = self.offset_to_utf16(inserted.start);
+                        self.normalized_utf8_range(
+                            self.offset_from_utf16(origin.saturating_add(selected.start))
+                                .min(inserted.end)
+                                ..self
+                                    .offset_from_utf16(origin.saturating_add(selected.end))
+                                    .min(inserted.end),
+                        )
+                    })
+                    .unwrap_or(inserted.end..inserted.end);
+                self.selection.reversed = false;
+            }
         }
-        self.selection.marked_range.take();
         self.interaction.vertical_motion_x = None;
         self.show_cursor();
+        if matches!(selection, EditSelection::Composition(_)) {
+            self.clear_selection_on_ownership_loss(cx);
+        }
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.note_text_edit_for_highlights(&range, &inserted);
-        if !preserve_view {
+        if !matches!(selection, EditSelection::Preserve) {
             self.queue_cursor_autoscroll();
         }
         cx.notify();
@@ -2431,7 +2459,7 @@ impl TextInput {
             let cursor = self.cursor_offset();
             return cursor..cursor;
         };
-        self.replace_utf8_range_internal_with_view(range, &new_text, true, cx)
+        self.apply_edit(range, &new_text, EditSelection::Preserve, cx)
     }
 
     /// Replace the current selection range with `new_text`.
@@ -3508,8 +3536,6 @@ impl EntityInputHandler for TextInput {
         let Some(new_text) = self.sanitize_insert_text(new_text) else {
             return;
         };
-        let undo_snapshot = self.current_undo_snapshot();
-
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -3519,21 +3545,7 @@ impl EntityInputHandler for TextInput {
             return;
         }
 
-        let inserted = self.replace_content_range(range.clone(), new_text.as_str(), cx);
-        self.shift_protected_ranges_for_edit(&range, &inserted);
-        self.selection
-            .pending_text_edit_deltas
-            .push((range.clone(), inserted.clone()));
-        self.push_undo_snapshot(undo_snapshot);
-        self.selection.range = inserted.end..inserted.end;
-        self.selection.reversed = false;
-        self.selection.marked_range.take();
-        self.interaction.vertical_motion_x = None;
-        self.show_cursor();
-        self.invalidate_layout_caches_preserving_wrap_rows();
-        self.note_text_edit_for_highlights(&range, &inserted);
-        self.queue_cursor_autoscroll();
-        cx.notify();
+        self.apply_edit(range, &new_text, EditSelection::AfterInsertion, cx);
     }
 
     fn replace_and_mark_text_in_range(
@@ -3550,8 +3562,6 @@ impl EntityInputHandler for TextInput {
         let Some(new_text) = self.sanitize_insert_text(new_text) else {
             return;
         };
-        let undo_snapshot = self.current_undo_snapshot();
-
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -3561,33 +3571,12 @@ impl EntityInputHandler for TextInput {
             return;
         }
 
-        let inserted = self.replace_content_range(range.clone(), new_text.as_str(), cx);
-        self.shift_protected_ranges_for_edit(&range, &inserted);
-        self.selection
-            .pending_text_edit_deltas
-            .push((range.clone(), inserted.clone()));
-        self.push_undo_snapshot(undo_snapshot);
-        if !new_text.is_empty() {
-            self.selection.marked_range = Some(inserted.clone());
-        } else {
-            self.selection.marked_range = None;
-        }
-        self.selection.range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
-        self.selection.reversed = false;
-
-        self.interaction.vertical_motion_x = None;
-        self.show_cursor();
-        // Like `unmark_text`: this can end the composition leaving a highlight.
-        // Self-guards on `marked_range`, so a composing input is left alone.
-        self.clear_selection_on_ownership_loss(cx);
-        self.invalidate_layout_caches_preserving_wrap_rows();
-        self.note_text_edit_for_highlights(&range, &inserted);
-        self.queue_cursor_autoscroll();
-        cx.notify();
+        self.apply_edit(
+            range,
+            &new_text,
+            EditSelection::Composition(new_selected_range_utf16),
+            cx,
+        );
     }
 
     fn bounds_for_range(
