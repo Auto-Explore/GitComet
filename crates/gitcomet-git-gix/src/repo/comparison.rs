@@ -177,8 +177,10 @@ pub(super) fn git_range_numstat_counts(
     to: Option<&CommitId>,
     cancellation: &CancellationToken,
 ) -> Result<NumstatCounts> {
-    let command = range_diff_command(workdir, &["--numstat"], from, to);
-    let label = "git diff --numstat -z --find-renames";
+    // Gitlink counts are dropped per row, so skip the `git status` git would
+    // otherwise run in every populated submodule against the working tree.
+    let command = range_diff_command(workdir, &["--numstat", "--ignore-submodules=all"], from, to);
+    let label = "git diff --numstat --ignore-submodules=all -z --find-renames";
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
 
     let mut counts = NumstatCounts::default();
