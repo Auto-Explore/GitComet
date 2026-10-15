@@ -41,8 +41,8 @@ crates/gitcomet-state/src/store/send_diagnostics.rs identifier 2 diagnostic pref
 crates/gitcomet-ui-gpui/src/assets.rs identifier 2 GitComet's default artwork files, served where the identity brings none
 crates/gitcomet-perf/src/bin/perf_budget_report/cli.rs identifier 1 benchmark tool name
 crates/gitcomet-ui-gpui/src/view/panes/diff/diff_cache/image_cache.rs identifier 2 temporary directory and file prefix
-crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax/language.rs identifier 1 thread name
-crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax/prepared/drop_queue.rs identifier 2 thread names
+crates/gitcomet-syntax/src/language.rs identifier 1 thread name
+crates/gitcomet-syntax/src/prepared/drop_queue.rs identifier 2 thread names
 crates/gitcomet-ui-gpui/src/view/settings_window/mod.rs identifier 1 settings search keyword for the upstream command name
 crates/gitcomet-ui-gpui/src/view/settings_window/rows.rs display-name 1 layout-overflow fixture row
 crates/gitcomet-ui-gpui/src/view/settings_window/rows.rs vendor 1 layout-overflow fixture row

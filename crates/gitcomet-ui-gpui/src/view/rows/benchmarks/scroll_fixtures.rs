@@ -42,7 +42,7 @@ impl LargeFileDiffScrollFixture {
             let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
             let document = prepare_bench_diff_syntax_document_from_shared(
                 language,
-                DiffSyntaxBudget::default(),
+                default_diff_syntax_budget(),
                 text.clone(),
                 Arc::clone(&line_starts),
                 None,

@@ -2457,7 +2457,7 @@ fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
             .expect("html output should build a live syntax document");
     let provider = resolved_output_live_highlight_provider(
         theme,
-        document.snapshot(theme),
+        document.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme)),
         ResolvedOutputUnresolvedSpans {
             all: Arc::from([placeholder_range.clone()]),
             active: Arc::default(),

@@ -56,11 +56,11 @@ pub(crate) fn treesitter_document_cache_key(
     language: DiffSyntaxLanguage,
     input: &str,
 ) -> PreparedSyntaxCacheKey {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     TS_DOCUMENT_HASH_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 
     PreparedSyntaxCacheKey {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         test_scope: syntax_test_scope(),
         language,
         doc_hash: treesitter_document_hash(language, input),
@@ -823,7 +823,7 @@ pub(crate) fn parse_combined_injection_tree_with_deadline(
         let mut guard = IncludedRangesGuard::set(parser, &ts_ranges)?;
         let budget = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let tree = parse_treesitter_tree(guard.parser(), input, None, budget);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if tree.is_some() {
             TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
             TS_COMBINED_LAYER_PARSED_BYTES.with(|bytes| {

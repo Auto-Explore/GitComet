@@ -1765,10 +1765,14 @@ impl DiffRenderer {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        let live = self
-            .file_editor_live_syntax
-            .as_ref()
-            .map(|document| (document.version(), document.snapshot(self.theme)));
+        let live = self.file_editor_live_syntax.as_ref().map(|document| {
+            (
+                document.version(),
+                document.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                    self.theme,
+                )),
+            )
+        });
 
         let (cursor, snapshot, has_selection) = self.file_editor_input.read_with(cx, |input, _| {
             let range = input.selected_range();

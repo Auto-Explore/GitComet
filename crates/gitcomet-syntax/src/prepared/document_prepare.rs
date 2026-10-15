@@ -5,7 +5,7 @@ pub(crate) fn should_apply_chunk_build_result(
     current_thread: std::thread::ThreadId,
     target_cache_key: Option<PreparedSyntaxCacheKey>,
 ) -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if !syntax_test_scope_is_active(result.chunk_key.cache_key) {
         return false;
     }
@@ -35,13 +35,13 @@ pub(crate) struct PendingParseRequest {
     pub(crate) request: TreesitterDocumentParseRequest,
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn benchmark_reset_prepared_syntax_cache_metrics() {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn benchmark_reset_prepared_syntax_cache_metrics() {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().reset_metrics());
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn benchmark_prepared_syntax_cache_metrics() -> (u64, u64, u64, u64) {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn benchmark_prepared_syntax_cache_metrics() -> (u64, u64, u64, u64) {
     TS_DOCUMENT_CACHE.with(|cache| {
         let metrics = cache.borrow().metrics();
         (
@@ -53,17 +53,15 @@ pub(crate) fn benchmark_prepared_syntax_cache_metrics() -> (u64, u64, u64, u64) 
     })
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn benchmark_prepared_syntax_loaded_chunk_count(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn benchmark_prepared_syntax_loaded_chunk_count(
     document: PreparedSyntaxDocument,
 ) -> Option<usize> {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow().loaded_chunk_count(document.cache_key))
 }
 
 #[cfg(feature = "benchmarks")]
-pub(crate) fn benchmark_prepared_syntax_cache_contains_document(
-    document: PreparedSyntaxDocument,
-) -> bool {
+pub fn benchmark_prepared_syntax_cache_contains_document(document: PreparedSyntaxDocument) -> bool {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow().contains_key(document.cache_key))
 }
 
@@ -78,8 +76,8 @@ pub(crate) fn prepared_syntax_cache_metrics() -> PreparedSyntaxCacheMetrics {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn reset_prepared_syntax_cache() {
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_prepared_syntax_cache() {
     reset_syntax_test_scope();
     TS_DOCUMENT_CACHE.with(|cache| {
         *cache.borrow_mut() = TreesitterDocumentCache::new();
@@ -92,7 +90,7 @@ pub(crate) fn prepared_syntax_loaded_chunk_count(document: PreparedSyntaxDocumen
     benchmark_prepared_syntax_loaded_chunk_count(document).unwrap_or_default()
 }
 
-pub(crate) fn prepare_treesitter_document_with_budget_reuse_text(
+pub fn prepare_treesitter_document_with_budget_reuse_text(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
     text: SharedString,
@@ -212,7 +210,7 @@ pub(crate) fn prepare_treesitter_document_in_background_text_with_reuse(
     prepare_treesitter_document_data_request_impl(request, old_document, reparse_plan)
 }
 
-pub(crate) fn prepare_treesitter_document_in_background_text_with_reparse_seed(
+pub fn prepare_treesitter_document_in_background_text_with_reparse_seed(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
     text: SharedString,
@@ -247,7 +245,7 @@ pub(crate) fn prepare_treesitter_document_in_background_text_with_reparse_seed(
     prepare_treesitter_document_data_request_impl(request, old_document, reparse_plan)
 }
 
-pub(crate) fn inject_prepared_document_data(
+pub fn inject_prepared_document_data(
     document: PreparedSyntaxDocumentData,
 ) -> PreparedSyntaxDocument {
     store_shared_prepared_document_seed(&document);
@@ -267,15 +265,15 @@ pub(crate) fn inject_prepared_document_data(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn syntax_tokens_for_prepared_document_line(
+#[cfg(any(test, feature = "test-support"))]
+pub fn syntax_tokens_for_prepared_document_line(
     document: PreparedSyntaxDocument,
     line_ix: usize,
 ) -> Option<Vec<SyntaxToken>> {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().line_tokens(document.cache_key, line_ix))
 }
 
-pub(crate) fn request_syntax_tokens_for_prepared_document_line(
+pub fn request_syntax_tokens_for_prepared_document_line(
     document: PreparedSyntaxDocument,
     line_ix: usize,
 ) -> Option<PreparedSyntaxLineTokensRequest> {
@@ -286,7 +284,7 @@ pub(crate) fn request_syntax_tokens_for_prepared_document_line(
     })
 }
 
-pub(crate) fn request_syntax_tokens_for_prepared_document_line_range_into(
+pub fn request_syntax_tokens_for_prepared_document_line_range_into(
     document: PreparedSyntaxDocument,
     line_range: Range<usize>,
     requests: &mut Vec<PreparedSyntaxLineTokensRequest>,
@@ -298,15 +296,15 @@ pub(crate) fn request_syntax_tokens_for_prepared_document_line_range_into(
     })
 }
 
-pub(crate) fn drain_completed_prepared_syntax_chunk_builds() -> usize {
+pub fn drain_completed_prepared_syntax_chunk_builds() -> usize {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().drain_completed_chunk_builds())
 }
 
-pub(crate) fn has_pending_prepared_syntax_chunk_builds() -> bool {
+pub fn has_pending_prepared_syntax_chunk_builds() -> bool {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow().has_pending_chunk_requests())
 }
 
-pub(crate) fn drain_completed_prepared_syntax_chunk_builds_for_document(
+pub fn drain_completed_prepared_syntax_chunk_builds_for_document(
     document: PreparedSyntaxDocument,
 ) -> usize {
     TS_DOCUMENT_CACHE.with(|cache| {
@@ -316,8 +314,8 @@ pub(crate) fn drain_completed_prepared_syntax_chunk_builds_for_document(
     })
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn has_pending_prepared_syntax_chunk_builds_for_document(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn has_pending_prepared_syntax_chunk_builds_for_document(
     document: PreparedSyntaxDocument,
 ) -> bool {
     TS_DOCUMENT_CACHE.with(|cache| {
@@ -346,7 +344,7 @@ pub(crate) fn prepared_document_tree_state(
 /// View-level handle caches outlive the small thread-local tree cache. A caller
 /// must use this check before treating a handle hit as a ready document; a
 /// missing shared seed then falls through to the normal parse/worker path.
-pub(crate) fn prepared_syntax_document_is_available(document: PreparedSyntaxDocument) -> bool {
+pub fn prepared_syntax_document_is_available(document: PreparedSyntaxDocument) -> bool {
     TS_DOCUMENT_CACHE.with(|cache| {
         cache
             .borrow_mut()
@@ -357,9 +355,9 @@ pub(crate) fn prepared_syntax_document_is_available(document: PreparedSyntaxDocu
 /// One end of a matched pair, in the coordinate space the row canvases speak:
 /// a document line index plus a *display* byte range within that line.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) struct PreparedSyntaxPairSpan {
-    pub(in crate::view) line_ix: usize,
-    pub(in crate::view) display_range: Range<usize>,
+pub struct PreparedSyntaxPairSpan {
+    pub line_ix: usize,
+    pub display_range: Range<usize>,
 }
 
 /// A matched pair on a prepared document, already projected into line space.
@@ -369,15 +367,15 @@ pub(in crate::view) struct PreparedSyntaxPairSpan {
 /// one delimiter but several rows, and reporting only its first line would wash
 /// `<div` and leave the rest bare.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) struct PreparedSyntaxPairHit {
+pub struct PreparedSyntaxPairHit {
     /// Which construct the pair delimits. Test-only for the same reason as
-    /// [`crate::view::DiffTextPairMatch::kind`]: every kind is painted alike, so
+    /// the host's `DiffTextPairMatch::kind`: every kind is painted alike, so
     /// this exists to let an assertion say which pair was found, not to steer
     /// anything.
-    #[cfg(test)]
-    pub(in crate::view) kind: SyntaxPairKind,
-    pub(in crate::view) open: Vec<PreparedSyntaxPairSpan>,
-    pub(in crate::view) close: Vec<PreparedSyntaxPairSpan>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub kind: SyntaxPairKind,
+    pub open: Vec<PreparedSyntaxPairSpan>,
+    pub close: Vec<PreparedSyntaxPairSpan>,
 }
 
 /// One line's byte range, without its line terminator.
@@ -431,7 +429,7 @@ pub(crate) fn prepared_line_span(
 /// `.njk`'s markup is one combined HTML layer, so while they were skipped here
 /// the Jinja host tree -- which has that markup as a single opaque `text` node --
 /// was the only tree left, and clicking any tag lit nothing at all.
-pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
+pub fn prepared_document_syntax_pair_at_display_offset(
     tab_width: usize,
     document: PreparedSyntaxDocument,
     line_ix: usize,
@@ -498,7 +496,7 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
 
     let (open, close) = (project(&pair.open), project(&pair.close));
     (!open.is_empty() && !close.is_empty()).then_some(PreparedSyntaxPairHit {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         kind: pair.kind,
         open,
         close,
@@ -525,7 +523,7 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
 /// `set_included_ranges`, so it has no leaf inside a host gap and candidates
 /// there are dropped -- while a name used on both sides of a `{% for %}` is
 /// still one set, which is the entire point of a combined layer.
-pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
+pub fn prepared_document_occurrences_at_display_offset(
     tab_width: usize,
     document: PreparedSyntaxDocument,
     line_ix: usize,
@@ -586,7 +584,7 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
         .collect()
 }
 
-pub(crate) fn prepared_document_reparse_seed(
+pub fn prepared_document_reparse_seed(
     document: PreparedSyntaxDocument,
 ) -> Option<PreparedSyntaxReparseSeed> {
     prepared_document_tree_state(document).map(|tree_state| PreparedSyntaxReparseSeed {
@@ -595,8 +593,8 @@ pub(crate) fn prepared_document_reparse_seed(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn prepared_document_parse_mode(
+#[cfg(any(test, feature = "test-support"))]
+pub fn prepared_document_parse_mode(
     document: PreparedSyntaxDocument,
 ) -> Option<TreesitterParseReuseMode> {
     TS_DOCUMENT_CACHE.with(|cache| {
@@ -607,8 +605,8 @@ pub(crate) fn prepared_document_parse_mode(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn prepared_document_source_version(document: PreparedSyntaxDocument) -> Option<u64> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn prepared_document_source_version(document: PreparedSyntaxDocument) -> Option<u64> {
     TS_DOCUMENT_CACHE.with(|cache| {
         cache
             .borrow_mut()
@@ -618,7 +616,7 @@ pub(crate) fn prepared_document_source_version(document: PreparedSyntaxDocument)
 }
 
 #[cfg(feature = "benchmarks")]
-pub(crate) fn benchmark_cache_replacement_drop_step(
+pub fn benchmark_cache_replacement_drop_step(
     lines: usize,
     tokens_per_line: usize,
     replacements: usize,
@@ -637,7 +635,7 @@ pub(crate) fn benchmark_cache_replacement_drop_step(
     for (nonce, line_tokens) in payloads.into_iter().enumerate() {
         cache.insert_document_with_mode(
             PreparedSyntaxCacheKey {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 test_scope: syntax_test_scope(),
                 language: DiffSyntaxLanguage::Rust,
                 doc_hash: 0,
@@ -652,7 +650,7 @@ pub(crate) fn benchmark_cache_replacement_drop_step(
 }
 
 #[cfg(feature = "benchmarks")]
-pub(crate) fn benchmark_drop_payload_timed_step(
+pub fn benchmark_drop_payload_timed_step(
     lines: usize,
     tokens_per_line: usize,
     seed: usize,
@@ -736,7 +734,7 @@ pub(crate) fn parse_treesitter_document_core(
         _ => None,
     };
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         let used_old_document_without_incremental = incremental_reparse_enabled()
             && matches!(
@@ -774,7 +772,7 @@ pub(crate) fn parse_treesitter_document_core(
             &request.input.line_starts,
             request.cache_key.doc_hash,
             foreground_timeout.map(|budget| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if TS_FORCE_COMBINED_LAYER_DEADLINE_MISS.with(|force| force.get()) {
                     return started;
                 }
@@ -789,7 +787,7 @@ pub(crate) fn parse_treesitter_document_core(
         None => Arc::new(OnceLock::new()),
     };
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let parse_mode = if incremental_seed.is_some() {
         TreesitterParseReuseMode::Incremental
     } else {
@@ -831,7 +829,7 @@ pub(crate) fn parse_treesitter_document_core(
             source_version,
             tree,
             combined_layers,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             parse_mode,
         }),
     })

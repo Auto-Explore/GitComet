@@ -1,4 +1,6 @@
 use super::*;
+use gitcomet_ui_kit::syntax_style::{SyntaxHighlightPalette, syntax_highlight_palette};
+use gitcomet_ui_kit::theme::AppTheme;
 
 fn line_starts_for(text: &str) -> Arc<[usize]> {
     let mut starts = vec![0usize];
@@ -40,7 +42,7 @@ pub(super) fn styles_at(
 fn runs_are_sorted_disjoint_and_clipped() {
     let text = "fn main() {\n    let value = 1;\n}\n";
     let doc = document(text, Vec::new());
-    let snapshot = doc.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
 
     assert!(!highlights.is_empty(), "rust source should highlight");
@@ -60,7 +62,7 @@ fn runs_are_sorted_disjoint_and_clipped() {
 fn window_query_matches_the_same_span_of_a_full_query() {
     let text = "fn main() {\n    let value = 1;\n    let other = 2;\n}\n";
     let doc = document(text, Vec::new());
-    let snapshot = doc.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
 
     let window = 12..47;
     let full = snapshot.highlights_for_byte_range(0..text.len());
@@ -77,18 +79,18 @@ fn window_query_matches_the_same_span_of_a_full_query() {
 
 #[test]
 fn occurrence_scan_crosses_rope_chunk_boundaries_without_flattening() {
-    let padding = " ".repeat(crate::kit::rope::MAX_CHUNK_BYTES - 5);
+    let padding = " ".repeat(gitcomet_text::rope::MAX_CHUNK_BYTES - 5);
     let text = format!("{padding}fn boundary_name() {{ boundary_name(); }}\n");
     let name_start = text.find("boundary_name").expect("fixture name");
     assert!(
-        name_start < crate::kit::rope::MAX_CHUNK_BYTES
-            && name_start + "boundary_name".len() > crate::kit::rope::MAX_CHUNK_BYTES,
+        name_start < gitcomet_text::rope::MAX_CHUNK_BYTES
+            && name_start + "boundary_name".len() > gitcomet_text::rope::MAX_CHUNK_BYTES,
         "the first name must straddle two rope chunks"
     );
 
     let doc = document(&text, Vec::new());
     let occurrences = doc
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .occurrences_at(name_start + 1);
     assert_eq!(
         occurrences,
@@ -124,7 +126,7 @@ fn occurrences_share_the_full_document_syntax_ceiling() {
     let second = text.rfind("shared_name").expect("fixture call");
     let doc = document(&text, Vec::new());
     assert_eq!(
-        doc.snapshot(AppTheme::gitcomet_dark())
+        doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
             .occurrences_at(first + 1),
         vec![
             first..first + "shared_name".len(),
@@ -148,9 +150,9 @@ fn masked_placeholder_does_not_poison_following_lines() {
     );
 
     let masked = document(with_placeholder, vec![placeholder_span]);
-    let masked = masked.snapshot(AppTheme::gitcomet_dark());
+    let masked = masked.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let spaced = document(with_spaces, Vec::new());
-    let spaced = spaced.snapshot(AppTheme::gitcomet_dark());
+    let spaced = spaced.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
 
     let tail = 27..with_placeholder.len();
     for offset in tail {
@@ -172,8 +174,10 @@ fn masked_placeholder_does_not_poison_following_lines() {
 fn unmasked_placeholder_is_what_masking_protects_against() {
     // Guards the premise: without the mask the tail really does change.
     let text = "fn a() {}\n<Merge Conflict>\nfn b() -> u32 { 7 }\n";
-    let masked = document(text, Vec::from([10..26usize; 1])).snapshot(AppTheme::gitcomet_dark());
-    let unmasked = document(text, Vec::new()).snapshot(AppTheme::gitcomet_dark());
+    let masked = document(text, Vec::from([10..26usize; 1]))
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
+    let unmasked =
+        document(text, Vec::new()).snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
 
     let full = 0..text.len();
     assert_ne!(
@@ -212,8 +216,9 @@ fn edit_keeps_the_document_exact() {
         "version must advance per edit"
     );
 
-    let incremental = doc.snapshot(AppTheme::gitcomet_dark());
-    let scratch = document(after, Vec::new()).snapshot(AppTheme::gitcomet_dark());
+    let incremental = doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
+    let scratch = document(after, Vec::new())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     assert_eq!(
         incremental.highlights_for_byte_range(0..after.len()),
         scratch.highlights_for_byte_range(0..after.len()),
@@ -289,7 +294,7 @@ fn an_edit_that_outruns_the_budget_defers_and_the_background_pass_catches_up() {
 
     // Deferred still renders: the edited tree moved with the edit, so the
     // provider has something positionally correct to paint right now.
-    let deferred = doc.snapshot(AppTheme::gitcomet_dark());
+    let deferred = doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     assert!(
         !deferred.highlights_for_byte_range(0..200).is_empty(),
         "a deferred document must keep painting rather than blank the viewport"
@@ -306,8 +311,9 @@ fn an_edit_that_outruns_the_budget_defers_and_the_background_pass_catches_up() {
     );
     assert!(doc.background_reparse_request().is_none());
 
-    let caught_up = doc.snapshot(AppTheme::gitcomet_dark());
-    let scratch = document(&after, Vec::new()).snapshot(AppTheme::gitcomet_dark());
+    let caught_up = doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
+    let scratch = document(&after, Vec::new())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     assert_eq!(
         caught_up.highlights_for_byte_range(0..400),
         scratch.highlights_for_byte_range(0..400),
@@ -330,7 +336,7 @@ fn a_wholesale_replacement_that_outruns_the_budget_is_abandoned() {
     // The empty buffer the editor blanks to before a file lands.
     let mut doc = document("", Vec::new());
     assert!(
-        doc.snapshot(AppTheme::gitcomet_dark())
+        doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
             .0
             .tree
             .root_node()
@@ -383,7 +389,11 @@ fn a_background_tree_for_a_superseded_version_is_rejected() {
     let before = "fn main() {}\n";
     let mut doc = document(before, Vec::new());
     let stale_version = doc.version();
-    let tree = doc.snapshot(AppTheme::gitcomet_dark()).0.tree.clone();
+    let tree = doc
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
+        .0
+        .tree
+        .clone();
 
     let after = "fn main() { let x = 1; }\n";
     doc.sync(Rope::from_text(after), Vec::new().into(), None, None);
@@ -402,8 +412,9 @@ fn wholesale_replacement_reparses_from_scratch() {
     let outcome = doc.sync(Rope::from_text(after), Vec::new().into(), None, None);
     assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
 
-    let replaced = doc.snapshot(AppTheme::gitcomet_dark());
-    let scratch = document(after, Vec::new()).snapshot(AppTheme::gitcomet_dark());
+    let replaced = doc.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
+    let scratch = document(after, Vec::new())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     assert_eq!(
         replaced.highlights_for_byte_range(0..after.len()),
         scratch.highlights_for_byte_range(0..after.len()),
@@ -499,15 +510,16 @@ pub(super) fn assert_engines_agree(
     // used to be under 512 bytes, which is why several rounds of "the
     // engines agree" said nothing about files the app actually opens.
     assert!(
-        text.len() > crate::kit::rope::MAX_CHUNK_BYTES,
+        text.len() > gitcomet_text::rope::MAX_CHUNK_BYTES,
         "an equivalence fixture must span more than one rope chunk \
              ({} bytes); this one is {} bytes",
-        crate::kit::rope::MAX_CHUNK_BYTES,
+        gitcomet_text::rope::MAX_CHUNK_BYTES,
         text.len(),
     );
     let theme = AppTheme::gitcomet_dark();
     let palette = syntax_highlight_palette(theme);
-    let snapshot = document_in(language, text, Vec::new()).snapshot(theme);
+    let snapshot =
+        document_in(language, text, Vec::new()).snapshot(SyntaxHighlightPalette::new(theme));
 
     let mut live_by_byte = vec![None; text.len()];
     for (range, style) in snapshot.highlights_for_byte_range(0..text.len()) {
@@ -743,7 +755,7 @@ fn syntax_pair_text<'a>(
     offset: usize,
 ) -> Option<(&'a str, &'a str)> {
     document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(offset)
         .map(|pair| (&text[pair.open], &text[pair.close]))
 }
@@ -783,7 +795,7 @@ fn syntax_pair_matches_the_innermost_block_around_the_caret() {
 
     let inside_block = text.find("let").expect("statement");
     let pair = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(inside_block)
         .expect("the body braces enclose the statement");
     assert_eq!(
@@ -804,7 +816,7 @@ fn syntax_pair_ignores_braces_inside_strings_and_comments() {
     // comes from the quotes enclosing it instead.
     let in_string = text.find("} b").expect("brace in string");
     let pair = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(in_string)
         .expect("the string's own quotes enclose the brace");
     assert_eq!(pair.kind, SyntaxPairKind::Quote);
@@ -816,7 +828,7 @@ fn syntax_pair_ignores_braces_inside_strings_and_comments() {
 
     let in_comment = text.find(") not").expect("paren in comment");
     let pair = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(in_comment)
         .expect("the function body still encloses the comment");
     assert_eq!(pair.kind, SyntaxPairKind::Bracket);
@@ -830,12 +842,12 @@ fn syntax_pair_distinguishes_sibling_pairs_of_the_same_kind() {
 
     let first_open = text.find("(1").expect("first inner");
     let first = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(first_open)
         .expect("first inner pair");
     let second_open = text.find("(2").expect("second inner");
     let second = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(second_open)
         .expect("second inner pair");
 
@@ -872,7 +884,7 @@ fn syntax_pair_is_correct_after_an_incremental_edit() {
 
     let new_block_open = after.find("{ }").expect("new block");
     let pair = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(new_block_open)
         .expect("the freshly typed block must pair");
     assert_eq!(pair.open.start, new_block_open);
@@ -881,7 +893,7 @@ fn syntax_pair_is_correct_after_an_incremental_edit() {
     // And the statement that moved down still resolves to the outer body.
     let moved_statement = after.rfind("let").expect("moved statement");
     let pair = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(moved_statement)
         .expect("the body still encloses the moved statement");
     assert_eq!(pair.open.start, after.find('{').expect("body open"));
@@ -895,7 +907,7 @@ fn pair_text_in(language: DiffSyntaxLanguage, text: &str, offset: usize) -> Opti
 
 fn pair_kind_in(language: DiffSyntaxLanguage, text: &str, offset: usize) -> Option<SyntaxPairKind> {
     document_in(language, text, Vec::new())
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(offset)
         .map(|pair| pair.kind)
 }
@@ -1048,7 +1060,7 @@ fn syntax_pair_matches_quote_delimiters() {
     );
     let document = document_in(DiffSyntaxLanguage::Json, json, Vec::new());
     let pair = document
-        .snapshot(AppTheme::gitcomet_dark())
+        .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
         .syntax_pair_at(in_value)
         .expect("the value's own quotes");
     assert_eq!(
@@ -1143,7 +1155,7 @@ fn syntax_pair_is_none_outside_any_pair() {
     let document = document(text, Vec::new());
     assert_eq!(
         document
-            .snapshot(AppTheme::gitcomet_dark())
+            .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
             .syntax_pair_at(0),
         None,
         "the caret before `fn` is inside nothing"

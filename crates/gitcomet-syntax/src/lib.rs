@@ -1,9 +1,16 @@
-use super::super::*;
-use gpui::SharedString;
+//! Tree-sitter syntax highlighting for diffs, previews and editors: language
+//! detection, prepared documents parsed off the UI thread, live documents for
+//! editable buffers, injections, occurrences and bracket/tag pairs. Token kinds
+//! come from `gitcomet-text`; renderers turn them into styles with a palette.
+
+use gitcomet_text::SyntaxTokenKind;
+use gitcomet_text::cache::{FxLruCache, new_fx_lru_cache};
+use gpui_shared_string::SharedString;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 use tree_sitter::StreamingIterator;
@@ -27,7 +34,7 @@ const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_PERCENT: usize = 80;
 const TS_LINE_TOKEN_CACHE_MAX_ENTRIES: usize = 256;
 // Extreme multi-megabyte documents are better served by the existing visible-line
 // heuristic fallback than by building a full prepared tree-sitter document.
-pub(in crate::view) const PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
+pub const PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES: usize = PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES;
 const TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES: usize = 64;
 const TS_PENDING_PARSE_REQUEST_MAX_ENTRIES: usize = 8;
@@ -199,25 +206,25 @@ thread_local! {
     static TS_PENDING_PARSE_REQUESTS: RefCell<Vec<PendingParseRequest>> = const { RefCell::new(Vec::new()) };
     static TS_INJECTION_ACCESS_COUNTER: Cell<u64> = const { Cell::new(0) };
     static TS_INJECTION_DEPTH: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_PARSER_SET_LANGUAGE_CALL_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_TREE_STATE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_INCREMENTAL_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_INCREMENTAL_FALLBACK_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_DOCUMENT_HASH_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_COMBINED_LAYER_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_COMBINED_LAYER_PARSED_BYTES: Cell<usize> = const { Cell::new(0) };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_INJECTION_TREE_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
     /// Makes the combined-layer deadline already expired on a budgeted prepare,
     /// isolating "root fits, layer does not" from parse timing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     static TS_FORCE_COMBINED_LAYER_DEADLINE_MISS: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -263,7 +270,7 @@ fn with_ts_parser<R>(
             .is_some_and(|current| current == ts_language);
 
         if needs_language_reset || !parser_language_matches {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(|count| count.set(count.get() + 1));
             if parser.set_language(ts_language).is_err() {
                 invalidate_ts_parser_language_fast_path();
@@ -288,7 +295,7 @@ fn with_ts_parser_parse_result<R>(
 // `Ord` so injection layers can be sorted by (range, language) and deduped;
 // the order itself carries no meaning beyond being total and stable.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(in crate::view) enum DiffSyntaxLanguage {
+pub enum DiffSyntaxLanguage {
     Markdown,
     MarkdownInline,
     Html,
@@ -447,13 +454,13 @@ pub(in crate::view) enum DiffSyntaxLanguage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::view) enum DiffSyntaxMode {
+pub enum DiffSyntaxMode {
     Auto,
     HeuristicOnly,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) struct DiffSyntaxEdit {
+pub struct DiffSyntaxEdit {
     pub old_range: Range<usize>,
     pub new_range: Range<usize>,
 }
@@ -464,7 +471,7 @@ pub(in crate::view) struct DiffSyntaxEdit {
 /// differing span is `prefix..old_suffix_start` in `old` and
 /// `prefix..new_suffix_start` in `new`. This is the shared edit-range
 /// primitive for diff-cache invalidation and prepared-document reparsing.
-pub(in crate::view) fn shared_byte_affix_bounds(old: &[u8], new: &[u8]) -> (usize, usize, usize) {
+pub fn shared_byte_affix_bounds(old: &[u8], new: &[u8]) -> (usize, usize, usize) {
     let mut prefix = 0usize;
     let max_prefix = old.len().min(new.len());
     while prefix < max_prefix && old[prefix] == new[prefix] {
@@ -485,13 +492,13 @@ pub(in crate::view) fn shared_byte_affix_bounds(old: &[u8], new: &[u8]) -> (usiz
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct SyntaxToken {
-    pub(super) range: Range<usize>,
-    pub(super) kind: SyntaxTokenKind,
+pub struct SyntaxToken {
+    pub range: Range<usize>,
+    pub kind: SyntaxTokenKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) struct PreparedSyntaxDocument {
+pub struct PreparedSyntaxDocument {
     cache_key: PreparedSyntaxCacheKey,
 }
 
@@ -499,7 +506,7 @@ pub(super) struct PreparedSyntaxDocument {
 struct PreparedSyntaxCacheKey {
     language: DiffSyntaxLanguage,
     doc_hash: u64,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     test_scope: u64,
 }
 
@@ -518,9 +525,9 @@ struct SingleLineSyntaxTokenCacheKey {
     text_hash: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TreesitterParseReuseMode {
+pub enum TreesitterParseReuseMode {
     Full,
     Incremental,
 }
@@ -537,7 +544,7 @@ struct PreparedSyntaxTreeState {
     /// across the chunk workers. `None` inside = over the range guard, so chunks
     /// use the windowed fallback.
     combined_layers: Arc<OnceLock<Option<Vec<PreparedCombinedLayer>>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     parse_mode: TreesitterParseReuseMode,
 }
 
@@ -590,7 +597,7 @@ impl PreparedSyntaxTreeState {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PreparedSyntaxDocumentData {
+pub struct PreparedSyntaxDocumentData {
     cache_key: PreparedSyntaxCacheKey,
     line_count: usize,
     line_token_chunks: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
@@ -598,26 +605,20 @@ pub(super) struct PreparedSyntaxDocumentData {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PreparedSyntaxReparseSeed {
+pub struct PreparedSyntaxReparseSeed {
     document: PreparedSyntaxDocument,
     tree_state: PreparedSyntaxTreeState,
 }
 
+/// How long a foreground parse may run before the document is prepared in the
+/// background instead. The host chooses it per runtime (live or test).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) struct DiffSyntaxBudget {
+pub struct DiffSyntaxBudget {
     pub foreground_parse: Duration,
 }
 
-impl Default for DiffSyntaxBudget {
-    fn default() -> Self {
-        Self {
-            foreground_parse: crate::ui_runtime::current().diff_syntax_foreground_parse_budget(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PrepareTreesitterDocumentResult {
+pub enum PrepareTreesitterDocumentResult {
     Ready(PreparedSyntaxDocument),
     TimedOut,
     Unsupported,
@@ -632,36 +633,34 @@ mod occurrences;
 mod pairs;
 mod prepared;
 
-use heuristic::*;
-use language::*;
-pub(in crate::view) use occurrences::OCCURRENCE_MAX_TEXT_BYTES;
-use occurrences::*;
-use pairs::*;
-use prepared::*;
+pub use heuristic::*;
+pub use language::*;
+pub use occurrences::OCCURRENCE_MAX_TEXT_BYTES;
+pub use occurrences::*;
+pub use pairs::*;
+pub use prepared::*;
 
-pub(super) use heuristic::syntax_tokens_for_line_heuristic_into;
-#[cfg(test)]
-pub(super) use language::syntax_tokens_for_line;
-pub(super) use language::syntax_tokens_for_line_shared;
-pub(in crate::view) use language::{
-    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
-};
-pub(in crate::view) use live::{
+pub use heuristic::syntax_tokens_for_line_heuristic_into;
+#[cfg(any(test, feature = "test-support"))]
+pub use language::syntax_tokens_for_line;
+pub use language::syntax_tokens_for_line_shared;
+pub use language::{diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path};
+pub use live::{
     LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_document_supported,
     live_syntax_reparse,
 };
-pub(in crate::view) use pairs::SyntaxPair;
-#[cfg(test)]
-pub(super) use prepared::reset_prepared_syntax_cache;
+pub use pairs::SyntaxPair;
+#[cfg(any(test, feature = "test-support"))]
+pub use prepared::reset_prepared_syntax_cache;
 // Only assertions name a pair kind -- every kind is painted alike; see
 // `DiffTextPairMatch::kind`.
-#[cfg(test)]
-pub(in crate::view) use pairs::SyntaxPairKind;
-#[cfg(any(test, feature = "benchmarks"))]
-pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
-#[cfg(test)]
-pub(super) use prepared::syntax_tokens_for_prepared_document_line;
-pub(super) use prepared::{
+#[cfg(any(test, feature = "test-support"))]
+pub use pairs::SyntaxPairKind;
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
+#[cfg(any(test, feature = "test-support"))]
+pub use prepared::syntax_tokens_for_prepared_document_line;
+pub use prepared::{
     PreparedSyntaxLineTokensRequest, drain_completed_prepared_syntax_chunk_builds,
     drain_completed_prepared_syntax_chunk_builds_for_document,
     has_pending_prepared_syntax_chunk_builds, inject_prepared_document_data,
@@ -670,21 +669,21 @@ pub(super) use prepared::{
     prepared_syntax_document_is_available, request_syntax_tokens_for_prepared_document_line,
     request_syntax_tokens_for_prepared_document_line_range_into,
 };
-pub(in crate::view) use prepared::{
+pub use prepared::{
     PreparedSyntaxPairHit, PreparedSyntaxPairSpan, prepared_document_occurrences_at_display_offset,
     prepared_document_syntax_pair_at_display_offset,
 };
 #[cfg(feature = "benchmarks")]
-pub(super) use prepared::{
+pub use prepared::{
     benchmark_cache_replacement_drop_step, benchmark_drop_payload_timed_step,
     benchmark_flush_deferred_drop_queue, benchmark_prepared_syntax_cache_contains_document,
     benchmark_prepared_syntax_cache_metrics, benchmark_prepared_syntax_loaded_chunk_count,
     benchmark_reset_prepared_syntax_cache_metrics,
 };
-#[cfg(test)]
-pub(super) use prepared::{prepared_document_parse_mode, prepared_document_source_version};
+#[cfg(any(test, feature = "test-support"))]
+pub use prepared::{prepared_document_parse_mode, prepared_document_source_version};
 
-pub(super) fn syntax_tokens_for_streamed_line_slice_heuristic(
+pub fn syntax_tokens_for_streamed_line_slice_heuristic(
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     language: DiffSyntaxLanguage,
     requested_slice_range: Range<usize>,
@@ -698,8 +697,8 @@ pub(super) fn syntax_tokens_for_streamed_line_slice_heuristic(
     )
 }
 
-#[cfg(test)]
-pub(super) fn reset_streamed_heuristic_line_cache() {
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_streamed_heuristic_line_cache() {
     heuristic::reset_streamed_heuristic_line_cache();
 }
 

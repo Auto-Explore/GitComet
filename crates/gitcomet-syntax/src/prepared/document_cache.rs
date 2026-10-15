@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::rows::LruTouchQueue;
+use gitcomet_text::cache::LruTouchQueue;
 
 impl TreesitterCachedDocument {
     pub(crate) fn from_chunked_line_tokens(
@@ -125,7 +125,7 @@ pub(crate) fn insert_line_token_chunk(
 pub(crate) fn clone_tree_state_for_chunk_build_ref(
     tree_state: &PreparedSyntaxTreeState,
 ) -> PreparedSyntaxTreeState {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     TS_TREE_STATE_CLONE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     tree_state.clone()
 }
@@ -474,7 +474,7 @@ impl TreesitterDocumentCache {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn line_tokens(
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
@@ -828,17 +828,17 @@ impl TreesitterDocumentCache {
         available
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
     pub(crate) fn metrics(&self) -> PreparedSyntaxCacheMetrics {
         self.metrics
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
     pub(crate) fn reset_metrics(&mut self) {
         self.metrics = PreparedSyntaxCacheMetrics::default();
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
     pub(crate) fn loaded_chunk_count(&self, cache_key: PreparedSyntaxCacheKey) -> Option<usize> {
         Some(self.by_cache_key.get(&cache_key)?.line_token_chunks.len())
     }
@@ -879,7 +879,7 @@ impl TreesitterDocumentCache {
             };
             let mut remaining = VecDeque::with_capacity(deferred.len());
             while let Some(result) = deferred.pop_front() {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if !syntax_test_scope_is_active(result.chunk_key.cache_key) {
                     continue;
                 }
@@ -913,7 +913,7 @@ impl TreesitterDocumentCache {
                 Err(poisoned) => poisoned.into_inner(),
             };
             for result in polled_results {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if !syntax_test_scope_is_active(result.chunk_key.cache_key) {
                     continue;
                 }
@@ -983,7 +983,7 @@ impl TreesitterDocumentCache {
     #[cfg(test)]
     pub(crate) fn make_test_cache_key(doc_hash: u64) -> PreparedSyntaxCacheKey {
         PreparedSyntaxCacheKey {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             test_scope: syntax_test_scope(),
             language: DiffSyntaxLanguage::Rust,
             doc_hash,

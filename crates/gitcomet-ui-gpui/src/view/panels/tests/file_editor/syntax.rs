@@ -243,7 +243,9 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
             .as_ref()
             .expect("markdown must get a tree-sitter document, not the heuristic fallback");
         let highlights = document
-            .snapshot(pane.theme)
+            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                pane.theme,
+            ))
             .highlights_for_byte_range(0..contents.len());
 
         let styled = |needle: &str| {
@@ -277,7 +279,7 @@ async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpu
     let workdir = unique_workdir("file_editor_actual_syntax_rs_click");
     let file_rel = std::path::PathBuf::from("syntax.rs");
     let source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/view/rows/diff_text/syntax.rs");
+        .join("../gitcomet-syntax/src/lib.rs");
     let mut contents = std::fs::read_to_string(&source_path).expect("read actual syntax.rs");
     for module in [
         "prepared/drop_queue.rs",
@@ -290,11 +292,7 @@ async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpu
         "live.rs",
         "heuristic.rs",
     ] {
-        let module_path = source_path
-            .parent()
-            .expect("syntax dir")
-            .join("syntax")
-            .join(module);
+        let module_path = source_path.parent().expect("syntax dir").join(module);
         contents.push_str(
             &std::fs::read_to_string(module_path)
                 .expect("read syntax module as part of the large-file fixture"),
@@ -782,7 +780,9 @@ fn assert_editor_renders_the_engines_highlights(
             "{label}: the editor must build the grammar selected from the file extension"
         );
         let expected = document
-            .snapshot(pane.theme)
+            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                pane.theme,
+            ))
             .highlights_for_byte_range(0..contents.len());
         assert!(
             expected.len() > 4,

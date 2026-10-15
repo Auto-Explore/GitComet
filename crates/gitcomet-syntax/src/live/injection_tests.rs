@@ -1,5 +1,7 @@
 use super::tests::{document_in, styles_at};
 use super::*;
+use gitcomet_ui_kit::syntax_style::{SyntaxHighlightPalette, syntax_highlight_palette};
+use gitcomet_ui_kit::theme::AppTheme;
 
 #[derive(Clone, Copy)]
 struct ParseClock {
@@ -77,9 +79,9 @@ fn root_work_consumes_the_injection_budget_and_background_recovery_is_exact() {
     let cold = document_in(DiffSyntaxLanguage::Html, text, Vec::new());
     assert_eq!(
         document
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len()),
-        cold.snapshot(theme)
+        cold.snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len())
     );
 }
@@ -112,10 +114,10 @@ fn expired_injection_discovery_retains_edited_layers_until_a_complete_reparse() 
     let theme = AppTheme::gitcomet_dark();
     assert_eq!(
         document
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len()),
         document_in(DiffSyntaxLanguage::Html, &text, Vec::new())
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len())
     );
 }
@@ -212,7 +214,7 @@ fn newly_typed_markdown_syntax_is_published_while_other_layers_are_deferred() {
                 };
                 let expected = styles_at(
                     &fresh
-                        .snapshot(theme)
+                        .snapshot(SyntaxHighlightPalette::new(theme))
                         .highlights_for_byte_range(at..at + opening.len() + step + closing.len()),
                     probe_at,
                 );
@@ -222,9 +224,11 @@ fn newly_typed_markdown_syntax_is_published_while_other_layers_are_deferred() {
                 );
                 assert_eq!(
                     styles_at(
-                        &document.snapshot(theme).highlights_for_byte_range(
-                            at..at + opening.len() + step + closing.len()
-                        ),
+                        &document
+                            .snapshot(SyntaxHighlightPalette::new(theme))
+                            .highlights_for_byte_range(
+                                at..at + opening.len() + step + closing.len()
+                            ),
                         probe_at
                     ),
                     expected,
@@ -252,10 +256,10 @@ fn newly_typed_markdown_syntax_is_published_while_other_layers_are_deferred() {
             let fresh = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
             assert_eq!(
                 document
-                    .snapshot(theme)
+                    .snapshot(SyntaxHighlightPalette::new(theme))
                     .highlights_for_byte_range(0..text.len()),
                 fresh
-                    .snapshot(theme)
+                    .snapshot(SyntaxHighlightPalette::new(theme))
                     .highlights_for_byte_range(0..text.len())
             );
         }
@@ -312,10 +316,10 @@ fn insertion_at_an_injection_start_keeps_the_new_text_in_that_layer() {
         let fresh = document_in(language, &edited, Vec::new());
         assert_eq!(
             document
-                .snapshot(AppTheme::gitcomet_dark())
+                .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
                 .highlights_for_byte_range(0..edited.len()),
             fresh
-                .snapshot(AppTheme::gitcomet_dark())
+                .snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()))
                 .highlights_for_byte_range(0..edited.len())
         );
     }
@@ -330,10 +334,10 @@ fn finish_reparse_and_compare_with_fresh(document: &mut LiveSyntaxDocument, text
     let theme = AppTheme::gitcomet_dark();
     assert_eq!(
         document
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len()),
         fresh
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len()),
     );
 }
@@ -347,7 +351,7 @@ fn deferred_paragraph_splits_and_joins_preserve_both_code_spans() {
     ] {
         let mut document = document_in(DiffSyntaxLanguage::Markdown, text, Vec::new());
         let original = document
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len());
         let at = text.find(" and").unwrap();
         let old = if replacement == " " {
@@ -366,7 +370,7 @@ fn deferred_paragraph_splits_and_joins_preserve_both_code_spans() {
             );
         });
         let highlights = document
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..edited.len());
         for probe in ["one", "two"] {
             let expected = styles_at(&original, text.find(probe).unwrap());
@@ -400,10 +404,10 @@ fn deferred_injection_captures_do_not_color_a_new_host_boundary() {
     let theme = AppTheme::gitcomet_dark();
     let fresh = html_document(&edited);
     let actual = document
-        .snapshot(theme)
+        .snapshot(SyntaxHighlightPalette::new(theme))
         .highlights_for_byte_range(at..edited.len());
     let expected = fresh
-        .snapshot(theme)
+        .snapshot(SyntaxHighlightPalette::new(theme))
         .highlights_for_byte_range(at..edited.len());
     assert_eq!(
         actual, expected,
@@ -441,10 +445,10 @@ fn background_reparse_seeds_every_existing_injection() {
     let theme = AppTheme::gitcomet_dark();
     assert_eq!(
         document
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len()),
         fresh
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len())
     );
 }
@@ -529,7 +533,7 @@ fn combined_layer_captures_are_clipped_to_its_ranges() {
     let layer = &document.injections[0];
     let ranges = layer.ranges.clone();
 
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
 
     let gap_start = ranges[0].end;
@@ -563,7 +567,7 @@ fn syntax_pair_at_never_straddles_a_combined_layer_gap() {
     let ranges = document.injections[0].ranges.clone();
     let gap = ranges[0].end..ranges[1].start;
     assert!(gap.start < gap.end, "fixture should have a real gap");
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
 
     let pair = snapshot
         .syntax_pair_at(gap.start)
@@ -610,7 +614,7 @@ fn syntax_pair_at_ignores_a_wide_combined_layer_gap() {
         gap.end - gap.start > 2,
         "fixture must have a gap with a strict interior, got {gap:?}"
     );
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
 
     let inside = gap.start + (gap.end - gap.start) / 2;
     assert!(inside > gap.start && inside < gap.end);
@@ -639,7 +643,7 @@ fn single_range_layers_are_unaffected_by_the_clip_parameter() {
     assert_eq!(layer.ranges.len(), 1, "an ordinary injection has one range");
     assert_eq!(layer.ranges[0], layer.hull());
 
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
     assert!(
         !styles_for(&highlights, text, "const").is_empty(),
@@ -657,7 +661,7 @@ fn script_bodies_are_highlighted_as_javascript() {
         "the script body should produce exactly one injected layer"
     );
 
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
 
     // `const` is a JavaScript keyword. The HTML grammar sees the whole
@@ -709,7 +713,7 @@ fn injected_capture_offsets_are_document_coordinates() {
     let prefix = "<html>\n<body>\n<p>filler</p>\n".repeat(20);
     let text = format!("{prefix}<script>\nconst answer = 42;\n</script>\n</html>\n");
     let document = html_document(&text);
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
 
     let keyword_at = text.find("const").expect("keyword");
@@ -744,7 +748,7 @@ fn script_bodies_inside_a_template_are_highlighted_as_javascript() {
         document.injections.iter().any(|layer| layer.depth == 2),
         "the script body should be a depth-2 layer under the HTML layer"
     );
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
     assert!(
         !styles_for(&highlights, text, "const").is_empty(),
@@ -777,7 +781,7 @@ fn nested_layer_ranges_exclude_the_template_gaps() {
         "no JSON range may cover the `{{% if %}}` bytes: {:?}",
         json.ranges
     );
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
     let palette = syntax_highlight_palette(AppTheme::gitcomet_dark());
     let keyword = palette
@@ -916,7 +920,7 @@ fn combined_layer_survives_a_template_past_the_prepared_range_ceiling() {
         "the combined html layer must actually cover the template"
     );
 
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let probe = text.find("<td>").expect("a table cell");
     let highlights = snapshot.highlights_for_byte_range(probe..probe + "<td>".len());
     assert!(
@@ -958,7 +962,7 @@ fn combined_layer_survives_a_template_past_the_prepared_byte_ceiling() {
         "the combined html layer must cover a span past the prepared byte ceiling"
     );
 
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let probe = text.rfind("<span").expect("a span near the end");
     let highlights = snapshot.highlights_for_byte_range(probe..probe + "<span".len());
     assert!(
@@ -1066,7 +1070,7 @@ fn vue_sections_are_highlighted_by_their_own_grammars() {
         "the SFC should produce injected layers"
     );
 
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..text.len());
 
     // `const` can only be coloured by the injected TypeScript layer: the Vue
@@ -1129,7 +1133,7 @@ fn layers_are_rebuilt_after_an_edit_moves_them() {
         layer.hull()
     );
 
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     let highlights = snapshot.highlights_for_byte_range(0..after.len());
     assert!(
         !styles_for(&highlights, &after, "const").is_empty(),
@@ -1239,7 +1243,9 @@ fn markdown_inline_colors_survive_repeated_edits_while_reparsing_is_deferred() {
         let mut document = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
         let code = text.find("inline_code").unwrap();
         let style = styles_at(
-            &document.snapshot(theme).highlights_for_byte_range(0..100),
+            &document
+                .snapshot(SyntaxHighlightPalette::new(theme))
+                .highlights_for_byte_range(0..100),
             code,
         )
         .expect("inline code must start highlighted");
@@ -1281,7 +1287,7 @@ fn markdown_inline_colors_survive_repeated_edits_while_reparsing_is_deferred() {
                 assert!(pending);
                 document.injections = layers;
             }
-            let snapshot = document.snapshot(theme);
+            let snapshot = document.snapshot(SyntaxHighlightPalette::new(theme));
             let highlights = snapshot.highlights_for_byte_range(0..text.len());
             // Both the edited paragraph and the untouched paragraphs keep
             // their color while a held key outruns the background parse.
@@ -1305,10 +1311,10 @@ fn markdown_inline_colors_survive_repeated_edits_while_reparsing_is_deferred() {
         let fresh = document_in(DiffSyntaxLanguage::Markdown, &text, Vec::new());
         assert_eq!(
             document
-                .snapshot(theme)
+                .snapshot(SyntaxHighlightPalette::new(theme))
                 .highlights_for_byte_range(0..text.len()),
             fresh
-                .snapshot(theme)
+                .snapshot(SyntaxHighlightPalette::new(theme))
                 .highlights_for_byte_range(0..text.len()),
         );
 
@@ -1328,7 +1334,7 @@ fn markdown_inline_colors_survive_repeated_edits_while_reparsing_is_deferred() {
         assert_ne!(
             styles_at(
                 &document
-                    .snapshot(theme)
+                    .snapshot(SyntaxHighlightPalette::new(theme))
                     .highlights_for_byte_range(0..closing),
                 code
             ),
@@ -1358,7 +1364,7 @@ fn deferred_injections_track_unicode_newlines_and_deletions() {
         let mut document = document_in(language, text, Vec::new());
         let style = styles_at(
             &document
-                .snapshot(theme)
+                .snapshot(SyntaxHighlightPalette::new(theme))
                 .highlights_for_byte_range(0..text.len()),
             text.find("const").unwrap(),
         )
@@ -1379,7 +1385,7 @@ fn deferred_injections_track_unicode_newlines_and_deletions() {
             assert_eq!(
                 styles_at(
                     &document
-                        .snapshot(theme)
+                        .snapshot(SyntaxHighlightPalette::new(theme))
                         .highlights_for_byte_range(0..current.len()),
                     current.find("const").unwrap(),
                 ),
@@ -1404,7 +1410,7 @@ fn adopting_a_background_tree_restores_the_injected_layers() {
     // Stand where an initial parse leaves a document when only its root
     // tree fits in the budget.
     document.injections.clear();
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     assert!(
         styles_for(
             &snapshot.highlights_for_byte_range(0..text.len()),
@@ -1429,7 +1435,7 @@ fn adopting_a_background_tree_restores_the_injected_layers() {
         !document.injections.is_empty(),
         "adopting the caught-up tree must rebuild the injected layers"
     );
-    let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = document.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
     assert!(
         !styles_for(
             &snapshot.highlights_for_byte_range(0..text.len()),
@@ -1470,9 +1476,9 @@ fn query_deadline_never_publishes_an_incomplete_combined_injection() {
     let theme = AppTheme::gitcomet_dark();
     assert_eq!(
         document
-            .snapshot(theme)
+            .snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len()),
-        cold.snapshot(theme)
+        cold.snapshot(SyntaxHighlightPalette::new(theme))
             .highlights_for_byte_range(0..text.len())
     );
 }

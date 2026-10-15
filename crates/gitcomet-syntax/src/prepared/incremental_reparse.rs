@@ -113,7 +113,7 @@ pub(crate) fn treesitter_document_cache_key_for_reparse_plan(
         new_input[edit.start_byte..edit.new_end_byte].hash(&mut hasher);
     }
     PreparedSyntaxCacheKey {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         test_scope: syntax_test_scope(),
         language,
         doc_hash: hasher.finish(),

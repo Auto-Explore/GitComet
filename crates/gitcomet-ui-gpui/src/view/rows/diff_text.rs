@@ -9,7 +9,8 @@ use std::sync::{Arc, OnceLock};
 
 mod build;
 mod prepared;
-mod syntax;
+
+use gitcomet_syntax as syntax;
 
 pub(super) use crate::kit::syntax_style::{
     SyntaxHighlightPalette, syntax_highlight_color, syntax_highlight_palette,
@@ -85,11 +86,21 @@ pub(in crate::view) use syntax::OCCURRENCE_MAX_TEXT_BYTES;
 pub(in crate::view) use syntax::SyntaxPairKind;
 pub(in crate::view) use syntax::{
     DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument,
-    LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
-    SyntaxPair, diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
+    LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, SyntaxPair,
+    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
     shared_byte_affix_bounds,
 };
 pub(in crate::view) use syntax::{live_syntax_document_supported, live_syntax_reparse};
+
+/// A live document snapshot styled with the theme's syntax palette.
+pub(in crate::view) type LiveSyntaxSnapshot = syntax::LiveSyntaxSnapshot<SyntaxHighlightPalette>;
+
+/// The foreground parse budget for the installed UI runtime.
+pub(in crate::view) fn default_diff_syntax_budget() -> DiffSyntaxBudget {
+    DiffSyntaxBudget {
+        foreground_parse: crate::ui_runtime::current().diff_syntax_foreground_parse_budget(),
+    }
+}
 
 pub(super) fn syntax_highlights_for_streamed_line_slice_heuristic(
     theme: AppTheme,

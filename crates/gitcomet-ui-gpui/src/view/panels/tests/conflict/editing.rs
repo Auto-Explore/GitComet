@@ -1005,7 +1005,9 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
                     .conflict_resolved_output_live_syntax
                     .as_ref()
                     .expect("recovered live document")
-                    .snapshot(pane.theme)
+                    .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                        pane.theme,
+                    ))
                     .highlights_for_byte_range(0..text.len());
                 let cold = rows::LiveSyntaxDocument::new(
                     rows::DiffSyntaxLanguage::Rust,
@@ -1014,7 +1016,9 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
                     None,
                 )
                 .expect("cold parse")
-                .snapshot(pane.theme)
+                .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                    pane.theme,
+                ))
                 .highlights_for_byte_range(0..text.len());
                 assert!(!live.is_empty(), "the recovered document must highlight");
                 assert_eq!(
@@ -1410,10 +1414,14 @@ fn edited_conflict_multiline_comment(
                     .unwrap();
                     assert_eq!(
                         document
-                            .snapshot(pane.theme)
+                            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                                pane.theme
+                            ))
                             .highlights_for_byte_range(0..text.len()),
-                        cold.snapshot(pane.theme)
-                            .highlights_for_byte_range(0..text.len())
+                        cold.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                            pane.theme
+                        ))
+                        .highlights_for_byte_range(0..text.len())
                     );
                     pane.live_syntax_background_gate_for_tests = None;
                 })

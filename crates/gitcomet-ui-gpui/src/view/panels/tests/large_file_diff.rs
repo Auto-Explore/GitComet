@@ -364,8 +364,9 @@ fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppConte
     ));
     let source_dir = workdir.join(".source-backed");
     std::fs::create_dir_all(&source_dir).expect("create actual syntax.rs click fixture");
-    let path = std::path::PathBuf::from("src/view/rows/diff_text/syntax.rs");
-    let new_source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&path);
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let new_source_path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gitcomet-syntax/src/lib.rs");
     let old_source_path = source_dir.join("old.rs");
     let new_text = std::fs::read_to_string(&new_source_path).expect("read actual syntax.rs");
     let new_target = "fn ensure_tree_sitter_allocator() {";

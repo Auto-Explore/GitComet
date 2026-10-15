@@ -280,7 +280,7 @@ fn prepared_tree_state_clones_share_source_buffers() {
 
 #[test]
 fn shared_text_input_reuses_snapshot_line_start_storage() {
-    let snapshot = crate::kit::text_model::TextModel::from("alpha\nbeta\ngamma").snapshot();
+    let snapshot = gitcomet_text::text_model::TextModel::from("alpha\nbeta\ngamma").snapshot();
     let shared_line_starts = snapshot.shared_line_starts();
     let input = treesitter_document_input_from_shared_text(
         snapshot.as_shared_string(),
@@ -311,7 +311,7 @@ fn collected_input_last_line_content_excludes_trailing_newline() {
 
 #[test]
 fn shared_text_input_last_line_content_excludes_trailing_newline() {
-    let snapshot = crate::kit::text_model::TextModel::from("alpha\nbeta\n").snapshot();
+    let snapshot = gitcomet_text::text_model::TextModel::from("alpha\nbeta\n").snapshot();
     let text_input = treesitter_document_input_from_text("alpha\nbeta\n");
     let input = treesitter_document_input_from_shared_text(
         snapshot.as_shared_string(),
@@ -333,7 +333,7 @@ fn shared_text_input_last_line_content_excludes_trailing_newline() {
 #[test]
 fn shared_text_input_preserves_real_empty_last_line_while_trimming_phantom_entry() {
     let source = "alpha\n\n";
-    let snapshot = crate::kit::text_model::TextModel::from(source).snapshot();
+    let snapshot = gitcomet_text::text_model::TextModel::from(source).snapshot();
     let input = treesitter_document_input_from_shared_text(
         snapshot.as_shared_string(),
         snapshot.shared_line_starts(),

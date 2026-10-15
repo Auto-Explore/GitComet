@@ -603,3 +603,21 @@ The theme's token styles (`syntax_highlight_color`, `syntax_highlight_style`,
 `SyntaxTokenKind::ALL` and a `SyntaxPalette` trait that the kit's palette
 implements, so the syntax engine can produce styled runs for any renderer
 without depending on GPUI.
+
+### 2.1b `gitcomet-syntax`
+
+The tree-sitter engine (`view/rows/diff_text/syntax.rs`, its 14 modules and 77
+query files) is now `crates/gitcomet-syntax`, with all 76 grammar crates and
+tree-sitter itself; the UI manifest lists none of them. The crate depends on
+`gitcomet-core`, `gitcomet-text` and the allocator hooks, never on GPUI or the
+kit, which a boundary rule enforces. Live documents style their runs through a
+`SyntaxPalette` the caller passes to `snapshot`; the host passes the kit's
+`SyntaxHighlightPalette`. `DiffSyntaxBudget` no longer reads the UI runtime: the
+host's `default_diff_syntax_budget()` does. The UI host reaches the engine
+through its existing facade in `rows/diff_text.rs`.
+
+Engine items the UI's tests use compile under a `test-support` feature, so UI
+tests keep the engine's test-mode cache scoping they ran with before; items only
+the engine's own tests use stay `cfg(test)`. All 482 engine tests (3 ignored)
+pass in the new crate, and the UI suite count drops by exactly those tests. The
+UI crate lost 14,338 production lines.

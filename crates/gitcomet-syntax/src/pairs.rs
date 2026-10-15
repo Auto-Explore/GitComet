@@ -19,7 +19,7 @@ use std::ops::Range;
 /// All three are painted with the same theme colour; the kind exists to rank
 /// candidates against each other and to let tests say what they mean.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) enum SyntaxPairKind {
+pub enum SyntaxPairKind {
     Bracket,
     Tag,
     Quote,
@@ -27,10 +27,10 @@ pub(in crate::view) enum SyntaxPairKind {
 
 /// A matched open/close pair, in document byte coordinates.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) struct SyntaxPair {
-    pub(in crate::view) open: Range<usize>,
-    pub(in crate::view) close: Range<usize>,
-    pub(in crate::view) kind: SyntaxPairKind,
+pub struct SyntaxPair {
+    pub open: Range<usize>,
+    pub close: Range<usize>,
+    pub kind: SyntaxPairKind,
 }
 
 impl SyntaxPair {
@@ -231,7 +231,7 @@ fn delimiter_node_for_click(node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_
 /// after), otherwise the innermost pair enclosing it.
 ///
 /// O(tree depth) -- cheap enough to run on the caret-move path.
-pub(in crate::view) fn syntax_pair_in_tree(
+pub fn syntax_pair_in_tree(
     tree: &tree_sitter::Tree,
     offset: usize,
     source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
@@ -624,12 +624,8 @@ fn delimits_whole_node(
 /// pair in a tab-indented file lands several columns per indent level off.
 ///
 /// An offset landing inside an expanded tab resolves to that tab.
-pub(in crate::view) fn raw_offset_for_display_offset(
-    tab_width: usize,
-    line: &str,
-    display_offset: usize,
-) -> usize {
-    crate::view::tab_width::raw_offset_for_display_offset(tab_width, line, display_offset)
+pub fn raw_offset_for_display_offset(tab_width: usize, line: &str, display_offset: usize) -> usize {
+    gitcomet_text::tab_width::raw_offset_for_display_offset(tab_width, line, display_offset)
 }
 
 /// The raw offset for a click's caret boundary, or `None` when that boundary is
@@ -639,21 +635,17 @@ pub(in crate::view) fn raw_offset_for_display_offset(
 /// when the pointer is on the right half of the final glyph as well as when the
 /// pointer is in trailing blank space; the view keeps those geometrically
 /// distinct and rejects the latter before calling the syntax layer.
-pub(in crate::view) fn clicked_raw_offset_for_display_offset(
+pub fn clicked_raw_offset_for_display_offset(
     tab_width: usize,
     line: &str,
     display_offset: usize,
 ) -> Option<usize> {
-    (display_offset <= crate::view::diff_utils::diff_text_display_len(tab_width, line))
+    (display_offset <= gitcomet_text::tab_width::expanded_len(tab_width, line))
         .then(|| raw_offset_for_display_offset(tab_width, line, display_offset))
 }
 
 /// Convert an offset in a raw line to the display column the canvas painted it
 /// at -- the inverse of [`raw_offset_for_display_offset`].
-pub(in crate::view) fn display_offset_for_raw_offset(
-    tab_width: usize,
-    line: &str,
-    raw_offset: usize,
-) -> usize {
-    crate::view::tab_width::display_offset_for_raw_offset(tab_width, line, raw_offset)
+pub fn display_offset_for_raw_offset(tab_width: usize, line: &str, raw_offset: usize) -> usize {
+    gitcomet_text::tab_width::display_offset_for_raw_offset(tab_width, line, raw_offset)
 }

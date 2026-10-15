@@ -9,7 +9,7 @@
 
 use std::ops::Range;
 
-use crate::kit::rope::Rope;
+use gitcomet_text::rope::Rope;
 
 /// Interactive names and pairs are available whenever full-document syntax is.
 ///
@@ -18,8 +18,7 @@ use crate::kit::rope::Rope;
 /// click can use it. The editor scans its rope without flattening it, and cold
 /// diff documents are completed off-thread, so matching the larger ceiling does
 /// not put an 8 MiB allocation or parse on the input path.
-pub(in crate::view) const OCCURRENCE_MAX_TEXT_BYTES: usize =
-    super::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES;
+pub const OCCURRENCE_MAX_TEXT_BYTES: usize = super::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES;
 
 /// The most matches worth reporting for one click.
 ///
@@ -40,11 +39,11 @@ const MAX_OCCURRENCE_CANDIDATES: usize = 4_096;
 
 /// The token a click landed on, and everywhere else the document names it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) struct SyntaxOccurrences {
+pub struct SyntaxOccurrences {
     /// The token under the click. Always also present in `ranges`.
-    pub(in crate::view) token: Range<usize>,
+    pub token: Range<usize>,
     /// Every occurrence, in document order, including `token`.
-    pub(in crate::view) ranges: Vec<Range<usize>>,
+    pub ranges: Vec<Range<usize>>,
 }
 
 fn is_word_byte(byte: u8) -> bool {
@@ -188,7 +187,7 @@ fn is_name_token_kind(node: &tree_sitter::Node<'_>) -> bool {
 /// Split out because the editor asks on every caret move, and most of those land
 /// on punctuation, whitespace or a literal. Answering "not a name" here costs a
 /// tree descent; answering it after flattening the document costs the document.
-pub(in crate::view) fn name_token_at(
+pub fn name_token_at(
     tree: &tree_sitter::Tree,
     offset: usize,
     token_text: impl Fn(Range<usize>) -> Option<String>,
@@ -215,7 +214,7 @@ pub(in crate::view) fn name_token_at(
 
 /// The occurrences of the name at `offset`, or `None` if the click did not land
 /// on one.
-pub(in crate::view) fn syntax_occurrences_in_tree(
+pub fn syntax_occurrences_in_tree(
     tree: &tree_sitter::Tree,
     text: &str,
     offset: usize,
@@ -272,7 +271,7 @@ pub(in crate::view) fn syntax_occurrences_in_tree(
 
 /// The occurrences lookup used by the live editor, without materializing the
 /// persistent rope into one document-sized `String`.
-pub(in crate::view) fn syntax_occurrences_in_rope(
+pub fn syntax_occurrences_in_rope(
     tree: &tree_sitter::Tree,
     rope: &Rope,
     offset: usize,
@@ -444,7 +443,7 @@ mod tests {
     /// match starts before a seam, spans one, and begins exactly on one.
     #[test]
     fn rope_scan_agrees_with_the_contiguous_scan_across_chunk_seams() {
-        let chunk = crate::kit::rope::MAX_CHUNK_BYTES;
+        let chunk = gitcomet_text::rope::MAX_CHUNK_BYTES;
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
@@ -483,7 +482,7 @@ mod tests {
     /// `memchr` skip must not step over the byte a boundary test reads.
     #[test]
     fn rope_scan_agrees_for_names_with_punctuation_edges() {
-        let chunk = crate::kit::rope::MAX_CHUNK_BYTES;
+        let chunk = gitcomet_text::rope::MAX_CHUNK_BYTES;
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_perl::LANGUAGE.into())

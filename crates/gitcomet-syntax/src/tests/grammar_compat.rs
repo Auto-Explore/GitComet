@@ -1356,7 +1356,7 @@ fn typescript_treesitter_preserves_arrow_operator_inside_arrow_function() {
 
 #[test]
 fn typescript_block_and_line_comments_among_object_properties_stay_comments() {
-    let text = crate::view::test_support::TS_COMPILER_OPTIONS_HELPERS;
+    let text = TS_COMPILER_OPTIONS_HELPERS;
     let lines: Vec<&str> = text.split('\n').collect();
     let document = prepare_test_document(DiffSyntaxLanguage::TypeScript, text);
 
@@ -1595,3 +1595,43 @@ fn vendored_capture_names_are_supported_or_ignored() {
         GOWORK_HIGHLIGHTS_QUERY,
     );
 }
+
+/// A TypeScript file that once tripped the grammar's compatibility checks.
+const TS_COMPILER_OPTIONS_HELPERS: &str = r#"import * as assert from 'node:assert/strict'
+import * as ts from 'typescript'
+import transformer from '../../src'
+
+/*
+ * Assertion based test helpers. The reference suite (tests/index.ts) compiles whole files and compares them
+ * to tests/references*, these helpers compile small TSX snippets in memory so a test can pin one behaviour.
+ */
+
+// Same flavour of options as tests/index.ts: no "use strict" prologue, LF newlines
+const baseCompilerOptions: ts.CompilerOptions = {
+    jsx: ts.JsxEmit.Preserve,
+    strict: false,
+    // alwaysStrict=false is deprecated in TypeScript 6 and reported as a diagnostic without this
+    ignoreDeprecations: '6.0',
+    alwaysStrict: false,
+    experimentalDecorators: true,
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    newLine: ts.NewLineKind.LineFeed
+}
+
+// Compiler options that can be passed as `compilerOptions` to the transform functions
+export const es5: ts.CompilerOptions = {target: ts.ScriptTarget.ES5, module: ts.ModuleKind.ESNext}
+export const es5CommonJS: ts.CompilerOptions = {target: ts.ScriptTarget.ES5, module: ts.ModuleKind.CommonJS}
+export const es2015: ts.CompilerOptions = {target: ts.ScriptTarget.ES2015, module: ts.ModuleKind.ES2015}
+export const commonJS: ts.CompilerOptions = {module: ts.ModuleKind.CommonJS}
+
+export interface TranspileResult {
+    code: string
+    map: string | undefined
+    diagnostics: readonly ts.Diagnostic[]
+}
+
+/*
+ * Compiles `input` with the plugin as an `after` transformer and returns the emitted code untouched,
+ * the source map when compilerOptions.sourceMap is set, and the syntactic diagnostics of the input.
+ */"#;

@@ -444,7 +444,7 @@ fn syntax_corpus_pairs_agree_from_both_ends() {
                         ));
                         continue;
                     }
-                    let width = crate::view::diff_utils::diff_text_display_len(
+                    let width = gitcomet_text::tab_width::expanded_len(
                         tab_width,
                         sample.line(span.line_ix),
                     );
@@ -744,7 +744,7 @@ fn syntax_pair_probe() {
         line_ix + 1
     );
     println!("  {line}");
-    let width = crate::view::diff_utils::diff_text_display_len(tab_width, line);
+    let width = gitcomet_text::tab_width::expanded_len(tab_width, line);
     for column in 0..=width {
         let at = line
             .chars()

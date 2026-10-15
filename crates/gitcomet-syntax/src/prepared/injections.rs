@@ -429,7 +429,7 @@ fn ensure_injection_tree_cached(
         }) else {
             return false;
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         TS_INJECTION_TREE_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         let access = next_injection_access();
 

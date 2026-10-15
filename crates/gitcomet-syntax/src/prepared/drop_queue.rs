@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::rows::LruTouchQueue;
+use gitcomet_text::cache::LruTouchQueue;
 
 #[derive(Clone, Copy)]
 pub(crate) enum SyntaxCacheDropMode {
@@ -10,14 +10,14 @@ pub(crate) enum SyntaxCacheDropMode {
 
 pub(crate) enum SyntaxCacheDropMessage {
     Drop(SyntaxCacheDropPayload),
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
     Flush(mpsc::Sender<()>),
 }
 
 pub(crate) struct SyntaxCacheDropPayload {
     pub(crate) line_tokens: Vec<Arc<[SyntaxToken]>>,
     pub(crate) estimated_bytes: usize,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     counters: Arc<SyntaxDropCounters>,
 }
 
@@ -26,7 +26,7 @@ impl SyntaxCacheDropPayload {
         Self {
             line_tokens,
             estimated_bytes,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             counters: syntax_drop_counters(),
         }
     }
@@ -55,13 +55,13 @@ pub(crate) struct PreparedSyntaxChunkBuildResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PreparedSyntaxLineTokensRequest {
+pub enum PreparedSyntaxLineTokensRequest {
     Ready(Arc<[SyntaxToken]>),
     Pending,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PreparedSyntaxLineTokensRangeSummary {
+pub struct PreparedSyntaxLineTokensRangeSummary {
     pub ready_lines: usize,
     pub ready_tokens: usize,
 }
@@ -136,7 +136,7 @@ impl SingleLineSyntaxTokenCache {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Default)]
 struct SyntaxDropCounters {
     enqueued: std::sync::atomic::AtomicUsize,
@@ -144,7 +144,7 @@ struct SyntaxDropCounters {
     inline: std::sync::atomic::AtomicUsize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static DROP_COUNTERS: std::cell::RefCell<Arc<SyntaxDropCounters>> =
         std::cell::RefCell::new(Arc::default());
@@ -152,7 +152,7 @@ thread_local! {
         std::cell::RefCell::new(SyntaxTestScope::new());
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn syntax_drop_counters() -> Arc<SyntaxDropCounters> {
     // Token caches can be dropped during TLS destruction, after this cell.
     DROP_COUNTERS
@@ -160,14 +160,14 @@ fn syntax_drop_counters() -> Arc<SyntaxDropCounters> {
         .unwrap_or_default()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static ACTIVE_TEST_SCOPES: std::sync::LazyLock<Mutex<std::collections::HashSet<u64>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct SyntaxTestScope(u64);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl SyntaxTestScope {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -180,7 +180,7 @@ impl SyntaxTestScope {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for SyntaxTestScope {
     fn drop(&mut self) {
         let mut active = ACTIVE_TEST_SCOPES.lock().unwrap_or_else(|e| e.into_inner());
@@ -194,17 +194,17 @@ impl Drop for SyntaxTestScope {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn syntax_test_scope() -> u64 {
     TEST_SCOPE.with(|scope| scope.borrow().0)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn reset_syntax_test_scope() {
     TEST_SCOPE.with(|scope| *scope.borrow_mut() = SyntaxTestScope::new());
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn syntax_test_scope_is_active(key: PreparedSyntaxCacheKey) -> bool {
     ACTIVE_TEST_SCOPES
         .lock()
@@ -223,15 +223,15 @@ pub(crate) fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxC
                     while let Ok(msg) = rx.recv() {
                         match msg {
                             SyntaxCacheDropMessage::Drop(drop_payload) => {
-                                #[cfg(test)]
+                                #[cfg(any(test, feature = "test-support"))]
                                 let counters = Arc::clone(&drop_payload.counters);
                                 drop(drop_payload);
-                                #[cfg(test)]
+                                #[cfg(any(test, feature = "test-support"))]
                                 counters
                                     .completed
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
-                            #[cfg(any(test, feature = "benchmarks"))]
+                            #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
                             SyntaxCacheDropMessage::Flush(ack) => {
                                 let _ = ack.send(());
                             }
@@ -256,9 +256,9 @@ pub(crate) fn shared_prepared_document_seed_store()
 pub(crate) fn store_shared_prepared_document_seed(document: &PreparedSyntaxDocumentData) {
     // Hold the scope lock through insertion so a retiring generation cannot
     // repopulate its seeds after cleanup. Foreign-thread handles keep their key.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let active = ACTIVE_TEST_SCOPES.lock().unwrap_or_else(|e| e.into_inner());
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if !active.contains(&document.cache_key.test_scope) {
         return;
     }
@@ -267,20 +267,20 @@ pub(crate) fn store_shared_prepared_document_seed(document: &PreparedSyntaxDocum
         Err(poisoned) => poisoned.into_inner(),
     };
     let belongs_to_scope = |key: &&PreparedSyntaxCacheKey| {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             key.test_scope == document.cache_key.test_scope
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-support")))]
         {
             let _ = key;
             true
         }
     };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let at_capacity =
         store.keys().filter(belongs_to_scope).count() >= TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES;
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     let at_capacity = store.len() >= TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES;
     if at_capacity
         && let Some(evict_key) = store.keys().find(belongs_to_scope).copied()
@@ -415,13 +415,13 @@ pub(crate) fn drop_line_tokens_with_mode(
     drop_payload: SyntaxCacheDropPayload,
     drop_mode: SyntaxCacheDropMode,
 ) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let counters = Arc::clone(&drop_payload.counters);
     let should_try_deferred = matches!(drop_mode, SyntaxCacheDropMode::DeferredWhenLarge)
         && drop_payload.estimated_bytes >= TS_DEFERRED_DROP_MIN_BYTES;
 
     if should_try_deferred && let Some(sender) = syntax_cache_drop_sender() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         counters
             .enqueued
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -431,7 +431,7 @@ pub(crate) fn drop_line_tokens_with_mode(
         {
             return;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             counters
                 .enqueued
@@ -443,7 +443,7 @@ pub(crate) fn drop_line_tokens_with_mode(
         return;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     counters
         .inline
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -489,7 +489,7 @@ pub(crate) fn document_hash_count() -> usize {
     TS_DOCUMENT_HASH_COUNT.with(Cell::get)
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub(crate) fn flush_deferred_syntax_cache_drop_queue_with_timeout(timeout: Duration) -> bool {
     let Some(sender) = syntax_cache_drop_sender() else {
         return false;
@@ -501,8 +501,8 @@ pub(crate) fn flush_deferred_syntax_cache_drop_queue_with_timeout(timeout: Durat
     ack_rx.recv_timeout(timeout).is_ok()
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn benchmark_flush_deferred_drop_queue() -> bool {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn benchmark_flush_deferred_drop_queue() -> bool {
     flush_deferred_syntax_cache_drop_queue_with_timeout(Duration::from_secs(2))
 }
 

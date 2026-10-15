@@ -1,4 +1,6 @@
 use super::*;
+use gitcomet_ui_kit::syntax_style::SyntaxHighlightPalette;
+use gitcomet_ui_kit::theme::AppTheme;
 
 // ---- `#set! injection.combined` ------------------------------------------
 
@@ -436,7 +438,7 @@ fn subtracting_a_non_overlapping_range_leaves_line_tokens_untouched() {
 fn combined_injection_groups_are_applied_after_the_single_ones() {
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/view/rows/diff_text/syntax/prepared/query_tokens.rs"
+        "/src/prepared/query_tokens.rs"
     ))
     .expect("query_tokens.rs should be readable");
     let body_start = source
@@ -1123,12 +1125,12 @@ fn live_and_prepared_agree_on_a_pair_inside_a_combined_layer() {
     let _ = syntax_tokens_for_prepared_document_line(document, 1);
     let live = LiveSyntaxDocument::new(
         DiffSyntaxLanguage::Jinja,
-        crate::kit::rope::Rope::from_text(text),
+        gitcomet_text::rope::Rope::from_text(text),
         Vec::new().into(),
         None,
     )
     .expect("jinja live document should build");
-    let snapshot = live.snapshot(AppTheme::gitcomet_dark());
+    let snapshot = live.snapshot(SyntaxHighlightPalette::new(AppTheme::gitcomet_dark()));
 
     let line_start = text.find("<div").expect("fixture has a div");
     for column in 0..6 {

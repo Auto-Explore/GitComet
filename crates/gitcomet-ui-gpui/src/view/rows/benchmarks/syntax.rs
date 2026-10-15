@@ -86,7 +86,7 @@ impl SyntaxPairLookupFixture {
         let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
         let document = prepare_bench_diff_syntax_document_from_shared(
             language,
-            DiffSyntaxBudget::default(),
+            default_diff_syntax_budget(),
             text.clone(),
             line_starts,
             None,
@@ -184,7 +184,7 @@ impl FileDiffSyntaxPrepareFixture {
             warm_line_starts,
             language,
             theme: AppTheme::gitcomet_dark(),
-            budget: DiffSyntaxBudget::default(),
+            budget: default_diff_syntax_budget(),
         }
     }
 
@@ -490,7 +490,7 @@ impl FileDiffSyntaxReparseFixture {
             lines: build_synthetic_source_lines(lines, line_bytes),
             language,
             theme: AppTheme::gitcomet_dark(),
-            budget: DiffSyntaxBudget::default(),
+            budget: default_diff_syntax_budget(),
             nonce: 0,
             prepared_document: None,
         }
@@ -680,7 +680,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
             }
         }
 
-        let budget = DiffSyntaxBudget::default();
+        let budget = default_diff_syntax_budget();
         let old_text = old_lines.join("\n");
         let old_document =
             prepare_bench_diff_syntax_document(language, budget, old_text.as_str(), None);
@@ -1032,7 +1032,7 @@ impl LargeHtmlSyntaxFixture {
     fn prepare_document(text: &str) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
         prepare_bench_diff_syntax_document(
             DiffSyntaxLanguage::Html,
-            DiffSyntaxBudget::default(),
+            default_diff_syntax_budget(),
             text,
             None,
         )
@@ -1246,7 +1246,7 @@ impl WorktreePreviewRenderFixture {
         let prepared_document = language.and_then(|language| {
             prepare_bench_diff_syntax_document_from_shared(
                 language,
-                DiffSyntaxBudget::default(),
+                default_diff_syntax_budget(),
                 source_text.clone(),
                 Arc::clone(&line_starts),
                 None,
@@ -1279,7 +1279,7 @@ impl WorktreePreviewRenderFixture {
         self.language.and_then(|language| {
             prepare_bench_diff_syntax_document_from_shared(
                 language,
-                DiffSyntaxBudget::default(),
+                default_diff_syntax_budget(),
                 self.source_text.clone(),
                 Arc::clone(&self.line_starts),
                 None,

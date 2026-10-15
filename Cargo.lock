@@ -2565,73 +2565,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitcomet-text"
+name = "gitcomet-syntax"
 version = "0.3.0"
 dependencies = [
- "gpui_ce_shared_string",
- "gpui_ce_sum_tree",
- "lru",
- "memchr",
- "rustc-hash 2.1.3",
-]
-
-[[package]]
-name = "gitcomet-tree-sitter-alloc"
-version = "0.3.0"
-dependencies = [
- "ctor",
- "rustfs-mimalloc-sys",
- "tree-sitter",
- "tree-sitter-json",
-]
-
-[[package]]
-name = "gitcomet-ui-gpui"
-version = "0.3.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "criterion",
  "dekobon-tree-sitter-groovy",
- "fast_image_resize",
- "fontdb 0.24.0",
- "futures",
  "gitcomet-core",
- "gitcomet-diagrams",
- "gitcomet-extension-api",
- "gitcomet-extension-example",
- "gitcomet-git-gix",
- "gitcomet-perf",
- "gitcomet-state",
  "gitcomet-text",
  "gitcomet-tree-sitter-alloc",
  "gitcomet-ui-kit",
- "gitcomet-win32-window-utils",
  "gpui-ce",
- "gpui_ce_platform",
- "gpui_ce_wgpu",
- "image",
- "jiff",
- "lru",
+ "gpui_ce_shared_string",
  "memchr",
- "metal",
- "palette",
- "pulldown-cmark",
- "raw-window-handle",
- "regex",
- "resvg",
  "rustc-hash 2.1.3",
- "rustfs-mimalloc",
- "rustix",
- "schemars",
- "semver",
- "serde",
- "serde_json",
- "shlex",
- "smallvec",
- "smol",
- "stats_alloc",
- "sysinfo",
  "tempfile",
  "tree-sitter",
  "tree-sitter-asm",
@@ -2710,6 +2655,77 @@ dependencies = [
  "tree-sitter-xml",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+]
+
+[[package]]
+name = "gitcomet-text"
+version = "0.3.0"
+dependencies = [
+ "gpui_ce_shared_string",
+ "gpui_ce_sum_tree",
+ "lru",
+ "memchr",
+ "rustc-hash 2.1.3",
+]
+
+[[package]]
+name = "gitcomet-tree-sitter-alloc"
+version = "0.3.0"
+dependencies = [
+ "ctor",
+ "rustfs-mimalloc-sys",
+ "tree-sitter",
+ "tree-sitter-json",
+]
+
+[[package]]
+name = "gitcomet-ui-gpui"
+version = "0.3.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "criterion",
+ "fast_image_resize",
+ "fontdb 0.24.0",
+ "futures",
+ "gitcomet-core",
+ "gitcomet-diagrams",
+ "gitcomet-extension-api",
+ "gitcomet-extension-example",
+ "gitcomet-git-gix",
+ "gitcomet-perf",
+ "gitcomet-state",
+ "gitcomet-syntax",
+ "gitcomet-text",
+ "gitcomet-tree-sitter-alloc",
+ "gitcomet-ui-kit",
+ "gitcomet-win32-window-utils",
+ "gpui-ce",
+ "gpui_ce_platform",
+ "gpui_ce_wgpu",
+ "image",
+ "jiff",
+ "lru",
+ "memchr",
+ "metal",
+ "palette",
+ "pulldown-cmark",
+ "raw-window-handle",
+ "regex",
+ "resvg",
+ "rustc-hash 2.1.3",
+ "rustfs-mimalloc",
+ "rustix",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "shlex",
+ "smallvec",
+ "smol",
+ "stats_alloc",
+ "sysinfo",
+ "tempfile",
  "unicode-normalization",
  "unicode-segmentation",
  "ureq",

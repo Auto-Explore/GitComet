@@ -97,7 +97,7 @@ impl ConflictThreeWayScrollFixture {
 
         let (base_document, ours_document, theirs_document) = if prepare_documents {
             let lang = language.unwrap_or(DiffSyntaxLanguage::Rust);
-            let budget = DiffSyntaxBudget::default();
+            let budget = default_diff_syntax_budget();
             (
                 prepare_bench_diff_syntax_document(lang, budget, &base_text, None),
                 prepare_bench_diff_syntax_document(lang, budget, &ours_text, None),
@@ -3321,7 +3321,9 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
         let start = row_start(start_line);
         let end = row_start(start_line.saturating_add(rows));
         let highlights = document
-            .snapshot(self.theme)
+            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                self.theme,
+            ))
             .highlights_for_byte_range(start..end);
         highlights.len() as u64
     }
@@ -3443,9 +3445,9 @@ impl LiveSyntaxEditTraceFixture {
         let theme = AppTheme::gitcomet_dark();
         assert_eq!(
             self.document
-                .snapshot(theme)
+                .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme))
                 .highlights_for_byte_range(0..self.rope.len()),
-            cold.snapshot(theme)
+            cold.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme))
                 .highlights_for_byte_range(0..self.rope.len())
         );
     }

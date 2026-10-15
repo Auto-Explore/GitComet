@@ -23,9 +23,9 @@
 //!
 //! Used by file editors and the merge tool's editable resolved output.
 
-use super::super::{SyntaxHighlightPalette, syntax_highlight_palette};
 use super::*;
-use crate::kit::rope::Rope;
+use gitcomet_text::SyntaxPalette;
+use gitcomet_text::rope::Rope;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Served in place of the real bytes for masked spans. See [`masked_read`].
@@ -130,7 +130,7 @@ impl<'a> tree_sitter::TextProvider<&'a [u8]> for RopeTextProvider<'a> {
     }
 }
 
-struct RopeChunkBytes<'a>(crate::kit::rope::Chunks<'a>);
+struct RopeChunkBytes<'a>(gitcomet_text::rope::Chunks<'a>);
 
 impl<'a> Iterator for RopeChunkBytes<'a> {
     type Item = &'a [u8];
@@ -192,11 +192,11 @@ fn parse_masked_tree(
 /// The capture source is a closure rather than a concrete iterator so that
 /// injected layers can be added by merging several layers' cursors into one
 /// ordered stream, without touching this function.
-fn sweep_runs(
+fn sweep_runs<P: SyntaxPalette>(
     mut next_capture: impl FnMut() -> Option<(Range<usize>, SyntaxTokenKind)>,
-    palette: &SyntaxHighlightPalette,
+    palette: &P,
     range: Range<usize>,
-    out: &mut Vec<(Range<usize>, gpui::HighlightStyle)>,
+    out: &mut Vec<(Range<usize>, P::Style)>,
 ) {
     let mut stack: Vec<(usize, SyntaxTokenKind)> = Vec::new();
     let mut pending = next_capture();
@@ -357,7 +357,7 @@ fn collect_layer_captures(
 /// them all, which is what the coarse overlap tests want; anything that has to
 /// know whether a specific byte belongs to the layer must consult `ranges`.
 #[derive(Clone)]
-pub(in crate::view) struct LiveSyntaxLayer {
+pub struct LiveSyntaxLayer {
     spec: &'static TreesitterHighlightSpec,
     tree: tree_sitter::Tree,
     ranges: Vec<Range<usize>>,
@@ -946,16 +946,13 @@ fn parse_included_range(
 /// directly. Callers check them up front rather than inferring them from a
 /// failed build, so a *transient* failure is never mistaken for a permanent one
 /// and latched.
-pub(in crate::view) fn live_syntax_document_supported(
-    language: DiffSyntaxLanguage,
-    len: usize,
-) -> bool {
+pub fn live_syntax_document_supported(language: DiffSyntaxLanguage, len: usize) -> bool {
     len <= PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
         && tree_sitter_highlight_spec(language).is_some()
 }
 
 /// A live tree-sitter document, owned by the view that edits it.
-pub(in crate::view) struct LiveSyntaxDocument {
+pub struct LiveSyntaxDocument {
     language: DiffSyntaxLanguage,
     spec: &'static TreesitterHighlightSpec,
     rope: Rope,
@@ -969,7 +966,7 @@ pub(in crate::view) struct LiveSyntaxDocument {
 
 /// What a parse attempt managed to do.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) enum LiveSyntaxSyncOutcome {
+pub enum LiveSyntaxSyncOutcome {
     /// The root tree describes the current text. Injected layers may still
     /// require the background reparse reported by the document.
     Reparsed,
@@ -989,7 +986,7 @@ impl LiveSyntaxDocument {
     /// [`PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES`], or the initial parse
     /// exhausts `budget` (there is no tree yet to fall back on). `budget: None`
     /// parses unbounded, for background threads and tests.
-    pub(in crate::view) fn new(
+    pub fn new(
         language: DiffSyntaxLanguage,
         rope: Rope,
         mask: Arc<[Range<usize>]>,
@@ -1027,7 +1024,7 @@ impl LiveSyntaxDocument {
         })
     }
 
-    pub(in crate::view) fn language(&self) -> DiffSyntaxLanguage {
+    pub fn language(&self) -> DiffSyntaxLanguage {
         self.language
     }
 
@@ -1054,7 +1051,7 @@ impl LiveSyntaxDocument {
     /// for a **seeded** sync, where `tree.edit()` has already moved the old tree
     /// into the new coordinates so it still paints while the background reparse
     /// catches up.
-    pub(in crate::view) fn sync(
+    pub fn sync(
         &mut self,
         rope: Rope,
         mask: Arc<[Range<usize>]>,
@@ -1155,13 +1152,13 @@ impl LiveSyntaxDocument {
         }
     }
 
-    pub(in crate::view) fn version(&self) -> u64 {
+    pub fn version(&self) -> u64 {
         self.version
     }
 
     /// Everything an off-thread reparse needs, or `None` if the tree is already
     /// current. All `Send`, so it can cross into a background task.
-    pub(in crate::view) fn background_reparse_request(&self) -> Option<LiveSyntaxReparseRequest> {
+    pub fn background_reparse_request(&self) -> Option<LiveSyntaxReparseRequest> {
         self.stale.then(|| LiveSyntaxReparseRequest {
             spec: self.spec,
             // O(1): the rope is persistent, so the background parse reads a
@@ -1181,7 +1178,7 @@ impl LiveSyntaxDocument {
     /// Returns false when the document moved on while the parse was in flight,
     /// in which case the tree describes text that no longer exists and must be
     /// discarded — the caller should re-issue from the current state.
-    pub(in crate::view) fn adopt_background_tree(
+    pub fn adopt_background_tree(
         &mut self,
         for_version: u64,
         tree: tree_sitter::Tree,
@@ -1199,19 +1196,20 @@ impl LiveSyntaxDocument {
         true
     }
 
-    pub(in crate::view) fn snapshot(&self, theme: AppTheme) -> LiveSyntaxSnapshot {
+    /// A snapshot whose highlights are styled by `palette`.
+    pub fn snapshot<P: SyntaxPalette>(&self, palette: P) -> LiveSyntaxSnapshot<P> {
         LiveSyntaxSnapshot(Arc::new(LiveSyntaxSnapshotInner {
             spec: self.spec,
             rope: self.rope.clone(),
             tree: self.tree.clone(),
             injections: self.injections.clone(),
-            palette: syntax_highlight_palette(theme),
+            palette,
         }))
     }
 }
 
 /// A deferred reparse, detached from the document so it can run off-thread.
-pub(in crate::view) struct LiveSyntaxReparseRequest {
+pub struct LiveSyntaxReparseRequest {
     spec: &'static TreesitterHighlightSpec,
     rope: Rope,
     mask: Arc<[Range<usize>]>,
@@ -1221,7 +1219,7 @@ pub(in crate::view) struct LiveSyntaxReparseRequest {
 }
 
 impl LiveSyntaxReparseRequest {
-    pub(in crate::view) fn version(&self) -> u64 {
+    pub fn version(&self) -> u64 {
         self.version
     }
 }
@@ -1237,7 +1235,7 @@ impl LiveSyntaxReparseRequest {
 /// region there — unbudgeted, since a dropped layer would be lost until the next
 /// edit — would block a frame for exactly the work this job exists to move off
 /// it.
-pub(in crate::view) fn live_syntax_reparse(
+pub fn live_syntax_reparse(
     request: LiveSyntaxReparseRequest,
 ) -> Option<(u64, tree_sitter::Tree, Vec<LiveSyntaxLayer>)> {
     let tree = parse_masked_tree(
@@ -1259,12 +1257,12 @@ pub(in crate::view) fn live_syntax_reparse(
     Some((request.version, tree, injections))
 }
 
-struct LiveSyntaxSnapshotInner {
+struct LiveSyntaxSnapshotInner<P> {
     spec: &'static TreesitterHighlightSpec,
     rope: Rope,
     injections: Vec<LiveSyntaxLayer>,
     tree: tree_sitter::Tree,
-    palette: SyntaxHighlightPalette,
+    palette: P,
 }
 
 /// An immutable view of a document, cheap to clone into a highlight-provider
@@ -1272,20 +1270,25 @@ struct LiveSyntaxSnapshotInner {
 /// its node ranges use the same coordinates as the text it carries. Token kinds
 /// can remain provisional during a deferred parse; the owner republishes the
 /// completed tree without callers having to interpolate ranges themselves.
-#[derive(Clone)]
-pub(in crate::view) struct LiveSyntaxSnapshot(Arc<LiveSyntaxSnapshotInner>);
+pub struct LiveSyntaxSnapshot<P>(Arc<LiveSyntaxSnapshotInner<P>>);
 
-impl LiveSyntaxSnapshot {
+impl<P> Clone for LiveSyntaxSnapshot<P> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<P: SyntaxPalette> LiveSyntaxSnapshot<P> {
     /// Styled runs covering `byte_range`: sorted, non-overlapping, clipped.
     ///
     /// Nothing is cached here. A viewport is a few thousand bytes and a
     /// windowed tree-sitter query over it is microseconds, so re-running it is
     /// cheaper than tracking what would invalidate a cache. `TextInput`'s own
     /// `ProviderHighlightCache` already memoizes repeated identical windows.
-    pub(in crate::view) fn highlights_for_byte_range(
+    pub fn highlights_for_byte_range(
         &self,
         byte_range: Range<usize>,
-    ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    ) -> Vec<(Range<usize>, P::Style)> {
         let inner = self.0.as_ref();
         let text_len = inner.rope.len();
         let range = clamp_to_len(byte_range, text_len);
@@ -1372,7 +1375,7 @@ impl LiveSyntaxSnapshot {
     ///
     /// Injected regions are not searched: the root tree has their bodies as one
     /// unparsed leaf, so a name inside one matches nothing there.
-    pub(in crate::view) fn occurrences_at(&self, offset: usize) -> Vec<Range<usize>> {
+    pub fn occurrences_at(&self, offset: usize) -> Vec<Range<usize>> {
         let inner = self.0.as_ref();
         let len = inner.rope.len();
         if len > OCCURRENCE_MAX_TEXT_BYTES {
@@ -1396,7 +1399,7 @@ impl LiveSyntaxSnapshot {
     /// O(document) scan. Answering that by range arithmetic instead cannot be
     /// exact: two name tokens can abut, and then one offset sits at the end of
     /// the first and the start of the second.
-    pub(in crate::view) fn name_token_at(&self, offset: usize) -> Option<Range<usize>> {
+    pub fn name_token_at(&self, offset: usize) -> Option<Range<usize>> {
         let inner = self.0.as_ref();
         let offset = offset.min(inner.rope.len());
         name_token_at(&inner.tree, offset, |range| {
@@ -1412,7 +1415,7 @@ impl LiveSyntaxSnapshot {
     /// what each covers and how they are read off the tree.
     ///
     /// O(tree depth) -- cheap enough to run on the caret-move path.
-    pub(in crate::view) fn syntax_pair_at(&self, offset: usize) -> Option<SyntaxPair> {
+    pub fn syntax_pair_at(&self, offset: usize) -> Option<SyntaxPair> {
         let inner = self.0.as_ref();
         let offset = offset.min(inner.rope.len());
         let source_ranges_equal = |left: Range<usize>, right: Range<usize>| {

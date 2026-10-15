@@ -389,10 +389,17 @@ impl DiffRenderer {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some((version, snapshot)) = self
-            .conflict_resolved_output_live_syntax
-            .as_ref()
-            .map(|document| (document.version(), document.snapshot(self.theme)))
+        let Some((version, snapshot)) =
+            self.conflict_resolved_output_live_syntax
+                .as_ref()
+                .map(|document| {
+                    (
+                        document.version(),
+                        document.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                            self.theme,
+                        )),
+                    )
+                })
         else {
             return;
         };
@@ -598,7 +605,14 @@ impl DiffRenderer {
         let live = self
             .conflict_resolved_output_live_syntax
             .as_ref()
-            .map(|document| (document.version(), document.snapshot(self.theme)));
+            .map(|document| {
+                (
+                    document.version(),
+                    document.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                        self.theme,
+                    )),
+                )
+            });
         self.ensure_conflict_resolved_output_live_syntax_reparse(cx);
 
         self.conflict_resolver_input.update(cx, |input, cx| {

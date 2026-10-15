@@ -1038,7 +1038,7 @@ pub(super) fn syntax_tokens_for_streamed_line_slice_heuristic(
     Some(tokens)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn reset_streamed_heuristic_line_cache() {
     STREAMED_HEURISTIC_LINE_CACHE.with(|cache| {
         *cache.borrow_mut() = new_fx_lru_cache(STREAMED_HEURISTIC_LINE_CACHE_MAX_ENTRIES);
@@ -1385,7 +1385,7 @@ pub(super) fn syntax_tokens_for_line_heuristic(
     tokens
 }
 
-pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
+pub fn syntax_tokens_for_line_heuristic_into(
     text: &str,
     language: DiffSyntaxLanguage,
     tokens: &mut Vec<SyntaxToken>,

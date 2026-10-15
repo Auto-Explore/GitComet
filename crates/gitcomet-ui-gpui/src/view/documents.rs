@@ -884,7 +884,8 @@ impl StandaloneBuffer {
                         return;
                     }
                     if let Some(syntax) = syntax {
-                        let snapshot = syntax.snapshot(theme);
+                        let snapshot = syntax
+                            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme));
                         let provider = crate::kit::HighlightProvider::with_pending(
                             move |range| crate::kit::HighlightProviderResult {
                                 highlights: snapshot.highlights_for_byte_range(range),

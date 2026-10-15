@@ -183,7 +183,7 @@ fn jinja_language_for_path(p: &std::path::Path) -> DiffSyntaxLanguage {
     }
 }
 
-pub(in crate::view) fn diff_syntax_language_for_path(
+pub fn diff_syntax_language_for_path(
     path: impl AsRef<std::path::Path>,
 ) -> Option<DiffSyntaxLanguage> {
     let p = path.as_ref();
@@ -203,9 +203,7 @@ pub(in crate::view) fn diff_syntax_language_for_path(
     })
 }
 
-pub(in crate::view) fn diff_syntax_language_for_code_fence_info(
-    info: &str,
-) -> Option<DiffSyntaxLanguage> {
+pub fn diff_syntax_language_for_code_fence_info(info: &str) -> Option<DiffSyntaxLanguage> {
     let token = info
         .trim()
         .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
@@ -268,7 +266,7 @@ fn syntax_tokens_for_line_uncached(
     }
 }
 
-pub(in super::super) fn syntax_tokens_for_line_shared(
+pub fn syntax_tokens_for_line_shared(
     text: &str,
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
@@ -294,8 +292,8 @@ pub(in super::super) fn syntax_tokens_for_line_shared(
     tokens
 }
 
-#[cfg(test)]
-pub(in super::super) fn syntax_tokens_for_line(
+#[cfg(any(test, feature = "test-support"))]
+pub fn syntax_tokens_for_line(
     text: &str,
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,

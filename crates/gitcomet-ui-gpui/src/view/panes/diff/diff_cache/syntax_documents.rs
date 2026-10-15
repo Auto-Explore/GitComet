@@ -118,7 +118,7 @@ impl DiffRenderer {
             return budget;
         }
 
-        rows::DiffSyntaxBudget::default()
+        rows::default_diff_syntax_budget()
     }
 
     #[cfg(test)]
