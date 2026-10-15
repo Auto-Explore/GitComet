@@ -302,8 +302,8 @@ pub struct CommitFileChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub is_submodule: bool,
-    /// Added line count; `None` for binary files, submodules, or when the
-    /// commit was too large to compute per-file stats.
+    /// Added line count; `None` when unknown, for the reasons [`LineStats`]
+    /// lists.
     pub additions: Option<u32>,
     /// Removed line count; `None` under the same conditions as `additions`.
     pub deletions: Option<u32>,
@@ -593,8 +593,9 @@ pub struct FileStatus {
     pub conflict: Option<FileConflictKind>,
 }
 
-/// `None` means unknown: binary, over the size cap, unreadable or gone when
-/// read, or content left unread (an LFS or annex payload).
+/// `None` means unknown: binary, a submodule, over the size cap, in a change
+/// set over the file cap, unreadable or gone when read, or content left unread
+/// (an LFS or annex payload).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LineStats {
     pub additions: Option<u32>,
