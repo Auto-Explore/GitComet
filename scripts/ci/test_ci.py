@@ -809,11 +809,11 @@ class RunnerTests(unittest.TestCase):
 
     def test_every_gpui_harness_runs_in_libtest_with_isolated_settings(self):
         packages = {"core": "gitcomet-core", "ui": runner.UI, "kit": "gitcomet-ui-kit",
-                    "example": "gitcomet-extension-example"}
+                    "terminal": "gitcomet-ui-terminal", "example": "gitcomet-extension-example"}
         self.assertEqual(runner.gpui_packages(packages), runner.GPUI_PACKAGES)
         self.assertEqual(runner.nextest_filter([], runner.gpui_packages(packages)),
                          "not (package(=gitcomet-ui-gpui) | package(=gitcomet-ui-kit) | "
-                         "package(=gitcomet-extension-example))")
+                         "package(=gitcomet-ui-terminal) | package(=gitcomet-extension-example))")
         # A package absent from the metadata cannot appear in a filterset.
         self.assertEqual(runner.gpui_packages({"core": "gitcomet-core", "ui": runner.UI}), (runner.UI,))
         self.assertIsNone(runner.nextest_filter([], ()))

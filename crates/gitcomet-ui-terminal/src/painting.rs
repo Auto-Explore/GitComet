@@ -1,6 +1,12 @@
 use super::*;
+use gitcomet_ui_kit::theme::{AppTheme, with_alpha};
+use gpui::{
+    App, Bounds, Pixels, Point, ShapedLine, SharedString, TextRun, Window, fill, point, px, size,
+};
 use rustc_hash::FxHasher;
+use std::hash::Hash;
 use std::hash::Hasher;
+use std::sync::Arc;
 
 /// Place backend-shaped glyphs on Alacritty's authoritative cell grid. Terminal
 /// hit testing and selection use that grid directly, rather than text-layout
@@ -293,20 +299,20 @@ mod grid_layout_tests {
 }
 
 #[derive(Default)]
-pub(super) struct TerminalCanvasPaintState {
+pub struct TerminalCanvasPaintState {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) terminal_bg: gpui::Rgba,
     pub(super) selection_rects: Vec<Bounds<Pixels>>,
     pub(super) background_rects: Vec<(Point<Pixels>, gpui::Size<Pixels>, gpui::Rgba)>,
     pub(super) lines: Vec<(ShapedLine, Point<Pixels>, Pixels)>,
-    pub(super) cursor: Option<TerminalPaintCursor>,
+    pub cursor: Option<TerminalPaintCursor>,
     pub(super) ime_bounds: Option<Bounds<Pixels>>,
     pub(super) ime_marked_text: Option<String>,
     pub(super) ime_base_style: Option<gpui::TextStyle>,
 }
 
 #[derive(Clone)]
-pub(super) struct TerminalPaintCursor {
+pub struct TerminalPaintCursor {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) shape: TerminalCursorShape,
 }
@@ -317,11 +323,11 @@ pub(super) struct TerminalPaintCursor {
 /// leaves that snapshot's `display_offset` stale until the next paint, so
 /// selection must resolve against these values instead.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct TerminalGridGeometry {
+pub struct TerminalGridGeometry {
     pub(super) display_offset: usize,
-    pub(super) history_size: usize,
-    pub(super) columns: usize,
-    pub(super) screen_lines: usize,
+    pub history_size: usize,
+    pub columns: usize,
+    pub screen_lines: usize,
 }
 
 pub(super) fn paint_terminal_canvas_state(

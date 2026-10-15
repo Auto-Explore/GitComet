@@ -657,3 +657,30 @@ the existing diff helper, taking the five marker tests with it. Unifying the
 host's marker builders in the kit is left to 1.4. The per-row styled-text cache
 holds the renderer's type behind `Any`, so the model never names GPUI styles.
 All 256 model tests pass under nextest; the UI suite runs 3,798 tests, 256 fewer.
+
+### 2.4 `gitcomet-ui-terminal`
+
+The embedded terminal widget (4.2k production and 2.4k test lines) is now
+`crates/gitcomet-ui-terminal`: the alacritty backend, the viewport entity with
+its layout and render caches, painting, and the clipboard command chord. It
+depends on the kit and `gitcomet-base`, and its boundary rule forbids core as
+the kit's does. The host passes the shell program to the spawn function and
+keeps tabs, sessions, shutdown prompts and the panel.
+
+Three choices differ from the plan:
+
+- `terminal_preferences.rs` stays in the host. It converts to and from the
+  state crate's session settings and launches external terminals, which is
+  host policy rather than widget behaviour.
+- The existing seam is kept instead of a new `TerminalView`/`TerminalEvent`
+  API: the spawn function returns the terminal, its PTY sender and an event
+  receiver, and the host's event task is the only consumer.
+- The duplicated cursor blink was dead in the root (its active flag was never
+  set), so it was deleted in its own commit rather than merged.
+
+The host's twelve context-menu and focus tests drive the root and read the
+viewport's selection, caret and PTY state, so those fields are public and the
+recording PTY sender compiles under `test-support`. A narrower test surface
+belongs with the terminal panel entity in 3.2. The crate's 104 tests run in
+their own libtest process (`GPUI_PACKAGES`); one tab-title test moved back to
+the host with the policy it covers.

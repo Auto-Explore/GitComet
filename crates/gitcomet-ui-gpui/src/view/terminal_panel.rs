@@ -1,45 +1,16 @@
-use super::terminal_alacritty::*;
 use super::*;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
+use gitcomet_ui_terminal::*;
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::path::PathBuf;
-
-mod painting;
-mod viewport;
 
 #[cfg(test)]
 mod tests;
 
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
-const TERMINAL_LINE_HEIGHT_SCALE: f32 = 1.15;
-const TERMINAL_MIN_GRID_ROWS: u16 = 2;
-const TERMINAL_MIN_GRID_COLS: u16 = 8;
-const TERMINAL_CARET_WIDTH_RATIO: f32 = 0.12;
-/// Close affordance on a terminal tab. Smaller than a control by design, but it
-/// still follows the density ramp so the target grows with the tab.
-const TERMINAL_CARET_MIN_WIDTH_PX: f32 = 2.0;
-const TERMINAL_CARET_MAX_WIDTH_PX: f32 = 3.0;
-const TERMINAL_CARET_VERTICAL_INSET_PX: f32 = 1.0;
-const TERMINAL_CARET_RADIUS_PX: f32 = 0.0;
-const TERMINAL_CARET_BLINK_INTERVAL_MS: u64 = 530;
-const TERMINAL_CARET_RESUME_DELAY_MS: u64 = 700;
-/// The caret blinks while the terminal is in use and then rests, shown, as
-/// text inputs do: every blink redraws the whole window.
-const TERMINAL_CARET_BLINK_TIMEOUT_MS: u64 = 10_000;
-const TERMINAL_SELECTION_ALPHA: f32 = 0.32;
-const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
-const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) enum TerminalCommand {
-    Copy,
-    Paste,
-    SelectAll,
-    ClearScreenAndScrollback,
-}
 
 /// Which surviving terminal receives focus after a stable-sequence close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -295,7 +266,9 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<TerminalInstance> {
         let window_id = 0u64;
-        let spawned = match spawn_alacritty_terminal(workdir, window_id) {
+        let spawned = match resolve_embedded_shell_program()
+            .and_then(|shell| spawn_alacritty_terminal(&shell, workdir, window_id))
+        {
             Ok(spawned) => spawned,
             Err(err) => {
                 self.push_toast(
@@ -1579,27 +1552,6 @@ fn terminate_terminal_process_group(child_pid: Option<u32>) {
 #[cfg(not(unix))]
 fn terminate_terminal_process_group(_child_pid: Option<u32>) {}
 
-fn terminal_clipboard_shortcut_action(keystroke: &gpui::Keystroke) -> Option<TerminalCommand> {
-    let action = match keystroke.key.as_str() {
-        "c" | "C" => TerminalCommand::Copy,
-        "v" | "V" => TerminalCommand::Paste,
-        "a" | "A" => TerminalCommand::SelectAll,
-        _ => return None,
-    };
-    let mods = keystroke.modifiers;
-    if cfg!(target_os = "macos") {
-        if mods.platform && !mods.control && !mods.alt && !mods.function && !mods.shift {
-            Some(action)
-        } else {
-            None
-        }
-    } else if mods.control && mods.shift && !mods.platform && !mods.alt && !mods.function {
-        Some(action)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod terminal_title_tests {
     use super::{MAX_TERMINAL_TITLE_CHARS, friendly_terminal_title, sanitize_terminal_title};
@@ -1623,5 +1575,23 @@ mod terminal_title_tests {
             friendly_terminal_title(long).chars().count(),
             MAX_TERMINAL_TITLE_CHARS
         );
+    }
+
+    #[test]
+    fn friendly_terminal_title_collapses_shell_paths_to_the_program_stem() {
+        assert_eq!(
+            friendly_terminal_title("C:\\Program Files\\PowerShell\\7\\pwsh.exe".to_string()),
+            "pwsh"
+        );
+        assert_eq!(
+            friendly_terminal_title("C:/Windows/System32/cmd.EXE".to_string()),
+            "cmd"
+        );
+        // Application-set titles pass through, even when they contain paths.
+        assert_eq!(
+            friendly_terminal_title("PS C:\\Users\\sampo\\git\\GitComet".to_string()),
+            "PS C:\\Users\\sampo\\git\\GitComet"
+        );
+        assert_eq!(friendly_terminal_title("vim".to_string()), "vim");
     }
 }

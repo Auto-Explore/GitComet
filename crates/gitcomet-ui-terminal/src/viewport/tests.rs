@@ -1,6 +1,12 @@
-use super::super::viewport::trim_terminal_copy;
-use super::super::*;
-use super::support::*;
+use super::*;
+use crate::backend::*;
+
+// A 20x6 grid of 6x12 cells, so the viewport is 120x72 at (100, 200).
+const TEST_COLS: usize = 20;
+const TEST_ROWS: usize = 6;
+const TEST_CELL_W: f32 = 6.0;
+const TEST_LINE_H: f32 = 12.0;
+const TEST_SCROLLBACK: usize = 100;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::vte::ansi::Handler;
 
@@ -617,24 +623,6 @@ fn clear_screen_and_scrollback_preserves_alternate_screen_and_terminal_modes(
 }
 
 #[test]
-fn friendly_terminal_title_collapses_shell_paths_to_the_program_stem() {
-    assert_eq!(
-        friendly_terminal_title("C:\\Program Files\\PowerShell\\7\\pwsh.exe".to_string()),
-        "pwsh"
-    );
-    assert_eq!(
-        friendly_terminal_title("C:/Windows/System32/cmd.EXE".to_string()),
-        "cmd"
-    );
-    // Application-set titles pass through, even when they contain paths.
-    assert_eq!(
-        friendly_terminal_title("PS C:\\Users\\sampo\\git\\GitComet".to_string()),
-        "PS C:\\Users\\sampo\\git\\GitComet"
-    );
-    assert_eq!(friendly_terminal_title("vim".to_string()), "vim");
-}
-
-#[test]
 fn trim_terminal_copy_strips_trailing_whitespace_and_blank_lines() {
     // Grid rows are space-padded to the full width; copying must trim trailing
     // spaces per line and drop trailing blank lines (the old newline-only trim
@@ -752,7 +740,7 @@ fn a_right_click_keeps_the_terminal_selection_for_its_context_menu(cx: &mut gpui
     // The press that opens the context menu: the window-level invalidator runs
     // in the capture phase, then the viewport's own handler in the bubble phase.
     with_viewport(&view, cx, |this, window, cx| {
-        crate::text_selection_owner::release_for_press(window, cx);
+        gitcomet_ui_kit::text_selection_owner::release_for_press(window, cx);
         this.handle_mouse_down(
             &MouseDownEvent {
                 button: MouseButton::Right,
@@ -798,7 +786,7 @@ fn terminal_selection_follows_window_ownership(cx: &mut gpui::TestAppContext) {
     );
 
     // A scrollbar drag elsewhere: writes the global, disturbs nothing.
-    cx.update(|_window, app| crate::text_selection_owner::preserve(app));
+    cx.update(|_window, app| gitcomet_ui_kit::text_selection_owner::preserve(app));
     cx.run_until_parked();
     assert!(
         with_viewport(&view, cx, |this, _window, _cx| this.has_selection()),
@@ -806,7 +794,7 @@ fn terminal_selection_follows_window_ownership(cx: &mut gpui::TestAppContext) {
     );
 
     cx.update(|window, app| {
-        let mut elsewhere = crate::text_selection_owner::SelectionOwnerToken::default();
+        let mut elsewhere = gitcomet_ui_kit::text_selection_owner::SelectionOwnerToken::default();
         elsewhere.adopt(window, app);
     });
     cx.run_until_parked();
@@ -831,13 +819,13 @@ fn a_busy_parser_does_not_block_paint_or_scrollbar_reads(cx: &mut gpui::TestAppC
         assert!(!state.lines.is_empty());
         assert!(view.paint_retry_scheduled);
         let content = view.last_content.as_ref().unwrap();
-        let driver = super::super::viewport::TerminalScrollbarDriver {
+        let driver = super::TerminalScrollbarDriver {
             term_lock: Some(term.clone()),
             line_height: px(TEST_LINE_H),
             fallback_history: content.history_size,
             fallback_display: content.display_offset,
         };
-        use crate::kit::ScrollbarDriver;
+        use gitcomet_ui_kit::ScrollbarDriver;
         assert!(driver.max_offset(ScrollbarAxis::Vertical) > px(0.));
         assert!(driver.raw_offset(ScrollbarAxis::Vertical) < px(0.));
     });

@@ -602,7 +602,7 @@ pub(in crate::view) enum ContextMenuAction {
     TerminalCommand {
         repo_id: RepoId,
         session_seq: u64,
-        command: terminal_panel::TerminalCommand,
+        command: gitcomet_ui_terminal::TerminalCommand,
     },
     TerminalOpenExternal {
         repo_id: RepoId,

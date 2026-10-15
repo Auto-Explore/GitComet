@@ -2728,6 +2728,7 @@ dependencies = [
  "gitcomet-text",
  "gitcomet-tree-sitter-alloc",
  "gitcomet-ui-kit",
+ "gitcomet-ui-terminal",
  "gitcomet-win32-window-utils",
  "gpui-ce",
  "gpui_ce_platform",
@@ -2787,6 +2788,19 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "x11-clipboard",
+]
+
+[[package]]
+name = "gitcomet-ui-terminal"
+version = "0.3.0"
+dependencies = [
+ "alacritty_terminal",
+ "gitcomet-base",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "palette",
+ "rustc-hash 2.1.3",
+ "smol",
 ]
 
 [[package]]

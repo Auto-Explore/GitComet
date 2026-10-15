@@ -3,8 +3,6 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::InteractiveRebaseAction;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
-
 pub(super) fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
 }

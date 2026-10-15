@@ -1,7 +1,6 @@
 use crate::app::{
     CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRepository, ResetUiScale,
 };
-use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gitcomet_core::diff::AnnotatedDiffLine;
@@ -324,7 +323,6 @@ mod splash;
 mod state_apply;
 mod status_actions;
 pub(in crate::view) use gitcomet_text::tab_width;
-mod terminal_alacritty;
 mod terminal_panel;
 mod terminal_preferences;
 #[cfg(test)]

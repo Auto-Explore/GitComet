@@ -1,6 +1,6 @@
 use super::*;
 use crate::kit::interaction as controls;
-use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
+use gitcomet_ui_terminal::{terminal_default_background, terminal_default_foreground};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum TextSection {

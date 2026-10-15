@@ -30,7 +30,7 @@ UI = "gitcomet-ui-gpui"
 # Packages whose tests mount GPUI windows. GPUI test contexts share
 # process-global platform state, so each of these harnesses runs as one libtest
 # process on every platform instead of nextest's process per test.
-GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-extension-example")
+GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-ui-terminal", "gitcomet-extension-example")
 NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first", "ci-watch-limited-4", "ci-watch-limited-8", "ci-throughput")
 WATCHER_FILTER = ('package(=gitcomet-fs-watch) | (package(=gitcomet-state) & '
                   '(test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | '

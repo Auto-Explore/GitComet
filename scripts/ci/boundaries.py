@@ -33,6 +33,8 @@ RULES = (
     ("gitcomet-core", (), ("gitcomet-state", *GPUI, *UI_HOST, *APPLICATION)),
     ("gitcomet-state", (), (*GPUI, "gitcomet-ui-kit", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-ui-kit", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    # The embedded terminal widget builds on the kit, like any downstream component.
+    ("gitcomet-ui-terminal", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-extension-api", (), (*UI_HOST, *APPLICATION)),
     # A downstream product library reaches the host only through the API.
     ("gitcomet-extension-example", (), (*UI_HOST, *APPLICATION)),

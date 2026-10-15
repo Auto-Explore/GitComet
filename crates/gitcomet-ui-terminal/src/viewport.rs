@@ -1,15 +1,152 @@
-use super::painting::{
+use super::*;
+use crate::painting::{
     TerminalCanvasPaintState, TerminalGridGeometry, TerminalPaintCursor,
     paint_terminal_canvas_state, terminal_cursor_width, terminal_row_fingerprint,
     terminal_snap_to_device_pixels,
 };
-use super::*;
-use crate::kit::ScrollbarDriver;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
+use gitcomet_ui_kit::theme::AppTheme;
+use gitcomet_ui_kit::{Scrollbar, ScrollbarAxis, ScrollbarDriver};
+use gpui::prelude::*;
+use gpui::{
+    App, Bounds, Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId,
+    InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, ShapedLine, Style, WeakEntity, Window, div, point, px,
+    size,
+};
 use palette::IntoColor;
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerminalTextMetrics {
+    pub(crate) font_size: Pixels,
+    pub(crate) line_height: Pixels,
+    pub(crate) cell_width: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TerminalGridSize {
+    pub(crate) rows: u16,
+    pub(crate) cols: u16,
+    pub(crate) pixel_width: u16,
+    pub(crate) pixel_height: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TerminalLayoutKey {
+    pub(crate) font_size_bits: u32,
+    pub(crate) line_height_bits: u32,
+    pub(crate) cell_width_bits: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TerminalLayoutCache {
+    pub(crate) rem_size: Pixels,
+    pub(crate) key: TerminalLayoutKey,
+    pub(crate) base_style: gpui::TextStyle,
+    pub(crate) metrics: TerminalTextMetrics,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TerminalCachedRow {
+    pub(crate) fingerprint: u64,
+    pub(crate) layout_key: TerminalLayoutKey,
+    pub(crate) shaped: Option<ShapedLine>,
+    pub(crate) background_rects: Vec<crate::backend::TerminalBackgroundRect>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TerminalViewportCacheKey {
+    pub(crate) content_epoch: u64,
+    pub(crate) scrollback: usize,
+    pub(crate) rows: u16,
+    pub(crate) cols: u16,
+    pub(crate) layout_key: TerminalLayoutKey,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TerminalRenderCache {
+    pub(crate) viewport_key: Option<TerminalViewportCacheKey>,
+    pub(crate) rows: Vec<TerminalCachedRow>,
+}
+
+pub struct TerminalViewportView {
+    pub(crate) theme: AppTheme,
+    pub focus_handle: FocusHandle,
+    pub(crate) focus_subscriptions: Option<[gpui::Subscription; 2]>,
+    pub(crate) took_press: bool,
+    pub term_lock: Option<AlacrittyTermLock>,
+    pub pty_sender: Option<crate::backend::PtySender>,
+    pub(crate) layout_cache: Option<TerminalLayoutCache>,
+    pub(crate) render_cache: TerminalRenderCache,
+    pub cursor_blink_visible: bool,
+    pub(crate) cursor_blink_hold_until: Instant,
+    pub cursor_blink_active: bool,
+    pub cursor_blink_task_scheduled: bool,
+    pub cursor_blink_seq: u64,
+    /// Blinks since the last keystroke, click or focus.
+    pub(crate) cursor_idle_blinks: u32,
+    pub content_epoch: u64,
+    pub(crate) paint_retry_scheduled: bool,
+    pub last_content: Option<crate::backend::TerminalContent>,
+    pub viewport_bounds: Option<Bounds<Pixels>>,
+    pub(crate) pressed_mouse_button: Option<gpui::MouseButton>,
+    /// Last grid cell reported to the PTY for mouse-motion tracking. Used to
+    /// dedupe motion reports so a TUI in any-event mode (1003) receives at most
+    /// one report per cell instead of one per pixel-level move event.
+    pub(crate) last_motion_cell: Option<TerminalGridPoint>,
+    pub(crate) was_focused: bool,
+    /// Selection endpoints in grid coordinates. Note these are *not* rotated
+    /// when the PTY emits output: alacritty shifts existing content to
+    /// more-negative rows as lines scroll off, so text can slide under a
+    /// stationary highlight during a drag. Autoscroll itself is safe because
+    /// `scroll_display` moves the viewport, not the content.
+    pub selection_start: Option<TerminalGridPoint>,
+    pub selection_end: Option<TerminalGridPoint>,
+    /// Set by "select all" so Copy grabs the entire buffer through the trimming
+    /// `copy_entire_buffer` path. Cleared as soon as a manual selection begins.
+    pub select_all_active: bool,
+    /// True while the left button is held down for a selection drag. Drives the
+    /// window-level `TerminalSelectionTracker` listeners and the autoscroll
+    /// ticker, both of which keep working after the pointer leaves the viewport.
+    pub selecting: bool,
+    /// Most recent pointer position seen during a drag. The autoscroll ticker
+    /// re-reads it every frame so scrolling continues while the pointer is held
+    /// still outside the viewport.
+    pub(crate) selection_last_mouse_pos: Point<Pixels>,
+    /// Whether the current drag has actually moved (pointer motion, a wheel
+    /// scroll, or an autoscroll step). The ticker refuses to re-resolve the free
+    /// end until it has: otherwise the first tick after a double- or
+    /// triple-click would drag that word/line selection back to the press cell.
+    pub(crate) selection_drag_moved: bool,
+    /// Bumped whenever a drag starts or ends so a stale autoscroll ticker exits.
+    pub selection_autoscroll_seq: u64,
+    /// Which window's text selection this viewport owns, if any.
+    /// See [`gitcomet_ui_kit::text_selection_owner`].
+    pub(crate) selection_owner: gitcomet_ui_kit::text_selection_owner::SelectionOwnerToken,
+    pub(crate) _selection_owner_observer: gpui::Subscription,
+    pub(crate) ime_state: Option<crate::backend::TerminalImeState>,
+}
+
+/// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
+/// top of the visible screen at the live tail, and scrollback history is
+/// negative down to `-history_size`. Field order matters — the derived `Ord`
+/// gives row-major ordering, which is what normalises a selection's
+/// `start`/`end` pair.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TerminalGridPoint {
+    pub(crate) row: i32,
+    pub(crate) col: u16,
+}
+
+impl TerminalGridPoint {
+    pub fn new(row: i32, col: u16) -> Self {
+        Self { row, col }
+    }
+}
 
 pub(super) struct TerminalScrollbarDriver {
     pub(super) term_lock: Option<AlacrittyTermLock>,
@@ -164,7 +301,7 @@ impl Element for TerminalSelectionTracker {
                         return;
                     }
                     let _ = window_handle.update(cx, |_root, window, cx| {
-                        if !crate::text_selection_owner::press_keeps_focus(window, cx)
+                        if !gitcomet_ui_kit::text_selection_owner::press_keeps_focus(window, cx)
                             && view.read(cx).focus_handle.is_focused(window)
                         {
                             window.blur(cx);
@@ -224,11 +361,11 @@ impl Element for TerminalSelectionTracker {
 }
 
 impl TerminalViewportView {
-    pub(super) fn new(
+    pub fn new(
         theme: AppTheme,
         focus_handle: FocusHandle,
         term_lock: AlacrittyTermLock,
-        pty_sender: terminal_alacritty::PtySender,
+        pty_sender: PtySender,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender), cx)
@@ -236,24 +373,25 @@ impl TerminalViewportView {
 
     /// Shared constructor. Tests use a real `Term` with either no PTY or a
     /// sender that records messages without spawning a process.
-    pub(super) fn with_backend(
+    pub fn with_backend(
         theme: AppTheme,
         focus_handle: FocusHandle,
         term_lock: Option<AlacrittyTermLock>,
-        pty_sender: Option<terminal_alacritty::PtySender>,
+        pty_sender: Option<PtySender>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
-            if !this.selection_owner.is_stale(cx) {
-                return;
-            }
-            // Not folded into the condition above: `clear_selection` also ends
-            // any drag and invalidates the autoscroll ticker, which is too much
-            // to hide behind `&&`.
-            if this.clear_selection() {
-                cx.notify();
-            }
-        });
+        let selection_owner_observer =
+            gitcomet_ui_kit::text_selection_owner::observe(cx, |this, cx| {
+                if !this.selection_owner.is_stale(cx) {
+                    return;
+                }
+                // Not folded into the condition above: `clear_selection` also ends
+                // any drag and invalidates the autoscroll ticker, which is too much
+                // to hide behind `&&`.
+                if this.clear_selection() {
+                    cx.notify();
+                }
+            });
         Self {
             theme,
             focus_handle,
@@ -289,13 +427,13 @@ impl TerminalViewportView {
         }
     }
 
-    pub(crate) fn invalidate_layout(&mut self, cx: &mut gpui::Context<Self>) {
+    pub fn invalidate_layout(&mut self, cx: &mut gpui::Context<Self>) {
         self.layout_cache = None;
         self.render_cache = TerminalRenderCache::default();
         cx.notify();
     }
 
-    pub(crate) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+    pub fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         self.layout_cache = None;
         self.render_cache = TerminalRenderCache::default();
@@ -349,7 +487,7 @@ impl TerminalViewportView {
     }
 
     fn schedule_cursor_blink_tick(&mut self, cx: &mut gpui::Context<Self>) {
-        if !crate::ui_runtime::current().uses_cursor_blink()
+        if !gitcomet_ui_kit::ui_runtime::current().uses_cursor_blink()
             || !self.cursor_blink_active
             || self.cursor_blink_task_scheduled
             || self.cursor_blink_timed_out()
@@ -372,7 +510,7 @@ impl TerminalViewportView {
     }
 
     fn cursor_blink_should_run(&self, window: &Window) -> bool {
-        self.connected() && crate::window_focus::is_active(&self.focus_handle, window)
+        self.connected() && gitcomet_ui_kit::window_focus::is_active(&self.focus_handle, window)
     }
 
     pub(super) fn connected(&self) -> bool {
@@ -380,7 +518,7 @@ impl TerminalViewportView {
     }
 
     fn sync_cursor_blink_activity(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
-        let is_focused = crate::window_focus::is_active(&self.focus_handle, window);
+        let is_focused = gitcomet_ui_kit::window_focus::is_active(&self.focus_handle, window);
         if is_focused && !self.was_focused {
             self.reset_cursor_blink(cx);
             self.handle_focus_gained(cx);
@@ -389,7 +527,7 @@ impl TerminalViewportView {
         }
         self.was_focused = is_focused;
 
-        if !crate::ui_runtime::current().uses_cursor_blink() {
+        if !gitcomet_ui_kit::ui_runtime::current().uses_cursor_blink() {
             if self.cursor_blink_active
                 || self.cursor_blink_task_scheduled
                 || !self.cursor_blink_visible
@@ -436,7 +574,7 @@ impl TerminalViewportView {
         }
     }
 
-    pub(super) fn advance_cursor_blink(
+    pub fn advance_cursor_blink(
         &mut self,
         blink_seq: u64,
         window: &Window,
@@ -477,7 +615,7 @@ impl TerminalViewportView {
         self.cursor_idle_blinks = 0;
         self.cursor_blink_hold_until =
             Instant::now() + Duration::from_millis(TERMINAL_CARET_RESUME_DELAY_MS);
-        if !crate::ui_runtime::current().uses_cursor_blink() {
+        if !gitcomet_ui_kit::ui_runtime::current().uses_cursor_blink() {
             self.cursor_blink_active = false;
             self.cursor_blink_task_scheduled = false;
         }
@@ -500,7 +638,7 @@ impl TerminalViewportView {
     /// terminal shortcut/scrollback action). Callers use the return value to
     /// decide whether to suppress the app's global key bindings — see
     /// [`GitCometView::forward_keystroke_to_focused_terminal`].
-    pub(super) fn handle_key_down(
+    pub fn handle_key_down(
         &mut self,
         keystroke: &gpui::Keystroke,
         window: &Window,
@@ -509,7 +647,7 @@ impl TerminalViewportView {
         if let Some(action) = terminal_clipboard_shortcut_action(keystroke) {
             self.perform_command(
                 action,
-                crate::clipboard::CopySource::TerminalShortcut,
+                gitcomet_ui_kit::clipboard::CopySource::TerminalShortcut,
                 window,
                 cx,
             );
@@ -539,10 +677,10 @@ impl TerminalViewportView {
         false
     }
 
-    pub(super) fn perform_command(
+    pub fn perform_command(
         &mut self,
         action: TerminalCommand,
-        copy_source: crate::clipboard::CopySource,
+        copy_source: gitcomet_ui_kit::clipboard::CopySource,
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -550,7 +688,7 @@ impl TerminalViewportView {
             TerminalCommand::Copy => {
                 let text = self.selected_text().unwrap_or_else(|| {
                     // Keyboard Copy also works without a selection.
-                    if copy_source == crate::clipboard::CopySource::TerminalShortcut
+                    if copy_source == gitcomet_ui_kit::clipboard::CopySource::TerminalShortcut
                         && !self.has_selection()
                     {
                         self.copy_visible_screen()
@@ -559,11 +697,11 @@ impl TerminalViewportView {
                     }
                 });
                 if !text.is_empty() {
-                    crate::clipboard::write_text(cx, text, copy_source);
+                    gitcomet_ui_kit::clipboard::write_text(cx, text, copy_source);
                 }
             }
             TerminalCommand::Paste => {
-                if let Some(text) = crate::clipboard::read_text(cx) {
+                if let Some(text) = gitcomet_ui_kit::clipboard::read_text(cx) {
                     self.paste_text(&text, cx);
                 }
             }
@@ -692,7 +830,7 @@ impl TerminalViewportView {
     /// Copies the entire terminal buffer, including the scrollback history above
     /// the visible screen. The buffer spans `Line(-history_size)` (oldest) to
     /// `Line(screen_lines - 1)` (newest).
-    pub(super) fn copy_entire_buffer(&self) -> String {
+    pub fn copy_entire_buffer(&self) -> String {
         let Some(term_lock) = &self.term_lock else {
             return String::new();
         };
@@ -727,11 +865,11 @@ impl TerminalViewportView {
         trim_terminal_copy(&text)
     }
 
-    pub(super) fn has_selection(&self) -> bool {
+    pub fn has_selection(&self) -> bool {
         self.selection_start.zip(self.selection_end).is_some()
     }
 
-    pub(super) fn selected_text(&self) -> Option<String> {
+    pub fn selected_text(&self) -> Option<String> {
         let text = if self.select_all_active {
             self.copy_entire_buffer()
         } else {
@@ -745,7 +883,7 @@ impl TerminalViewportView {
     ///
     /// Takes the terminal lock, so it must not be called while that lock is
     /// already held — `FairMutex` is not reentrant.
-    pub(super) fn grid_geometry(&self) -> Option<TerminalGridGeometry> {
+    pub fn grid_geometry(&self) -> Option<TerminalGridGeometry> {
         let term = self.term_lock.as_ref()?.lock();
         let grid = term.grid();
         Some(TerminalGridGeometry {
@@ -756,7 +894,7 @@ impl TerminalViewportView {
         })
     }
 
-    pub(super) fn select_all(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
+    pub fn select_all(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
         let Some(geometry) = self.grid_geometry() else {
             return;
         };
@@ -934,7 +1072,7 @@ impl TerminalViewportView {
     /// last painted [`TerminalContent`] snapshot. Mouse forwarding gates on this so a
     /// TUI that has just enabled mouse reporting is honoured at the instant of the
     /// click, independent of when the next paint refreshes `last_content`.
-    pub(super) fn live_modes(&self) -> TerminalModes {
+    pub fn live_modes(&self) -> TerminalModes {
         self.term_lock
             .as_ref()
             .map(|t| terminal_live_modes(&t.lock()))
@@ -951,7 +1089,7 @@ impl TerminalViewportView {
         self.took_press = true;
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
-        crate::press_gesture::claim_press(cx);
+        gitcomet_ui_kit::press_gesture::claim_press(cx);
         // Every button, like `TextInput::on_mouse_down`: a right-click opens a
         // menu that copies this selection, and a middle-click paste must not
         // let the press resolver collapse it either.
@@ -1167,7 +1305,7 @@ impl TerminalViewportView {
     /// outside it. A ticker is needed rather than doing this from move events:
     /// the pointer can be held perfectly still beyond the edge, and a mid-drag
     /// wheel scroll also has to re-resolve the selection's free end.
-    pub(super) fn start_selection_autoscroll(&mut self, cx: &mut gpui::Context<Self>) {
+    pub fn start_selection_autoscroll(&mut self, cx: &mut gpui::Context<Self>) {
         if !self.selecting {
             return;
         }
@@ -1185,7 +1323,7 @@ impl TerminalViewportView {
                         if !this.selecting || this.selection_autoscroll_seq != seq {
                             return;
                         }
-                        if !crate::window_focus::is_active(&this.focus_handle, window) {
+                        if !gitcomet_ui_kit::window_focus::is_active(&this.focus_handle, window) {
                             this.end_selection_drag(cx);
                             return;
                         }
@@ -1364,7 +1502,7 @@ impl TerminalViewportView {
         .detach();
     }
 
-    pub(super) fn build_terminal_canvas_paint_state(
+    pub fn build_terminal_canvas_paint_state(
         &mut self,
         bounds: Bounds<Pixels>,
         window: &mut Window,
@@ -1450,7 +1588,7 @@ impl TerminalViewportView {
                 {
                     let (text, runs, bg_rects) =
                         build_alacritty_row(cells, grid_row, cols, &layout.base_style, self.theme);
-                    let shaped = super::painting::shape_terminal_grid_line(
+                    let shaped = crate::painting::shape_terminal_grid_line(
                         text,
                         &runs,
                         cells,
@@ -1571,7 +1709,7 @@ impl TerminalViewportView {
             }
 
             // Cursor
-            if crate::window_focus::is_active(&self.focus_handle, window)
+            if gitcomet_ui_kit::window_focus::is_active(&self.focus_handle, window)
                 && self.cursor_blink_visible
                 && self
                     .ime_state
@@ -1620,7 +1758,7 @@ impl TerminalViewportView {
             // IME marked text
             if let Some(ref ime) = self.ime_state
                 && !ime.marked_text.is_empty()
-                && crate::window_focus::is_active(&self.focus_handle, window)
+                && gitcomet_ui_kit::window_focus::is_active(&self.focus_handle, window)
             {
                 paint_state.ime_marked_text = Some(ime.marked_text.clone());
                 paint_state.ime_base_style = Some(layout.base_style.clone());
@@ -1652,7 +1790,7 @@ impl TerminalViewportView {
 impl Render for TerminalViewportView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         if self.focus_subscriptions.is_none() {
-            self.focus_subscriptions = Some(crate::window_focus::observe_blur(
+            self.focus_subscriptions = Some(gitcomet_ui_kit::window_focus::observe_blur(
                 &self.focus_handle,
                 window,
                 cx,
@@ -1750,7 +1888,10 @@ impl Render for TerminalViewportView {
                                                 },
                                             ),
                                         };
-                                        if crate::window_focus::is_active(&focus_handle, window) {
+                                        if gitcomet_ui_kit::window_focus::is_active(
+                                            &focus_handle,
+                                            window,
+                                        ) {
                                             window.handle_input(&focus_handle, ime_handler, cx);
                                         }
                                         paint_terminal_canvas_state(paint_state, theme, window, cx);
@@ -1795,14 +1936,18 @@ where
     C: gpui::BorrowAppContext,
 {
     let mut style = window.text_style();
-    style.font_family = crate::font_preferences::current_editor_font_family(cx).into();
+    style.font_family = gitcomet_ui_kit::font_preferences::current_editor_font_family(cx).into();
     style.font_features = gpui::FontFeatures::disable_ligatures();
     style.font_weight = FontWeight::NORMAL;
     let appearance =
-        cx.update_default_global::<crate::appearance::Appearance, _>(|appearance, _| *appearance);
-    style.font_size =
-        crate::ui_scale::design_px_from_window(appearance.editor_font_size_px as f32, window)
-            .into();
+        cx.update_default_global::<gitcomet_ui_kit::appearance::Appearance, _>(|appearance, _| {
+            *appearance
+        });
+    style.font_size = gitcomet_ui_kit::ui_scale::design_px_from_window(
+        appearance.editor_font_size_px as f32,
+        window,
+    )
+    .into();
     style.font_style = gpui::FontStyle::Normal;
     style.color = terminal_default_foreground(theme).into_color();
     style.white_space = gpui::WhiteSpace::Nowrap;
@@ -1926,3 +2071,6 @@ fn terminal_scroll_wheel_delta(
     let step_rows = ((delta.abs() / line_height).ceil() as usize).max(1);
     Some((delta, step_rows))
 }
+
+#[cfg(test)]
+mod tests;
