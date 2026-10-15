@@ -115,10 +115,9 @@ mod tests {
         for entry in std::fs::read_dir(dir).expect("read src") {
             let path = entry.expect("dir entry").path();
             if path.is_dir() {
-                if path
-                    .file_name()
-                    .is_some_and(|name| name == "tests" || name == "benchmarks")
-                {
+                if path.file_name().is_some_and(|name| {
+                    name == "tests" || name == "smoke_tests" || name == "benchmarks"
+                }) {
                     continue;
                 }
                 production_lines(&path, visit);
@@ -148,6 +147,28 @@ mod tests {
                 visit(&path, ix + 1, line);
             }
         }
+    }
+
+    #[test]
+    fn production_line_scan_skips_smoke_modules_but_keeps_similarly_named_sources() {
+        let sources = tempfile::tempdir().unwrap();
+        for directory in ["smoke_tests", "smoke_tests_extra", "production"] {
+            let directory = sources.path().join(directory);
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("fixture.rs"), "AppTheme::gitcomet_dark()\n").unwrap();
+        }
+        let mut visited = Vec::new();
+        production_lines(sources.path(), &mut |path, _, _| {
+            visited.push(path.strip_prefix(sources.path()).unwrap().to_path_buf());
+        });
+        visited.sort();
+        assert_eq!(
+            visited,
+            [
+                std::path::PathBuf::from("production/fixture.rs"),
+                std::path::PathBuf::from("smoke_tests_extra/fixture.rs"),
+            ]
+        );
     }
 
     /// An `icons/…` path the assets lack draws nothing (`svg()` of a missing
@@ -196,11 +217,7 @@ mod tests {
     fn render_code_never_builds_its_own_theme() {
         let mut offenders = Vec::new();
         production_lines(std::path::Path::new("src"), &mut |path, line_no, line| {
-            if path.ends_with("theme.rs")
-                // TextInput's constructor supplies a default until set_theme is called.
-                // Match path components before formatting platform-specific diagnostics.
-                || path.ends_with(std::path::Path::new("kit/text_input/editing.rs"))
-            {
+            if path.ends_with("theme.rs") {
                 return;
             }
             if line.contains("AppTheme::gitcomet_") {

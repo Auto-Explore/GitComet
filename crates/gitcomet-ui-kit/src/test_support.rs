@@ -122,10 +122,9 @@ pub mod source_guards {
         for path in paths {
             let relative = path.strip_prefix(src_dir).expect("source below src");
             let relative_str = relative.to_string_lossy().replace('\\', "/");
-            let is_test_source = relative
-                .components()
-                .any(|component| component.as_os_str() == "tests")
-                || relative_str.ends_with("tests.rs")
+            let is_test_source = relative.components().any(|component| {
+                component.as_os_str() == "tests" || component.as_os_str() == "smoke_tests"
+            }) || relative_str.ends_with("tests.rs")
                 || relative_str.ends_with("test_support.rs");
             if is_test_source {
                 continue;
@@ -239,12 +238,11 @@ pub mod source_guards {
         for path in paths {
             let relative = path.strip_prefix(src_dir).expect("source below src");
             let relative_str = relative.to_string_lossy().replace('\\', "/");
-            let is_test_source = relative
-                .components()
-                .any(|component| component.as_os_str() == "tests")
-                || relative.file_name().is_some_and(|name| {
-                    name == "tests.rs" || name == "smoke_tests.rs" || name == "test_support.rs"
-                });
+            let is_test_source = relative.components().any(|component| {
+                component.as_os_str() == "tests" || component.as_os_str() == "smoke_tests"
+            }) || relative.file_name().is_some_and(|name| {
+                name == "tests.rs" || name == "smoke_tests.rs" || name == "test_support.rs"
+            });
             if allowed.contains(&relative_str.as_str()) || is_test_source {
                 continue;
             }
@@ -340,5 +338,29 @@ pub mod source_guards {
             }
         }
         violations
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn source_scans_skip_smoke_modules_but_keep_similarly_named_sources() {
+            let sources = tempfile::tempdir().unwrap();
+            for directory in ["smoke_tests", "smoke_tests_extra", "production"] {
+                let directory = sources.path().join(directory);
+                std::fs::create_dir(&directory).unwrap();
+                std::fs::write(directory.join("fixture.rs"), "cx.read_from_clipboard()\n").unwrap();
+            }
+            let expected = ["production/fixture.rs", "smoke_tests_extra/fixture.rs"];
+            let mut production: Vec<_> = super::production_sources(sources.path())
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect();
+            production.sort();
+            assert_eq!(production, expected);
+
+            let mut clipboard = super::direct_clipboard_access(sources.path(), &[]);
+            clipboard.sort();
+            assert_eq!(clipboard, expected);
+        }
     }
 }
