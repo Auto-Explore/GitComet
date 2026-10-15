@@ -1092,8 +1092,7 @@ pub(super) fn canonicalize_path(path: PathBuf) -> PathBuf {
 }
 
 pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind, message: String) {
-    state.notifications_seq = state.notifications_seq.wrapping_add(1);
-    state.notifications.push(AppNotification {
+    state.push_notification(AppNotification {
         time: SystemTime::now(),
         kind,
         message,
@@ -1101,22 +1100,11 @@ pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind,
 }
 
 pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
-    repo_state.feedback.diagnostics_seq = repo_state.feedback.diagnostics_seq.wrapping_add(1);
-    repo_state.feedback.diagnostics.push(DiagnosticEntry {
+    repo_state.feedback.push_diagnostic(DiagnosticEntry {
         time: SystemTime::now(),
         kind,
         message,
     });
-}
-
-/// Drops the entries the window has acknowledged from the front of a feedback
-/// queue whose newest entry is number `seq`. Entries appended after the
-/// acknowledgement was sent stay queued, and an acknowledgement from before
-/// the numbering restarted (a reopened repository) drops nothing.
-pub(super) fn drop_acknowledged<T>(entries: &mut Vec<T>, seq: u64, through_seq: u64) {
-    let unacknowledged = usize::try_from(seq.wrapping_sub(through_seq)).unwrap_or(usize::MAX);
-    let acknowledged = entries.len().saturating_sub(unacknowledged);
-    entries.drain(..acknowledged);
 }
 
 pub(super) fn handle_session_persist_result(
@@ -1179,7 +1167,7 @@ pub(super) fn push_command_log(
         }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     };
-    append_command_log_entry(repo_state, entry);
+    repo_state.feedback.push_command_result(entry);
 }
 
 pub(super) fn push_action_log(
@@ -1208,13 +1196,7 @@ pub(super) fn push_action_log(
         }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     };
-    append_command_log_entry(repo_state, entry);
-}
-
-fn append_command_log_entry(repo_state: &mut RepoState, entry: CommandLogEntry) {
-    let feedback = &mut repo_state.feedback;
-    feedback.command_log_seq = feedback.command_log_seq.wrapping_add(1);
-    feedback.command_log.push(entry);
+    repo_state.feedback.push_command_result(entry);
 }
 
 /// Nested command completion already carries its exact reporting owner. Mark
@@ -2274,21 +2256,6 @@ mod tests {
         assert_eq!(repo.feedback.diagnostics.len(), 205);
         assert_eq!(repo.feedback.diagnostics_seq, 205);
         assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-0");
-    }
-
-    #[test]
-    fn drop_acknowledged_keeps_entries_appended_after_the_acknowledgement() {
-        // Entries 4 to 6 are queued; 1 to 3 were acknowledged earlier.
-        let mut entries = vec![4, 5, 6];
-        drop_acknowledged(&mut entries, 6, 5);
-        assert_eq!(entries, [6]);
-        drop_acknowledged(&mut entries, 6, 6);
-        assert!(entries.is_empty());
-
-        // Numbered past the queue: sent before the numbering restarted.
-        let mut entries = vec![1, 2];
-        drop_acknowledged(&mut entries, 2, 40);
-        assert_eq!(entries, [1, 2]);
     }
 
     #[test]

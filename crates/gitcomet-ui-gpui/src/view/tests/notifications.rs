@@ -470,8 +470,7 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
     );
     repo.feedback.last_error = Some(error.clone());
     repo.feedback
-        .command_log
-        .push(gitcomet_state::model::CommandLogEntry {
+        .push_command_result(gitcomet_state::model::CommandLogEntry {
             time: std::time::SystemTime::now(),
             ok: false,
             command: "git fetch".to_string(),
@@ -547,10 +546,8 @@ fn toasts_follow_feedback_sequences_after_shown_entries_are_dropped(cx: &mut gpu
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let mut repo = open_repo_state_with_workdir("/tmp/acknowledged-feedback");
     for ix in 1..=3 {
-        repo.feedback.command_log_seq += 1;
         repo.feedback
-            .command_log
-            .push(announced_command(&format!("Pushed {ix}")));
+            .push_command_result(announced_command(&format!("Pushed {ix}")));
     }
     let mut state = AppState {
         active_repo: Some(repo.id),
@@ -589,7 +586,7 @@ fn toasts_follow_feedback_sequences_after_shown_entries_are_dropped(cx: &mut gpu
 }
 
 #[gpui::test]
-fn shown_feedback_is_released_from_the_store(cx: &mut gpui::TestAppContext) {
+fn shown_feedback_is_released_with_the_next_store_change(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -602,12 +599,10 @@ fn shown_feedback_is_released_from_the_store(cx: &mut gpui::TestAppContext) {
             workdir: PathBuf::from("/tmp/released-feedback"),
         },
     );
-    repo.feedback.command_log_seq = 1;
-    repo.feedback.command_log.push(announced_command("Pushed"));
-    repo.feedback.diagnostics_seq = 1;
     repo.feedback
-        .diagnostics
-        .push(gitcomet_state::model::DiagnosticEntry {
+        .push_command_result(announced_command("Pushed"));
+    repo.feedback
+        .push_diagnostic(gitcomet_state::model::DiagnosticEntry {
             time: std::time::SystemTime::now(),
             kind: DiagnosticKind::Error,
             message: "Disk full".into(),
@@ -628,29 +623,45 @@ fn shown_feedback_is_released_from_the_store(cx: &mut gpui::TestAppContext) {
     let queued = |store: &AppStore| {
         let state = store.snapshot();
         let feedback = &state.repos[0].feedback;
-        (
-            state.notifications.len(),
-            feedback.diagnostics.len(),
-            feedback.command_log.len(),
-        )
+        state
+            .notifications
+            .iter()
+            .map(|notification| notification.message.clone())
+            .chain(feedback.diagnostics.iter().map(|d| d.message.clone()))
+            .chain(feedback.command_log.iter().map(|e| e.summary.clone()))
+            .collect::<Vec<_>>()
     };
 
     show_store_state(cx);
+    let shown = ["Low on space", "Pushed", "Disk full"];
     assert_eq!(
         all_toasts(cx, &view)
             .into_iter()
             .map(|(_, message)| message)
             .collect::<Vec<_>>(),
-        ["Low on space", "Pushed", "Disk full"]
+        shown
     );
-    assert_eq!(queued(&store), (0, 0, 0), "the window acknowledged them");
 
+    // The store applies the acknowledgement with its next change.
     store.dispatch(Msg::ReportError {
         repo_id: Some(repo_id),
         message: "Disk still full".into(),
     });
     test_support::drain_store_worker(&view, cx);
-    assert_eq!(queued(&store), (0, 1, 0));
+    let after_report = queued(&store);
+    assert!(
+        shown
+            .iter()
+            .all(|message| !after_report.iter().any(|queued| queued == message)),
+        "shown feedback is still queued: {after_report:?}"
+    );
+    assert!(
+        after_report
+            .iter()
+            .any(|queued| queued == "Disk still full"),
+        "newer feedback was dropped: {after_report:?}"
+    );
+
     show_store_state(cx);
     assert_eq!(
         error_toasts(cx, &view),
@@ -659,7 +670,15 @@ fn shown_feedback_is_released_from_the_store(cx: &mut gpui::TestAppContext) {
             (Some(repo_id), "Disk full".to_string()),
         ]
     );
-    assert_eq!(queued(&store), (0, 0, 0));
+    store.dispatch(Msg::DismissRepoError { repo_id });
+    test_support::drain_store_worker(&view, cx);
+    let after_dismiss = queued(&store);
+    assert!(
+        !after_dismiss
+            .iter()
+            .any(|queued| queued == "Disk still full"),
+        "shown feedback is still queued: {after_dismiss:?}"
+    );
 }
 
 fn auth_challenge(kind: AuthPromptKind) -> &'static str {
@@ -698,7 +717,7 @@ fn auth_pull_attempt(kind: AuthPromptKind) -> gitcomet_state::model::CommandLogE
 
 fn auth_pull_state(kind: AuthPromptKind) -> AppState {
     let mut repo = open_repo_state_with_workdir("/tmp/auth-pull-notifications");
-    repo.feedback.command_log.push(auth_pull_attempt(kind));
+    repo.feedback.push_command_result(auth_pull_attempt(kind));
     AppState {
         active_repo: Some(repo.id),
         auth_prompt: Some(AuthPromptState {
@@ -834,8 +853,7 @@ fn authentication_prompt_preserves_user_focus_on_redraw_and_unrelated_snapshot(
 
         state.repos[0]
             .feedback
-            .command_log
-            .push(successful_pull_attempt());
+            .push_command_result(successful_pull_attempt());
         apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
         assert!(
@@ -966,8 +984,7 @@ fn pull_authentication_announces_only_the_successful_retry(cx: &mut gpui::TestAp
 
         state.repos[0]
             .feedback
-            .command_log
-            .push(successful_pull_attempt());
+            .push_command_result(successful_pull_attempt());
         apply_notification_snapshot(cx, &view, &state);
         apply_notification_snapshot(cx, &view, &state);
         assert_eq!(
@@ -1005,8 +1022,7 @@ fn coalesced_authentication_and_success_snapshots_do_not_revive_the_challenge(
         state.auth_prompt = None;
         state.repos[0]
             .feedback
-            .command_log
-            .push(successful_pull_attempt());
+            .push_command_result(successful_pull_attempt());
 
         // The UI never received the prompt or retry-in-flight snapshots.
         apply_notification_snapshot(cx, &view, &state);
@@ -1036,7 +1052,7 @@ fn rejected_credentials_and_prompt_cancellation_do_not_accumulate_error_toasts(
 
         let mut rejected = auth_pull_attempt(kind);
         rejected.time += Duration::from_secs(1);
-        state.repos[0].feedback.command_log.push(rejected);
+        state.repos[0].feedback.push_command_result(rejected);
         prompt.generation += 1;
         prompt.status = AuthPromptStatus::Rejected;
         prompt.reason = auth_rejection(kind).into();
@@ -1216,8 +1232,7 @@ fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppConte
         ] {
             state.repos[0]
                 .feedback
-                .command_log
-                .push(gitcomet_state::model::CommandLogEntry {
+                .push_command_result(gitcomet_state::model::CommandLogEntry {
                     command: command.into(),
                     summary: summary.into(),
                     stderr: summary.into(),
@@ -1249,8 +1264,7 @@ fn pull_blocked_after_authentication_has_one_actionable_failure_and_no_stale_pro
     state.auth_prompt = None;
     state.repos[0]
         .feedback
-        .command_log
-        .push(gitcomet_state::model::CommandLogEntry {
+        .push_command_result(gitcomet_state::model::CommandLogEntry {
             summary: "Pull failed".into(),
             stderr: "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md\nAborting".into(),
             handled_by_auth_prompt: false,
@@ -1334,18 +1348,16 @@ fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
     let mut next = AppState::test_default();
     let mut repo = open_repo_state_with_workdir("/tmp/persist-repo");
     repo.feedback
-        .diagnostics
-        .push(gitcomet_state::model::DiagnosticEntry {
+        .push_diagnostic(gitcomet_state::model::DiagnosticEntry {
             time: std::time::SystemTime::now(),
             kind: DiagnosticKind::Error,
             message: message.clone(),
         });
-    next.notifications
-        .push(gitcomet_state::model::AppNotification {
-            time: std::time::SystemTime::now(),
-            kind: gitcomet_state::model::AppNotificationKind::Error,
-            message: message.clone(),
-        });
+    next.push_notification(gitcomet_state::model::AppNotification {
+        time: std::time::SystemTime::now(),
+        kind: gitcomet_state::model::AppNotificationKind::Error,
+        message: message.clone(),
+    });
     next.active_repo = Some(repo_id);
     next.repos.push(repo);
     let next = Arc::new(next);
