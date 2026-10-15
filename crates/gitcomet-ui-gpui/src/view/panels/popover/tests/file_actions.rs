@@ -1633,7 +1633,7 @@ fn file_browser_file_menu_for_a_commit_source_has_no_explorer_groups(
 
 #[gpui::test]
 fn explorer_entries_carry_icons_and_platform_shortcuts(cx: &mut gpui::TestAppContext) {
-    use crate::view::shortcut_labels::{Shortcut, secondary_shortcut};
+    use crate::kit::components::{Shortcut, secondary_shortcut};
 
     let model = file_browser_menu_model(cx, "src/a.rs", false, |_state| {});
     let entry = |label: &str| {

@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::Shortcut;
+use crate::kit::components::Shortcut;
 
 fn push_entry(
     items: &mut Vec<ContextMenuItem>,

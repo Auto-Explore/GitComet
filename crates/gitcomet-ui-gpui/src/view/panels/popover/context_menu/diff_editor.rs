@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn model(

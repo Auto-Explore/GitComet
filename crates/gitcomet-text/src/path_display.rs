@@ -1,4 +1,4 @@
-use gpui::SharedString;
+use gpui_shared_string::SharedString;
 #[cfg(windows)]
 use rustc_hash::FxHashMap;
 #[cfg(not(windows))]
@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct PathDisplayBenchSnapshot {
+pub struct PathDisplayBenchSnapshot {
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub cache_clears: u64,
@@ -32,7 +32,7 @@ type PathDisplayCacheMap = FxHashMap<PathBuf, SharedString>;
 
 /// A bounded two-generation cache. Keeping the previous generation avoids the
 /// all-or-nothing cliff when a large repo first crosses the cache cap.
-pub(super) struct PathDisplayCache {
+pub struct PathDisplayCache {
     recent: PathDisplayCacheMap,
     previous: PathDisplayCacheMap,
     recent_entries: usize,
@@ -83,13 +83,17 @@ impl PathDisplayCache {
     const MAX_ENTRIES: usize = 8_192;
     const RECENT_MAX_ENTRIES: usize = Self::MAX_ENTRIES / 2;
 
-    pub(super) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.recent_entries + self.previous_entries
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     #[allow(dead_code)]
-    pub(in crate::view) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
 
@@ -234,22 +238,22 @@ fn cache_insert(
 }
 
 #[cfg(windows)]
-pub(super) fn path_display_string(path: &Path) -> String {
+pub fn path_display_string(path: &Path) -> String {
     format_windows_path_for_display(path.display().to_string())
 }
 
 #[cfg(not(windows))]
-pub(super) fn path_display_string(path: &Path) -> String {
+pub fn path_display_string(path: &Path) -> String {
     path.to_str()
         .map(str::to_owned)
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-pub(super) fn path_display_shared(path: &Path) -> SharedString {
+pub fn path_display_shared(path: &Path) -> SharedString {
     path_display_string(path).into()
 }
 
-pub(in crate::view) fn repo_path_name(path: &Path) -> SharedString {
+pub fn repo_path_name(path: &Path) -> SharedString {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(SharedString::new)
@@ -259,7 +263,7 @@ pub(in crate::view) fn repo_path_name(path: &Path) -> SharedString {
 /// Fast path that skips the intermediate `String` allocation on non-Windows
 /// by constructing `SharedString` directly from `&str` → `Arc<str>`.
 #[cfg(not(windows))]
-pub(in crate::view) fn path_display_shared_fast(path: &Path) -> SharedString {
+pub fn path_display_shared_fast(path: &Path) -> SharedString {
     match path.to_str() {
         Some(s) => SharedString::new(s),
         None => path_display_shared(path),
@@ -267,11 +271,11 @@ pub(in crate::view) fn path_display_shared_fast(path: &Path) -> SharedString {
 }
 
 #[cfg(windows)]
-pub(in crate::view) fn path_display_shared_fast(path: &Path) -> SharedString {
+pub fn path_display_shared_fast(path: &Path) -> SharedString {
     path_display_shared(path)
 }
 
-pub(super) fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedString {
+pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedString {
     #[cfg(not(windows))]
     let Some(path_key) = path.to_str() else {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
@@ -406,7 +410,7 @@ pub(super) fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> 
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn bench_snapshot() -> PathDisplayBenchSnapshot {
+pub fn bench_snapshot() -> PathDisplayBenchSnapshot {
     #[cfg(any(debug_assertions, feature = "benchmarks"))]
     {
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::snapshot)
@@ -418,7 +422,7 @@ pub(in crate::view) fn bench_snapshot() -> PathDisplayBenchSnapshot {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn bench_reset() {
+pub fn bench_reset() {
     #[cfg(any(debug_assertions, feature = "benchmarks"))]
     {
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::reset);

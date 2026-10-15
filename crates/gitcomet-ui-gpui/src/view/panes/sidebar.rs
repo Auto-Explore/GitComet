@@ -1794,7 +1794,7 @@ impl SidebarPaneView {
                             if can_locate_open_file {
                                 format!(
                                     "Show the open file in the explorer ({})",
-                                    crate::view::shortcut_labels::secondary_shortcut("Shift+L")
+                                    crate::kit::components::secondary_shortcut("Shift+L")
                                 )
                                 .into()
                             } else {

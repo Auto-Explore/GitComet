@@ -10,9 +10,9 @@ use gpui::{
 };
 use palette::IntoColor;
 
-use super::shortcut_labels::Shortcut;
 use super::tooltip::GitCometTooltipExt;
 use super::{GitCometView, components, restrict_scroll_to_vertical_axis};
+use crate::kit::components::Shortcut;
 use gitcomet_core::tag_push::TagPushMode;
 
 pub(crate) struct CommandEntry {

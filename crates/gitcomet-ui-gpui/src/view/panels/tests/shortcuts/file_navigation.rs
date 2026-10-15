@@ -1248,7 +1248,7 @@ fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
         "Stage at the right edge: {stage:?} in {bar:?}"
     );
 
-    let alt = crate::view::shortcut_labels::alt_shortcut;
+    let alt = crate::kit::components::alt_shortcut;
     for (selector, expected) in [
         (
             "diff_prev_file",

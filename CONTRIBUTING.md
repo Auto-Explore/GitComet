@@ -39,7 +39,7 @@ See [Architecture](docs/architecture.md) for dependency boundaries, state flow,
 repository lifetimes, and document ownership.
 
 - `crates/gitcomet-base`: product identity (`identity`), per-user directories (`platform::dirs`), platform detection, file utilities, operation traces and work counters. No Git domain types; core re-exports these modules at their `gitcomet_core::` paths.
-- `crates/gitcomet-text`: text foundations without GPUI itself: rope and text model, tab expansion, instrumented LRU caches and syntax token kinds. The UI kit re-exports `rope` and `text_model`.
+- `crates/gitcomet-text`: text foundations without GPUI itself: rope and text model, tab expansion, instrumented LRU caches, syntax token kinds, date and time formatting, and cached path display. The UI kit re-exports `rope` and `text_model`.
 - `crates/gitcomet-syntax`: tree-sitter syntax highlighting without GPUI: language detection, the bundled grammars and queries, prepared documents parsed off the UI thread, live documents for editors, injections, occurrences and pairs. Renderers style its token kinds through a `SyntaxPalette`.
 - `crates/gitcomet-conflict-resolver`: the conflict resolver's model without GPUI: marker parsing, two- and three-way row projections, navigation, provenance, resolution and autosolve summaries, and word highlights. Rendering and styled-text caches stay in the UI host.
 - `crates/gitcomet-markdown`: the markdown preview model without GPUI: parsing, HTML and table flattening, inline spans, heading anchors, code-fence languages, row wrapping and scrollbar marker buckets. Rendering and row styling stay in the UI host.

@@ -928,7 +928,7 @@ impl StandaloneBuffer {
         let icon_color = file_icons::file_icon_color(icon, theme.is_dark)
             .unwrap_or(theme.colors.foreground.secondary);
         let unsaved = self.dirty() || self.saving().is_some();
-        let save_shortcut = crate::view::shortcut_labels::secondary_shortcut("S");
+        let save_shortcut = crate::kit::components::secondary_shortcut("S");
 
         let title = div()
             .flex_1()

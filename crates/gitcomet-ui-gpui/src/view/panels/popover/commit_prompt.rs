@@ -41,7 +41,7 @@ pub(super) fn panel(
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "commit_prompt_submit_hint",
-                            crate::view::shortcut_labels::secondary_shortcut("Enter"),
+                            crate::kit::components::secondary_shortcut("Enter"),
                         ))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_commit)

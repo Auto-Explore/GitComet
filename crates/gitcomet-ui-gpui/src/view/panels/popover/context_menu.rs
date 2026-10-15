@@ -3155,7 +3155,7 @@ fn interactive_rebase_autosquash_menu_model() -> ContextMenuModel {
 mod tests {
     use super::*;
 
-    use crate::view::shortcut_labels::secondary_shortcut;
+    use crate::kit::components::secondary_shortcut;
 
     #[test]
     fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {

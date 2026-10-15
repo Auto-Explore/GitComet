@@ -19,5 +19,7 @@ benchmarks = []
 gpui_shared_string = { workspace = true }
 gpui_sum_tree = { workspace = true }
 lru = { workspace = true }
+jiff = { workspace = true }
 memchr = { workspace = true }
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }

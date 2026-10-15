@@ -133,7 +133,7 @@ impl DiffRenderer {
                             theme,
                             format!(
                                 "Previous conflict (F2 / Shift+F7 / {})",
-                                crate::view::shortcut_labels::alt_shortcut("Up")
+                                crate::kit::components::alt_shortcut("Up")
                             )
                             .into(),
                         ),
@@ -156,7 +156,7 @@ impl DiffRenderer {
                             theme,
                             format!(
                                 "Next conflict (F3 / F7 / {})",
-                                crate::view::shortcut_labels::alt_shortcut("Down")
+                                crate::kit::components::alt_shortcut("Down")
                             )
                             .into(),
                         ),

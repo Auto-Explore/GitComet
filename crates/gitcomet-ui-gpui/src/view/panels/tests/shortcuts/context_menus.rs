@@ -57,7 +57,7 @@ fn context_menu_entry_disabled_by_label_prefix(model: &ContextMenuModel, prefix:
 /// Platform-aware label for `secondary`-modifier shortcuts, matching what the
 /// context menus declare.
 fn sec(suffix: &str) -> String {
-    crate::view::shortcut_labels::secondary_shortcut(suffix)
+    crate::kit::components::secondary_shortcut(suffix)
 }
 
 fn context_menu_model_for(

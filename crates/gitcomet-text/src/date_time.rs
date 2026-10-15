@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub(super) enum DateTimeFormat {
+pub enum DateTimeFormat {
     YmdHm,
     YmdHms,
     DmyHm,
@@ -7,7 +7,7 @@ pub(super) enum DateTimeFormat {
 }
 
 impl DateTimeFormat {
-    pub(super) fn all() -> &'static [DateTimeFormat] {
+    pub fn all() -> &'static [DateTimeFormat] {
         &[
             DateTimeFormat::YmdHm,
             DateTimeFormat::YmdHms,
@@ -16,7 +16,7 @@ impl DateTimeFormat {
         ]
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             DateTimeFormat::YmdHm => "YYYY-MM-DD HH:MM",
             DateTimeFormat::YmdHms => "YYYY-MM-DD HH:MM:SS",
@@ -25,7 +25,7 @@ impl DateTimeFormat {
         }
     }
 
-    pub(super) fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             DateTimeFormat::YmdHm => "ymd_hm_utc",
             DateTimeFormat::YmdHms => "ymd_hms_utc",
@@ -34,7 +34,7 @@ impl DateTimeFormat {
         }
     }
 
-    pub(super) fn from_key(s: &str) -> Option<Self> {
+    pub fn from_key(s: &str) -> Option<Self> {
         match s {
             "ymd_hm_utc" => Some(DateTimeFormat::YmdHm),
             "ymd_hms_utc" => Some(DateTimeFormat::YmdHms),
@@ -46,7 +46,7 @@ impl DateTimeFormat {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-pub(super) enum Timezone {
+pub enum Timezone {
     /// The device's timezone, resolved per timestamp (DST-correct via jiff).
     #[default]
     SystemLocal,
@@ -56,7 +56,7 @@ pub(super) enum Timezone {
 }
 
 impl Timezone {
-    pub(super) fn all() -> &'static [Timezone] {
+    pub fn all() -> &'static [Timezone] {
         use Timezone::*;
         &[
             SystemLocal,
@@ -101,7 +101,7 @@ impl Timezone {
         ]
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Timezone::SystemLocal => "System local",
             Timezone::Utc => "UTC",
@@ -148,7 +148,7 @@ impl Timezone {
         }
     }
 
-    pub(super) fn key(self) -> String {
+    pub fn key(self) -> String {
         match self {
             Timezone::SystemLocal => "system_local".to_string(),
             Timezone::Utc => "utc".to_string(),
@@ -156,7 +156,7 @@ impl Timezone {
         }
     }
 
-    pub(super) fn from_key(s: &str) -> Option<Self> {
+    pub fn from_key(s: &str) -> Option<Self> {
         match s {
             "system_local" => Some(Timezone::SystemLocal),
             "utc" => Some(Timezone::Utc),
@@ -168,7 +168,7 @@ impl Timezone {
         }
     }
 
-    pub(super) fn cities(self) -> &'static str {
+    pub fn cities(self) -> &'static str {
         match self {
             Timezone::SystemLocal => "This device's timezone",
             Timezone::Utc => "London, Reykjavik",
@@ -218,7 +218,7 @@ impl Timezone {
     /// UTC offset in seconds for the given unix timestamp. `SystemLocal`
     /// resolves the device timezone per timestamp, so historical commits keep
     /// their correct DST offset.
-    pub(super) fn offset_seconds_at(self, unix_seconds: i64) -> i64 {
+    pub fn offset_seconds_at(self, unix_seconds: i64) -> i64 {
         match self {
             Timezone::SystemLocal => jiff::Timestamp::from_second(unix_seconds)
                 .map(|ts| i64::from(jiff::tz::TimeZone::system().to_offset(ts).seconds()))
@@ -229,8 +229,8 @@ impl Timezone {
     }
 }
 
-#[cfg(test)]
-pub(super) fn format_datetime(
+#[cfg(any(test, feature = "test-support"))]
+pub fn format_datetime(
     time: std::time::SystemTime,
     format: DateTimeFormat,
     timezone: Timezone,
@@ -243,7 +243,7 @@ pub(super) fn format_datetime(
 
 /// Like `format_datetime` but writes into a caller-owned buffer,
 /// allowing the allocation to be reused across many calls.
-pub(super) fn format_datetime_into(
+pub fn format_datetime_into(
     buf: &mut String,
     time: std::time::SystemTime,
     format: DateTimeFormat,
@@ -412,13 +412,13 @@ fn push_utc_offset_label(buf: &mut String, offset_seconds: i64) {
 }
 
 /// Backward-compatible wrapper that formats in UTC.
-#[cfg(test)]
-pub(super) fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeFormat) -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeFormat) -> String {
     format_datetime(time, format, Timezone::Utc, true)
 }
 
 /// Convert unix seconds to a `SystemTime`, handling pre-epoch values.
-pub(super) fn system_time_from_unix(secs: i64) -> std::time::SystemTime {
+pub fn system_time_from_unix(secs: i64) -> std::time::SystemTime {
     use std::time::{Duration, UNIX_EPOCH};
     if secs >= 0 {
         UNIX_EPOCH + Duration::from_secs(secs as u64)
@@ -433,7 +433,7 @@ pub(super) fn system_time_from_unix(secs: i64) -> std::time::SystemTime {
 /// Used by the blame/annotate column. Future or zero deltas render as
 /// `just now`. The breakpoints intentionally favour readable approximations
 /// (30-day months, 365-day years) over calendar accuracy.
-pub(super) fn format_relative_time(unix_secs: i64, now: std::time::SystemTime) -> String {
+pub fn format_relative_time(unix_secs: i64, now: std::time::SystemTime) -> String {
     use std::time::UNIX_EPOCH;
 
     let now_secs = match now.duration_since(UNIX_EPOCH) {

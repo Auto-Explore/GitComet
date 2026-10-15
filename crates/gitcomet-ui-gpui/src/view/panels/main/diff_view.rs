@@ -1232,7 +1232,7 @@ impl DiffRenderer {
                     true,
                 ),
                 _ => {
-                    shortcuts.push(crate::view::shortcut_labels::alt_shortcut("B").into());
+                    shortcuts.push(crate::kit::components::alt_shortcut("B").into());
                     ("Toggle blame annotations".into(), false)
                 }
             }
@@ -1300,7 +1300,7 @@ impl DiffRenderer {
         } else if dirty {
             format!(
                 "Unsaved changes — {} saves",
-                crate::view::shortcut_labels::secondary_shortcut("S")
+                crate::kit::components::secondary_shortcut("S")
             )
             .into()
         } else {
@@ -1309,7 +1309,7 @@ impl DiffRenderer {
         let shortcuts: Vec<SharedString> = if disabled || dirty {
             Vec::new()
         } else {
-            vec![crate::view::shortcut_labels::alt_shortcut("E").into()]
+            vec![crate::kit::components::alt_shortcut("E").into()]
         };
 
         components::Button::new("diff_edit", if dirty { "Edit •" } else { "Edit" })
@@ -1556,7 +1556,7 @@ impl DiffRenderer {
             .gitcomet_tooltip_keyed(
                 theme,
                 "Save the file and return".into(),
-                vec![crate::view::shortcut_labels::secondary_shortcut("S").into()],
+                vec![crate::kit::components::secondary_shortcut("S").into()],
             )
     }
 
@@ -1955,7 +1955,7 @@ impl DiffRenderer {
                         .child(next_hunk_btn),
                 );
 
-                let alt = crate::view::shortcut_labels::alt_shortcut;
+                let alt = crate::kit::components::alt_shortcut;
                 let view_toggle = components::SegmentedControl::new("diff_view_toggle")
                     .segment(
                         components::Segment::new("diff_inline", "Inline")

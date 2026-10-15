@@ -5,8 +5,8 @@
 //! global is absent, windows skip every lookup, and no task is spawned.
 
 use super::command_palette::{CommandEntry, Needs};
-use super::shortcut_labels::Shortcut;
 use super::*;
+use crate::kit::components::Shortcut;
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
     MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,

@@ -707,3 +707,17 @@ Three tests moved to the host with the code they exercise: the conflict
 image fallback drives the diff renderer, and two SVG text tests check the host's
 rasterizers. They read `Group` through two `test-support` accessors. The crate's
 55 tests run in their own libtest process.
+
+### 1.4 Text helpers out of the host (first part)
+
+`date_time.rs` and `path_display.rs` moved to `gitcomet-text` instead of a GPUI
+`kit::text` module: neither touches GPUI, so their 20 Linux tests (22 on
+Windows) run under nextest. `jiff` moves with the date code. The test-only
+formatting wrappers compile under the text crate's `test-support`.
+
+The platform-aware label helpers from `shortcut_labels.rs` (`secondary_shortcut`,
+`alt_shortcut` and the command-palette `Shortcut`) moved into the kit's
+`components::shortcut_keys` with their three tests. The host keeps only the
+diff surfaces' file and change navigation key lists, which mirror its own
+bindings. The remaining 1.4 pieces (window chrome, hover cards, toast stack,
+menu model, query matcher, resize handle) are still in the host.

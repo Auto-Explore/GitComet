@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 fn diff_hunk_primary_metadata(
     diff_target: Option<&DiffTarget>,

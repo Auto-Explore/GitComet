@@ -109,6 +109,7 @@ gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 # The example product's extension, run against the real host.
 gitcomet-extension-example = { path = "../gitcomet-extension-example" }
 gitcomet-state = { workspace = true, features = ["test-support"] }
+gitcomet-text = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
 gitcomet-ui-media = { workspace = true, features = ["test-support"] }
 gitcomet-ui-terminal = { workspace = true, features = ["test-support"] }

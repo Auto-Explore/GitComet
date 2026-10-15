@@ -255,9 +255,9 @@ pub(crate) mod components;
 mod conflict_markers;
 pub(crate) use gitcomet_conflict_resolver as conflict_resolver;
 mod conflict_style_cache;
-mod date_time;
 #[cfg(feature = "benchmarks")]
 pub use diagram_preview::benchmarks::MermaidPreviewFixture;
+use gitcomet_text::{date_time, path_display};
 use gitcomet_ui_media::rendered_preview::{
     RenderedPreviewKind, RenderedPreviewMode, RenderedPreviewModes,
 };
@@ -300,7 +300,6 @@ mod pane_store;
 mod panels;
 mod panes;
 mod patch_split;
-mod path_display;
 mod perf;
 mod permalink;
 pub(super) mod platform_open;

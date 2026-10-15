@@ -3,6 +3,8 @@
 //! instrumented caches and the token kinds a highlighter emits.
 
 pub mod cache;
+pub mod date_time;
+pub mod path_display;
 pub mod rope;
 pub mod tab_width;
 pub mod text_model;
