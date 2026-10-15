@@ -8,6 +8,8 @@ The [workspace layout](../CONTRIBUTING.md#workspace-layout) lists each crate's r
 
 Products launch through [`AppLaunch`](../crates/gitcomet-app/src/lib.rs) or [`UiLaunch`](../crates/gitcomet-ui-gpui/src/app/launch.rs). Extensions use [`gitcomet-extension-api`](../crates/gitcomet-extension-api/src/lib.rs), including weak window and repository handles; its contract does not depend on the UI host. The [example product](../crates/gitcomet-extension-example-app) exercises these public interfaces in its own build context.
 
+The extension [`Registry`](../crates/gitcomet-extension-api/src/registry.rs) validates key chords and optional context predicates with GPUI's parsers before keymap installation. Invalid contexts join the existing registration errors, preserving declaration order and reporting all registration problems together.
+
 [Dependency checks](../scripts/ci/boundaries.py) enforce the layering across normal and build dependencies. GPUI revisions and gix features are selected in the [workspace manifest](../Cargo.toml); local dependency patches and grammar changes are documented in [vendor/README.md](../vendor/README.md).
 
 ## Git contracts and errors

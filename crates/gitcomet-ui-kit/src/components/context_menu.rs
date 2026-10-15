@@ -400,16 +400,14 @@ fn context_menu_entry<V: 'static>(
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     // An extension's own asset (`extensions/<id>/…`), or a kit icon the
     // table does not name, is drawn as given.
-    let drawn_icon = icon_path
-        .map(SharedString::new_static)
-        .or_else(|| match &icon {
-            ContextMenuIconSlot::Icon(name)
-                if name.starts_with("extensions/") || name.starts_with("icons/") =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        });
+    let drawn_icon = icon_path.map(SharedString::from).or_else(|| match &icon {
+        ContextMenuIconSlot::Icon(name)
+            if name.starts_with("extensions/") || name.starts_with("icons/") =>
+        {
+            Some(name.clone())
+        }
+        _ => None,
+    });
     let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
     let mut row = crate::menu::menu_item(id, theme, ui_scale, selected, disabled)
         .text_color(text_color)
@@ -506,7 +504,7 @@ fn context_menu_icon_color(
     theme: AppTheme,
     disabled: bool,
     label: &str,
-    icon_path: Option<&'static str>,
+    icon_path: Option<&str>,
 ) -> gpui::Rgba {
     if disabled {
         return theme.colors.foreground.secondary;
@@ -555,8 +553,11 @@ fn context_menu_icon_color(
 }
 
 /// The icon a context-menu entry draws, or `None` for an empty slot.
-pub fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
+pub fn context_menu_icon_path<'a>(icon: &'a str, label: &str) -> Option<&'a str> {
     let trimmed = icon.trim();
+    if trimmed.starts_with("icons/") || trimmed.starts_with("extensions/") {
+        return Some(trimmed);
+    }
     let by_icon = match trimmed {
         "icons/link.svg" | "link" => Some("icons/link.svg"),
         "icons/unlink.svg" | "unlink" => Some("icons/unlink.svg"),
@@ -1040,6 +1041,18 @@ mod tests {
             context_menu_icon_path("unlink", "test"),
             Some("icons/unlink.svg")
         );
+    }
+
+    #[test]
+    fn explicit_menu_assets_take_precedence_over_english_label_inference() {
+        for path in [
+            "extensions/com.example.review/icons/review.svg",
+            "icons/terminal.svg",
+        ] {
+            for label in ["Remove review", "Pull review", "Copy review", "Open review"] {
+                assert_eq!(context_menu_icon_path(path, label), Some(path));
+            }
+        }
     }
 
     #[test]

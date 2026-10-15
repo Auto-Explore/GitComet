@@ -7,7 +7,7 @@ use crate::contributions::{
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
-use gitcomet_ui_kit::gpui::{Keystroke, SharedString};
+use gitcomet_ui_kit::gpui::{KeyBindingContextPredicate, Keystroke, SharedString};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -583,6 +583,14 @@ impl Registry {
                     );
                 }
             }
+            if let Some(context) = &binding.context
+                && KeyBindingContextPredicate::parse(context).is_err()
+            {
+                error(
+                    binding.command.extension(),
+                    format!("key binding context {context:?} does not parse"),
+                );
+            }
         }
         for item in &registry.menu_items {
             if !commands.contains(&item.command) {
@@ -840,6 +848,102 @@ mod tests {
                 "missing {expected:?} in {messages:#?}"
             );
         }
+    }
+
+    #[test]
+    fn malformed_key_contexts_are_aggregated_with_other_registration_errors() {
+        let errors = build(vec![
+            Fixture {
+                id: "com.example.a",
+                register: |r| {
+                    r.command("run", command("Run"))
+                        .key_binding("secondary-r", "run", Some("(".into()))
+                        .key_binding("a-b", "missing", Some("RepositoryView &&".into()));
+                },
+            },
+            Fixture {
+                id: "com.example.b",
+                register: |r| {
+                    r.command("run", command("Run")).key_binding(
+                        "secondary-r",
+                        "run",
+                        Some("RepositoryView >".into()),
+                    );
+                },
+            },
+        ])
+        .err()
+        .expect("invalid contexts must prevent keymap installation");
+        assert_eq!(
+            errors,
+            [
+                RegistrationError {
+                    extension: "com.example.a".into(),
+                    message: "key binding context \"(\" does not parse".into(),
+                },
+                RegistrationError {
+                    extension: "com.example.a".into(),
+                    message: "key binding names unknown command com.example.a/missing".into(),
+                },
+                RegistrationError {
+                    extension: "com.example.a".into(),
+                    message: "key binding \"a-b\" does not parse".into(),
+                },
+                RegistrationError {
+                    extension: "com.example.a".into(),
+                    message: "key binding context \"RepositoryView &&\" does not parse".into(),
+                },
+                RegistrationError {
+                    extension: "com.example.b".into(),
+                    message: "key binding context \"RepositoryView >\" does not parse".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn valid_compound_key_contexts_keep_declaration_and_precedence_order() {
+        let registry = build(vec![
+            Fixture {
+                id: "com.example.a",
+                register: |r| {
+                    r.command("run", command("Run"))
+                        .key_binding("secondary-r", "run", None)
+                        .key_binding(
+                            "secondary-r",
+                            "run",
+                            Some("RepositoryView && (!TextInput || mode == review)".into()),
+                        );
+                },
+            },
+            Fixture {
+                id: "com.example.b",
+                register: |r| {
+                    r.command("run", command("Run")).key_binding(
+                        "secondary-r",
+                        "run",
+                        Some("Window > RepositoryView".into()),
+                    );
+                },
+            },
+        ])
+        .expect("the GPUI parser accepts compound contexts");
+        let declarations: Vec<_> = registry
+            .key_bindings()
+            .iter()
+            .map(|binding| (binding.command.to_string(), binding.context.as_deref()))
+            .collect();
+        assert_eq!(
+            declarations,
+            [
+                ("com.example.a/run".into(), None),
+                (
+                    "com.example.a/run".into(),
+                    Some("RepositoryView && (!TextInput || mode == review)"),
+                ),
+                ("com.example.b/run".into(), Some("Window > RepositoryView"),),
+            ]
+        );
     }
 
     #[test]
