@@ -35,6 +35,17 @@ pub(super) struct RangeStatusChange {
     pub(super) new_mode: Option<FileMode>,
 }
 
+impl RangeStatusChange {
+    /// numstat's counts for this change. A gitlink's numstat counts its
+    /// "Subproject commit" line, not content, so a submodule has none.
+    pub(super) fn line_counts(&self, counts: &NumstatCounts) -> NumstatLineCounts {
+        if self.is_submodule {
+            return (None, None);
+        }
+        counts.get(&self.path).cloned().unwrap_or((None, None))
+    }
+}
+
 /// Git's tree entry mode for a gitlink (a submodule pointer).
 const GITLINK_ENTRY_MODE: &[u8] = b"160000";
 
@@ -238,12 +249,7 @@ fn git_worktree_changes(
                 || counts.contains_key(&change.path)
         })
         .map(|change| {
-            // A gitlink's numstat counts its "Subproject commit" line, not content.
-            let (additions, deletions) = counts
-                .get(&change.path)
-                .filter(|_| !change.is_submodule)
-                .cloned()
-                .unwrap_or((None, None));
+            let (additions, deletions) = change.line_counts(&counts);
             CommitFileChange::new(change.path, change.kind)
                 .with_submodule(change.is_submodule)
                 .with_line_counts(additions, deletions)

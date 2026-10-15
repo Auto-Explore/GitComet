@@ -1106,7 +1106,7 @@ fn submodule_range_changes_from_commits(
         .into_iter()
         .map(|change| {
             cancellation.check_cancelled()?;
-            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
+            let (additions, deletions) = change.line_counts(&counts);
             Ok(SubmoduleInnerChange::new(change.path, change.kind)
                 .with_line_counts(additions, deletions)
                 .with_old_path(change.old_path))
@@ -1140,11 +1140,17 @@ fn git_numstat_counts(
     if cached {
         command.arg("--cached");
     }
-    command.arg("--numstat").arg("-z").arg("--no-renames");
+    // A gitlink would count its "Subproject commit" line, and these rows
+    // carry no mode to drop that by.
+    command
+        .arg("--numstat")
+        .arg("-z")
+        .arg("--no-renames")
+        .arg("--ignore-submodules=all");
     let label = if cached {
-        "git diff --cached --numstat -z --no-renames"
+        "git diff --cached --numstat -z --no-renames --ignore-submodules=all"
     } else {
-        "git diff --numstat -z --no-renames"
+        "git diff --numstat -z --no-renames --ignore-submodules=all"
     };
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
 
@@ -2001,6 +2007,78 @@ mod tests {
     fn open_repo(workdir: &Path) -> GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    /// A submodule whose own nested submodule pointer `vendor/x` moves in
+    /// two commits and once more in the index. Returns the two commits.
+    fn nested_pointer_moves(dir: &Path) -> (CommitId, CommitId) {
+        init_test_repo(dir);
+        let point = |digit: char| {
+            let id = digit
+                .to_string()
+                .repeat(gix::open(dir).unwrap().object_hash().len_in_hex());
+            run_git(
+                dir,
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    &format!("160000,{id},vendor/x"),
+                ],
+            );
+        };
+        let head = || {
+            CommitId(
+                gix::open(dir)
+                    .unwrap()
+                    .head_id()
+                    .unwrap()
+                    .to_string()
+                    .into(),
+            )
+        };
+        point('1');
+        run_git(dir, &["commit", "-q", "-m", "first"]);
+        let first = head();
+        point('2');
+        run_git(dir, &["commit", "-q", "-m", "second"]);
+        let second = head();
+        point('3');
+        (first, second)
+    }
+
+    fn pointer_counts(changes: &[SubmoduleInnerChange]) -> (Option<u32>, Option<u32>) {
+        let pointer = changes
+            .iter()
+            .find(|change| change.path == Path::new("vendor/x"))
+            .expect("the nested pointer is listed");
+        (pointer.additions, pointer.deletions)
+    }
+
+    /// numstat counts a gitlink's "Subproject commit" line, not content.
+    #[test]
+    fn a_nested_pointer_has_no_line_counts_between_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (first, second) = nested_pointer_moves(tmp.path());
+        let changes = submodule_range_changes_from_commits(
+            tmp.path(),
+            &first,
+            &second,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(pointer_counts(&changes), (None, None));
+    }
+
+    #[test]
+    fn a_nested_pointer_has_no_line_counts_in_the_live_lists() {
+        let tmp = tempfile::tempdir().unwrap();
+        nested_pointer_moves(tmp.path());
+        let repo = gix::open(tmp.path()).unwrap();
+        let (staged, _) =
+            submodule_live_inner_changes(tmp.path(), Some(&repo), &CancellationToken::new())
+                .unwrap();
+        assert_eq!(pointer_counts(&staged), (None, None));
     }
 
     #[test]
