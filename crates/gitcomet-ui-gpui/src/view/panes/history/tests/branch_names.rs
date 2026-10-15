@@ -26,8 +26,6 @@ fn assert_ref_node_paint(
         let at_row = |q: &&gpui::Quad| {
             (q.bounds.center().y.0 - f32::from(row.center().y) * scale).abs() < 0.6
         };
-        // The selection glow's inner ring can snap to the node's size; only
-        // the node itself is filled.
         let node = quads.iter().filter(at_row).find(|q| {
             q.corner_radii.top_left.0 > 0.0
                 && !q.background.is_transparent()

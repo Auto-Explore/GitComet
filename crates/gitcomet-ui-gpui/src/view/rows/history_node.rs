@@ -6,10 +6,10 @@ const AUTHOR_DIAMETER_PX: f32 = 20.0;
 const AUTHOR_DOT_DIAMETER_PX: f32 = 7.0;
 const RING_PX: f32 = 1.5;
 
-/// Quads round strokes half toward zero, which would thin the 1.5px ring to
-/// 1px at 1x; round half up to whole device pixels instead.
+/// The node ring rounds half up (2px at 1x); chip borders keep gpui's
+/// half-toward-zero like every other 1px border.
 pub(super) fn ring_width(scale: ui_scale::UiScale, scale_factor: f32) -> Pixels {
-    px((scale.scale_f32(RING_PX) * scale_factor).round().max(1.0) / scale_factor)
+    super::history_shapes::device_px(scale.px(RING_PX), scale_factor)
 }
 
 fn extra_inset(appearance: crate::appearance::Appearance) -> f32 {
@@ -100,16 +100,15 @@ pub(super) fn selection_progress(
     })
 }
 
-// A finite radial falloff keeps the halo visible in compact rows without
-// squeezing most of a Gaussian into the first pixel or clipping its long tail.
-const GLOW_LAYERS: usize = 11;
-
 #[derive(Clone, Copy)]
 struct GlowLayer {
     bounds: Bounds<Pixels>,
     alpha: f32,
 }
 
+// A finite radial falloff keeps the halo visible in compact rows without
+// squeezing most of a Gaussian into the first pixel or clipping its long tail.
+// One ring per device pixel keeps every ring concentric with the even node.
 fn selection_glow_layers(
     theme: AppTheme,
     bounds: Bounds<Pixels>,
@@ -117,40 +116,42 @@ fn selection_glow_layers(
     progress: f32,
     scale: ui_scale::UiScale,
     device_scale: f32,
-) -> Option<[GlowLayer; GLOW_LAYERS]> {
-    if progress <= 0.0 {
-        return None;
-    }
+) -> impl Iterator<Item = GlowLayer> {
     // Reserve a physical pixel for antialiasing/outward geometry rounding.
     let clearance = (bounds.left() - cell_bounds.left())
         .min(cell_bounds.right() - bounds.right())
         .min(bounds.top() - cell_bounds.top())
         .min(cell_bounds.bottom() - bounds.bottom())
         - px(1.0 / device_scale);
-    if clearance <= px(0.0) {
-        return None;
-    }
-    let extent = scale.px(6.0).min(clearance);
+    let rings = if progress > 0.0 {
+        (f32::from(scale.px(6.0).min(clearance)) * device_scale)
+            .floor()
+            .max(0.0) as usize
+    } else {
+        0
+    };
     let strength = progress * if theme.is_dark { 0.65 } else { 0.42 };
     let mut previous_alpha = 0.0;
-    Some(std::array::from_fn(|ix| {
-        // A ring at t = 1 would have no width; the falloff ends just inside it.
-        let t = (ix + 1) as f32 / (GLOW_LAYERS + 1) as f32;
+    (0..rings).map(move |ring| {
+        let dilation = rings - ring;
+        // Each ring sets the falloff at the middle of the pixel band inside its
+        // outer edge, so the outermost band fades out.
+        let t = 1.0 - (dilation as f32 - 0.5) / rings as f32;
         let target_alpha = strength * t * t * (3.0 - 2.0 * t);
         // Concentric translucent rings overlap. Compensate so their combined
         // opacity follows the smooth falloff rather than accumulating a rim.
         let alpha = (target_alpha - previous_alpha) / (1.0 - previous_alpha);
         previous_alpha = target_alpha;
         GlowLayer {
-            bounds: bounds.dilate(extent * (1.0 - t)),
+            bounds: bounds.dilate(px(dilation as f32 / device_scale)),
             alpha,
         }
-    }))
+    })
 }
 
 /// One soft lane-coloured halo for commit, merge, stash and change nodes.
-/// The outer edge fades to zero inside the row and graph column; the node's
-/// interior stays transparent so the halo cannot tint its fill or author glyph.
+/// It fades out inside the row and graph column; the node's interior stays
+/// transparent so the halo cannot tint its fill or author glyph.
 pub(super) fn paint_selection_glow(
     theme: AppTheme,
     bounds: Bounds<Pixels>,
@@ -170,32 +171,23 @@ pub(super) fn paint_selection_glow(
             cell_bounds.bottom(),
         ),
     );
-    let Some(layers) = selection_glow_layers(
+    for layer in selection_glow_layers(
         theme,
         bounds,
         visible_cell,
         progress,
         ui_scale::UiScale::from_window(window),
         window.scale_factor(),
-    ) else {
-        return;
-    };
-    for layer in layers {
-        let width = (layer.bounds.size.width - bounds.size.width) * 0.5;
-        if width <= px(0.0) {
-            continue;
-        }
-        window.paint_quad(
-            gpui::outline(
-                layer.bounds,
-                with_alpha(lane, layer.alpha),
-                Default::default(),
-            )
+    ) {
+        super::history_shapes::paint_rounded_rect(
+            layer.bounds,
+            layer.bounds.size.width * 0.5,
             // Match the transparent fill's RGB to the border: antialiasing
             // interpolates both, and transparent black leaves a dark fringe.
-            .background(with_alpha(lane, 0.0))
-            .border_widths(width)
-            .corner_radii(layer.bounds.size.width * 0.5),
+            with_alpha(lane, 0.0),
+            (layer.bounds.size.width - bounds.size.width) * 0.5,
+            with_alpha(lane, layer.alpha),
+            window,
         );
     }
 }
@@ -240,7 +232,7 @@ mod tests {
                                     ),
                                     size(diameter, diameter),
                                 );
-                                let layers = selection_glow_layers(
+                                let layers: Vec<_> = selection_glow_layers(
                                     theme,
                                     node,
                                     cell,
@@ -248,9 +240,22 @@ mod tests {
                                     scale,
                                     device_scale,
                                 )
-                                .unwrap();
+                                .collect();
+                                assert!(!layers.is_empty());
                                 for layer in layers {
                                     assert!(layer.alpha > 0.0 && layer.alpha < 1.0);
+                                    // Whole device-pixel rings stay concentric once snapped.
+                                    let ring = f32::from(layer.bounds.size.width - node.size.width)
+                                        * 0.5
+                                        * device_scale;
+                                    assert!(
+                                        ring >= 1.0 - 1e-3 && (ring - ring.round()).abs() < 1e-3
+                                    );
+                                    assert!(
+                                        (f32::from(layer.bounds.center().x - node.center().x))
+                                            .abs()
+                                            < 1e-3
+                                    );
                                     let tail = layer.bounds.dilate(px(1.0 / device_scale));
                                     let epsilon = px(0.001);
                                     assert!(tail.left() >= cell.left() - epsilon);
@@ -319,7 +324,8 @@ mod tests {
             })
         };
         let visible = rings(cx, 0.0);
-        assert_eq!(visible.len(), GLOW_LAYERS, "every computed ring is painted");
+        // 5.5px of clearance at the test window's 2x is 11 device-pixel rings.
+        assert_eq!(visible.len(), 11, "every computed ring is painted");
         for mask_top in [12.0, 20.0, 30.0] {
             assert_eq!(rings(cx, mask_top), visible, "mask top at {mask_top}px");
         }
@@ -336,16 +342,35 @@ mod tests {
             ui_scale::UiScale::from_percent(100),
             1.0,
         )
-        .unwrap();
-        assert!(layers[0].alpha < 0.02, "outer edge fades away");
+        .collect::<Vec<_>>();
         let opacity = 1.0
-            - layers[..GLOW_LAYERS.div_ceil(2)]
+            - layers
                 .iter()
                 .map(|layer| 1.0 - layer.alpha)
                 .product::<f32>();
+        assert!(opacity > 0.3, "halo stays visible beside the node");
+        assert!(layers[0].alpha < opacity / 2.0, "outer edge fades");
+    }
+
+    /// Six device pixels of room is a 1x Comfortable row: its outermost ring
+    /// must fade out instead of ending the halo on a visible step.
+    #[test]
+    fn history_glow_outer_ring_fades_out() {
+        let node = Bounds::new(point(px(7.0), px(7.0)), size(px(24.0), px(24.0)));
+        let layers = selection_glow_layers(
+            AppTheme::gitcomet_dark(),
+            node,
+            Bounds::new(point(px(0.0), px(0.0)), size(px(38.0), px(38.0))),
+            1.0,
+            ui_scale::UiScale::from_percent(100),
+            1.0,
+        )
+        .collect::<Vec<_>>();
+        assert_eq!(layers.len(), 6);
         assert!(
-            opacity > 0.3,
-            "halo remains visible halfway through its falloff"
+            layers[0].alpha < 0.02,
+            "outer ring alpha {}",
+            layers[0].alpha
         );
     }
 
@@ -355,9 +380,15 @@ mod tests {
         let node = Bounds::new(point(px(10.0), px(10.0)), size(px(20.0), px(20.0)));
         let scale = ui_scale::UiScale::from_percent(100);
         assert!(
-            selection_glow_layers(theme, node, node.dilate(px(8.0)), 0.0, scale, 1.0).is_none()
+            selection_glow_layers(theme, node, node.dilate(px(8.0)), 0.0, scale, 1.0)
+                .next()
+                .is_none()
         );
-        assert!(selection_glow_layers(theme, node, node, 1.0, scale, 1.0).is_none());
+        assert!(
+            selection_glow_layers(theme, node, node, 1.0, scale, 1.0)
+                .next()
+                .is_none()
+        );
     }
 
     #[test]

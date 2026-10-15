@@ -922,6 +922,7 @@ pub(super) fn paint_history_graph_band(
 
     paint_uncommitted_node(
         theme,
+        grid,
         point(left + node_x_offset, y_center),
         node.color,
         row_background,
@@ -985,7 +986,7 @@ impl GraphGrid {
         snap_to_device(value, self.scale_factor)
     }
 
-    pub(super) fn even(self, value: Pixels) -> Pixels {
+    fn even(self, value: Pixels) -> Pixels {
         even_device_px(value, self.scale_factor)
     }
 
@@ -1008,7 +1009,7 @@ impl GraphGrid {
 /// An even device width keeps both edges on pixels around a whole-pixel centre,
 /// as lane centre lines are.
 fn even_device_px(value: Pixels, scale_factor: f32) -> Pixels {
-    px((f32::from(value) * scale_factor / 2.0).round().max(1.0) * 2.0 / scale_factor)
+    super::history_shapes::device_px(value * 0.5, scale_factor) * 2.0
 }
 
 /// Rounds to a device pixel the way gpui snaps quads (halves toward zero).
@@ -1248,6 +1249,7 @@ pub(super) fn paint_icon_node(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_uncommitted_node(
     theme: AppTheme,
+    grid: GraphGrid,
     center: Point<Pixels>,
     ring_color: gpui::Rgba,
     background: gpui::Rgba,
@@ -1258,10 +1260,7 @@ pub(super) fn paint_uncommitted_node(
 ) {
     let scale = ui_scale::UiScale::from_window(window).with_appearance(theme.metrics);
     let scaled_px = ui_scale::scaler(scale);
-    let diameter = even_device_px(
-        super::history_node::icon_diameter(scale),
-        window.scale_factor(),
-    );
+    let diameter = grid.even(super::history_node::icon_diameter(scale));
     let disc = Bounds::new(
         point(center.x - diameter * 0.5, center.y - diameter * 0.5),
         size(diameter, diameter),
@@ -2663,7 +2662,9 @@ mod author_node_geometry_tests {
         );
     }
 
-    struct GraphPaintView(Rc<dyn Fn(&mut Window, &mut App)>);
+    type GraphPaint = Rc<dyn Fn(&mut Window, &mut App)>;
+
+    struct GraphPaintView(GraphPaint);
 
     impl gpui::Render for GraphPaintView {
         fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -2672,10 +2673,7 @@ mod author_node_geometry_tests {
         }
     }
 
-    /// Paths drop the antialiased pixels past their bounds' right and bottom
-    /// edges, and a quad keeps its radius while gpui snaps its edges. Either way
-    /// a node stops being round, so each is one quad whose radius is half its
-    /// even device size, centred on the lane through it.
+    /// Each node is one round quad of even device size, centred on its lane.
     #[gpui::test]
     fn history_nodes_paint_as_round_quads_centred_on_their_lane(cx: &mut gpui::TestAppContext) {
         use crate::appearance::{Appearance, UiDensity};

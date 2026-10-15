@@ -1,5 +1,11 @@
 use gpui::{BorderStyle, Bounds, Pixels, Rgba, Window, point, px, size};
 
+/// Whole device pixels, halves up and at least one. gpui rounds halves toward
+/// zero, which thins a 1.5px stroke to 1px at 1x.
+pub(super) fn device_px(value: Pixels, scale_factor: f32) -> Pixels {
+    px((f32::from(value) * scale_factor).round().max(1.0) / scale_factor)
+}
+
 /// History's circles and pills are SDF quads. gpui snaps a quad's edges to
 /// device pixels but keeps its radius, so a circle whose bounds fall between
 /// pixels paints as a lens or a rounded square: snap first, then fit the radius.
@@ -35,29 +41,21 @@ pub(super) fn paint_rounded_rect(
     ));
 }
 
-/// Circles take a whole device-pixel diameter before their position snaps, so
-/// each stays round and a dotted line keeps one dot size.
-pub(super) fn paint_discs(
-    discs: impl Iterator<Item = Bounds<Pixels>>,
+/// A circle takes a whole device-pixel diameter before its position snaps, so
+/// it stays round and a dotted line keeps one dot size. Returns what it painted.
+pub(super) fn paint_disc(
+    bounds: Bounds<Pixels>,
     color: Rgba,
     window: &mut Window,
-) {
-    let scale_factor = window.scale_factor();
-    for disc in discs {
-        let diameter =
-            px((f32::from(disc.size.width) * scale_factor).round().max(1.0) / scale_factor);
-        let center = disc.center();
-        let origin =
-            window.pixel_snap_point(point(center.x - diameter * 0.5, center.y - diameter * 0.5));
-        paint_rounded_rect(
-            Bounds::new(origin, size(diameter, diameter)),
-            diameter * 0.5,
-            color,
-            px(0.0),
-            color,
-            window,
-        );
-    }
+) -> Bounds<Pixels> {
+    let diameter = device_px(bounds.size.width, window.scale_factor());
+    let center = bounds.center();
+    let disc = Bounds::new(
+        window.pixel_snap_point(point(center.x - diameter * 0.5, center.y - diameter * 0.5)),
+        size(diameter, diameter),
+    );
+    paint_rounded_rect(disc, diameter * 0.5, color, px(0.0), color, window);
+    disc
 }
 
 #[cfg(test)]
@@ -148,13 +146,13 @@ mod tests {
         let (view, cx) = cx.add_window_view(|_, _| PaintView(Rc::new(|_| {})));
         for (scale_factor, expected) in [(1.0, 2.0), (1.25, 2.0), (1.5, 2.0), (2.0, 3.0)] {
             let quads = painted(cx, &view, scale_factor, |window| {
-                let dots = (0..6).map(|index| {
-                    Bounds::new(
+                for index in 0..6 {
+                    let dot = Bounds::new(
                         point(px(50.3 + index as f32 * 3.7), px(20.45)),
                         size(px(1.5), px(1.5)),
-                    )
-                });
-                paint_discs(dots, gpui::rgba(0xabcdefff), window);
+                    );
+                    paint_disc(dot, gpui::rgba(0xabcdefff), window);
+                }
             });
             assert_eq!(quads.len(), 6, "scale={scale_factor}");
             for quad in &quads {

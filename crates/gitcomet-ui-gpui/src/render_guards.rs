@@ -216,6 +216,29 @@ mod tests {
         );
     }
 
+    /// gpui snaps a quad's edges to device pixels but keeps its corner radius,
+    /// so a round history shape on fractional bounds paints as a lens.
+    #[test]
+    fn history_rows_paint_round_shapes_through_history_shapes() {
+        let rows = src_dir().join("view").join("rows");
+        let mut offenders = Vec::new();
+        production_lines(&rows, &mut |path, line_no, line| {
+            let history = path.strip_prefix(&rows).is_ok_and(|relative| {
+                relative.starts_with("history")
+                    || relative.to_string_lossy().starts_with("history_")
+            });
+            let round = line.contains("corner_radii(") || line.contains("gpui::quad(");
+            if history && !path.ends_with("history_shapes.rs") && round {
+                offenders.push(format!("{}:{line_no}", path.display()));
+            }
+        });
+
+        assert!(
+            offenders.is_empty(),
+            "use history_shapes::paint_rounded_rect: {offenders:?}"
+        );
+    }
+
     /// `window_bounds()` reports the *restore* size while the window is
     /// maximized or fullscreen, and includes the client-side decoration inset, so
     /// anything sized or placed from it misfits the visible window. Views use

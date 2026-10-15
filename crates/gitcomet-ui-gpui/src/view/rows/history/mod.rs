@@ -1041,6 +1041,7 @@ fn working_tree_summary_history_row(
 
             super::history_graph_paint::paint_uncommitted_node(
                 theme,
+                grid,
                 center,
                 node_color,
                 node_background,

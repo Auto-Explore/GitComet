@@ -1370,11 +1370,9 @@ fn paint_history_ref_connector(
     window: &mut Window,
 ) {
     let pitch = ui_scale::UiScale::from_window(window).px(HISTORY_REF_CONNECTOR_PITCH_PX);
-    super::history_shapes::paint_discs(
-        history_ref_connector_dots(mode, bounds, leading_annotation, pitch),
-        color,
-        window,
-    );
+    for dot in history_ref_connector_dots(mode, bounds, leading_annotation, pitch) {
+        super::history_shapes::paint_disc(dot, color, window);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1928,17 +1926,14 @@ pub(super) fn history_commit_row_canvas(
                 if !show_graph && author_bounds.size.width >= avatar_d + cell_pad_x * 2.0 {
                     let avatar_top = author_bounds.top()
                         + (author_bounds.size.height - avatar_d).max(px(0.0)) * 0.5;
-                    super::history_shapes::paint_discs(
-                        std::iter::once(Bounds::new(
-                            point(avatar_left, avatar_top),
-                            size(avatar_d, avatar_d),
-                        )),
+                    let avatar = super::history_shapes::paint_disc(
+                        Bounds::new(point(avatar_left, avatar_top), size(avatar_d, avatar_d)),
                         with_alpha(identity_color, 0.22),
                         window,
                     );
 
                     paint_author_initials(
-                        Bounds::new(point(avatar_left, avatar_top), size(avatar_d, avatar_d)),
+                        avatar,
                         &author,
                         scale.ui_text(components::AVATAR_FONT_PX),
                         avatar_d,
