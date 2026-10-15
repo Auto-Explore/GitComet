@@ -760,12 +760,15 @@ class CacheTests(unittest.TestCase):
         for gate in gates:
             self.assertIn("!cancelled() && job.status == 'success' && ", gate)
 
-    def test_every_python_setup_pins_the_same_version(self):
+    def test_every_python_setup_pins_one_minor_version(self):
         github = Path(__file__).resolve().parents[2] / ".github"
         pins = {(path.name, version) for path in sorted(github.rglob("*.yml"))
                 for version in re.findall(r'python-version: "([^"]+)"', path.read_text(encoding="utf-8"))}
         self.assertGreaterEqual(len(pins), 3)
         self.assertEqual(len({version for _, version in pins}), 1, pins)
+        for name, version in pins:
+            self.assertRegex(version, r"^\d+\.\d+$",
+                             f"{name}: an exact patch makes setup-python reinstall when an image caches another patch")
 
     def test_every_job_running_ci_helpers_sets_up_their_python(self):
         # The runners' system Python 3.10 has no tomllib, which cache.py (and report.py through it) imports.
