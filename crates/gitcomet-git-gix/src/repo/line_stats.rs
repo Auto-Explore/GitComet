@@ -464,7 +464,7 @@ fn unstaged_entry_line_stats(
 /// filters, keeping attribute caches and filter processes across files. A
 /// file the LFS clean filter takes is not read: cleaning would hash and store
 /// the payload on every refresh, only to count changed pointer lines.
-pub(super) struct WorktreeReader<'repo> {
+struct WorktreeReader<'repo> {
     repo: &'repo gix::Repository,
     workdir: &'repo std::path::Path,
     pipeline: Option<(
@@ -475,7 +475,7 @@ pub(super) struct WorktreeReader<'repo> {
 }
 
 impl<'repo> WorktreeReader<'repo> {
-    pub(super) fn new(repo: &'repo gix::Repository, workdir: &'repo std::path::Path) -> Self {
+    fn new(repo: &'repo gix::Repository, workdir: &'repo std::path::Path) -> Self {
         Self {
             repo,
             workdir,
@@ -485,7 +485,7 @@ impl<'repo> WorktreeReader<'repo> {
     }
 
     /// A file with nothing stored for it: all of it is added.
-    pub(super) fn added_file_line_stats(
+    fn added_file_line_stats(
         &mut self,
         relative: &std::path::Path,
         buf: &mut Vec<u8>,
@@ -499,7 +499,7 @@ impl<'repo> WorktreeReader<'repo> {
     /// Replaces `out` with the file at `relative`. `false` means over the
     /// size cap, unreadable, or left to the LFS clean filter; binary is left
     /// to `line_stats_from_bytes`.
-    pub(super) fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
+    fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
         use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
         use std::io::Read as _;
 
