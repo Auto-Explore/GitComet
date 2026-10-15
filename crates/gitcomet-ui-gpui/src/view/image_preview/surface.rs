@@ -344,8 +344,8 @@ impl Group {
                     return;
                 }
                 let zoom = match event.keystroke.key.as_str() {
-                    "+" | "=" => Zoom::In,
-                    "-" => Zoom::Out,
+                    "+" | "=" => Zoom::Step(ZoomStep::In),
+                    "-" => Zoom::Step(ZoomStep::Out),
                     "0" => Zoom::Fit,
                     "1" => Zoom::Scale(1.0),
                     _ => return,

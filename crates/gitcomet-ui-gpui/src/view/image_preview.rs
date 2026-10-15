@@ -1,5 +1,6 @@
 //! Device-pixel image inspection shared by files, diffs and conflict previews.
 use super::*;
+use crate::view::zoom_wheel::ZoomStep;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "benchmarks")]
@@ -29,11 +30,10 @@ pub(in crate::view) struct Input {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Zoom {
+pub(in crate::view) enum Zoom {
     Fit,
     Scale(f64),
-    In,
-    Out,
+    Step(ZoomStep),
 }
 
 struct Side {
@@ -261,17 +261,11 @@ impl Group {
         self.layout(index);
         let view = self.sides[index].device_size;
         let camera = &mut self.sides[index].camera;
+        let anchor = pointer.unwrap_or((view.0 / 2.0, view.1 / 2.0));
         match zoom {
             Zoom::Fit => camera.fit = true,
-            _ => {
-                let next = match zoom {
-                    Zoom::Scale(s) => s,
-                    Zoom::In => camera.step(true),
-                    Zoom::Out => camera.step(false),
-                    Zoom::Fit => unreachable!(),
-                };
-                camera.zoom(next, pointer.unwrap_or((view.0 / 2.0, view.1 / 2.0)), view);
-            }
+            Zoom::Scale(scale) => camera.zoom(scale, anchor, view),
+            Zoom::Step(step) => camera.zoom(camera.step(step), anchor, view),
         }
         self.layout(index);
         cx.notify();
@@ -307,13 +301,11 @@ impl Group {
         cx: &mut gpui::Context<Self>,
     ) {
         self.active = index;
-        let zoom = match self.zoom_wheel.step(event) {
-            Some(crate::view::zoom_wheel::ZoomStep::In) => Zoom::In,
-            Some(crate::view::zoom_wheel::ZoomStep::Out) => Zoom::Out,
-            None => return,
+        let Some(step) = self.zoom_wheel.step(event) else {
+            return;
         };
         self.zoom(
-            zoom,
+            Zoom::Step(step),
             Some((
                 f64::from(f32::from(pointer.x)) * dpr,
                 f64::from(f32::from(pointer.y)) * dpr,
