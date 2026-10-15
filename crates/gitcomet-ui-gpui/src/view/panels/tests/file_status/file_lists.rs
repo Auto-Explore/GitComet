@@ -1263,6 +1263,7 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
 
     let repo_id = gitcomet_state::model::RepoId(650);
     let paths = ["src/a.rs", "src/b.rs"];
+    let mut repo = repo_with_unstaged_paths(repo_id, &paths);
 
     let folder_additions = |cx: &mut gpui::VisualTestContext| -> Option<u64> {
         cx.update(|_window, app| {
@@ -1276,13 +1277,10 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
         })
     };
 
+    let without_counts = repo.clone();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            push_test_state(
-                this,
-                app_state_with_repo(repo_with_unstaged_paths(repo_id, &paths), repo_id),
-                cx,
-            );
+            push_test_state(this, app_state_with_repo(without_counts, repo_id), cx);
         });
     });
     draw_and_drain_test_window(cx);
@@ -1300,24 +1298,23 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
     draw_and_drain_test_window(cx);
     assert_eq!(folder_additions(cx), None, "no counts before they load");
 
-    // Same status, same rev — only the stats lane moves.
+    // The same repository and status rev: only the stats lane moves.
+    let mut unstaged = rustc_hash::FxHashMap::default();
+    for (ix, path) in paths.iter().enumerate() {
+        unstaged.insert(
+            std::path::PathBuf::from(path),
+            gitcomet_core::domain::LineStats::from((Some(ix as u32 + 1), Some(1))),
+        );
+    }
+    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::UncommittedLineStats {
+            staged: Default::default(),
+            unstaged,
+        },
+    ));
+    repo.unstaged_line_stats_rev = 1;
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let mut repo = repo_with_unstaged_paths(repo_id, &paths);
-            let mut unstaged = rustc_hash::FxHashMap::default();
-            for (ix, path) in paths.iter().enumerate() {
-                unstaged.insert(
-                    std::path::PathBuf::from(path),
-                    gitcomet_core::domain::LineStats::from((Some(ix as u32 + 1), Some(1))),
-                );
-            }
-            repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
-                gitcomet_core::domain::UncommittedLineStats {
-                    staged: Default::default(),
-                    unstaged,
-                },
-            ));
-            repo.unstaged_line_stats_rev = 1;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
     });
