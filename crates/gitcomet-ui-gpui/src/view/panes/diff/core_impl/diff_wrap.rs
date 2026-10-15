@@ -332,6 +332,7 @@ impl DiffRenderer {
             return;
         }
 
+        let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
         let mut wrapped_rows = Vec::with_capacity(source_len);
         for source_visible_ix in 0..source_len {
             let (primary_ranges, secondary_ranges) = self.diff_wrap_ranges_for_source_visible_ix(

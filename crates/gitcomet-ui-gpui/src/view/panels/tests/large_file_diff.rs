@@ -4254,3 +4254,122 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// Passes over every row of a source-backed file diff (the word-wrap layout,
+/// a search rescan) read each side once, not with an open and read per row.
+#[gpui::test]
+fn source_backed_whole_view_passes_read_each_side_once(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(883);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_source_backed_whole_view_passes",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create source-backed fixture");
+    let path = std::path::PathBuf::from("src/whole_view.txt");
+    let old_source_path = source_dir.join("old.txt");
+    let new_source_path = source_dir.join("new.txt");
+    let line = |ix: usize, edited: bool| {
+        let word = if ix % 300 == 0 { "needle" } else { "plain" };
+        let tail = if edited { " edited" } else { "" };
+        format!("row {ix:05} {word} content{tail}\n")
+    };
+    let old_text: String = (0..3_000).map(|ix| line(ix, false)).collect();
+    let new_text: String = (0..3_000).map(|ix| line(ix, ix % 50 == 0)).collect();
+    std::fs::write(&old_source_path, &old_text).expect("write old source");
+    std::fs::write(&new_source_path, &new_text).expect("write new source");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, ""),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                        old_source_path.clone(),
+                        "old-whole-view",
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                        new_source_path.clone(),
+                        "new-whole-view",
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed file diff",
+        |pane| pane.file_diff_cache_rev == 1 && pane.file_diff_cache_inflight.is_none(),
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    let (search_opens, search_matches) = cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.diff_view = DiffViewMode::Inline;
+            pane.diff_search_active = true;
+            pane.diff_search_query = "needle".into();
+            pane.diff_search_input.update(cx, |input, cx| {
+                input.set_text("needle", cx);
+            });
+            let _ = gitcomet_core::file_diff::take_file_slice_opens_for_tests();
+            pane.diff_search_recompute_matches_and_scroll_to_first();
+            (
+                gitcomet_core::file_diff::take_file_slice_opens_for_tests(),
+                pane.diff_search_matches.len(),
+            )
+        })
+    });
+    assert_eq!(search_matches, 20, "both sides of every needle row");
+    // One read per side, not one per row of the 3,000.
+    assert!(
+        search_opens < 10,
+        "a search rescan opened the sources {search_opens} times"
+    );
+
+    let wrap_opens = cx.update(|window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.diff_search_active = false;
+            pane.set_diff_word_wrap(true, cx);
+            let _ = gitcomet_core::file_diff::take_file_slice_opens_for_tests();
+            pane.ensure_diff_wrap_visible_rows(window, cx);
+            assert!(!pane.diff_wrap_visible_rows.is_empty());
+            gitcomet_core::file_diff::take_file_slice_opens_for_tests()
+        })
+    });
+    assert!(
+        wrap_opens < 10,
+        "a word-wrap layout opened the sources {wrap_opens} times"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}

@@ -1425,6 +1425,7 @@ impl DiffRenderer {
     }
 
     fn diff_search_scan_current_view_with_matcher(&mut self, matcher: &DiffSearchMatcher) {
+        let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
         // Ahead of everything else: the arms below dispatch on
         // `is_file_preview_active()`, which stays true in edit mode, and that is
         // what had the search counting the stale pre-edit preview text.
