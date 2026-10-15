@@ -221,6 +221,7 @@ fn redo_is_noop_when_input_is_read_only(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+#[allow(clippy::single_range_in_vec_init)] // One protected range.
 fn rejected_composition_preserves_content_history_and_protected_ranges(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -246,6 +247,7 @@ fn rejected_composition_preserves_content_history_and_protected_ranges(
 }
 
 #[gpui::test]
+#[allow(clippy::single_range_in_vec_init)] // One protected range.
 fn programmatic_replacement_can_update_protected_content_without_moving_the_view(
     cx: &mut gpui::TestAppContext,
 ) {
