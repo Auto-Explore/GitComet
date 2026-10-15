@@ -40,6 +40,8 @@ TEXTS = {
     "crates/gitcomet-git-gix/tests/a_integration.rs": "\n",
     "crates/gitcomet-git-gix/tests/b_integration.rs": "\n",
     "crates/gitcomet-git-gix/tests/support/helper.rs": "\n",
+    "crates/gitcomet-git-gix/tests/merged/main.rs": "\n",
+    "crates/gitcomet-git-gix/tests/merged/module.rs": "\n",
     "crates/gitcomet-git-gix/src/lib.rs": "\n",
     ratchets.CI_RUNNER: 'UI = "gitcomet-ui-gpui"\nGPUI_PACKAGES = (UI, "gitcomet-ui-kit",\n    "gitcomet-extension-example")\n',
 }
@@ -89,8 +91,8 @@ class Metrics(unittest.TestCase):
     def test_repo_iter_mut_find_sites_allow_line_breaks(self):
         self.assertEqual(self.found["state_repo_iter_mut_find_sites"], 2)
 
-    def test_gix_integration_binaries_are_top_level_files(self):
-        self.assertEqual(self.found["gix_integration_test_binaries"], 2)
+    def test_gix_integration_binaries_are_top_level_files_and_main_dirs(self):
+        self.assertEqual(self.found["gix_integration_test_binaries"], 3)
 
     def test_gpui_test_packages_parse_the_runner(self):
         self.assertEqual(self.found["gpui_test_packages"], 3)

@@ -80,7 +80,8 @@ METRICS = {
         "max", lambda t: sum(len(re.findall(r"\.iter_mut\(\)\s*\.find\(", text)) for path, text in t.items()
                              if path.startswith(STATE) and is_production(path))),
     "gix_integration_test_binaries": (
-        "max", lambda t: sum(1 for path in t if re.fullmatch(r"crates/gitcomet-git-gix/tests/[^/]+\.rs", path))),
+        "max", lambda t: sum(1 for path in t
+                             if re.fullmatch(r"crates/gitcomet-git-gix/tests/(?:[^/]+|[^/]+/main)\.rs", path))),
     "gpui_test_packages": ("min", gpui_test_packages),
 }
 

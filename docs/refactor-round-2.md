@@ -525,3 +525,20 @@ serde_json, enforced by a boundary rule. The UI crate loses 8,218 production
 lines and its test builds no longer link a second full UI binary for the report.
 All 117 moved tests (111 report, 6 sidecar) pass in the new crate. Workflows and
 profiling scripts run the binary with `-p gitcomet-perf`.
+
+### 0.5 Backend integration tests in one binary
+
+The 32 `gitcomet-git-gix` integration test crates are modules of
+`tests/integration/`, sharing one instance of each support module. The 1,114
+backend tests map one to one (`module::test` names, unchanged ignore flags), and
+pass under nextest and in a single libtest process. Sharing a process exposed a
+second, identical test git environment in the status tests; they now use the
+shared one. Three tests that re-run themselves in a child process qualify their
+names through `support/child_test.rs`, which fails unless the child ran the test:
+an unmatched `--exact` filter would otherwise pass without running anything.
+
+| Measurement (`ci-test`, backend crate rebuilt from scratch) | Before | After |
+|---|---|---|
+| Test build, 4 jobs (CI runner size) | 26.1 s | 23.1 s |
+| Test build, 32 jobs | 17.3 s | 14.7 s |
+| Integration test binaries on disk (test profile) | 3.5 GB | 158 MB |

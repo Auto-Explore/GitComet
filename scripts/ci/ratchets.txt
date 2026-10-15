@@ -7,5 +7,5 @@ set_theme_calls_in_ui max 130
 kit_gitcomet_core_refs max 46
 production_files_over_3000_lines max 19
 state_repo_iter_mut_find_sites max 213
-gix_integration_test_binaries max 32
+gix_integration_test_binaries max 1
 gpui_test_packages min 3
