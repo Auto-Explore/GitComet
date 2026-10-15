@@ -696,19 +696,21 @@ impl Element for UiScaleScrollCapture {
                 return;
             }
 
-            let delta_y = event.delta.pixel_delta(window.line_height()).y;
-            if delta_y.is_zero() {
+            // A gesture's start can carry no distance; the accumulator still sees it.
+            let step = view.update(cx, |view, _| view.zoom_wheel.step(event));
+            // Horizontal-only Ctrl/Cmd+scroll falls through to the content.
+            if event.delta.pixel_delta(window.line_height()).y.is_zero() {
                 return;
             }
-
-            let current = crate::ui_scale::current(cx).percent;
-            let next = if delta_y > px(0.0) {
-                crate::ui_scale::step_up(current)
-            } else {
-                crate::ui_scale::step_down(current)
-            };
-
             cx.stop_propagation();
+            let Some(step) = step else {
+                return;
+            };
+            let current = crate::ui_scale::current(cx).percent;
+            let next = match step {
+                zoom_wheel::ZoomStep::In => crate::ui_scale::step_up(current),
+                zoom_wheel::ZoomStep::Out => crate::ui_scale::step_down(current),
+            };
             if next == current {
                 return;
             }
