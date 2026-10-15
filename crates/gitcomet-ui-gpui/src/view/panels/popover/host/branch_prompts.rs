@@ -54,10 +54,8 @@ impl PopoverHost {
                 self.branch_picker_selected_index = None;
                 if let Some(input) = &self.branch_picker_search_input {
                     let target = self.create_branch_source_target.clone();
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(target, cx);
                         cx.notify();
                     });
@@ -71,10 +69,8 @@ impl PopoverHost {
                 self.branch_picker_selected_index = None;
                 if let Some(input) = &self.branch_picker_search_input {
                     let target = self.worktree_ref_source_target.clone();
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(target, cx);
                         cx.notify();
                     });
@@ -98,10 +94,8 @@ impl PopoverHost {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. }) => {
                 self.create_branch_source_target = name;
                 if let Some(input) = &self.branch_picker_search_input {
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(self.create_branch_source_target.clone(), cx);
                         cx.notify();
                     });
@@ -127,10 +121,8 @@ impl PopoverHost {
             }) => {
                 self.worktree_ref_source_target = name;
                 if let Some(input) = &self.branch_picker_search_input {
-                    let theme = self.theme;
                     input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(self.worktree_ref_source_target.clone(), cx);
                         cx.notify();
                     });

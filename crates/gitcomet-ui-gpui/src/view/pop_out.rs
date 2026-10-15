@@ -77,8 +77,9 @@ pub(in crate::view) fn open(
     };
     let handle = cx
         .open_window(options, move |window, cx| {
-            // Renders at its main window's zoom, and changes with it.
+            // Renders at its main window's zoom and theme, and changes with them.
             crate::ui_scale::follow_window(cx, window.window_handle().window_id(), main);
+            crate::theme::follow_window_theme(cx, window.window_handle().window_id(), main);
             crate::ui_scale::apply_to_window(window, percent);
             let popped = window.window_handle();
             let content = content(window, cx);

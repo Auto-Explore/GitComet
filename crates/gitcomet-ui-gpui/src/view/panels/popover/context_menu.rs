@@ -2433,10 +2433,8 @@ impl PopoverHost {
         self.gitignore_suggestions = suggestions;
         self.gitignore_scope = scope;
 
-        let theme = self.theme;
         self.gitignore_patterns_input.update(cx, |input, cx| {
             input.clear_transient_key_presses();
-            input.set_theme(theme, cx);
             input.set_text(&text, cx);
             cx.notify();
         });

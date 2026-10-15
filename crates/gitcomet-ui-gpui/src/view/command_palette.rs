@@ -1106,7 +1106,7 @@ impl CommandPaletteView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let query_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
+            components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Search commands…".into(),
                     chromeless: true,
@@ -1114,9 +1114,7 @@ impl CommandPaletteView {
                 },
                 window,
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         let input_subscription = cx.observe_in(&query_input, window, |this, input, window, cx| {
             this.handle_input_notification(input, window, cx);
@@ -1146,8 +1144,6 @@ impl CommandPaletteView {
 
     pub(crate) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self.query_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }
 

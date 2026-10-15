@@ -460,9 +460,7 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) {
         self.clear_conflict_resolver_state(cx);
-        let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_text("", cx);
         });
         self.store.dispatch(Msg::LoadConflictFile {

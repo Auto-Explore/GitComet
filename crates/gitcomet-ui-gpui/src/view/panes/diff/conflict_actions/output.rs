@@ -36,10 +36,8 @@ impl DiffRenderer {
             return;
         }
         let line_to_append = line.to_string();
-        let theme = self.theme;
         let mut append_line_ix = 0usize;
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             let content = input.text();
             append_line_ix = source_line_count(content);
             let insertion = append_line_insertion_text(content, line_to_append.as_str());
@@ -113,10 +111,8 @@ impl DiffRenderer {
         let unchanged = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text() == text);
-        let theme = self.theme;
         let next_text = text;
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             let current = input.text();
             // The same minimal-edit the buffer computes for its own `set_text`,
             // so its edit accounting and ours cannot disagree about the span.
@@ -209,9 +205,7 @@ impl DiffRenderer {
         }
         replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0.start));
 
-        let theme = self.theme;
         let (snapshot, edit_deltas) = self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             for (range, replacement) in replacements {
                 input.replace_utf8_range(range, &replacement, cx);
             }
@@ -339,7 +333,6 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) {
         self.ensure_conflict_resolved_output_materialized(cx);
-        let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             let selection = input.selected_range();
             // The unresolved-conflict rows are uneditable however the edit is
@@ -347,7 +340,6 @@ impl DiffRenderer {
             if selection.is_empty() || input.edit_alters_protected_range(&selection, "") {
                 return;
             }
-            input.set_theme(theme, cx);
             let _ = input.replace_selection_utf8("", cx);
         });
     }
@@ -359,13 +351,11 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) {
         self.ensure_conflict_resolved_output_materialized(cx);
-        let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             let pos = input.cursor_offset().min(input.text().len());
             if input.edit_alters_protected_range(&(pos..pos), paste_text) {
                 return;
             }
-            input.set_theme(theme, cx);
             input.replace_utf8_range(pos..pos, paste_text, cx);
         });
     }
@@ -394,10 +384,8 @@ impl DiffRenderer {
         replacement: &str,
         cx: &mut gpui::Context<Self>,
     ) {
-        let theme = self.theme;
         let mut scroll_to_line = None;
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             let content = input.text();
             if let Some(range) = line_content_byte_range_for_index(content, output_line_ix) {
                 input.replace_utf8_range(range, replacement, cx);

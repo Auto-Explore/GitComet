@@ -387,14 +387,6 @@ impl DiffRenderer {
         self.clear_conflict_diff_style_caches();
         self.conflict_three_way_segments_cache.clear();
         self.conflict_three_way_query_segments_cache.clear();
-        self.diff_raw_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.diff_search_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.conflict_resolver_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.file_editor_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         self.rebind_file_editor_highlight_provider(cx);
         if self.conflict_resolved_output_is_streamed() {
             self.conflict_resolved_preview_syntax_language = self
@@ -687,9 +679,7 @@ impl DiffRenderer {
     ) {
         let text = text.into();
         let line_ending = crate::kit::TextInput::detect_line_ending(text.as_ref());
-        let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(text, cx);
             input.set_caret(0, cx);
@@ -708,9 +698,7 @@ impl DiffRenderer {
     ) {
         self.sync_conflict_resolved_output_active_conflict_highlight(cx);
         let scroll = self.conflict_resolved_output_editor_scroll.clone();
-        let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_read_only(false, cx);
             input.set_vertical_scroll_handle(Some(scroll));
             // Lay the editor out at content width so its `overflow_scroll`

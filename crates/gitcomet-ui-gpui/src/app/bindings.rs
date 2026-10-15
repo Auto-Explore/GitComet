@@ -144,6 +144,8 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         }
     });
     cx.on_window_closed(ui_scale::forget_window).detach();
+    cx.on_window_closed(crate::theme::forget_window_theme)
+        .detach();
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));

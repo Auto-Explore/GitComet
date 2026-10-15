@@ -381,12 +381,10 @@ impl Render for GitCometView {
             let is_validating = prompt.status == AuthPromptStatus::Validating
                 || self.auth_prompt_submitted_generation == Some(prompt.generation);
             self.auth_prompt_username_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
                 input.set_read_only(is_validating, cx);
             });
             let is_host_verification = prompt.kind == AuthPromptKind::HostVerification;
             self.auth_prompt_secret_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
                 input.set_masked(!is_host_verification, cx);
                 input.set_read_only(is_validating, cx);
             });

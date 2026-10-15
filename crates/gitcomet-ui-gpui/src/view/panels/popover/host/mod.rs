@@ -318,17 +318,6 @@ impl PopoverHost {
             )
         });
 
-        let rebase_onto_input = cx.new(|cx| {
-            components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "origin/main".into(),
-                    ..Default::default()
-                },
-                window,
-                cx,
-            )
-        });
-
         let create_tag_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -949,7 +938,6 @@ impl PopoverHost {
             picker_prompt_scroll: ScrollHandle::new(),
             clone_repo_url_input,
             clone_repo_parent_dir_input,
-            rebase_onto_input,
             create_tag_input,
             create_tag_message_input,
             create_tag_message_scroll,
@@ -1020,61 +1008,8 @@ impl PopoverHost {
         }
     }
 
-    /// Every text input owned by the host, including the lazily created
-    /// picker search inputs that currently exist.
-    pub(super) fn all_text_inputs(&self) -> impl Iterator<Item = &Entity<components::TextInput>> {
-        [
-            &self.clone_repo_url_input,
-            &self.clone_repo_parent_dir_input,
-            &self.rebase_onto_input,
-            &self.create_tag_input,
-            &self.create_tag_message_input,
-            &self.gitignore_patterns_input,
-            &self.squash_message_input,
-            &self.squash_description_input,
-            &self.remote_name_input,
-            &self.remote_url_input,
-            &self.remote_url_edit_input,
-            &self.create_branch_input,
-            &self.stash_message_input,
-            &self.commit_prompt_message_input,
-            &self.push_upstream_branch_input,
-            &self.worktree_path_input,
-            &self.worktree_ref_input,
-            &self.submodule_url_input,
-            &self.submodule_path_input,
-            &self.submodule_ref_input,
-            &self.submodule_branch_input,
-            &self.submodule_name_input,
-            &self.rebase_reword_input,
-            &self.rebase_reword_description_input,
-        ]
-        .into_iter()
-        .chain(
-            [
-                &self.repo_picker_search_input,
-                &self.branch_picker_search_input,
-                &self.remote_picker_search_input,
-                &self.file_history_search_input,
-                &self.history_author_filter_search_input,
-                &self.worktree_picker_search_input,
-                &self.worktree_badge_picker_search_input,
-                &self.submodule_picker_search_input,
-                &self.stash_picker_search_input,
-            ]
-            .into_iter()
-            .flatten(),
-        )
-    }
-
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-
-        let inputs: Vec<_> = self.all_text_inputs().cloned().collect();
-        for input in inputs {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-
         cx.notify();
     }
 
@@ -1981,7 +1916,6 @@ impl PopoverHost {
                     name_prefix,
                     ..
                 } => {
-                    let theme = self.theme;
                     self.create_branch_checkout_enabled = true;
                     self.create_branch_source_target = target.clone();
                     if *source_selectable {
@@ -1995,7 +1929,6 @@ impl PopoverHost {
                     let name_prefix = name_prefix.clone();
                     self.create_branch_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(name_prefix, cx);
                         cx.notify();
                     });
@@ -2005,10 +1938,8 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::RenameBranchPrompt { name, .. } => {
-                    let theme = self.theme;
                     self.create_branch_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(name.clone(), cx);
                         cx.notify();
                     });
@@ -2018,10 +1949,8 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
-                    let theme = self.theme;
                     self.create_branch_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(branch.clone(), cx);
                         cx.notify();
                     });
@@ -2031,10 +1960,8 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::StashPrompt => {
-                    let theme = self.theme;
                     self.stash_message_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
@@ -2044,7 +1971,6 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::CommitPrompt { repo_id } => {
-                    let theme = self.theme;
                     let draft = self
                         .commit_prompt_message_drafts
                         .get(repo_id)
@@ -2052,7 +1978,6 @@ impl PopoverHost {
                         .unwrap_or_default();
                     self.commit_prompt_message_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(draft.to_string(), cx);
                         cx.notify();
                     });
@@ -2068,7 +1993,6 @@ impl PopoverHost {
                     self.stash_picker_prompt_selected_index = Some(0);
                 }
                 PopoverKind::CloneRepo => {
-                    let theme = self.theme;
                     let url_text = self
                         .clone_repo_url_input
                         .read_with(cx, |i, _| i.text().to_string());
@@ -2077,13 +2001,11 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.text().to_string());
                     self.clone_repo_url_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(url_text, cx);
                         cx.notify();
                     });
                     self.clone_repo_parent_dir_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(parent_text, cx);
                         cx.notify();
                     });
@@ -2093,17 +2015,14 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::SquashPrompt { .. } => {
-                    let theme = self.theme;
                     self.squash_prompt_prefilled_range = None;
                     self.squash_message_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
                     self.squash_description_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
@@ -2117,17 +2036,14 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::CreateTagPrompt { .. } => {
-                    let theme = self.theme;
                     self.create_tag_annotated =
                         matches!(self.state.default_tag_type, DefaultTagType::Annotated);
                     self.create_tag_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
                     self.create_tag_message_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
@@ -2138,14 +2054,11 @@ impl PopoverHost {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
                     ..
                 } => {
-                    let theme = self.theme;
                     self.remote_name_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
                     self.remote_url_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
@@ -2158,7 +2071,6 @@ impl PopoverHost {
                     repo_id,
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { name, .. }),
                 } => {
-                    let theme = self.theme;
                     let text = self
                         .state
                         .repos
@@ -2173,7 +2085,6 @@ impl PopoverHost {
                         })
                         .unwrap_or_default();
                     self.remote_url_edit_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(text, cx);
                         cx.notify();
                     });
@@ -2186,11 +2097,9 @@ impl PopoverHost {
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
                     ..
                 } => {
-                    let theme = self.theme;
                     let (path_prefill, reference_prefill) =
                         self.pending_worktree_add_prefill.take().unwrap_or_default();
                     self.worktree_path_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(path_prefill, cx);
                         cx.notify();
                     });
@@ -2234,26 +2143,21 @@ impl PopoverHost {
                     kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
                     ..
                 } => {
-                    let theme = self.theme;
                     self.submodule_add_advanced_expanded = false;
                     self.submodule_force_enabled = false;
                     self.submodule_url_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
                     self.submodule_path_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
                     self.submodule_branch_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
                     self.submodule_name_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
@@ -2267,9 +2171,7 @@ impl PopoverHost {
                         RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
                     ..
                 } => {
-                    let theme = self.theme;
                     self.submodule_ref_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
@@ -2286,10 +2188,8 @@ impl PopoverHost {
                         self.store
                             .dispatch(Msg::LoadAnnexUnused { repo_id: *repo_id });
                     }
-                    let theme = self.theme;
                     let text = annex_prompt::initial_text(prompt);
                     self.submodule_ref_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(text, cx);
                         cx.notify();
                     });
@@ -2335,7 +2235,6 @@ impl PopoverHost {
                     configure_only_for,
                     ..
                 } => {
-                    let theme = self.theme;
                     self.push_upstream_remote_menu_open = false;
                     self.push_upstream_remote_selected_index = None;
                     let current_text = self
@@ -2353,7 +2252,6 @@ impl PopoverHost {
                             .unwrap_or(current_text)
                     });
                     self.push_upstream_branch_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(text, cx);
                         cx.notify();
                     });
@@ -2367,21 +2265,18 @@ impl PopoverHost {
                     original_action: _,
                     original_message,
                 } => {
-                    let theme = self.theme;
                     let (subject, body) = original_message
                         .split_once("\n\n")
                         .map(|(s, b)| (s.to_owned(), b.to_owned()))
                         .unwrap_or_else(|| (original_message.clone(), String::new()));
                     self.rebase_reword_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
                         input.set_text(subject, cx);
                         cx.notify();
                     });
                     self.rebase_reword_description_input
                         .update(cx, |input, cx| {
                             input.clear_transient_key_presses();
-                            input.set_theme(theme, cx);
                             input.set_text(body, cx);
                             cx.notify();
                         });

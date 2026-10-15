@@ -735,3 +735,23 @@ toasts, dialogs, menus, navigation, panels, URLs) and dispatched messages, and
 example extension uses it for two new tests of review counting and the reset
 prompt. The themed test-window fixture waits for 1.2: until the theme is a
 window global there is nothing for a fixture to install.
+
+### 1.2 Theme as a window global (first phase)
+
+The kit now keeps each window's theme in a global, like zoom:
+`theme::set_window_theme`, `follow_window_theme` for pop-outs and
+`forget_window_theme` on close, read through `AppTheme::current(cx)` or
+`AppTheme::for_window`. A window without one gets the default dark theme in the
+current appearance. The root view installs its theme in `set_theme`, the
+settings window in its render, and pop-outs follow their main window.
+
+`TextInput::set_theme` is gone: an input restyles from its window's theme when
+it renders, bumping its shaping epoch only when the style changed. That removed
+every host call that themed an input, so host `set_theme` calls dropped from
+130 to 30, and an unused rebase-onto input in the popover host went with them.
+
+The remaining 23 calls are the root's fan-out to its panes. Several panes do
+more than store the theme (the diff renderer clears style caches, documents
+re-run syntax, the commit hover drops its body, extension hosts emit
+`ThemeChanged`), and some read their theme from async completions, where no
+window is current. Those move with 3.2, when each pane becomes its own entity.

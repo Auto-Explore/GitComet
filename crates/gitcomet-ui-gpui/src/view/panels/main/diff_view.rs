@@ -2386,7 +2386,6 @@ impl DiffRenderer {
                     }
                     Loadable::Error(e) => {
                         self.diff_raw_input.update(cx, |input, cx| {
-                            input.set_theme(theme, cx);
                             input.set_text(e.clone(), cx);
                             input.set_read_only(true, cx);
                         });

@@ -568,16 +568,6 @@ impl DetailsPaneView {
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self.commit_message_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.commit_details_message_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.commit_details_sha_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.commit_details_date_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.commit_details_parent_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }
 

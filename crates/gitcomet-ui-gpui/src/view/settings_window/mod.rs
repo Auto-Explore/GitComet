@@ -1169,7 +1169,6 @@ impl SettingsWindowView {
                 window,
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_text(terminal_preferences.external_terminal_program.clone(), cx);
             input
         });
@@ -1184,7 +1183,6 @@ impl SettingsWindowView {
                 window,
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_line_height(Some(px(20.0)), cx);
             input.set_text(terminal_preferences.external_args_multiline(), cx);
             input
@@ -1283,7 +1281,7 @@ impl SettingsWindowView {
                 cx.notify();
             });
         let search_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
+            components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Search".into(),
                     leading_icon: Some("icons/zoom.svg"),
@@ -1291,9 +1289,7 @@ impl SettingsWindowView {
                 },
                 window,
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         let search_input_subscription = cx.observe(&search_input, |this, input, cx| {
             let next = input.read(cx).text().to_string();
@@ -1348,7 +1344,6 @@ impl SettingsWindowView {
                 let mut input =
                     components::TextInput::new(components::TextInputOptions::default(), window, cx);
                 input.set_text(appearance_metrics.size(role).to_string(), cx);
-                input.set_theme(theme, cx);
                 input
             })
         });

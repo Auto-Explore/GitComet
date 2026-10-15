@@ -52,9 +52,7 @@ fn text(
         });
     *seen = true;
     let value = value.into();
-    let theme = this.theme;
     input.update(cx, |input, cx| {
-        input.set_theme(theme, cx);
         input.set_text(value, cx);
     });
     let selector = format!("error_details_text_{key}");

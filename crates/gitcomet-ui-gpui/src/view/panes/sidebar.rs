@@ -3311,7 +3311,6 @@ impl Render for SidebarPaneView {
         if self.explorer_name_edit.is_some() {
             let height = ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme));
             self.explorer_name_input.update(cx, |input, cx| {
-                input.set_theme(self.theme, cx);
                 input.set_line_height(Some(height - px(4.0)), cx)
             });
             if self

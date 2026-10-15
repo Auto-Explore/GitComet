@@ -1969,10 +1969,6 @@ impl HistoryView {
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        if let Some(find) = &self.find {
-            find.input
-                .update(cx, |input, cx| input.set_theme(theme, cx));
-        }
         cx.notify();
     }
 

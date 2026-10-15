@@ -69,14 +69,14 @@ impl TextInput {
         self.style.menu_theme
     }
 
-    pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
-        let style = TextInputStyle::from_theme(theme);
-        if self.style == style {
-            return;
+    /// Restyles the input for its window's theme, so shaped lines drawn with
+    /// the old colours are not reused.
+    pub(super) fn sync_theme(&mut self, cx: &App) {
+        let style = TextInputStyle::from_theme(AppTheme::current(cx));
+        if self.style != style {
+            self.style = style;
+            self.bump_shape_style_epoch();
         }
-        self.style = style;
-        self.bump_shape_style_epoch();
-        cx.notify();
     }
 
     pub fn set_chromeless(&mut self, chromeless: bool, cx: &mut Context<Self>) {

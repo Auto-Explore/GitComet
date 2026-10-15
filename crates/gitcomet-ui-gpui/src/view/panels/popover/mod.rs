@@ -351,7 +351,6 @@ pub(in super::super) struct PopoverHost {
 
     clone_repo_url_input: Entity<components::TextInput>,
     clone_repo_parent_dir_input: Entity<components::TextInput>,
-    rebase_onto_input: Entity<components::TextInput>,
     create_tag_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,

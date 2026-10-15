@@ -407,7 +407,6 @@ impl DiffRenderer {
         &mut self,
         slot: usize,
         value: String,
-        theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let Some(input) = self
@@ -418,7 +417,6 @@ impl DiffRenderer {
             return self.diff_raw_input.clone();
         };
         input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_text(value, cx);
             input.set_read_only(true, cx);
         });
@@ -621,7 +619,6 @@ impl DiffRenderer {
                 full_submodule_hash_opt(range.from.as_ref()),
                 full_submodule_hash_opt(range.to.as_ref())
             ),
-            theme,
             cx,
         );
         let mut section = div()

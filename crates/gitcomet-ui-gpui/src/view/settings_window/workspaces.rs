@@ -165,8 +165,6 @@ impl SettingsWindowView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
-        self.workspace_name_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         let workspaces = sorted_workspaces(cx);
         let new_window_shortcut = crate::kit::components::secondary_shortcut("N");
         let open_workspace_shortcut = crate::kit::components::secondary_shortcut("Shift+R");

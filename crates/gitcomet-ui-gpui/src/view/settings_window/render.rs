@@ -16,13 +16,7 @@ impl Render for SettingsWindowView {
         }
         self.theme = self.theme.with_appearance(metrics);
         let theme = self.theme;
-        for input in &self.font_size_inputs {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        self.terminal_external_program_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.terminal_external_args_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
+        crate::theme::set_window_theme(cx, window.window_handle().window_id(), theme);
         let decorations = window.window_decorations();
         let show_custom_window_chrome =
             crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
@@ -42,15 +36,6 @@ impl Render for SettingsWindowView {
             .map(chrome::cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
         let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
-
-        self.git_executable_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.external_editor_custom_path_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.external_editor_custom_arguments_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.search_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
 
         #[cfg(test)]
         let show_overflow_probe =

@@ -1119,3 +1119,24 @@ fn windowed_and_whole_row_text_agree_including_an_unterminated_final_row() {
         }
     }
 }
+
+#[gpui::test]
+fn inputs_restyle_when_their_window_theme_changes(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                placeholder: "theme".into(),
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+    let window_id = cx.update(|window, _| window.window_handle().window_id());
+    for theme in [AppTheme::gitcomet_light(), AppTheme::gitcomet_dark()] {
+        cx.update(|_, app| crate::theme::set_window_theme(app, window_id, theme));
+        crate::test_support::refresh_and_draw(cx);
+        let color = cx.update(|_, app| input.read(app).debug_text_color());
+        assert_eq!(color, TextInputStyle::from_theme(theme).text);
+    }
+}

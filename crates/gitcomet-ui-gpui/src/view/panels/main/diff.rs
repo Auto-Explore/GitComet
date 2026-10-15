@@ -326,7 +326,6 @@ impl DiffRenderer {
                 }
                 DiffFileImageState::Error(e) => {
                     self.diff_raw_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(e, cx);
                         input.set_read_only(true, cx);
                     });
@@ -502,7 +501,6 @@ impl DiffRenderer {
                         components::empty_state(theme, "Preview", e).into_any_element()
                     } else {
                         self.diff_raw_input.update(cx, |input, cx| {
-                            input.set_theme(theme, cx);
                             input.set_text(e, cx);
                             input.set_read_only(true, cx);
                         });
@@ -575,7 +573,6 @@ impl DiffRenderer {
                         .into_any_element()
                     } else if let Some(error) = self.file_diff_cache_error.clone() {
                         self.diff_raw_input.update(cx, |input, cx| {
-                            input.set_theme(theme, cx);
                             input.set_text(error.to_string(), cx);
                             input.set_read_only(true, cx);
                         });

@@ -88,7 +88,6 @@ fn text(
         });
     field.seen = true;
     field.input.update(cx, |input, cx| {
-        input.set_theme(this.theme, cx);
         if section == TextSection::Output {
             input.set_vertical_scroll_handle(Some(this.hook_activity_output_scroll.clone()));
             input.set_text_preserving_selection_on_append(value, cx);

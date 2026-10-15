@@ -2107,6 +2107,7 @@ impl GitCometView {
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         let theme = theme.with_appearance(crate::appearance::current(cx));
+        crate::theme::set_window_theme(cx, self.window_handle.window_id(), theme);
         self.documents
             .update(cx, |documents, cx| documents.set_theme(theme, cx));
         self.document_picker
@@ -2155,14 +2156,6 @@ impl GitCometView {
             .update(cx, |palette, cx| palette.set_theme(theme, cx));
         self.reveal_commit_dialog
             .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
-        self.open_repo_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.home_search_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.auth_prompt_username_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.auth_prompt_secret_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }
 

@@ -74,12 +74,6 @@ impl DocumentsView {
         for buffer in self.buffers.values() {
             buffer.update(cx, |buffer, cx| {
                 buffer.theme = theme;
-                buffer
-                    .input
-                    .update(cx, |input, cx| input.set_theme(theme, cx));
-                buffer
-                    .path_input
-                    .update(cx, |input, cx| input.set_theme(theme, cx));
                 buffer.syntax_key = None;
                 buffer.refresh_syntax(cx);
                 cx.notify();
@@ -446,14 +440,12 @@ impl StandaloneBuffer {
                 },
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_content_width_layout(true);
             input.set_vertical_scroll_handle(Some(scroll.clone()));
             input
         });
         let path_input = cx.new(|cx| {
             let mut input = TextInput::new_inert(TextInputOptions::selectable(), cx);
-            input.set_theme(theme, cx);
             // Inherits the header's muted label style.
             input.set_display_text(cx);
             input.set_text(path.display().to_string(), cx);

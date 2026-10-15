@@ -99,7 +99,7 @@ impl DocumentPicker {
     ) -> Self {
         let recents = shared_recents(cx);
         let search = cx.new(|cx| {
-            let mut input = TextInput::new_inert(
+            TextInput::new_inert(
                 TextInputOptions {
                     placeholder: "Search recent files or type a path…".into(),
                     leading_icon: Some("icons/zoom.svg"),
@@ -107,9 +107,7 @@ impl DocumentPicker {
                     ..Default::default()
                 },
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         let subscriptions = vec![
             cx.observe(&recents, |this, _, cx| {
@@ -146,8 +144,6 @@ impl DocumentPicker {
 
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self.search
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }
 

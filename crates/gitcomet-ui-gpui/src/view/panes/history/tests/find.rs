@@ -2267,11 +2267,13 @@ fn indexed_history_find_keeps_partial_matches_after_a_failure(cx: &mut gpui::Tes
 fn history_find_input_tracks_theme_changes_while_open_and_closed(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (view, _store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-    open_find_with_shortcut(cx, &view);
-    let input = find_input(cx, &view);
+    // Each theme lands while find is closed and must show once it opens.
     for theme in [AppTheme::gitcomet_light(), AppTheme::gitcomet_dark()] {
+        cx.update(|_window, app| view.update(app, |root, cx| root.set_theme(theme, cx)));
+        open_find_with_shortcut(cx, &view);
+        crate::test_support::refresh_and_draw(cx);
+        let input = find_input(cx, &view);
         cx.update(|_window, app| {
-            history_view(&view, app).update(app, |history, cx| history.set_theme(theme, cx));
             let actual = input.read(app).theme_for_test();
             assert_eq!(
                 actual.colors.editor.foreground,
