@@ -37,7 +37,12 @@ pub enum Effect {
     Status(super::StatusEffect),
     References(super::ReferenceEffect),
     RepoCommand(super::RepoCommandEffect),
-
+    ValidateAuthPrompt {
+        generation: u64,
+        challenge: gitcomet_core::auth::AuthChallenge,
+        auth: StagedGitAuth,
+        cancellation: gitcomet_core::services::CancellationToken,
+    },
     Filesystem(gitcomet_core::filesystem::Request),
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
     DiffSession(crate::diff_session::DiffSessionEffect),
@@ -393,7 +398,10 @@ pub enum Effect {
 impl Effect {
     pub(crate) fn requires_available_git(&self) -> bool {
         match self {
-            Self::Filesystem(_) | Self::Persistence(_) | Self::Control(_) => false,
+            Self::Filesystem(_)
+            | Self::Persistence(_)
+            | Self::Control(_)
+            | Self::ValidateAuthPrompt { .. } => false,
             Self::Status(_)
             | Self::References(_)
             | Self::RepoCommand(_)

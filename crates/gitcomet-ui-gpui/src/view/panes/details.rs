@@ -2992,6 +2992,8 @@ mod tests {
             stdout: "".into(),
             stderr: "".into(),
             announce_success: true,
+            handled_by_auth_prompt: false,
+            failure_id: None,
             hook_operation_id: None,
         }
     }
@@ -3083,6 +3085,9 @@ mod tests {
             repos: vec![repo_state(repo_id, "/tmp/repo")],
             active_repo: Some(repo_id),
             auth_prompt: Some(AuthPromptState {
+                generation: 1,
+                challenge: None,
+                status: AuthPromptStatus::AwaitingInput,
                 kind: AuthPromptKind::UsernamePassword,
                 reason: "auth required".into(),
                 operation: AuthRetryOperation::Commit {

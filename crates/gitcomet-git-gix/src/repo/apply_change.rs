@@ -522,7 +522,7 @@ impl GixRepo {
         groups: &[&[FileName]],
         paths: &[PathBuf],
         label: &str,
-    ) -> Result<std::process::Output> {
+    ) -> Result<crate::util::GitOutput> {
         let patch_file = write_patch_file(&self.change_patch(source, groups)?)?;
         let mut cmd = self.git_workdir_cmd();
         cmd.args(["apply", "--3way", "--whitespace=nowarn"])
@@ -539,7 +539,7 @@ impl GixRepo {
         &self,
         paths: &[PathBuf],
         label: &str,
-        applied: std::process::Output,
+        applied: crate::util::GitOutput,
     ) -> Error {
         let conflicted: Vec<&Path> = match self.conflicted_paths(paths) {
             Ok(conflicted) => conflicted,
@@ -565,14 +565,17 @@ impl GixRepo {
             "{applied_what} Resolve them, then commit.\n\n{}",
             bytes_to_text_preserving_utf8(&applied.stderr).trim()
         );
-        Error::new(ErrorKind::Git(GitFailure::new(
-            label,
-            GitFailureId::ApplyChangeConflict,
-            applied.status.code(),
-            applied.stdout,
-            applied.stderr,
-            Some(detail.trim_end().to_string()),
-        )))
+        Error::new(ErrorKind::Git(
+            GitFailure::new(
+                label,
+                GitFailureId::ApplyChangeConflict,
+                applied.status.code(),
+                applied.stdout,
+                applied.stderr,
+                Some(detail.trim_end().to_string()),
+            )
+            .with_auth_outcome(applied.auth_outcome),
+        ))
     }
 
     fn conflicted_paths<'p>(&self, paths: &'p [PathBuf]) -> Result<Vec<&'p Path>> {
@@ -623,17 +626,19 @@ impl GixRepo {
         run_git_with_output(cmd, &label).map_err(|error| match error.kind() {
             // The change stays staged; mark it so the store offers the message.
             ErrorKind::Git(failure) if failure.id() == GitFailureId::CommandFailed => {
-                Error::new(ErrorKind::Git(
-                    GitFailure::new(
-                        failure.command(),
-                        GitFailureId::ApplyChangeCommitFailed,
-                        failure.exit_code(),
-                        failure.stdout().to_vec(),
-                        failure.stderr().to_vec(),
-                        failure.detail().map(str::to_owned),
-                    )
-                    .with_apply_file_change_retry(checkpoint),
-                ))
+                let mut commit_failure = GitFailure::new(
+                    failure.command(),
+                    GitFailureId::ApplyChangeCommitFailed,
+                    failure.exit_code(),
+                    failure.stdout().to_vec(),
+                    failure.stderr().to_vec(),
+                    failure.detail().map(str::to_owned),
+                )
+                .with_apply_file_change_retry(checkpoint);
+                if let Some(auth_outcome) = failure.auth_outcome() {
+                    commit_failure = commit_failure.with_auth_outcome(auth_outcome.clone());
+                }
+                Error::new(ErrorKind::Git(commit_failure))
             }
             _ => error,
         })

@@ -38,6 +38,8 @@ fn dummy_log_entry(ix: usize) -> CommandLogEntry {
         stdout: Arc::from(""),
         stderr: Arc::from(""),
         announce_success: true,
+        handled_by_auth_prompt: false,
+        failure_id: None,
         hook_operation_id: None,
     }
 }
@@ -473,6 +475,7 @@ fn command_and_action_logs_use_expected_stderr_and_trim_history() {
         &RepoCommandKind::FetchAll,
         &command_output("git fetch", "", "stderr from git"),
         None,
+        false,
     );
     assert_eq!(repo.feedback.command_log.len(), 200);
     assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
@@ -495,6 +498,7 @@ fn command_and_action_logs_use_expected_stderr_and_trim_history() {
         Some(&Error::new(ErrorKind::Backend(
             "backend failure".to_string(),
         ))),
+        false,
     );
     assert_eq!(repo.feedback.command_log.len(), 200);
     assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
@@ -1380,13 +1384,13 @@ fn detect_auth_prompt_kind_classifies_username_password_passphrase_and_host_veri
         detect_auth_prompt_kind_from_message(
             "git clone --progress git@github.com:org/repo.git C:\\git\\repo failed: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
         ),
-        Some(crate::model::AuthPromptKind::Passphrase)
+        None
     );
     assert_eq!(
         detect_auth_prompt_kind_from_message(
             "git pull --no-rebase origin main failed: Host key verification failed.\nfatal: Could not read from remote repository."
         ),
-        Some(crate::model::AuthPromptKind::HostVerification)
+        None
     );
     assert_eq!(
         detect_auth_prompt_kind_from_message(
@@ -1412,7 +1416,7 @@ fn detect_auth_prompt_kind_classifies_username_password_passphrase_and_host_veri
         detect_auth_prompt_kind_from_message(&format!(
             "git commit failed\n{SSH_PASSPHRASE_PROMPT_MARKER}\nEnter passphrase for key"
         )),
-        Some(crate::model::AuthPromptKind::Passphrase)
+        None
     );
 
     let structured = Error::new(ErrorKind::Git(GitFailure::new(
@@ -1423,10 +1427,7 @@ fn detect_auth_prompt_kind_classifies_username_password_passphrase_and_host_veri
         b"Host key verification failed.\nfatal: Could not read from remote repository.\n".to_vec(),
         None,
     )));
-    assert_eq!(
-        detect_auth_prompt_kind(&structured),
-        Some(crate::model::AuthPromptKind::HostVerification)
-    );
+    assert_eq!(detect_auth_prompt_kind(&structured), None);
 }
 
 #[test]

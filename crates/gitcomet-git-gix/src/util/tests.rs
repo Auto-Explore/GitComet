@@ -517,6 +517,7 @@ fn run_git_with_output_failure_preserves_structured_details() {
             assert_eq!(failure.stderr(), b"err");
             assert_eq!(failure.detail(), Some("err"));
             assert_eq!(failure.to_string(), "git synthetic failed: err");
+            assert_eq!(failure.auth_outcome(), Some(&AuthOutcome::NotRequested));
         }
         other => panic!("expected structured git failure, got {other:?}"),
     }
@@ -635,6 +636,39 @@ fn classifies_git_lfs_failures_from_stderr() {
         add_lfs_failure_hint("boom".to_string(), GitFailureId::CommandFailed),
         "boom"
     );
+}
+
+#[test]
+fn classifies_local_overwrites_independently_of_auth_prompt_diagnostics() {
+    for stderr in [
+        "error: Your local changes to the following files would be overwritten by merge:\n file.txt\nPlease commit your changes or stash them before you merge.\nAborting\nSSH key passphrase prompt:\nEnter passphrase for key 'C:/Users/test/.ssh/id_ed25519':",
+        "error: The following untracked working tree files would be overwritten by checkout:\n file.txt",
+    ] {
+        assert_eq!(
+            classify_git_failure(stderr),
+            GitFailureId::WorktreeWouldBeOverwritten
+        );
+    }
+}
+
+#[test]
+fn parsed_stdout_failure_preserves_authoritative_auth_outcome() {
+    let error = run_git_parsed_stdout(
+        failing_command_with_streams(),
+        "git synthetic",
+        false,
+        |mut stdout| {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).unwrap();
+            Ok(bytes)
+        },
+    )
+    .expect_err("the process failed after producing stdout");
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected structured failure: {error:?}");
+    };
+    assert_eq!(failure.exit_code(), Some(7));
+    assert_eq!(failure.auth_outcome(), Some(&AuthOutcome::NotRequested));
 }
 
 /// Real stderr: the LFS hooks' own message, dash's (Debian/Ubuntu `sh`)
@@ -1267,6 +1301,7 @@ fn configure_git_auth_prompt_sets_username_password_env() {
     let askpass = create_askpass_script().expect("askpass script creation");
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     let auth = PromptAuth::Explicit(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
         secret: "secret-token".to_string(),
@@ -1330,6 +1365,7 @@ fn configure_git_auth_prompt_sets_passphrase_env_and_removes_username() {
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::Explicit(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::Passphrase,
         username: None,
         secret: "ssh-passphrase".to_string(),
@@ -1400,6 +1436,7 @@ fn configure_git_auth_prompt_sets_host_verification_env_and_removes_username() {
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
     cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
     let auth = PromptAuth::Explicit(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::HostVerification,
         username: None,
         secret: "yes".to_string(),

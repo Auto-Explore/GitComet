@@ -132,6 +132,7 @@ fn auto_resolve_session_on_open(inputs: &ReducerInputs, repo_state: &mut RepoSta
             stats,
         ),
         None,
+        false,
     );
 }
 

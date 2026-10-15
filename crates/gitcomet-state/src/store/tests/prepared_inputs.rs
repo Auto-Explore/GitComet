@@ -535,6 +535,9 @@ fn auth_worktree_retry_prepares_the_path_only_when_git_is_available() {
                 };
         }
         state.auth_prompt = Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: crate::model::AuthPromptStatus::AwaitingInput,
             kind: AuthPromptKind::Passphrase,
             reason: "test signing prompt".into(),
             operation: AuthRetryOperation::RepoCommand {
@@ -549,6 +552,7 @@ fn auth_worktree_retry_prepares_the_path_only_when_git_is_available() {
             &AtomicU64::new(2),
             &mut state,
             Msg::SubmitAuthPrompt {
+                generation: 1,
                 username: None,
                 secret: "test-passphrase".into(),
             },

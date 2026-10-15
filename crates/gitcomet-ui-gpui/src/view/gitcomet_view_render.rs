@@ -368,8 +368,9 @@ impl Render for GitCometView {
         }
 
         if let Some(prompt) = self.state.auth_prompt.clone() {
-            let prompt_key = format!("{:?}:{:?}", prompt.kind, prompt.operation);
-            if self.auth_prompt_key.as_ref() != Some(&prompt_key) {
+            let prompt_key = prompt.generation;
+            let is_new_prompt = self.auth_prompt_key != Some(prompt_key);
+            if is_new_prompt {
                 self.auth_prompt_key = Some(prompt_key);
                 self.auth_prompt_username_input
                     .update(cx, |input, cx| input.set_text("", cx));
@@ -377,41 +378,89 @@ impl Render for GitCometView {
                     .update(cx, |input, cx| input.set_text("", cx));
             }
 
-            self.auth_prompt_username_input
-                .update(cx, |input, cx| input.set_theme(theme, cx));
+            let is_validating = prompt.status == AuthPromptStatus::Validating
+                || self.auth_prompt_submitted_generation == Some(prompt.generation);
+            self.auth_prompt_username_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_read_only(is_validating, cx);
+            });
             let is_host_verification = prompt.kind == AuthPromptKind::HostVerification;
             self.auth_prompt_secret_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
                 input.set_masked(!is_host_verification, cx);
+                input.set_read_only(is_validating, cx);
             });
+            if is_new_prompt && !is_validating {
+                let first_input = match prompt.kind {
+                    AuthPromptKind::UsernamePassword => {
+                        Some(self.auth_prompt_username_input.clone())
+                    }
+                    AuthPromptKind::Passphrase => Some(self.auth_prompt_secret_input.clone()),
+                    AuthPromptKind::HostVerification => None,
+                };
+                if let Some(input) = first_input {
+                    self.focus_new_auth_prompt(&input, window, cx);
+                }
+            }
 
             let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
+            let is_pin = prompt
+                .challenge
+                .as_ref()
+                .is_some_and(|challenge| challenge.is_pin());
             let title = match prompt.kind {
                 AuthPromptKind::UsernamePassword => "Repository authentication required",
+                AuthPromptKind::Passphrase if is_pin => "Security key PIN required",
                 AuthPromptKind::Passphrase => "Passphrase required",
                 AuthPromptKind::HostVerification => "Host authenticity confirmation required",
             };
-            let subtitle = match prompt.kind {
-                AuthPromptKind::UsernamePassword => {
-                    "Enter username and password, then confirm to retry."
-                }
-                AuthPromptKind::Passphrase => "Enter your key passphrase, then confirm to retry.",
-                AuthPromptKind::HostVerification => {
-                    "Enter `yes` to trust this host key, or paste the shown fingerprint."
+            let subtitle = if is_validating {
+                "Checking authentication…"
+            } else {
+                match prompt.kind {
+                    AuthPromptKind::UsernamePassword => {
+                        "Enter username and password, then confirm to continue."
+                    }
+                    AuthPromptKind::Passphrase if is_pin => {
+                        "Enter your security key's PIN, then confirm to continue."
+                    }
+                    AuthPromptKind::Passphrase => {
+                        "Enter your key passphrase, then confirm to continue."
+                    }
+                    AuthPromptKind::HostVerification => {
+                        "Enter `yes` to trust this host key, or paste the shown fingerprint."
+                    }
                 }
             };
 
-            let confirm_button = components::Button::new("auth_prompt_confirm", "Confirm")
-                .style(components::ButtonStyle::Filled)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    this.try_auth_prompt_submit(cx);
-                });
+            let inline_error = self.auth_prompt_input_error.clone().or_else(|| {
+                (prompt.status == AuthPromptStatus::Rejected).then(|| prompt.reason.clone())
+            });
+            let reason = prompt
+                .challenge
+                .as_ref()
+                .map(|challenge| challenge.prompt.clone())
+                .unwrap_or_else(|| prompt.reason.clone());
+
+            let confirm_button = components::Button::new(
+                "auth_prompt_confirm",
+                if is_validating {
+                    "Checking…"
+                } else {
+                    "Confirm"
+                },
+            )
+            .style(components::ButtonStyle::Filled)
+            .disabled(is_validating)
+            .on_click(theme, cx, move |this, _e, _w, cx| {
+                this.try_auth_prompt_submit(cx);
+            })
+            .debug_selector(|| "auth_prompt_confirm".to_string());
 
             let cancel_button = components::Button::new("auth_prompt_cancel", "Cancel")
                 .style(components::ButtonStyle::Outlined)
                 .on_click(theme, cx, |this, _e, _w, cx| {
-                    this.store.dispatch(Msg::CancelAuthPrompt);
-                    cx.notify();
+                    this.cancel_auth_prompt(cx);
                 });
 
             let prompt_form = div()
@@ -442,22 +491,35 @@ impl Render for GitCometView {
                             .child("Use Cancel if you do not trust this host."),
                     )
                 })
-                .when(!prompt.reason.trim().is_empty(), |this| {
+                .when_some(inline_error, |this, error| {
                     this.child(
-                        restrict_scroll_to_vertical_axis(
-                            div()
-                                .id("auth_prompt_reason_scroll")
-                                .max_h(scaled_px(96.0))
-                                .overflow_y_scroll(),
-                        )
-                        .child(
-                            div()
-                                .text_size(theme.ui_text(12.0))
-                                .text_color(theme.colors.foreground.secondary)
-                                .child(prompt.reason.clone()),
-                        ),
+                        div()
+                            .id("auth_prompt_error")
+                            .debug_selector(|| "auth_prompt_error".to_string())
+                            .text_size(theme.ui_text(12.0))
+                            .text_color(theme.colors.status.danger.foreground)
+                            .child(error),
                     )
                 })
+                .when(
+                    !reason.trim().is_empty() && prompt.status != AuthPromptStatus::Rejected,
+                    |this| {
+                        this.child(
+                            restrict_scroll_to_vertical_axis(
+                                div()
+                                    .id("auth_prompt_reason_scroll")
+                                    .max_h(scaled_px(96.0))
+                                    .overflow_y_scroll(),
+                            )
+                            .child(
+                                div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child(reason),
+                            ),
+                        )
+                    },
+                )
                 .child(
                     div()
                         .pt_1()
@@ -482,6 +544,7 @@ impl Render for GitCometView {
             );
         } else {
             self.auth_prompt_key = None;
+            self.restore_focus_after_auth_prompt(window, cx);
         }
 
         let mut root = div()

@@ -643,6 +643,10 @@ impl DiffRenderer {
     /// on its file.
     pub(in crate::view) fn error_action_available(&self, action: &ErrorAction) -> bool {
         match action {
+            ErrorAction::ReviewLocalChanges { repo_id } => self
+                .input
+                .repository_state()
+                .is_some_and(|state| state.repos.iter().any(|repo| repo.id == *repo_id)),
             ErrorAction::SaveEditorAs { repo_id, path, .. }
             | ErrorAction::RevealInEditor { repo_id, path, .. } => {
                 self.diff_surface().body == DiffBody::FileEditor

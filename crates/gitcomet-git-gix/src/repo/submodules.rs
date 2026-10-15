@@ -1499,17 +1499,23 @@ fn append_failed_submodule_add_note(
     workdir: &Path,
 ) -> Error {
     let error = match err.kind() {
-        ErrorKind::Git(failure) => Error::new(ErrorKind::Git(GitFailure::new(
-            failure.command(),
-            failure.id(),
-            failure.exit_code(),
-            failure.stdout().to_vec(),
-            failure.stderr().to_vec(),
-            Some(match failure.detail() {
-                Some(detail) if !detail.is_empty() => format!("{detail}\n\n{note}"),
-                _ => note.to_string(),
-            }),
-        ))),
+        ErrorKind::Git(failure) => {
+            let mut detailed_failure = GitFailure::new(
+                failure.command(),
+                failure.id(),
+                failure.exit_code(),
+                failure.stdout().to_vec(),
+                failure.stderr().to_vec(),
+                Some(match failure.detail() {
+                    Some(detail) if !detail.is_empty() => format!("{detail}\n\n{note}"),
+                    _ => note.to_string(),
+                }),
+            );
+            if let Some(auth_outcome) = failure.auth_outcome() {
+                detailed_failure = detailed_failure.with_auth_outcome(auth_outcome.clone());
+            }
+            Error::new(ErrorKind::Git(detailed_failure))
+        }
         _ => Error::new(ErrorKind::Backend(format!("{err}\n\n{note}"))),
     };
     error

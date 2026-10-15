@@ -199,7 +199,9 @@ impl Driver {
                     .as_ref()
                     .filter(|item| item.dest.as_ref() == dest)?;
                 return Some(match &clone.status {
-                    CloneOpStatus::Running | CloneOpStatus::Cancelling => Ok(None),
+                    CloneOpStatus::Running
+                    | CloneOpStatus::Cancelling
+                    | CloneOpStatus::WaitingForAuthentication => Ok(None),
                     CloneOpStatus::FinishedOk => Ok(Some(false)),
                     CloneOpStatus::Cancelled => Ok(Some(true)),
                     CloneOpStatus::FinishedErr(error) => Err(error.clone()),
@@ -338,6 +340,8 @@ mod tests {
             stdout: "".into(),
             stderr: "".into(),
             announce_success: true,
+            handled_by_auth_prompt: false,
+            failure_id: None,
             hook_operation_id: None,
         };
         assert_eq!(

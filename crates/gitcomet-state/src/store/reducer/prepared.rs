@@ -401,7 +401,9 @@ fn capture_paths(message: &Msg, state: &AppState) -> PathRequests {
                     .push((path.clone(), PathBase::Worktree(repo.spec.workdir.clone())));
             }
         }
-        Msg::SubmitAuthPrompt { username, secret } => {
+        Msg::SubmitAuthPrompt {
+            username, secret, ..
+        } => {
             if state.git_runtime.is_available()
                 && let Some(prompt) = &state.auth_prompt
                 && super::auth::prepare_staged_git_auth(prompt.kind, username.as_deref(), secret)

@@ -51,7 +51,10 @@ pub(super) fn send_unavailable_git_effect_result(
                 send(Msg::Internal(message));
             }
         }
-        Effect::Filesystem(_) | Effect::Persistence(_) | Effect::Control(_) => {}
+        Effect::Filesystem(_)
+        | Effect::Persistence(_)
+        | Effect::Control(_)
+        | Effect::ValidateAuthPrompt { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
                 repo_id,

@@ -174,6 +174,28 @@ pub(super) fn schedule_effect(
         Effect::RepoCommand(work) => {
             repo_commands::schedule(executor, thread_state, backend, repos, msg_tx, work)
         }
+        Effect::ValidateAuthPrompt {
+            generation,
+            challenge,
+            auth,
+            cancellation,
+        } => {
+            executor.spawn(move || {
+                let result = gitcomet_core::auth::askpass::validate_passphrase(
+                    &challenge,
+                    &auth,
+                    &cancellation,
+                );
+                util::send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::AuthPromptValidated {
+                        generation,
+                        result,
+                        auth,
+                    }),
+                );
+            });
+        }
         Effect::Filesystem(request) => {
             super::executor::filesystem_executor().spawn(move || {
                 // The engine ticks once per item and every dispatch deep-copies

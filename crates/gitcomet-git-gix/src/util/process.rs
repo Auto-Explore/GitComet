@@ -91,17 +91,20 @@ pub(super) fn git_timeout_error(
     stdout: Vec<u8>,
     stderr: Vec<u8>,
 ) -> Error {
-    Error::new(ErrorKind::Git(GitFailure::new(
-        label,
-        GitFailureId::Timeout,
-        exit_code,
-        stdout,
-        stderr,
-        Some(format!(
-            "after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
-            timeout.as_secs()
-        )),
-    )))
+    Error::new(ErrorKind::Git(
+        GitFailure::new(
+            label,
+            GitFailureId::Timeout,
+            exit_code,
+            stdout,
+            stderr,
+            Some(format!(
+                "after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+                timeout.as_secs()
+            )),
+        )
+        .with_auth_outcome(AuthOutcome::Unknown),
+    ))
 }
 
 /// "a.txt", "a.txt and b.txt", or "a.txt, b.txt and 3 more" for messages.
@@ -124,11 +127,12 @@ pub(crate) fn describe_path_list<P: AsRef<[u8]>>(paths: &[P]) -> String {
     }
 }
 
-pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
-    let Output {
+pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error {
+    let GitOutput {
         status,
         stdout,
         stderr,
+        auth_outcome,
     } = output;
     let detail = [stderr.as_slice(), stdout.as_slice()]
         .into_iter()
@@ -138,14 +142,10 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
         .map(add_git_failure_hint);
     let id = classify_git_failure(&String::from_utf8_lossy(&stderr));
     let detail = detail.map(|detail| add_lfs_failure_hint(detail, id));
-    Error::new(ErrorKind::Git(GitFailure::new(
-        label,
-        id,
-        status.code(),
-        stdout,
-        stderr,
-        detail,
-    )))
+    Error::new(ErrorKind::Git(
+        GitFailure::new(label, id, status.code(), stdout, stderr, detail)
+            .with_auth_outcome(auth_outcome),
+    ))
 }
 
 pub(super) fn add_git_failure_hint(mut detail: String) -> String {
@@ -177,7 +177,11 @@ pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
                         || line.contains("cannot spawn git-lfs"))
                         && line.contains("no such file or directory"))))
     });
-    if lfs_binary_missing {
+    if lower.contains("your local changes to the following files would be overwritten")
+        || lower.contains("the following untracked working tree files would be overwritten")
+    {
+        GitFailureId::WorktreeWouldBeOverwritten
+    } else if lfs_binary_missing {
         GitFailureId::LfsNotInstalled
     } else if lower.contains("unable to push locked files")
         || lower.contains("lock exists")
@@ -521,7 +525,7 @@ pub(super) fn run_command_with_timeout(
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth(cmd, label, timeout, cancellation, true)
 }
 
@@ -531,7 +535,7 @@ pub(crate) fn run_git_preview_output(
     cmd: Command,
     label: &str,
     cancellation: &CancellationToken,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth(
         cmd,
         label,
@@ -580,7 +584,7 @@ pub(crate) fn run_git_background_output(
     cmd: Command,
     label: &str,
     cancellation: &CancellationToken,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth(cmd, label, git_command_timeout(), Some(cancellation), false)
 }
 
@@ -590,7 +594,7 @@ pub(super) fn run_command_with_timeout_auth(
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth_stdin(cmd, label, timeout, cancellation, allow_auth, None)
 }
 
@@ -601,7 +605,7 @@ fn run_command_with_timeout_auth_stdin(
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
     stdin: Option<Stdio>,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
@@ -695,9 +699,19 @@ fn run_command_with_timeout_auth_stdin(
     drop(lfs_progress);
     timing.stage("trace-finish");
 
+    let auth_outcome = askpass_context
+        .as_ref()
+        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
+            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+        });
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        if !status.success() {
+        // The trailer explains a request for a passphrase. On a failure with
+        // another cause, such as a pull refused for local changes, it misleads.
+        if matches!(
+            auth_outcome,
+            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+        ) {
             append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
         }
     }
@@ -716,20 +730,15 @@ fn run_command_with_timeout_auth_stdin(
         ));
     }
 
-    if let Some((askpass_script, auth)) = askpass_context.as_ref()
-        && status.success()
-    {
-        remember_successful_prompt_auth(auth.as_ref(), askpass_script);
-    }
-
-    Ok(Output {
+    Ok(GitOutput {
         status,
         stdout,
         stderr,
+        auth_outcome,
     })
 }
 
-pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
+pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<GitOutput> {
     run_command_with_timeout(cmd, label, git_command_timeout(), None)
 }
 
@@ -845,10 +854,11 @@ pub(crate) fn run_git_with_stdin_capture(
     if !status.success() {
         return Err(git_command_failed_error(
             label,
-            Output {
+            GitOutput {
                 status,
                 stdout,
                 stderr,
+                auth_outcome: AuthOutcome::NotRequested,
             },
         ));
     }
@@ -1007,9 +1017,19 @@ where
     }
     timing.stage("trace-finish");
 
+    let auth_outcome = askpass_context
+        .as_ref()
+        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
+            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+        });
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        if !status.success() {
+        // The trailer explains a request for a passphrase. On a failure with
+        // another cause, such as a pull refused for local changes, it misleads.
+        if matches!(
+            auth_outcome,
+            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+        ) {
             append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
         }
     }
@@ -1032,22 +1052,19 @@ where
     if !ok_exit {
         return Err(git_command_failed_error(
             label,
-            Output {
+            GitOutput {
                 status,
                 stdout: Vec::new(),
                 stderr,
+                auth_outcome,
             },
         ));
-    }
-
-    if let Some((askpass_script, auth)) = askpass_context.as_ref() {
-        remember_successful_prompt_auth(auth.as_ref(), askpass_script);
     }
 
     parsed_result
 }
 
-pub(super) fn run_git_checked_output(cmd: Command, label: &str) -> Result<Output> {
+pub(super) fn run_git_checked_output(cmd: Command, label: &str) -> Result<GitOutput> {
     let output = run_git_raw_output(cmd, label)?;
     if output.status.success() {
         Ok(output)
@@ -1158,7 +1175,7 @@ pub(crate) fn run_git_with_output_and_timeout(
     Ok(command_output(label, output))
 }
 
-fn command_output(label: &str, output: Output) -> CommandOutput {
+fn command_output(label: &str, output: GitOutput) -> CommandOutput {
     let exit_code = output.status.code();
     let stdout = bytes_to_text_preserving_utf8(&output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);
