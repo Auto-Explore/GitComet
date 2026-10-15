@@ -1,0 +1,43 @@
+# Vendored from the `tree-sitter-properties 0.3.0` crates.io release, whose
+# source records https://github.com/tree-sitter-grammars/tree-sitter-properties
+# commit 579b62f5ad8d96c2bb331f07d1408c92767531d9 (MIT -- see LICENSE, fetched
+# from that commit because the published tarball ships none).
+#
+# Vendored for a scanner fix, the only change. Upstream's src/scanner.c keeps its
+# "`_eof` already emitted" flag in a file-scope `static bool`, shared by every
+# parser in the process. Two threads parsing `.properties` at once race on it:
+# one can scan with the other's flag, emit a second zero-width `_eof` at end of
+# input, and then replay that token from the parser's token cache forever (the
+# scanner is never called again). An unbudgeted parse never returns. Upstream
+# master still has the static. The patch moves the flag into the scanner payload;
+# serialization is unchanged. `vendored_properties_grammar_parses_concurrently`
+# guards it.
+#
+# grammar.js, src/parser.c, src/grammar.json, src/node-types.json, queries/ and
+# bindings/rust/lib.rs are byte-for-byte the published crate. The parser is ABI
+# 14 from a pre-0.26 CLI (`.version`, `TSLexMode`), so it keeps its private
+# `src/tree_sitter/` headers rather than the shared ABI-15 ones, like
+# vendor/tree-sitter-v. GitComet reads upstream's HIGHLIGHTS_QUERY, so
+# `queries/` is vendored.
+[package]
+name = "tree-sitter-properties"
+description = "Java properties grammar for tree-sitter"
+version = "0.3.0"
+repository = "https://github.com/tree-sitter-grammars/tree-sitter-properties"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.27.0"

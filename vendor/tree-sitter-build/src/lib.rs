@@ -181,11 +181,10 @@ fn grammar_dirs(manifest: &Path) -> Vec<PathBuf> {
 ///
 /// Most vendored grammars have no `queries/`: GitComet keeps its own in
 /// `crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/`, so the consts
-/// compile out. Nine grammars whose upstream queries GitComet reads directly --
-/// fsharp, haskell, kotlin-sg, objc, php, powershell, scala, sequel, swift -- do
-/// vendor theirs, and for those the cfgs are set. Either way they are all
-/// *declared*, because the vendored `bindings/rust/lib.rs` files reference them
-/// and without the `rustc-check-cfg` lines those files would warn about
+/// compile out. Grammars whose upstream query consts GitComet reads directly
+/// vendor their `queries/`, and for those the cfgs are set. Either way they are
+/// all *declared*, because the vendored `bindings/rust/lib.rs` files reference
+/// them and without the `rustc-check-cfg` lines those files would warn about
 /// unexpected cfgs. `folds` and `indents` are here for tree-sitter-objc, the only
 /// grammar that ships them.
 fn emit_query_cfgs(manifest: &Path) {
