@@ -227,10 +227,7 @@ impl AppState {
 
 #[derive(Clone, Debug, Default)]
 pub struct FilesystemState {
-    pub pending: std::collections::BTreeMap<
-        gitcomet_core::filesystem::OperationId,
-        gitcomet_core::filesystem::Request,
-    >,
+    pub pending: std::collections::BTreeSet<gitcomet_core::filesystem::OperationId>,
     pub progress: Option<gitcomet_core::filesystem::Progress>,
     pub completed: std::collections::VecDeque<gitcomet_core::filesystem::OperationResult>,
     pub undo_available: bool,

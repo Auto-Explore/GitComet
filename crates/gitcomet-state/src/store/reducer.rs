@@ -732,14 +732,13 @@ fn reduce_inner(
             vec![]
         }
         Msg::FilesystemRequest(request) => {
-            if state.filesystem.pending.contains_key(&request.id) {
+            if !state.filesystem.pending.insert(request.id) {
                 return vec![];
             }
-            state.filesystem.pending.insert(request.id, request.clone());
             vec![Effect::Filesystem(request)]
         }
         Msg::FilesystemProgress(progress) => {
-            if state.filesystem.pending.contains_key(&progress.id) {
+            if state.filesystem.pending.contains(&progress.id) {
                 state.filesystem.progress = Some(progress);
             }
             vec![]
