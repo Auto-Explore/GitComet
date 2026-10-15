@@ -16,11 +16,6 @@ use std::path::PathBuf;
 /// Mirrors the blob-side cap in `commit_stats`.
 pub(super) const WORKTREE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Whether a worktree entry is a regular file the lanes read whole.
-fn within_worktree_cap(metadata: &std::fs::Metadata) -> bool {
-    metadata.is_file() && metadata.len() <= WORKTREE_MAX_BYTES
-}
-
 type LineStatsKey = (DiffArea, Option<gix::ObjectId>, Option<gix::ObjectId>);
 
 /// The two lanes have different rules for pointers. Keep counts separate,
@@ -519,7 +514,7 @@ impl<'repo> WorktreeReader<'repo> {
             out.extend_from_slice(target.as_ref());
             return true;
         }
-        if !within_worktree_cap(&metadata) {
+        if !metadata.is_file() || metadata.len() > WORKTREE_MAX_BYTES {
             return false;
         }
         let Some((pipeline, index)) = self.pipeline.as_mut() else {
