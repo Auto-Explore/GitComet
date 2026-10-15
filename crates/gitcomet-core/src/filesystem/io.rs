@@ -443,14 +443,62 @@ pub(super) fn copy_tree(
 /// Never replace a directory entry created by another process after validation.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn rename_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        source,
-        rustix::fs::CWD,
-        destination,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(Into::into)
+    rename_exclusive_with(source, destination, |source, destination| {
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            source,
+            rustix::fs::CWD,
+            destination,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+    })
+}
+
+/// Where the no-replace flag is rejected (NFS, 9p, some FUSE and macOS
+/// mounts), a file moves by link and unlink and anything else by a rename
+/// after checking the destination is free. Windows of one syscall remain: an
+/// entry renamed over the source between link and unlink, or one created at
+/// the destination before a fallback rename.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn rename_exclusive_with(
+    source: &Path,
+    destination: &Path,
+    rename_no_replace: impl FnOnce(&Path, &Path) -> rustix::io::Result<()>,
+) -> io::Result<()> {
+    use rustix::io::Errno;
+    let unsupported = |errno: Option<i32>| {
+        [Errno::INVAL, Errno::NOTSUP, Errno::NOSYS, Errno::PERM]
+            .into_iter()
+            .any(|unsupported| Some(unsupported.raw_os_error()) == errno)
+    };
+    match rename_no_replace(source, destination) {
+        Err(Errno::INVAL | Errno::NOTSUP | Errno::NOSYS) => {}
+        result => return result.map_err(Into::into),
+    }
+    if !fs::symlink_metadata(source)?.is_dir() {
+        match fs::hard_link(source, destination) {
+            Ok(()) => {
+                return match fs::remove_file(source) {
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                        let _ = fs::remove_file(destination);
+                        Err(error)
+                    }
+                    // A source already gone leaves the destination as the
+                    // only name: keep it.
+                    _ => Ok(()),
+                };
+            }
+            Err(error) if unsupported(error.raw_os_error()) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if exists(destination)? {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Destination exists",
+        ));
+    }
+    fs::rename(source, destination)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
