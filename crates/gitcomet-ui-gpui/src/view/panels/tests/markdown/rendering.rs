@@ -3818,8 +3818,7 @@ fn changelog_with_contents(releases: usize) -> (String, Vec<(&'static str, Strin
 }
 
 /// Draw the next frame until one passes without the main pane asking for
-/// another, and return how many did. `notified` counts the pane's notifies;
-/// other views (a busy spinner) keep queueing frames of their own.
+/// another, and return how many did. `notified` counts the pane's notifies.
 fn settle_preview_frames(
     cx: &mut gpui::VisualTestContext,
     notified: &std::cell::Cell<usize>,
@@ -3864,17 +3863,6 @@ fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
         "markdown_interaction_benchmark",
         &source,
     );
-    // Loaded, not opening: an opening repository spins a busy icon in its tab,
-    // which queues a frame every frame and would count in every measurement.
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut state = (*this.store.snapshot()).clone();
-            for repo in &mut state.repos {
-                repo.open = gitcomet_state::model::Loadable::Ready(());
-            }
-            push_test_state(this, Arc::new(state), cx);
-        });
-    });
     draw_frames(cx, 2);
     let rows = fixture.document.rows.len();
     let profile = if cfg!(debug_assertions) {

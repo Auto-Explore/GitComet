@@ -42,6 +42,10 @@ fn recording_instance(
     (instance, term, messages)
 }
 
+fn stop_spinner_animations(cx: &mut gpui::VisualTestContext) {
+    cx.update(|_, app| app.set_reduce_motion(true));
+}
+
 fn fixture(cx: &mut gpui::TestAppContext) -> (TerminalMenuFixture, &mut gpui::VisualTestContext) {
     let (root, repo_id, cx) = test_root_view_with_active_repo(cx);
     let (viewport, term, messages) = cx.update(|window, app| {
@@ -207,6 +211,7 @@ fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext
     let _clipboard = crate::test_support::lock_clipboard_test();
     let (fixture, cx) = fixture(cx);
     cx.update(|window, _| window.activate());
+    stop_spinner_animations(cx);
     cx.run_until_parked();
     fixture.term.lock().scroll_display(Scroll::Bottom);
     // Terminal applications that request focus reports must see one loss and
@@ -301,6 +306,7 @@ fn idle_terminal_caret_stops_blinking_until_the_next_keystroke(cx: &mut gpui::Te
     let _visual = crate::test_support::lock_visual_test();
     let (fixture, cx) = fixture(cx);
     cx.update(|window, _| window.activate());
+    stop_spinner_animations(cx);
     cx.run_until_parked();
     crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), || {
         refresh_and_draw(cx);
