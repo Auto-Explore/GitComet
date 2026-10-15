@@ -21,14 +21,6 @@ fn within_worktree_cap(metadata: &std::fs::Metadata) -> bool {
     metadata.is_file() && metadata.len() <= WORKTREE_MAX_BYTES
 }
 
-/// A worktree file's raw bytes; `None` past the cap or unreadable.
-pub(super) fn read_worktree_file_capped(full: &std::path::Path) -> Option<Vec<u8>> {
-    std::fs::metadata(full)
-        .ok()
-        .filter(within_worktree_cap)
-        .and_then(|_| std::fs::read(full).ok())
-}
-
 type LineStatsKey = (DiffArea, Option<gix::ObjectId>, Option<gix::ObjectId>);
 
 /// The two lanes have different rules for pointers. Keep counts separate,
@@ -44,7 +36,6 @@ pub(super) struct LineStatsMemo {
 enum IndexPointer {
     None,
     Annex,
-    Lfs,
 }
 
 /// One scan's view of the memo: hits carry over into `next`, which replaces
@@ -170,24 +161,37 @@ impl super::GixRepo {
         result
     }
 
-    /// Edits for a commit-to-worktree file list, whose counts came from
-    /// `git diff --numstat` without the contents. Reads both sides under the
-    /// caps the counts use, and only for files those could count.
-    pub(super) fn add_worktree_edits(
+    /// What a commit-to-worktree file list lacks. Untracked files are counted
+    /// as the status list counts them. `git diff --numstat` counted the rest
+    /// without the contents, so they get only the edit, read under the caps
+    /// the counts use and only for files those could count.
+    pub(super) fn add_worktree_line_stats(
         &self,
         files: &mut [gitcomet_core::domain::CommitFileChange],
         cancellation: &CancellationToken,
     ) -> Result<()> {
-        if files.len() > super::log::COMMIT_STATS_MAX_FILES {
+        let edits = files.len() <= super::log::COMMIT_STATS_MAX_FILES;
+        if !edits
+            && files
+                .iter()
+                .all(|file| file.kind != FileStatusKind::Untracked)
+        {
             return Ok(());
         }
         let repo = self.status_repo();
-        let mut pipeline = repo.filter_pipeline(None).ok();
+        let mut reader = WorktreeReader::new(&repo, &self.spec.workdir);
         let (mut old, mut new) = (Vec::new(), Vec::new());
-        for file in files
-            .iter_mut()
-            .filter(|file| file.edit.is_none() && file.additions.is_some() && !file.is_submodule)
-        {
+        for file in files.iter_mut() {
+            if file.kind == FileStatusKind::Untracked {
+                cancellation.check_cancelled()?;
+                let stats = reader.added_file_line_stats(&file.path, &mut new);
+                (file.additions, file.deletions, file.edit) =
+                    (stats.additions, stats.deletions, stats.edit);
+                continue;
+            }
+            if !edits || file.edit.is_some() || file.additions.is_none() || file.is_submodule {
+                continue;
+            }
             cancellation.check_cancelled()?;
             let old_id = file
                 .old_id
@@ -197,9 +201,7 @@ impl super::GixRepo {
                 continue;
             }
             new.clear();
-            if file.kind != FileStatusKind::Deleted
-                && !read_worktree_git_bytes(self, pipeline.as_mut(), &file.path, &mut new)
-            {
+            if file.kind != FileStatusKind::Deleted && !reader.read(&file.path, &mut new) {
                 continue;
             }
             file.edit = line_stats_from_bytes(&old, &new).edit;
@@ -343,7 +345,8 @@ fn staged_line_stats(
 }
 
 /// Index blob vs worktree file, the latter run through the worktree->git
-/// filter pipeline so CRLF and clean filters apply before counting.
+/// filter pipeline so CRLF and clean filters apply before counting. An
+/// untracked file has no blob, so all of it is added.
 fn unstaged_line_stats(
     gix_repo: &super::GixRepo,
     repo: &gix::Repository,
@@ -362,30 +365,23 @@ fn unstaged_line_stats(
     // Only the old side is a blob, so `CommitStatsScratch` does not fit.
     let mut index_blob = Vec::new();
     let mut worktree = Vec::new();
-    // Retain attribute caches and reusable filter processes across all files.
-    let mut pipeline = repo.filter_pipeline(None).ok();
-    let mut lfs_clean = LfsCleanFilter::Unprobed;
+    let mut reader = WorktreeReader::new(repo, &gix_repo.spec.workdir);
 
     for entry in entries.iter() {
-        // Untracked is in neither index lane; conflicted has no single before.
-        if matches!(
-            entry.kind,
-            FileStatusKind::Untracked | FileStatusKind::Conflicted
-        ) {
+        // Conflicted has no single before.
+        if entry.kind == FileStatusKind::Conflicted {
             continue;
         }
         // Per file: this loop reads both sides of each one.
         cancellation.check_cancelled()?;
         let stats = unstaged_entry_line_stats(
-            gix_repo,
             repo,
             &index,
             entry,
             &mut index_blob,
             &mut worktree,
-            pipeline.as_mut(),
+            &mut reader,
             memo,
-            &mut lfs_clean,
         );
         out.insert(entry.path.clone(), stats);
     }
@@ -393,71 +389,53 @@ fn unstaged_line_stats(
     Ok(out)
 }
 
-fn unstaged_entry_line_stats<'repo>(
-    gix_repo: &super::GixRepo,
-    repo: &'repo gix::Repository,
+fn unstaged_entry_line_stats(
+    repo: &gix::Repository,
     index: &gix::index::File,
     entry: &FileStatus,
     index_blob: &mut Vec<u8>,
     worktree: &mut Vec<u8>,
-    pipeline: Option<&mut (
-        gix::filter::Pipeline<'_>,
-        gix::worktree::IndexPersistedOrInMemory,
-    )>,
+    reader: &mut WorktreeReader<'_>,
     memo: &mut MemoScan,
-    lfs_clean: &mut LfsCleanFilter<'repo>,
 ) -> LineStats {
     let Ok(rel) = gix::path::into_bstr(entry.path.as_path()) else {
         return LineStats::UNKNOWN;
     };
-    let index_id = index.entry_by_path(rel.as_ref()).map(|found| found.id);
+    let Some(index_id) = index.entry_by_path(rel.as_ref()).map(|found| found.id) else {
+        // Untracked: every line is added, with no diff for the memo to save.
+        return reader.added_file_line_stats(&entry.path, worktree);
+    };
 
     let mut index_blob_loaded = false;
-    if let Some(id) = index_id {
-        let pointer = memo.index_pointer(id, || {
-            let header = repo.find_header(id).ok()?;
-            if header.kind() != gix::object::Kind::Blob {
-                return None;
-            }
-            if header.size() > gitcomet_core::annex::POINTER_MAX_BYTES as u64 {
-                return Some(IndexPointer::None);
-            }
-            // A larger blob cannot be a pointer; leave its decompression to
-            // a diff miss, after the worktree's size and binary checks.
-            index_blob.clear();
-            index_blob_loaded = repo.objects.find_blob(&id, index_blob).is_ok();
-            index_blob_loaded.then(|| {
-                if gitcomet_core::annex::key_from_pointer(index_blob).is_some() {
-                    IndexPointer::Annex
-                } else if gitcomet_core::lfs::parse_pointer(index_blob).is_some() {
-                    IndexPointer::Lfs
-                } else {
-                    IndexPointer::None
-                }
-            })
-        });
-        match pointer {
-            // Unlocked content cannot be compared without annex's clean
-            // filter. Its size and hash cannot make these counts known.
-            Some(IndexPointer::Annex) | None => return LineStats::UNKNOWN,
-            // Reading a modified payload would start `git lfs filter-process`
-            // and hash (and store) it on every refresh, only to count the two
-            // pointer lines that changed. A deletion, or a pointer the filter
-            // does not clean, reads no filter and keeps its counts.
-            Some(IndexPointer::Lfs)
-                if entry.kind != FileStatusKind::Deleted
-                    && lfs_clean.runs_for(repo, index, rel.as_ref()) =>
-            {
-                return LineStats::UNKNOWN;
-            }
-            Some(_) => {}
+    let pointer = memo.index_pointer(index_id, || {
+        let header = repo.find_header(index_id).ok()?;
+        if header.kind() != gix::object::Kind::Blob {
+            return None;
         }
+        if header.size() > gitcomet_core::annex::POINTER_MAX_BYTES as u64 {
+            return Some(IndexPointer::None);
+        }
+        // A larger blob cannot be a pointer; leave its decompression to
+        // a diff miss, after the worktree's size and binary checks.
+        index_blob.clear();
+        index_blob_loaded = repo.objects.find_blob(&index_id, index_blob).is_ok();
+        index_blob_loaded.then(|| {
+            if gitcomet_core::annex::key_from_pointer(index_blob).is_some() {
+                IndexPointer::Annex
+            } else {
+                IndexPointer::None
+            }
+        })
+    });
+    match pointer {
+        // Unlocked content cannot be compared without annex's clean
+        // filter. Its size and hash cannot make these counts known.
+        Some(IndexPointer::Annex) | None => return LineStats::UNKNOWN,
+        Some(IndexPointer::None) => {}
     }
 
     worktree.clear();
-    if entry.kind != FileStatusKind::Deleted
-        && !read_worktree_git_bytes(gix_repo, pipeline, &entry.path, worktree)
-    {
+    if entry.kind != FileStatusKind::Deleted && !reader.read(&entry.path, worktree) {
         return LineStats::UNKNOWN;
     }
     // Binary on this side means no counts, whatever the index holds: skip
@@ -467,22 +445,113 @@ fn unstaged_entry_line_stats<'repo>(
     }
 
     let mut diff = || {
-        if !index_blob_loaded && !read_commit_stats_blob(repo, index_id, index_blob) {
+        if !index_blob_loaded && !read_commit_stats_blob(repo, Some(index_id), index_blob) {
             return LineStats::UNKNOWN;
         }
         line_stats_from_bytes(index_blob.as_slice(), worktree.as_slice())
     };
     // Hashing costs a fraction of the diff an unchanged file then skips.
     match gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, worktree) {
-        Ok(worktree_id) => memo.counts((DiffArea::Unstaged, index_id, Some(worktree_id)), diff),
+        Ok(worktree_id) => memo.counts(
+            (DiffArea::Unstaged, Some(index_id), Some(worktree_id)),
+            diff,
+        ),
         Err(_) => diff(),
     }
 }
 
-/// Reads a worktree file as git would store it. `false` means over the size
-/// cap or unreadable; binary is left to `line_stats_from_bytes`.
+/// Reads worktree files as git would store them, through the worktree->git
+/// filters, keeping attribute caches and filter processes across files. A
+/// file the LFS clean filter takes is not read: cleaning would hash and store
+/// the payload on every refresh, only to count changed pointer lines.
+pub(super) struct WorktreeReader<'repo> {
+    repo: &'repo gix::Repository,
+    workdir: &'repo std::path::Path,
+    pipeline: Option<(
+        gix::filter::Pipeline<'repo>,
+        gix::worktree::IndexPersistedOrInMemory,
+    )>,
+    lfs_clean: LfsCleanFilter<'repo>,
+}
+
+impl<'repo> WorktreeReader<'repo> {
+    pub(super) fn new(repo: &'repo gix::Repository, workdir: &'repo std::path::Path) -> Self {
+        Self {
+            repo,
+            workdir,
+            pipeline: repo.filter_pipeline(None).ok(),
+            lfs_clean: LfsCleanFilter::Unprobed,
+        }
+    }
+
+    /// A file with nothing stored for it: all of it is added.
+    pub(super) fn added_file_line_stats(
+        &mut self,
+        relative: &std::path::Path,
+        buf: &mut Vec<u8>,
+    ) -> LineStats {
+        if !self.read(relative, buf) {
+            return LineStats::UNKNOWN;
+        }
+        line_stats_from_bytes(&[], buf)
+    }
+
+    /// Replaces `out` with the file at `relative`. `false` means over the
+    /// size cap, unreadable, or left to the LFS clean filter; binary is left
+    /// to `line_stats_from_bytes`.
+    pub(super) fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
+        use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
+        use std::io::Read as _;
+
+        out.clear();
+        let full = self.workdir.join(relative);
+        let Ok(metadata) = std::fs::symlink_metadata(&full) else {
+            // Vanished between the status walk and here; empty diffs as a deletion.
+            return true;
+        };
+        if metadata.file_type().is_symlink() {
+            let Ok(target) = std::fs::read_link(&full) else {
+                return false;
+            };
+            let Ok(target) = gix::path::into_bstr(target) else {
+                return false;
+            };
+            out.extend_from_slice(target.as_ref());
+            return true;
+        }
+        if !within_worktree_cap(&metadata) {
+            return false;
+        }
+        let Some((pipeline, index)) = self.pipeline.as_mut() else {
+            return false;
+        };
+        let Ok(path) = gix::path::into_bstr(relative) else {
+            return false;
+        };
+        if self.lfs_clean.runs_for(self.repo, index, path.as_ref()) {
+            return false;
+        }
+        #[cfg(test)]
+        LINE_STATS_WORKTREE_READS.with(|reads| reads.set(reads.get() + 1));
+        let Ok(file) = std::fs::File::open(&full) else {
+            return false;
+        };
+        let Ok(converted) = pipeline.convert_to_git(file, relative, index) else {
+            return false;
+        };
+        match converted {
+            ToGitOutcome::Unchanged(mut file) => file.read_to_end(out).is_ok(),
+            ToGitOutcome::Process(mut stream) => stream.read_to_end(out).is_ok(),
+            ToGitOutcome::Buffer(bytes) => {
+                out.extend_from_slice(bytes);
+                true
+            }
+        }
+    }
+}
+
 /// Whether reading a path runs the LFS clean filter: `filter=lfs` selects it
-/// and a driver is configured. Probed at the first LFS pointer of a scan.
+/// and a driver is configured. Probed at the first read that needs it.
 enum LfsCleanFilter<'repo> {
     Unprobed,
     Off,
@@ -534,59 +603,6 @@ impl<'repo> LfsCleanFilter<'repo> {
         outcome.iter_selected().any(|matched| {
             matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == "lfs")
         })
-    }
-}
-
-fn read_worktree_git_bytes(
-    gix_repo: &super::GixRepo,
-    pipeline: Option<&mut (
-        gix::filter::Pipeline<'_>,
-        gix::worktree::IndexPersistedOrInMemory,
-    )>,
-    relative: &std::path::Path,
-    out: &mut Vec<u8>,
-) -> bool {
-    use std::io::Read as _;
-
-    #[cfg(test)]
-    LINE_STATS_WORKTREE_READS.with(|reads| reads.set(reads.get() + 1));
-
-    let full = gix_repo.spec.workdir.join(relative);
-    let Ok(metadata) = std::fs::symlink_metadata(&full) else {
-        // Vanished between the status walk and here; empty diffs as a deletion.
-        return true;
-    };
-    if metadata.file_type().is_symlink() {
-        let Ok(target) = std::fs::read_link(&full) else {
-            return false;
-        };
-        let Ok(target) = gix::path::into_bstr(target) else {
-            return false;
-        };
-        out.extend_from_slice(target.as_ref());
-        return true;
-    }
-    if !within_worktree_cap(&metadata) {
-        return false;
-    }
-    let Some((pipeline, index)) = pipeline else {
-        return false;
-    };
-    let Ok(file) = std::fs::File::open(&full) else {
-        return false;
-    };
-    let Ok(converted) = pipeline.convert_to_git(file, relative, index) else {
-        return false;
-    };
-
-    use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
-    match converted {
-        ToGitOutcome::Unchanged(mut file) => file.read_to_end(out).is_ok(),
-        ToGitOutcome::Process(mut stream) => stream.read_to_end(out).is_ok(),
-        ToGitOutcome::Buffer(bytes) => {
-            out.extend_from_slice(bytes);
-            true
-        }
     }
 }
 
@@ -649,13 +665,17 @@ mod tests {
         for path in ["staged.bin", "unstaged.bin"] {
             write_file(dir, path, &pointer('a', 5));
         }
+        // Stored as content: committed before a driver was configured.
+        write_file(dir, "content.bin", "content\n");
+        write_file(dir, ".gitattributes", "*.bin filter=lfs\n");
         git_success(dir, &["add", "."]);
         git_success(dir, &["commit", "-m", "pointers"]);
         // A staged change is pointer against pointer, both already stored.
         write_file(dir, "staged.bin", &pointer('b', 7));
         git_success(dir, &["add", "staged.bin"]);
+        write_file(dir, "intent.bin", "new payload\n");
+        git_success(dir, &["add", "-N", "intent.bin"]);
         let ran = dir.join("clean-filter-ran");
-        write_file(dir, ".gitattributes", "*.bin filter=lfs\n");
         git_success(
             dir,
             &[
@@ -665,16 +685,21 @@ mod tests {
             ],
         );
         std::fs::write(dir.join("unstaged.bin"), b"smudged payload\n").unwrap();
+        std::fs::write(dir.join("untracked.bin"), b"new payload\n").unwrap();
+        write_file(dir, "content.bin", "content\nedited\n");
         let repo = open_repo(dir);
         LINE_STATS_WORKTREE_READS.with(|reads| reads.set(0));
         for _ in 0..2 {
             let stats = repo
                 .uncommitted_line_stats_impl(&CancellationToken::new())
                 .unwrap();
-            assert_eq!(
-                stats.unstaged[std::path::Path::new("unstaged.bin")],
-                LineStats::UNKNOWN
-            );
+            for path in ["unstaged.bin", "untracked.bin", "intent.bin", "content.bin"] {
+                assert_eq!(
+                    stats.unstaged[std::path::Path::new(path)],
+                    LineStats::UNKNOWN,
+                    "{path}"
+                );
+            }
             assert_eq!(
                 counts(stats.staged.get(std::path::Path::new("staged.bin"))),
                 Some((Some(2), Some(2)))
@@ -706,6 +731,8 @@ mod tests {
         std::fs::remove_file(dir.join("deleted.bin")).unwrap();
         write_file(dir, "plain.txt", "edited\n");
         write_file(dir, "tracked.dat", "smudged payload\n");
+        write_file(dir, "new.txt", "new\n");
+        write_file(dir, "new.bin", "new payload\n");
         let unstaged = |path: &str| {
             open_repo(dir)
                 .uncommitted_line_stats_impl(&CancellationToken::new())
@@ -721,6 +748,7 @@ mod tests {
             counts(Some(&unstaged("plain.txt"))),
             Some((Some(1), Some(3)))
         );
+        assert_eq!(counts(Some(&unstaged("new.txt"))), Some((Some(1), Some(0))));
 
         let ran = dir.join("clean-filter-ran");
         git_success(
@@ -740,8 +768,57 @@ mod tests {
             counts(Some(&unstaged("plain.txt"))),
             Some((Some(1), Some(3)))
         );
+        assert_eq!(counts(Some(&unstaged("new.txt"))), Some((Some(1), Some(0))));
         assert_eq!(unstaged("tracked.dat"), LineStats::UNKNOWN);
+        assert_eq!(unstaged("new.bin"), LineStats::UNKNOWN);
         assert!(!ran.exists(), "the LFS clean filter must not run");
+    }
+
+    /// Refresh cost of counting untracked files: 4 KiB each, in 200 folders.
+    #[test]
+    #[ignore = "timing probe"]
+    fn perf_untracked_line_stats_refresh() {
+        let body = |seed: usize| -> String {
+            (0..64)
+                .map(|line| format!("untracked {seed:06} line {line:02} representative text ...\n"))
+                .collect()
+        };
+        for untracked in [2_000usize, 20_000] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path();
+            init_test_repo(dir);
+            write_file(dir, "seed.txt", "seed\n");
+            git_success(dir, &["add", "."]);
+            git_success(dir, &["commit", "-q", "-m", "seed"]);
+            for ix in 0..untracked {
+                write_file(
+                    dir,
+                    &format!("new/d{:03}/f{ix:06}.txt", ix % 200),
+                    &body(ix),
+                );
+            }
+            let repo = open_repo(dir);
+            let token = CancellationToken::new();
+            let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+            assert_eq!(entries.len(), untracked);
+            std::hint::black_box(repo.line_stats_for_entries_impl(&entries, &token).unwrap());
+            let (mut walk_ms, mut stats_ms) = (Vec::new(), Vec::new());
+            for _ in 0..5 {
+                let started = std::time::Instant::now();
+                let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+                walk_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+                let started = std::time::Instant::now();
+                let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
+                stats_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+                std::hint::black_box(stats);
+            }
+            walk_ms.sort_by(f64::total_cmp);
+            stats_ms.sort_by(f64::total_cmp);
+            eprintln!(
+                "untracked={untracked}: status walk min {:.1} median {:.1} ms | line stats min {:.1} median {:.1} ms",
+                walk_ms[0], walk_ms[2], stats_ms[0], stats_ms[2]
+            );
+        }
     }
 
     /// Refresh cost with real `git-lfs`: 20 modified 1 MiB payloads.
@@ -1097,37 +1174,88 @@ mod tests {
         assert_eq!(renamed.deletions, Some(0));
     }
 
+    /// The index holds nothing for an untracked file, so all of it is added,
+    /// as the diff panel shows it.
     #[test]
-    fn untracked_and_binary_report_no_counts() {
+    fn untracked_files_count_every_line_as_added() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let workdir = tmp.path();
         init_test_repo(workdir);
-
         write_file(workdir, "seed.txt", "seed\n");
         git_success(workdir, &["add", "."]);
         git_success(workdir, &["commit", "-m", "seed"]);
+
+        write_file(workdir, "brand-new.txt", &lines("new", 3));
+        write_file(workdir, "nested/unterminated.txt", "one\ntwo");
+        write_file(workdir, "empty.txt", "");
+
+        let stats = open_repo(workdir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .expect("line stats");
+        let unstaged = |path: &str| counts(stats.unstaged.get(std::path::Path::new(path)));
+        assert_eq!(unstaged("brand-new.txt"), Some((Some(3), Some(0))));
+        assert_eq!(
+            unstaged("nested/unterminated.txt"),
+            Some((Some(2), Some(0)))
+        );
+        assert_eq!(unstaged("empty.txt"), Some((Some(0), Some(0))));
+        assert!(stats.staged.is_empty(), "nothing was staged");
+    }
+
+    /// `git add -N` moves a new file from untracked to added; what it adds
+    /// stays the same.
+    #[test]
+    fn an_untracked_file_counts_like_the_same_file_added_with_intent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "seed.txt", "seed\n");
+        git_success(workdir, &["add", "."]);
+        git_success(workdir, &["commit", "-m", "seed"]);
+        write_file(workdir, "new.rs", "use a;\nfn a() {}\n");
+        let new_file = |workdir: &std::path::Path| {
+            open_repo(workdir)
+                .uncommitted_line_stats_impl(&CancellationToken::new())
+                .expect("line stats")
+                .unstaged
+                .get(std::path::Path::new("new.rs"))
+                .copied()
+        };
+
+        let untracked = new_file(workdir);
+        git_success(workdir, &["add", "-N", "new.rs"]);
+        let intent_to_add = new_file(workdir);
+
+        assert_eq!(counts(untracked.as_ref()), Some((Some(2), Some(0))));
+        assert!(untracked.is_some_and(|stats| stats.edit.is_some()));
+        assert_eq!(untracked, intent_to_add);
+    }
+
+    #[test]
+    fn binary_and_oversized_files_report_unknown_counts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
 
         std::fs::write(workdir.join("blob.bin"), b"\0\0\0binary\0\0").expect("write binary");
         git_success(workdir, &["add", "blob.bin"]);
         git_success(workdir, &["commit", "-m", "binary"]);
         std::fs::write(workdir.join("blob.bin"), b"\0\0\0changed\0\0").expect("edit binary");
-        write_file(workdir, "brand-new.txt", "hello\n");
+        std::fs::write(workdir.join("new.bin"), b"\0\0\0new\0\0").expect("write binary");
+        let oversized = "line\n".repeat(WORKTREE_MAX_BYTES as usize / 5 + 1);
+        write_file(workdir, "oversized.txt", &oversized);
 
         let stats = open_repo(workdir)
             .uncommitted_line_stats_impl(&CancellationToken::new())
             .expect("line stats");
 
-        assert_eq!(
-            stats.unstaged.get(std::path::Path::new("blob.bin")),
-            Some(&LineStats::UNKNOWN),
-            "binary files are reported as unknown, not zero"
-        );
-        assert!(
-            !stats
-                .unstaged
-                .contains_key(std::path::Path::new("brand-new.txt")),
-            "untracked files are in neither index lane"
-        );
+        for path in ["blob.bin", "new.bin", "oversized.txt"] {
+            assert_eq!(
+                stats.unstaged.get(std::path::Path::new(path)),
+                Some(&LineStats::UNKNOWN),
+                "{path} is reported as unknown, not zero"
+            );
+        }
     }
 
     /// A repo that closed mid-scan must not keep this running.

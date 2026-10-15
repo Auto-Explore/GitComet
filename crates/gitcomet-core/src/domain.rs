@@ -593,8 +593,8 @@ pub struct FileStatus {
     pub conflict: Option<FileConflictKind>,
 }
 
-/// `None` means unknown: binary, over the size cap, or not reported by git at
-/// all — an untracked file is in neither index lane.
+/// `None` means unknown: binary, over the size cap, or content left unread
+/// (an LFS or annex payload).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LineStats {
     pub additions: Option<u32>,

@@ -999,7 +999,7 @@ impl GixRepo {
                     false,
                     &cancellation,
                 )?;
-                self.add_worktree_edits(&mut files, &cancellation)?;
+                self.add_worktree_line_stats(&mut files, &cancellation)?;
                 Ok(files)
             }
         }

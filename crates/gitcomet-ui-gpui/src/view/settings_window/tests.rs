@@ -2842,9 +2842,8 @@ fn changed_file_list_options_cover_every_layout_and_sort() {
     }
 }
 
-/// The defaults reach every list: the details pane, its sections (Untracked
-/// keeps path order under a sort it cannot offer), and the global a list an
-/// extension opens reads.
+/// The defaults reach every list: the details pane, its sections, and the
+/// global a list an extension opens reads.
 #[gpui::test]
 fn changed_file_list_defaults_reach_the_main_window(cx: &mut gpui::TestAppContext) {
     use crate::view::rows::CommitFileSort;
@@ -2892,7 +2891,7 @@ fn changed_file_list_defaults_reach_the_main_window(cx: &mut gpui::TestAppContex
         );
         assert_eq!(
             pane.status_file_sort_for(StatusSection::Untracked),
-            CommitFileSort::PathAscending
+            CommitFileSort::Edits
         );
         assert_eq!(
             crate::view::FileListDefaults::current(app),

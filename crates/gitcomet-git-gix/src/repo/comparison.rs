@@ -248,15 +248,12 @@ pub(super) fn commit_to_worktree_files(
         })
         .collect();
     if include_untracked {
-        for path in untracked_paths(workdir, cancellation)? {
-            // Counted from disk, under the tracked lanes' size cap.
-            let stats = super::line_stats::read_worktree_file_capped(&workdir.join(&path))
-                .map(|bytes| super::log::line_stats_from_bytes(&[], &bytes))
-                .unwrap_or_default();
-            files.push(
-                CommitFileChange::new(path, FileStatusKind::Untracked).with_line_stats(stats),
-            );
-        }
+        // Counted by `GixRepo::add_worktree_line_stats`, as the status list counts them.
+        files.extend(
+            untracked_paths(workdir, cancellation)?
+                .into_iter()
+                .map(|path| CommitFileChange::new(path, FileStatusKind::Untracked)),
+        );
     }
     Ok(files)
 }
@@ -300,7 +297,7 @@ impl GixRepo {
                     options.include_untracked,
                     cancellation,
                 )?;
-                self.add_worktree_edits(&mut files, cancellation)?;
+                self.add_worktree_line_stats(&mut files, cancellation)?;
                 files
             }
         };
@@ -438,17 +435,7 @@ mod tests {
             "line\n".repeat(super::super::line_stats::WORKTREE_MAX_BYTES as usize / 5 + 1);
         std::fs::write(dir.join("big.txt"), oversized).unwrap();
 
-        let repo = open_repo(dir);
-        let head = super::super::history::gix_head_id_or_none(&repo.repo())
-            .unwrap()
-            .unwrap();
-        let files = commit_to_worktree_files(
-            dir,
-            &CommitId(head.to_string().into()),
-            true,
-            &CancellationToken::new(),
-        )
-        .unwrap();
+        let files = against_the_worktree_with_untracked(&open_repo(dir));
         let counts = |name: &str| {
             let file = files
                 .iter()
@@ -461,6 +448,65 @@ mod tests {
             (FileStatusKind::Untracked, Some(2), Some(0))
         );
         assert_eq!(counts("big.txt"), (FileStatusKind::Untracked, None, None));
+    }
+
+    /// The comparison counts an untracked file the way the status list does:
+    /// as git would store it, so a symlink is its link text, and a path the
+    /// LFS filter would clean is unknown rather than cleaned.
+    #[cfg(unix)]
+    #[test]
+    fn untracked_counts_match_the_status_list() {
+        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, ".gitattributes", "*.bin filter=lfs\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        git_success(dir, &["config", "filter.lfs.clean", "cat"]);
+        write_file(dir, "three.txt", "a\nb\nc\n");
+        std::os::unix::fs::symlink("three.txt", dir.join("link")).unwrap();
+        write_file(dir, "new.bin", "payload\n");
+
+        let repo = open_repo(dir);
+        let status = repo
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap()
+            .unstaged;
+        let files = against_the_worktree_with_untracked(&repo);
+        for path in ["three.txt", "link", "new.bin"] {
+            let file = files
+                .iter()
+                .find(|file| file.path == Path::new(path))
+                .unwrap();
+            let listed = status[Path::new(path)];
+            assert_eq!(
+                (file.kind, file.additions, file.deletions, file.edit),
+                (
+                    FileStatusKind::Untracked,
+                    listed.additions,
+                    listed.deletions,
+                    listed.edit
+                ),
+                "{path}"
+            );
+        }
+        assert_eq!(status[Path::new("link")].additions, Some(1), "link text");
+        assert_eq!(status[Path::new("new.bin")].additions, None);
+    }
+
+    fn against_the_worktree_with_untracked(repo: &GixRepo) -> Vec<CommitFileChange> {
+        let head = super::super::history::gix_head_id_or_none(&repo.repo())
+            .unwrap()
+            .unwrap();
+        repo.compare_files_impl(
+            &CommitId(head.to_string().into()),
+            None,
+            &ComparisonOptions::direct().with_untracked(true),
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .files
     }
 
     #[test]

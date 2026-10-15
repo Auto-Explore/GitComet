@@ -1330,6 +1330,93 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
     );
 }
 
+/// Untracked files are counted in the unstaged lane, so the split view's
+/// Untracked section shows them, and picks them up like the other sections.
+#[gpui::test]
+fn the_untracked_section_shows_line_stats_that_arrive_without_a_status_change(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(651);
+    let paths = ["new/a.rs", "new/b.rs"];
+    let mut repo = repo_with_unstaged_paths(repo_id, &paths);
+    repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
+        paths
+            .iter()
+            .map(|path| gitcomet_core::domain::FileStatus {
+                path: (*path).into(),
+                kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                conflict: None,
+            })
+            .collect(),
+    ));
+    let folder_additions = |cx: &mut gpui::VisualTestContext| -> Option<u64> {
+        cx.update(|_window, app| {
+            let pane = view.read(app).details_pane.read(app);
+            let repo = pane.active_repo().expect("active repo");
+            let plan = pane.status_file_plan(repo, StatusSection::Untracked);
+            match plan.row_at(crate::view::rows::RowIx(0)) {
+                Some(crate::view::rows::FileListRow::Directory { additions, .. }) => additions,
+                other => panic!("expected a folder row, got {other:?}"),
+            }
+        })
+    };
+
+    let without_counts = repo.clone();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(without_counts, repo_id), cx);
+            this.set_change_tracking_view(ChangeTrackingView::SplitUntracked, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.toggle_file_list_layout(
+                    repo_id,
+                    crate::view::rows::FileListId::Status(StatusSection::Untracked),
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert_eq!(folder_additions(cx), None, "no counts before they load");
+
+    // The same repository and status rev: only the stats lane moves.
+    let unstaged = paths
+        .iter()
+        .enumerate()
+        .map(|(ix, path)| {
+            (
+                std::path::PathBuf::from(path),
+                gitcomet_core::domain::LineStats::from((Some(ix as u32 + 2), Some(0))),
+            )
+        })
+        .collect();
+    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::UncommittedLineStats {
+            staged: Default::default(),
+            unstaged,
+        },
+    ));
+    repo.unstaged_line_stats_rev = 1;
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(folder_additions(cx), Some(5));
+}
+
 /// A tree hoists directories above files, so a range computed in ordinal space
 /// skips files displayed between the clicks — and those files then get staged.
 #[gpui::test]
