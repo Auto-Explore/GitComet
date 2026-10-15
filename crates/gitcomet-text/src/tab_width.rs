@@ -7,8 +7,8 @@
 
 use std::borrow::Cow;
 
-pub(in crate::view) const DEFAULT_TAB_WIDTH: u8 = 4;
-pub(in crate::view) const MAX_TAB_WIDTH: u8 = 16;
+pub const DEFAULT_TAB_WIDTH: u8 = 4;
+pub const MAX_TAB_WIDTH: u8 = 16;
 
 /// Spaces the tab at `column` takes.
 #[inline]
@@ -18,7 +18,7 @@ fn tab_span(column: usize, width: usize) -> usize {
 
 /// Columns (and expanded bytes) `ch` takes at `column`.
 #[inline]
-pub(in crate::view) fn char_columns(width: usize, ch: char, column: usize) -> usize {
+pub fn char_columns(width: usize, ch: char, column: usize) -> usize {
     if ch == '\t' {
         tab_span(column, width)
     } else {
@@ -28,7 +28,7 @@ pub(in crate::view) fn char_columns(width: usize, ch: char, column: usize) -> us
 
 /// Expanded bytes `ch` takes at `column`.
 #[inline]
-pub(in crate::view) fn char_expanded_len(width: usize, ch: char, column: usize) -> usize {
+pub fn char_expanded_len(width: usize, ch: char, column: usize) -> usize {
     if ch == '\t' {
         tab_span(column, width)
     } else {
@@ -38,12 +38,7 @@ pub(in crate::view) fn char_expanded_len(width: usize, ch: char, column: usize) 
 
 /// Append `text` (a line, or the rest of one starting at `*column`) with its
 /// tabs expanded, advancing `column`.
-pub(in crate::view) fn push_expanded(
-    width: usize,
-    out: &mut String,
-    text: &str,
-    column: &mut usize,
-) {
+pub fn push_expanded(width: usize, out: &mut String, text: &str, column: &mut usize) {
     let mut rest = text;
     while let Some(tab) = rest.find('\t') {
         let before = &rest[..tab];
@@ -68,7 +63,7 @@ fn column_count(text: &str) -> usize {
 }
 
 /// A line with its tabs expanded.
-pub(in crate::view) fn expand_tabs(width: usize, line: &str) -> Cow<'_, str> {
+pub fn expand_tabs(width: usize, line: &str) -> Cow<'_, str> {
     if !line.contains('\t') {
         return Cow::Borrowed(line);
     }
@@ -79,7 +74,7 @@ pub(in crate::view) fn expand_tabs(width: usize, line: &str) -> Cow<'_, str> {
 
 /// Inline patches paint the sign separately; tab stops begin at the content.
 /// Keep the sign in searchable/copyable text without counting it as a column.
-pub(in crate::view) fn expand_patch_tabs(width: usize, line: &str) -> Cow<'_, str> {
+pub fn expand_patch_tabs(width: usize, line: &str) -> Cow<'_, str> {
     if !line.contains('\t') {
         return Cow::Borrowed(line);
     }
@@ -94,7 +89,7 @@ pub(in crate::view) fn expand_patch_tabs(width: usize, line: &str) -> Cow<'_, st
 }
 
 /// Length corresponding to `expand_patch_tabs`, without allocating text.
-pub(in crate::view) fn expanded_patch_len(width: usize, line: &str) -> usize {
+pub fn expanded_patch_len(width: usize, line: &str) -> usize {
     if matches!(line.as_bytes().first(), Some(b'+' | b'-' | b' ')) {
         1 + expanded_len(width, &line[1..])
     } else {
@@ -103,7 +98,7 @@ pub(in crate::view) fn expanded_patch_len(width: usize, line: &str) -> usize {
 }
 
 /// Byte length of `line` once expanded.
-pub(in crate::view) fn expanded_len(width: usize, line: &str) -> usize {
+pub fn expanded_len(width: usize, line: &str) -> usize {
     if !line.contains('\t') {
         return line.len();
     }
@@ -124,11 +119,7 @@ pub(in crate::view) fn expanded_len(width: usize, line: &str) -> usize {
 
 /// The expanded offset of raw byte `raw` in `line`. A tab maps to the start
 /// of its spaces.
-pub(in crate::view) fn display_offset_for_raw_offset(
-    width: usize,
-    line: &str,
-    raw: usize,
-) -> usize {
+pub fn display_offset_for_raw_offset(width: usize, line: &str, raw: usize) -> usize {
     if !line.contains('\t') {
         return raw.min(line.len());
     }
@@ -152,11 +143,7 @@ pub(in crate::view) fn display_offset_for_raw_offset(
 
 /// The raw byte in `line` whose display span contains `display`; an offset
 /// inside a tab's spaces resolves to that tab.
-pub(in crate::view) fn raw_offset_for_display_offset(
-    width: usize,
-    line: &str,
-    display: usize,
-) -> usize {
+pub fn raw_offset_for_display_offset(width: usize, line: &str, display: usize) -> usize {
     if !line.contains('\t') {
         return display.min(line.len());
     }

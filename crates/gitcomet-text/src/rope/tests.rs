@@ -622,7 +622,7 @@ fn many_small_edits_do_not_fragment_the_tree() {
 
     let edits = 500usize;
     for ix in 0..edits {
-        let at = rope.clip_offset((ix * 7) % rope.len(), gpui::sum_tree::Bias::Left);
+        let at = rope.clip_offset((ix * 7) % rope.len(), gpui_sum_tree::Bias::Left);
         rope.replace(at..at, "x");
         oracle.insert(at, 'x');
     }

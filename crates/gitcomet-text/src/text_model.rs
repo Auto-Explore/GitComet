@@ -1,5 +1,5 @@
 use crate::rope::{Point, Rope};
-use gpui::SharedString;
+use gpui_shared_string::SharedString;
 use std::borrow::Cow;
 use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -164,7 +164,7 @@ impl TextModel {
     pub fn clamp_to_char_boundary(&self, offset: usize) -> usize {
         self.core
             .rope
-            .clip_offset(offset, gpui::sum_tree::Bias::Left)
+            .clip_offset(offset, gpui_sum_tree::Bias::Left)
     }
 
     /// Replace `range` with `new_text`, returning the byte range the inserted
@@ -366,7 +366,7 @@ impl TextModelSnapshot {
     fn clamp_offset_to_char_boundary(&self, offset: usize) -> usize {
         self.core
             .rope
-            .clip_offset(offset, gpui::sum_tree::Bias::Left)
+            .clip_offset(offset, gpui_sum_tree::Bias::Left)
     }
 
     fn normalized_char_range(&self, range: Range<usize>) -> Range<usize> {

@@ -30,7 +30,7 @@
 // the tree yet. They are covered by this module's own tests.
 #![allow(dead_code)]
 
-use gpui::sum_tree::{Bias, ContextLessSummary, Dimension, Dimensions, Item, SumTree};
+use gpui_sum_tree::{Bias, ContextLessSummary, Dimension, Dimensions, Item, SumTree};
 use memchr::{memchr, memrchr};
 use std::fmt;
 use std::ops::{Add, AddAssign, Range};
@@ -696,7 +696,7 @@ impl Eq for Rope {}
 
 /// Borrowed chunk slices covering a byte range.
 pub struct Chunks<'a> {
-    cursor: gpui::sum_tree::Cursor<'a, 'static, Chunk, usize>,
+    cursor: gpui_sum_tree::Cursor<'a, 'static, Chunk, usize>,
     range: Range<usize>,
     done: bool,
 }

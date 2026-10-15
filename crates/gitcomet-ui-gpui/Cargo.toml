@@ -36,6 +36,7 @@ gitcomet-extension-api = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-perf = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
+gitcomet-text = { workspace = true }
 gitcomet-tree-sitter-alloc = { workspace = true }
 gitcomet-ui-kit = { workspace = true }
 # `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.

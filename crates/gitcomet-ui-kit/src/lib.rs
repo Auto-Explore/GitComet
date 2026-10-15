@@ -9,6 +9,9 @@
 // Every type a public signature exposes must be nameable by a consumer.
 #![warn(unnameable_types)]
 
+/// Text foundations shared with syntax highlighting; kept at the kit's paths.
+pub use gitcomet_text::{rope, text_model};
+
 /// The GPUI this kit is built against; use it instead of a separate `gpui`
 /// dependency so versions cannot drift.
 pub use gpui;
@@ -34,11 +37,9 @@ pub mod menu;
 pub mod menu_placement;
 mod minimap;
 pub mod press_gesture;
-pub mod rope;
 mod scrollbar;
 mod text_input;
 pub mod text_layout;
-pub mod text_model;
 pub mod text_runs;
 pub mod text_selection;
 pub mod text_selection_owner;
@@ -111,7 +112,13 @@ mod version_contract {
             super::GPUI_REVISION,
             "update crates/gitcomet-ui-kit/gpui-revision with the workspace gpui pin"
         );
-        for dependency in ["gpui_platform", "gpui_wgpu", "gpui_parley"] {
+        for dependency in [
+            "gpui_platform",
+            "gpui_wgpu",
+            "gpui_parley",
+            "gpui_shared_string",
+            "gpui_sum_tree",
+        ] {
             assert_eq!(
                 revision(dependency),
                 gpui_revision,

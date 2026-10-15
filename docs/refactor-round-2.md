@@ -582,3 +582,15 @@ resolver view. The quick search bar's toggles are the kit's `SearchToggles`,
 which the host converts to the search engine's options. All 31 moved base tests
 pass (three are Windows-only); kit-facing UI tests and the downstream example
 pass. The UI crate gained 118 production lines that moved out of the kit.
+
+### 2.0 Text foundations
+
+`crates/gitcomet-text` holds the rope and text model (from the kit, which
+re-exports them at their old paths), tab expansion, the instrumented LRU caches
+and recency queue (from the host's rows module) and `SyntaxTokenKind`. It
+depends on GPUI's standalone string and sum-tree crates at the pinned revision,
+never on GPUI itself, which a boundary rule enforces and the kit's revision
+contract test now checks. The caches' test-only accessors (`peek`, `len`,
+`clear`, `metrics`) became ordinary API, so no feature is needed to reach them.
+All 50 moved tests pass in the new crate, and the UI suite count reconciles
+exactly with the tests that left it.

@@ -14,6 +14,7 @@ members = [
   "crates/gitcomet-perf",
   "crates/gitcomet-state",
   "crates/gitcomet-fs-watch",
+  "crates/gitcomet-text",
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
@@ -71,6 +72,7 @@ default-members = [
   "crates/gitcomet-git-gix",
   "crates/gitcomet-perf",
   "crates/gitcomet-state",
+  "crates/gitcomet-text",
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
 ]
@@ -98,6 +100,7 @@ gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-perf = { path = "crates/gitcomet-perf" }
 gitcomet-state = { path = "crates/gitcomet-state" }
+gitcomet-text = { path = "crates/gitcomet-text" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
@@ -136,6 +139,8 @@ gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", re
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", features = ["font-kit"] }
 gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
 gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
 image = "0.25.10"
 fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.

@@ -39,6 +39,7 @@ See [Architecture](docs/architecture.md) for dependency boundaries, state flow,
 repository lifetimes, and document ownership.
 
 - `crates/gitcomet-base`: product identity (`identity`), per-user directories (`platform::dirs`), platform detection, file utilities, operation traces and work counters. No Git domain types; core re-exports these modules at their `gitcomet_core::` paths.
+- `crates/gitcomet-text`: text foundations without GPUI itself: rope and text model, tab expansion, instrumented LRU caches and syntax token kinds. The UI kit re-exports `rope` and `text_model`.
 - `crates/gitcomet-core`: domain types, Git service contracts, merge algorithm, conflict session, text utils.
 - `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.

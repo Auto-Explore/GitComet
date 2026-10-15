@@ -321,7 +321,7 @@ mod sidebar_sticky;
 mod splash;
 mod state_apply;
 mod status_actions;
-pub(in crate::view) mod tab_width;
+pub(in crate::view) use gitcomet_text::tab_width;
 mod terminal_alacritty;
 mod terminal_panel;
 mod terminal_preferences;
@@ -366,9 +366,9 @@ pub(in crate::view) use terminal_preferences::{
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 use commit_message_hover::{CommitMessageHoverHost, CommitMessageHoverState};
+use diff_text_model::CachedDiffStyledText;
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
-use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{
     ConflictRowSelectionTracker, DiffTextEmptySpaceDecoration, DiffTextSelectionOverlay,
     DiffTextSelectionTracker, empty_diff_text_document, flowing_diff_text_empty_space,
@@ -386,6 +386,7 @@ use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
+use gitcomet_text::SyntaxTokenKind;
 use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
 pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
