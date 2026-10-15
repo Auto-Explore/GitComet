@@ -1861,7 +1861,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
             ),
             true,
         );
-        let write = hold_editor_saves();
+        let write = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
         cx.update(|_, app| {
             view.read(app).main_pane.clone().update(app, |pane, cx| {
                 let expected = pane

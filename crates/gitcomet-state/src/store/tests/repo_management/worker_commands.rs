@@ -308,6 +308,7 @@ fn guarded_effect_sender_wraps_repository_load_messages() {
         Arc::new(std::sync::atomic::AtomicBool::new(true)),
         StoreInstanceId::next(),
         crate::store::repository_preferences::PreferenceHub::new(None),
+        crate::store::isolated_filesystem(),
     );
     let guarded = sender.with_repo_load_guard(repo_id, 3, CancellationToken::new());
 

@@ -14,19 +14,17 @@ pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Holds the shared filesystem worker, so editor saves queued meanwhile stay
-/// in flight until [`HeldEditorSaves::release`]. The UI thread must not read
-/// through the editor while held: that read takes the same lock.
+/// Holds a test store's filesystem engine, so that store's editor saves queued
+/// meanwhile stay in flight until [`HeldEditorSaves::release`]. The UI thread
+/// must not read through the editor while held: that read takes the same lock.
 pub(super) struct HeldEditorSaves(
     Option<std::sync::MutexGuard<'static, gitcomet_core::filesystem::Filesystem>>,
 );
 
-pub(super) fn hold_editor_saves() -> HeldEditorSaves {
-    HeldEditorSaves(Some(
-        gitcomet_core::filesystem::global()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-    ))
+pub(super) fn hold_editor_saves(
+    filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
+) -> HeldEditorSaves {
+    HeldEditorSaves(Some(filesystem.lock().unwrap_or_else(|e| e.into_inner())))
 }
 
 impl HeldEditorSaves {
@@ -37,7 +35,7 @@ impl HeldEditorSaves {
     }
 }
 
-/// Filesystem effects run on the real shared worker. Pump the results into the
+/// Filesystem effects run on the store's real filesystem worker. Pump the results into the
 /// pane without replacing the synthetic repository the fixture pushed.
 pub(super) fn finish_editor_saves(
     view: &gpui::Entity<GitCometView>,

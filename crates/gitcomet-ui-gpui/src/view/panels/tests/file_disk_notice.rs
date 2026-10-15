@@ -318,7 +318,8 @@ async fn own_save_does_not_raise_the_notice_before_or_after_the_write_lands(
     });
     // The worker holds this lock for the whole save, so the write stays
     // queued until it is released.
-    let worker = gitcomet_core::filesystem::global()
+    let worker = h
+        .with_pane(cx, |pane, _| pane.store.filesystem())
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));

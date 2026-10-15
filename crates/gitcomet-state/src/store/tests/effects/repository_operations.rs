@@ -400,7 +400,7 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
     for (path, succeeds) in [("file.txt", true), ("../outside.txt", false)] {
         let (release, wait) = std::sync::mpsc::channel();
         // Saves run on the shared filesystem queue, not the repo executor.
-        super::super::executor::filesystem_executor().spawn(move || {
+        super::super::executor::FILESYSTEM_QUEUE.spawn(move || {
             let _ = wait.recv();
         });
         let (completion, received) = smol::channel::bounded(1);

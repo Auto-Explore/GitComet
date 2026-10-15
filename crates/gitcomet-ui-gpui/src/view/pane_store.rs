@@ -13,6 +13,7 @@ pub(crate) struct DiffBinding {
 #[derive(Clone)]
 pub(crate) struct PaneStore {
     store: std::sync::Weak<AppStore>,
+    filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     snapshot: Option<std::rc::Rc<std::cell::RefCell<Arc<AppState>>>>,
     pub binding: Option<DiffBinding>,
     /// What the pane lets the user do now: the owner's policy, with staging
@@ -26,6 +27,7 @@ pub(crate) struct PaneStore {
 impl From<Arc<AppStore>> for PaneStore {
     fn from(store: Arc<AppStore>) -> Self {
         Self {
+            filesystem: store.filesystem(),
             store: Arc::downgrade(&store),
             snapshot: None,
             binding: None,
@@ -49,6 +51,11 @@ fn bound_worktree(state: &AppState, binding: DiffBinding) -> Option<std::path::P
 }
 
 impl PaneStore {
+    /// The window store's filesystem engine, kept so it outlives the weak store.
+    pub fn filesystem(&self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        self.filesystem
+    }
+
     pub fn bind_snapshot(
         &mut self,
         state: Arc<AppState>,

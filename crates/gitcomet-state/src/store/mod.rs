@@ -42,6 +42,41 @@ use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
+/// Which filesystem engine and submission queue a store's file operations use.
+#[derive(Clone, Copy)]
+enum FilesystemScope {
+    /// Windows share the process's, so undo history and write order span windows.
+    Process,
+    /// Tests run concurrently in one process; one must not undo, or queue
+    /// behind, another's file operations.
+    #[cfg(any(test, feature = "test-support"))]
+    Store,
+}
+
+impl FilesystemScope {
+    fn engine(self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        match self {
+            Self::Process => gitcomet_core::filesystem::global(),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Store => isolated_filesystem(),
+        }
+    }
+
+    fn own_queue(self) -> Option<std::sync::LazyLock<TaskExecutor>> {
+        match self {
+            Self::Process => None,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Store => Some(std::sync::LazyLock::new(executor::filesystem_queue)),
+        }
+    }
+}
+
+/// Leaked like the process-wide engine, which is never dropped either.
+#[cfg(any(test, feature = "test-support"))]
+fn isolated_filesystem() -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+    Box::leak(Box::default())
+}
+
 /// Inactive repositories whose file monitors keep running, most recently
 /// active first. A macOS FSEvents stream is one recursive registration per
 /// root, so a warm monitor costs little; inotify registers every directory,
@@ -225,6 +260,7 @@ struct WorkerLoopContext<'a> {
     signature_executor: &'a TaskExecutor,
     history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
     session_persist_executor: &'a TaskExecutor,
+    filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
     backend: &'a Arc<dyn GitBackend>,
     publication: &'a AtomicU64,
 }
@@ -455,6 +491,7 @@ impl WorkerLoopContext<'_> {
                     metadata_executor: self.metadata_executor,
                     signature_executor: self.signature_executor,
                     history_find_executor: self.history_find_executor,
+                    filesystem_executor: self.filesystem_executor,
                 },
                 self.thread_state,
                 self.backend,
@@ -593,6 +630,7 @@ impl AppStore {
             backend,
             AppState::default(),
             repository_preferences::PreferenceHub::shared(),
+            FilesystemScope::Process,
         )
     }
 
@@ -604,6 +642,7 @@ impl AppStore {
             repository_preferences::PreferenceHub::new(
                 crate::session::default_session_file_path_for_effect(),
             ),
+            FilesystemScope::Store,
         )
     }
 
@@ -616,6 +655,7 @@ impl AppStore {
             backend,
             AppState::test_default(),
             Arc::clone(&other.msg_tx.preferences),
+            FilesystemScope::Store,
         )
     }
 
@@ -623,14 +663,20 @@ impl AppStore {
         backend: Arc<dyn GitBackend>,
         initial: AppState,
         preferences: Arc<repository_preferences::PreferenceHub>,
+        filesystem: FilesystemScope,
     ) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let discovery_backend = Arc::clone(&backend);
         let state = Arc::new(RwLock::new(Arc::new(initial)));
         let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
         let store_id = StoreInstanceId::next();
         let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let msg_tx =
-            StoreWorkerSender::new(command_tx, Arc::clone(&store_alive), store_id, preferences);
+        let msg_tx = StoreWorkerSender::new(
+            command_tx,
+            Arc::clone(&store_alive),
+            store_id,
+            preferences,
+            filesystem.engine(),
+        );
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
@@ -673,6 +719,12 @@ impl AppStore {
                 std::sync::LazyLock::new(|| {
                     TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
                 });
+            #[allow(unused_mut)]
+            let mut store_filesystem_executor = filesystem.own_queue();
+            let filesystem_executor = match store_filesystem_executor.as_ref() {
+                Some(own) => own,
+                None => &executor::FILESYSTEM_QUEUE,
+            };
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
@@ -836,6 +888,7 @@ impl AppStore {
                     signature_executor: &signature_executor,
                     history_find_executor: &history_find_executor,
                     session_persist_executor: &session_persist_executor,
+                    filesystem_executor,
                     backend: &backend,
                     publication: &thread_publication,
                 };
@@ -1001,6 +1054,12 @@ impl AppStore {
                 if let Some(executor) = std::sync::LazyLock::get_mut(&mut history_find_executor) {
                     executor.join_workers();
                 }
+                if let Some(executor) = store_filesystem_executor
+                    .as_mut()
+                    .and_then(std::sync::LazyLock::get_mut)
+                {
+                    executor.join_workers();
+                }
             }
         });
         worker.expect("spawn store worker thread");
@@ -1110,6 +1169,11 @@ impl AppStore {
         self.public_lifetime
             .history_find_dispatches
             .load(Ordering::Relaxed)
+    }
+
+    /// The filesystem engine this store's file operations journal into.
+    pub fn filesystem(&self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        self.msg_tx.filesystem
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {

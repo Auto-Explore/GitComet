@@ -2948,7 +2948,7 @@ fn check_move_waits_for_existing_saves(
 
     // Both writes stay queued while held. Pushing test state replaces the
     // store's results too, so every push happens before the writes can land.
-    let held = hold_editor_saves();
+    let held = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
     let dispatch = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_, app| {
             view.update(app, |view, cx| {
@@ -3345,7 +3345,7 @@ async fn review_regression_confirmed_failed_save_aborts_repository_move(
         target_workspace: None,
     };
     // The file changes before the worker gets to the save, which refuses it.
-    let held = hold_editor_saves();
+    let held = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.resolve_unsaved_file_edits(action, true, cx);

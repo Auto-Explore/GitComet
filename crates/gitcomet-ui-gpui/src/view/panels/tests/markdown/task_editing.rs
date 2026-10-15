@@ -85,7 +85,8 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
         let saved = {
             // Saves briefly park the original before installing the new file.
             // Share the worker's lock so the read cannot land in that gap.
-            let _filesystem = gitcomet_core::filesystem::global()
+            let _filesystem = cx
+                .update(|_window, app| view.read(app).store.filesystem())
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             std::fs::read_to_string(&saved_path).expect("read saved preview")
