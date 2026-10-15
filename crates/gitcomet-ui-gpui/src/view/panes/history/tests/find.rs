@@ -216,33 +216,6 @@ fn view_selected(
     })
 }
 
-/// The test runtime has no live store poller, so the view only sees what the
-/// reducer did once a test pulls the store's snapshot into it.
-fn sync_view_with_store(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
-    cx.update(|window, app| {
-        view.update(app, |this, cx| {
-            crate::view::test_support::sync_store_snapshot(this, cx);
-        });
-        let _ = window.draw(app);
-    });
-    cx.run_until_parked();
-}
-
-/// Waits for `ready` to hold in the store, then syncs the view. Syncing
-/// first could hand the view the snapshot from just before `ready` held.
-fn wait_for_store(
-    cx: &mut gpui::VisualTestContext,
-    view: &gpui::Entity<GitCometView>,
-    description: &str,
-    ready: impl Fn() -> bool,
-) {
-    wait_until(cx, description, |cx| {
-        let ready = ready();
-        sync_view_with_store(cx, view);
-        ready
-    });
-}
-
 /// Waits for `expected` to be selected in the store and for the history view
 /// to have caught up with it.
 fn wait_for_selection(

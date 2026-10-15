@@ -3383,6 +3383,8 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
     assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
 
     cx.simulate_keystrokes("ctrl-tab");
+    // The switch reaches the store's worker; the next shortcut reads the result.
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)
@@ -3393,6 +3395,7 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
     assert_eq!(store.snapshot().active_repo, Some(repo_ids[1]));
 
     cx.simulate_keystrokes("ctrl-shift-tab");
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)
@@ -3403,6 +3406,7 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
     assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
 
     cx.simulate_keystrokes("ctrl-shift-tab");
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)

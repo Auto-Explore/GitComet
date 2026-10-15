@@ -58,16 +58,6 @@ fn mount_navigation(
 }
 
 impl NavigationFixture {
-    fn sync(&self, cx: &mut gpui::VisualTestContext) {
-        cx.update(|window, app| {
-            self.root.update(app, |root, cx| {
-                crate::view::test_support::sync_store_snapshot(root, cx);
-            });
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
-
     // Measure rendered geometry independently of the navigation helper.
     fn metrics(&self, cx: &mut gpui::VisualTestContext) -> (f64, f64, f64) {
         cx.update(|_, app| {
@@ -108,14 +98,13 @@ impl NavigationFixture {
             size.width,
             size.height + px((rows * height - viewport) as f32),
         ));
-        self.sync(cx);
+        sync_view_with_store(cx, &self.root);
         assert_eq!(self.page_rows(cx), rows.floor() as usize);
     }
 
     fn assert_commit(&self, cx: &mut gpui::VisualTestContext, index: usize) {
         let expected = &self.commits[index].id;
-        wait_until(cx, "page destination selected", |cx| {
-            self.sync(cx);
+        wait_for_store(cx, &self.root, "page destination selected", || {
             self.store.snapshot().repos[0]
                 .history_state
                 .selected_commit
@@ -230,7 +219,7 @@ fn paging_clamps_and_respects_focus(cx: &mut gpui::TestAppContext, indexed: bool
         );
     });
     cx.simulate_keystrokes("secondary-f");
-    fixture.sync(cx);
+    sync_view_with_store(cx, &fixture.root);
     cx.update(|window, app| {
         let history = fixture.history.read(app);
         let input = &history.find.as_ref().unwrap().input;
@@ -298,21 +287,24 @@ fn paging_includes_worktree_rows(cx: &mut gpui::TestAppContext, indexed: bool) {
     // The working tree is row 0. The linked worktree sits at row 10,
     // immediately above commit 9, so exactly one page must select it.
     cx.simulate_keystrokes("pagedown");
-    wait_until(cx, "linked worktree selected by page", |cx| {
-        fixture.sync(cx);
-        fixture.store.snapshot().repos[0]
-            .history_state
-            .worktree_selection
-            .as_ref()
-            == Some(&path)
-    });
+    wait_for_store(
+        cx,
+        &fixture.root,
+        "linked worktree selected by page",
+        || {
+            fixture.store.snapshot().repos[0]
+                .history_state
+                .worktree_selection
+                .as_ref()
+                == Some(&path)
+        },
+    );
     fixture.assert_visible(cx, 10);
     cx.simulate_keystrokes("pagedown");
     fixture.assert_commit(cx, 18);
     fixture.assert_visible(cx, 20);
     cx.simulate_keystrokes("pageup pageup");
-    wait_until(cx, "working tree selected by page", |cx| {
-        fixture.sync(cx);
+    wait_for_store(cx, &fixture.root, "working tree selected by page", || {
         let snapshot = fixture.store.snapshot();
         let history = &snapshot.repos[0].history_state;
         history.selected_commit.is_none() && history.worktree_selection.is_none()
@@ -382,7 +374,7 @@ fn paging_without_selection_enters_at_the_first_row(cx: &mut gpui::TestAppContex
             .store
             .replace_snapshot_for_test(Arc::new(state.clone()));
         set_history_view_state_for_tests(cx, &fixture.root, Arc::new(state));
-        fixture.sync(cx);
+        sync_view_with_store(cx, &fixture.root);
         cx.simulate_keystrokes(key);
         fixture.assert_commit(cx, 0);
         fixture.assert_visible(cx, 0);

@@ -690,6 +690,14 @@ fn restored_active_repository_is_not_reopened_before_view_snapshot_arrives(
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.run_until_parked();
+    // Startup messages still on the store's worker would publish over the restore.
+    let settle_worker = |store: &AppStore| {
+        store
+            .barrier_for_test()
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("the store worker acknowledges its barrier");
+    };
+    settle_worker(&store_for_state);
 
     let path = PathBuf::from("/repos/restored-before-view-sync");
     let mut repo = RepoState::new_opening(
@@ -718,6 +726,7 @@ fn restored_active_repository_is_not_reopened_before_view_snapshot_arrives(
             assert!(this.deferred_repo_bootstrap.is_none());
         });
     });
+    settle_worker(&store_for_state);
     assert!(Arc::ptr_eq(&store_for_state.snapshot(), &restored));
 }
 

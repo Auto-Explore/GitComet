@@ -3905,8 +3905,9 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
         });
     });
     cx.run_until_parked();
-    // The exit goes through the store, so pull the reduced snapshot back into
-    // the view the way a real frame would.
+    // The exit goes through the store, so wait for its worker to reduce it and
+    // pull that snapshot back into the view the way a real frame would.
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)
