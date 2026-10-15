@@ -238,16 +238,6 @@ const fn restore_on_launch_default() -> bool {
     true
 }
 
-/// An unknown or malformed value falls back to its default.
-fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::de::DeserializeOwned + Default,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    Ok(serde_json::from_value(value).unwrap_or_default())
-}
-
 /// Drops workspace entries that fail to parse instead of failing the file.
 pub(super) fn lenient_workspaces<'de, D>(
     deserializer: D,
@@ -428,41 +418,4 @@ pub(super) fn legacy_workspace_from_projection(file: &UiSessionFile) -> Option<W
         last_opened_at: None,
         extensions: super::ExtensionNamespaces::default(),
     })
-}
-
-/// Keep one copy of a session file written by an older format version, so a
-/// downgrade can recover it (older builds drop files with a newer version).
-pub(super) fn preserve_previous_version_session_backup(
-    path: &Path,
-    replacement: &[u8],
-) -> io::Result<()> {
-    // Writers load the file first; a file already current needs no re-read.
-    if loaded_session_version(path).is_some_and(|version| version >= CURRENT_SESSION_FILE_VERSION) {
-        return Ok(());
-    }
-    let replacement_version = serde_json::from_slice::<serde_json::Value>(replacement)
-        .ok()
-        .and_then(|value| value.get("version").and_then(|version| version.as_u64()));
-    if replacement_version != Some(CURRENT_SESSION_FILE_VERSION as u64) {
-        return Ok(());
-    }
-
-    let Ok(previous) = fs::read(path) else {
-        return Ok(());
-    };
-    let previous_version = serde_json::from_slice::<serde_json::Value>(&previous)
-        .ok()
-        .and_then(|value| value.get("version").and_then(|version| version.as_u64()))
-        .unwrap_or(SESSION_FILE_VERSION_V1 as u64);
-    if previous_version >= CURRENT_SESSION_FILE_VERSION as u64 {
-        return Ok(());
-    }
-
-    let mut backup_name = path.as_os_str().to_os_string();
-    backup_name.push(format!(".v{previous_version}.bak"));
-    let backup_path = PathBuf::from(backup_name);
-    if backup_path.exists() {
-        return Ok(());
-    }
-    gitcomet_core::fs_utils::write_private_file(&backup_path, &previous)
 }

@@ -3300,6 +3300,96 @@ fn closed_groups_remain_saved_but_do_not_project_as_open_repositories() {
     assert!(loaded.active_repo.is_none());
 }
 
+/// A session written by a newer build, or one that is not JSON, loads as
+/// empty, and the next write used to replace it outright: every open
+/// repository, workspace and setting in it was gone, with no copy.
+#[test]
+fn first_write_over_an_unreadable_session_keeps_a_backup() {
+    for (name, contents, suffix) in [
+        (
+            "session-newer-version",
+            r#"{"version":7,"open_repos":["/work/newer"],"active_repo":"/work/newer"}"#,
+            ".v7.bak",
+        ),
+        ("session-not-json", "{not json", ".unreadable.bak"),
+    ] {
+        let path = unique_session_test_dir(name).join("session.json");
+        fs::write(&path, contents).expect("seed session");
+        assert!(
+            load_from_path(&path).open_repos.is_empty(),
+            "{name} is unreadable here"
+        );
+
+        let group = Workspace::new(vec![PathBuf::from("/work/replacement")]);
+        persist_workspaces_to_path(&[group], &path).expect("persist workspaces");
+
+        let mut backup_name = path.as_os_str().to_os_string();
+        backup_name.push(suffix);
+        assert_eq!(
+            fs::read_to_string(PathBuf::from(backup_name)).expect("read backup"),
+            contents,
+            "{name}"
+        );
+    }
+}
+
+/// A session file that exists but cannot be read (left root-owned by a `sudo`
+/// run, or a transient NFS error) read as absent, so the next write replaced
+/// it with an empty session and no backup.
+#[cfg(unix)]
+#[test]
+fn a_session_file_that_cannot_be_read_is_never_replaced() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = unique_session_test_dir("session-unreadable-file").join("session.json");
+    let contents = r#"{"version":6,"open_repos":["/work/kept"]}"#;
+    fs::write(&path, contents).expect("seed session");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("make unreadable");
+    if fs::read(&path).is_ok() {
+        // Root reads it regardless; nothing to prove there.
+        return;
+    }
+
+    let group = Workspace::new(vec![PathBuf::from("/work/replacement")]);
+    let result = persist_workspaces_to_path(&[group], &path);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("make readable");
+
+    assert!(
+        result.is_err(),
+        "the write must not replace an unreadable file"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+}
+
+/// One value this build cannot parse (a newer build's setting variant, say)
+/// used to make the whole session unreadable, so the next write dropped every
+/// repository and setting. Each field now resets on its own; a field added
+/// without that fails here.
+#[test]
+fn a_value_this_build_cannot_parse_resets_only_that_value() {
+    let fields = serde_json::to_value(UiSessionFile::default()).expect("serialize session");
+    let serde_json::Value::Object(fields) = fields else {
+        panic!("a session serializes as an object");
+    };
+    for key in fields.keys() {
+        if matches!(key.as_str(), "version" | "open_repos") {
+            continue;
+        }
+        let path = unique_session_test_dir("session-unparsable-value").join("session.json");
+        let contents = serde_json::json!({
+            "version": CURRENT_SESSION_FILE_VERSION,
+            "open_repos": ["/work/kept"],
+            key.as_str(): [{"from": "a newer build"}],
+        });
+        fs::write(&path, contents.to_string()).expect("seed session");
+
+        assert_eq!(
+            load_from_path(&path).open_repos,
+            vec![PathBuf::from("/work/kept")],
+            "{key}"
+        );
+    }
+}
+
 #[test]
 fn first_current_write_preserves_one_v3_backup() {
     let path = unique_session_test_dir("workspace-v3-backup").join("session.json");
@@ -3881,7 +3971,6 @@ fn timing_session_persist_cost_by_file_size() {
         )
         .expect("seed session");
         let bytes = fs::metadata(&path).expect("session metadata").len();
-        let contents = fs::read(&path).expect("read session");
 
         let started = std::time::Instant::now();
         for ix in 0..ITERATIONS {
@@ -3903,15 +3992,9 @@ fn timing_session_persist_cost_by_file_size() {
         }
         let snapshot_write = started.elapsed() / ITERATIONS;
 
-        let started = std::time::Instant::now();
-        for _ in 0..ITERATIONS {
-            preserve_previous_version_session_backup(&path, &contents).expect("backup check");
-        }
-        let backup_check = started.elapsed() / ITERATIONS;
-
         println!(
             "session persist: repos={repo_count} bytes={bytes} settings_write={settings_write:?} \
-             snapshot_write={snapshot_write:?} backup_check={backup_check:?}"
+             snapshot_write={snapshot_write:?}"
         );
     }
 }
