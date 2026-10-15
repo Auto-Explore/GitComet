@@ -889,6 +889,16 @@ fn deferred_worktree_and_index_changes_replan_the_selected_submodule_marker() {
             },
         ));
         let requested = summary_requested.recv_timeout(Duration::from_secs(5));
+        // The fake records the request before its reply is queued, so a
+        // barrier alone can overtake the reply.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while matches!(
+            store.snapshot().repos[0].diff_state.submodule_summary,
+            Loadable::NotLoaded
+        ) && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         store
             .barrier_for_test()
             .recv_timeout(Duration::from_secs(5))
