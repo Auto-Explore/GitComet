@@ -573,7 +573,8 @@ impl<'repo> WorktreeReader<'repo> {
         #[cfg(test)]
         LINE_STATS_WORKTREE_READS.with(|reads| reads.set(reads.get() + 1));
         if matches!(encoding, Some(StateRef::Value(_))) {
-            let text = super::text_attributes::resolve_text_attributes(self.repo, relative);
+            let text =
+                super::text_attributes::resolve_text_attributes_on(self.repo, attributes, relative);
             if super::text_attributes::decodes_working_tree_encoding(&text) {
                 let Ok(bytes) =
                     super::diff::worktree_encoding_to_git(self.repo, index, relative, &full, &text)
@@ -945,6 +946,58 @@ mod tests {
         samples.sort_by(f64::total_cmp);
         eprintln!(
             "untracked binaries: min {:.1} ms, median {:.1} ms, max {:.1} ms",
+            samples[0], samples[3], samples[5]
+        );
+    }
+
+    /// Refresh cost of 200 untracked `working-tree-encoding` files in a
+    /// repository of 20,000 tracked ones.
+    #[test]
+    #[ignore = "timing probe"]
+    fn perf_untracked_encoded_line_stats_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(
+            dir,
+            ".gitattributes",
+            "*.u16 working-tree-encoding=UTF-16LE-BOM\n",
+        );
+        for ix in 0..20_000u32 {
+            write_file(
+                dir,
+                &format!("tracked/d{:03}/f{ix:05}.txt", ix % 200),
+                "x\n",
+            );
+        }
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-q", "-m", "seed"]);
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain("a\nb\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        for ix in 0..200u32 {
+            std::fs::write(dir.join(format!("new{ix:03}.u16")), &utf16).unwrap();
+        }
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+        assert_eq!(entries.len(), 200);
+        let mut samples = Vec::new();
+        for _ in 0..6 {
+            let started = std::time::Instant::now();
+            let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert!(
+                stats
+                    .unstaged
+                    .values()
+                    .all(|stats| stats.additions == Some(2))
+            );
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "untracked encoded: min {:.1} ms, median {:.1} ms, max {:.1} ms",
             samples[0], samples[3], samples[5]
         );
     }
