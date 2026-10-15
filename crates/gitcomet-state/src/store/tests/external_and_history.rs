@@ -372,6 +372,88 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
     );
 }
 
+fn reloads_selected_diff(effects: &[Effect]) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadDiff { .. }
+                | Effect::LoadDiffFile { .. }
+                | Effect::LoadSubmoduleSummary { .. }
+                | Effect::LoadDiffFileImage { .. }
+                | Effect::LoadDiffPreviewTextFile { .. }
+                | Effect::LoadSelectedDiff { .. }
+        )
+    })
+}
+
+#[test]
+fn external_worktree_change_reloads_the_selected_diff_only_for_its_paths() {
+    let unstaged = |path: &str| DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged);
+    let to_worktree = |path: &str| {
+        DiffTarget::commit_range(
+            CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            None,
+            Some(PathBuf::from(path)),
+        )
+    };
+    for (target, changed, reloads) in [
+        (unstaged("a.txt"), "b.txt", false),
+        (unstaged("a.txt"), "a.txt", true),
+        (unstaged("vendor/sub"), "vendor/sub/src/lib.rs", true),
+        (to_worktree("a.txt"), "b.txt", false),
+        (to_worktree("a.txt"), "a.txt", true),
+    ] {
+        let mut repos: RepositoryRuntimes = Default::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::test_default();
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+        );
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+                preferences: None,
+                repo_id: RepoId(1),
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo"),
+                },
+                repo: Arc::new(DummyRepo::new("/tmp/repo")),
+            }),
+        );
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SelectDiff {
+                repo_id: RepoId(1),
+                target: target.clone(),
+            },
+        );
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id: RepoId(1),
+                change: crate::msg::RepoExternalChange {
+                    paths: crate::msg::ChangedPaths::known(vec![changed.into()]),
+                    ..crate::msg::RepoExternalChange::worktree()
+                },
+            },
+        );
+        assert_eq!(
+            reloads_selected_diff(&effects),
+            reloads,
+            "{target:?} after a change to {changed}"
+        );
+    }
+}
+
 #[test]
 fn external_index_change_refreshes_both_staged_and_unstaged_lanes() {
     // An external `git add` / `git reset` / `git restore --staged` rewrites `.git/index` without

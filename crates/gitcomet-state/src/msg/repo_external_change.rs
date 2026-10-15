@@ -1,3 +1,4 @@
+use gitcomet_core::domain::DiffTarget;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -198,6 +199,17 @@ impl RepoExternalChange {
             && !self.verification_context
             && !self.large_file_support
             && !self.text_attributes
+    }
+
+    /// Whether this change's worktree edits may reach `target`'s files.
+    pub(crate) fn worktree_edits_reach(&self, target: &DiffTarget) -> bool {
+        self.worktree
+            && (target
+                .file_path()
+                .is_none_or(|path| self.paths.may_contain(path))
+                || target
+                    .old_file_path()
+                    .is_some_and(|path| self.paths.may_contain(path)))
     }
 }
 

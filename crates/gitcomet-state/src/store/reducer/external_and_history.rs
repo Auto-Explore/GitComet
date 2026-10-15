@@ -177,11 +177,14 @@ pub(super) fn external_change_reloads_diff(
 ) -> bool {
     match target {
         DiffTarget::WorkingTree { area, .. } => {
-            change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
+            change.git_state
+                || change.index
+                || (*area == DiffArea::Unstaged && change.worktree_edits_reach(target))
         }
         DiffTarget::Commit { .. } => false,
         DiffTarget::CommitRange { to_commit_id, .. } => {
-            to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
+            to_commit_id.is_none()
+                && (change.git_state || change.index || change.worktree_edits_reach(target))
         }
     }
 }
