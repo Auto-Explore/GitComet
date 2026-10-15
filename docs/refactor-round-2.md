@@ -721,3 +721,16 @@ The platform-aware label helpers from `shortcut_labels.rs` (`secondary_shortcut`
 diff surfaces' file and change navigation key lists, which mirror its own
 bindings. The remaining 1.4 pieces (window chrome, hover cards, toast stack,
 menu model, query matcher, resize handle) are still in the host.
+
+### 1.5 Kit and extension test support
+
+The kit's real-text test backend loads its two faces from
+`gitcomet_fonts::{IBM_PLEX_SANS_REGULAR_BYTES, LILEX_REGULAR_BYTES}` instead of
+`include_bytes!` paths into a sibling crate, so it works for any downstream
+crate. `gitcomet-extension-api` gains a `test-support` feature with
+`FakeWindowHost`: workspace state in memory, recorded requests (notifications,
+toasts, dialogs, menus, navigation, panels, URLs) and dispatched messages, and
+`HostError::Unsupported` for panes and lists that need a real window. The
+example extension uses it for two new tests of review counting and the reset
+prompt. The themed test-window fixture waits for 1.2: until the theme is a
+window global there is nothing for a fixture to install.
