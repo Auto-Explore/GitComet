@@ -31,6 +31,7 @@ COMPILED_BUDGETS_MIB = {
 # One per OS family: crate files, the sparse index and git databases (522 MiB on Linux).
 SOURCES_BUDGET_MIB = 600
 UNIT_HASH = re.compile(r"-([0-9a-f]{16})(?:\..*)?$")
+PACKAGE_ID = re.compile(r"(registry|sparse|git|path)\+[^#]+#(?:([^@#]+)@)?(\S+)")
 
 
 def output(key, value):
@@ -78,22 +79,28 @@ def cache_keys(context):
             "source-key": source_prefix + dependency_hash, "source-restore-key": source_prefix}
 
 
-def built_units():
-    """Unit hashes this job's cargo builds compiled or found fresh, from run.py's recorded messages."""
+def build_record():
+    """Unit hashes and registry crates this job's cargo builds compiled or found fresh, from run.py's messages."""
     logs = sorted(REPORTS.glob("*/cargo-messages.jsonl"))
     if not logs:
         raise RuntimeError(f"no */cargo-messages.jsonl under {REPORTS}; compile with scripts/ci/run.py before packing")
-    units = set()
+    units, crates = set(), set()
     for log in logs:
         for line in log.read_text(encoding="utf-8").splitlines():
             message = json.loads(line)
+            if "package_id" in message:
+                package = PACKAGE_ID.fullmatch(message["package_id"])
+                if not package or (package[1] in ("registry", "sparse") and not package[2]):
+                    raise RuntimeError(f"unrecognised cargo package id {message['package_id']!r} in {log}")
+                if package[1] in ("registry", "sparse"):
+                    crates.add(f"{package[2]}-{package[3]}")
             paths = [*message.get("filenames", []), *([message["out_dir"]] if "out_dir" in message else [])]
             for path in map(Path, paths):
                 # deps/libname-HASH.rlib, build/name-HASH/build-script-build, build/name-HASH/out
                 match = UNIT_HASH.search(path.name) or UNIT_HASH.search(path.parent.name)
                 if match:
                     units.add(match[1])
-    return units
+    return units, crates
 
 
 def dependency_entries(target, metadata, units):
@@ -146,7 +153,7 @@ def fetched_entries(cargo_home, crates):
 
 
 def extracted_entries(cargo_home, crates):
-    """Unpacked sources keep the timestamps compiled build-script fingerprints compare against."""
+    """Unpacked sources of built crates keep the timestamps their build-script fingerprints compare against."""
     yield from registry_entries(cargo_home, "src", crates)
     yield from directory_entries(cargo_home, "git/checkouts")
 
@@ -257,10 +264,10 @@ def main():
     elif args.operation == "pack-compiled":
         if args.context not in COMPILED_BUDGETS_MIB:
             parser.error(f"{args.context} has no compiled bundle budget in COMPILED_BUDGETS_MIB")
-        units = built_units()
+        units, built_crates = build_record()
         metadata = cargo_metadata()
-        crates = registry_crates(metadata)
-        entries = [*fetched_entries(args.cargo_home, crates), *extracted_entries(args.cargo_home, crates),
+        entries = [*fetched_entries(args.cargo_home, registry_crates(metadata)),
+                   *extracted_entries(args.cargo_home, built_crates),
                    *dependency_entries(args.target, metadata, units)]
         pack(args.bundle, entries, mode="compiled", budget_mib=COMPILED_BUDGETS_MIB[args.context])
     else:

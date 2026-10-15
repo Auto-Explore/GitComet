@@ -591,6 +591,8 @@ class CacheTests(unittest.TestCase):
             "cargo-home/registry/index/index-0000/.cache/se/rd/serde": "index entry",
             "cargo-home/registry/src/index-0000/serde-1.0.2/src/lib.rs": "current source",
             "cargo-home/registry/src/index-0000/serde-1.0.1/src/lib.rs": "older lockfile's source",
+            "cargo-home/registry/cache/index-0000/windows-0.62.2.crate": "crate this platform never builds",
+            "cargo-home/registry/src/index-0000/windows-0.62.2/src/lib.rs": "source this platform never builds",
             "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack": "git database",
             "cargo-home/git/checkouts/gpui-0000/abcdef0/src/lib.rs": "checkout",
             "target/ci-test/deps/libserde-1111111111111111.rlib": "current unit",
@@ -620,6 +622,8 @@ class CacheTests(unittest.TestCase):
         metadata = {"packages": [
             {"name": "serde", "version": "1.0.2", "source": "registry+https://github.com/rust-lang/crates.io-index",
              "targets": [{"name": "serde"}]},
+            {"name": "windows", "version": "0.62.2", "source": "registry+https://github.com/rust-lang/crates.io-index",
+             "targets": [{"name": "windows"}]},
             {"name": "gitcomet-core", "version": "0.3.0", "source": None, "targets": [{"name": "gitcomet_core"}]},
         ]}
         return cargo, target, metadata
@@ -647,6 +651,7 @@ class CacheTests(unittest.TestCase):
                            "--cargo-home", str(cargo), "--target", str(target))
             self.assertEqual(self.restored_files(root, bundle), {
                 "cargo-home/registry/cache/index-0000/serde-1.0.2.crate",
+                "cargo-home/registry/cache/index-0000/windows-0.62.2.crate",
                 "cargo-home/registry/index/index-0000/.cache/se/rd/serde",
                 "cargo-home/registry/src/index-0000/serde-1.0.2/src/lib.rs",
                 "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack",
@@ -672,6 +677,22 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(report["mode"], "compiled")
             self.assertGreater(report["bytes"], 1024**2)
 
+    def test_compiled_pack_refuses_package_ids_it_cannot_read(self):
+        # Skipping them would drop every crate's unpacked sources, and a restore would rerun their build scripts.
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            messages = target / "ci-reports/workspace/cargo-messages.jsonl"
+            messages.write_text(messages.read_text().replace(
+                "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2",
+                "serde 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)"))
+            bundle = root / "bundle.tar.gz"
+            with self.assertRaisesRegex(RuntimeError, "unrecognised cargo package id 'serde 1.0.2"):
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test",
+                               "--bundle", str(bundle), "--cargo-home", str(cargo), "--target", str(target))
+            self.assertFalse(bundle.exists())
+
     def test_compiled_pack_refuses_without_this_jobs_cargo_messages(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
@@ -693,6 +714,7 @@ class CacheTests(unittest.TestCase):
                            "--target", str(target))
             self.assertEqual(self.restored_files(root, bundle), {
                 "cargo-home/registry/cache/index-0000/serde-1.0.2.crate",
+                "cargo-home/registry/cache/index-0000/windows-0.62.2.crate",
                 "cargo-home/registry/index/index-0000/.cache/se/rd/serde",
                 "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack",
             })
