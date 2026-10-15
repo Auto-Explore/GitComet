@@ -211,6 +211,7 @@ fn unknown_repo_handlers_are_noops() {
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
+            crate::model::ConflictLoadRequestId::default(),
             path.clone(),
             Ok(None),
             None
@@ -889,6 +890,7 @@ fn conflict_file_loaded_builds_session_from_merged_markers() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::ConflictLoadRequestId::default(),
         path.clone(),
         Ok(Some(file)),
         None,
@@ -939,6 +941,7 @@ fn conflict_file_loaded_uses_synthetic_session_for_non_marker_payloads() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::ConflictLoadRequestId::default(),
         path,
         Ok(Some(file)),
         None,
@@ -972,6 +975,7 @@ fn conflict_file_loaded_prefers_provided_session_and_records_errors() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::ConflictLoadRequestId::default(),
         tracked_path.clone(),
         Err(backend_error("conflict failed")),
         Some(provided.clone()),
@@ -999,6 +1003,7 @@ fn conflict_file_loaded_prefers_provided_session_and_records_errors() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::ConflictLoadRequestId::default(),
         other_path,
         Ok(Some(empty_conflict_file(&tracked_path))),
         None,
@@ -1050,6 +1055,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert!(matches!(
         effects[0],
         Effect::LoadConflictFile {
+            request: _,
             repo_id: rid,
             ref path,
             mode: ConflictFileLoadMode::CurrentOnly

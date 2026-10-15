@@ -92,14 +92,18 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::LoadConflictFile { repo_id, path, .. } => {
-            send(Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
-                repo_id,
-                path,
-                result: Box::new(Err(git_unavailable_error(runtime))),
-                conflict_session: None,
-            }))
-        }
+        Effect::LoadConflictFile {
+            request,
+            repo_id,
+            path,
+            ..
+        } => send(Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
+            repo_id,
+            path,
+            result: Box::new(Err(git_unavailable_error(runtime))),
+            conflict_session: None,
+        })),
         Effect::LoadReflog { repo_id, .. } => {
             send(Msg::Internal(crate::msg::InternalMsg::ReflogLoaded {
                 repo_id,
@@ -470,11 +474,14 @@ pub(super) fn send_unavailable_git_effect_result(
                 }));
             }
         }
-        Effect::LoadSelectedConflictFile { repo_id, .. } => {
-            let Some(path) = selected_conflict_file_path(thread_state, repo_id) else {
+        Effect::LoadSelectedConflictFile {
+            request, repo_id, ..
+        } => {
+            let Some(path) = selected_conflict_file_path(thread_state, repo_id, request) else {
                 return;
             };
             send(Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path,
                 result: Box::new(Err(git_unavailable_error(runtime))),

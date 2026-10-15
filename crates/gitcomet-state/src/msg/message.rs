@@ -1484,6 +1484,7 @@ pub enum InternalMsg {
         result: Result<Vec<gitcomet_core::services::BlameLine>, Error>,
     },
     ConflictFileLoaded {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         path: PathBuf,
         result: Box<Result<Option<crate::model::ConflictFile>, Error>>,

@@ -1895,6 +1895,7 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
     assert!(effects.iter().any(|effect| matches!(
         effect,
         Effect::LoadSelectedConflictFile {
+            request: _,
             repo_id,
             mode: crate::model::ConflictFileLoadMode::CurrentOnly,
         } if *repo_id == repo1

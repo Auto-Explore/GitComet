@@ -520,15 +520,26 @@ pub(super) fn schedule_load_stashes(
     );
 }
 
+pub(super) struct ConflictFileRequest {
+    pub(super) request: crate::model::ConflictLoadRequestId,
+    pub(super) path: PathBuf,
+    pub(super) mode: ConflictFileLoadMode,
+    pub(super) encoding: Option<gitcomet_core::text_format::TextEncoding>,
+}
+
 pub(super) fn schedule_load_conflict_file(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    path: PathBuf,
-    mode: ConflictFileLoadMode,
-    encoding: Option<gitcomet_core::text_format::TextEncoding>,
+    load: ConflictFileRequest,
 ) {
+    let ConflictFileRequest {
+        request,
+        path,
+        mode,
+        encoding,
+    } = load;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let trace_path = path.clone();
         let load_full = matches!(mode, ConflictFileLoadMode::Full);
@@ -678,6 +689,7 @@ pub(super) fn schedule_load_conflict_file(
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path,
                 result: Box::new(result),

@@ -233,6 +233,13 @@ the completion and every continuation; do not replace it with a new identity.
 `Msg::LoadFileHistory` retains its existing arguments. New openings and repository
 reactivation issue new identities, so stale results for the same path are rejected.
 
+`Effect::LoadConflictFile`, `Effect::LoadSelectedConflictFile` and
+`InternalMsg::ConflictFileLoaded` carry a `ConflictLoadRequestId` in their
+`request` field. Forward the issued identity unchanged into the completion.
+`Msg::LoadConflictFile` retains its existing arguments. Each reload issues a new
+identity, including the provisional `CurrentOnly` to `Full` upgrade; conflict
+editing revisions and repository load epochs remain separate protocols.
+
 Test harnesses using `AppStore::insert_repo_for_test` must first seed the matching
 repository through `replace_snapshot_for_test`. The runtime uses that model's
 lifetime; a backend inserted without a repository model is invalid test setup.

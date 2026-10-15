@@ -135,15 +135,16 @@ pub(super) fn conflict_file_loaded(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
+    request: crate::model::ConflictLoadRequestId,
     path: PathBuf,
     result: std::result::Result<Option<crate::model::ConflictFile>, Error>,
     conflict_session: Option<ConflictSession>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path)
+        && repo_state.conflict_state.accepts_load(request, &path)
     {
         // A same-path reload stashes the previous session (see
-        // `reset_conflict_target_reload_state`); it counts as the existing
+        // `RepoState::begin_conflict_load`); it counts as the existing
         // session for resolution restore. Ordinary reloads suppress on-open
         // autosolve, while the provisional CurrentOnly -> Full upgrade does not.
         let stashed_session = repo_state.conflict_state.session_pending_restore.take();
@@ -1541,8 +1542,9 @@ pub(super) fn load_conflict_file(
     };
     let same_path = repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path);
     repo_state.set_conflict_file_path(Some(path.clone()));
-    super::util::reset_conflict_target_reload_state(repo_state, mode, same_path);
+    let request = repo_state.begin_conflict_load(mode, same_path);
     vec![Effect::LoadConflictFile {
+        request,
         repo_id,
         path,
         mode,

@@ -88,12 +88,13 @@ fn repo_worktree_cache(
 fn selected_conflict_file_path(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     repo_id: RepoId,
+    request: crate::model::ConflictLoadRequestId,
 ) -> Option<std::path::PathBuf> {
     let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
     state
         .repos
         .iter()
-        .find(|repo| repo.id == repo_id)
+        .find(|repo| repo.id == repo_id && repo.conflict_state.load_request() == request)
         .and_then(|repo| repo.conflict_state.conflict_file_path.clone())
 }
 
@@ -288,6 +289,7 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::LoadConflictFile {
+            request,
             repo_id,
             path,
             mode,
@@ -295,7 +297,16 @@ pub(super) fn schedule_effect(
             if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
                 let encoding = repo_load::file_encoding_override(thread_state, repo_id, &path);
                 repo_load::schedule_load_conflict_file(
-                    executor, repos, msg_tx, repo_id, path, mode, encoding,
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    repo_load::ConflictFileRequest {
+                        request,
+                        path,
+                        mode,
+                        encoding,
+                    },
                 );
             }
         }
@@ -758,13 +769,26 @@ pub(super) fn schedule_effect(
             load_submodule_summary,
             load_file_image,
         ),
-        Effect::LoadSelectedConflictFile { repo_id, mode } => {
-            if let Some(path) = selected_conflict_file_path(thread_state, repo_id)
+        Effect::LoadSelectedConflictFile {
+            request,
+            repo_id,
+            mode,
+        } => {
+            if let Some(path) = selected_conflict_file_path(thread_state, repo_id, request)
                 && let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id)
             {
                 let encoding = repo_load::file_encoding_override(thread_state, repo_id, &path);
                 repo_load::schedule_load_conflict_file(
-                    executor, repos, msg_tx, repo_id, path, mode, encoding,
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    repo_load::ConflictFileRequest {
+                        request,
+                        path,
+                        mode,
+                        encoding,
+                    },
                 );
             }
         }

@@ -89,6 +89,301 @@ fn two_region_marker_conflict_file(path: &str, current: &str) -> ConflictFile {
     }
 }
 
+fn current_conflict_request(
+    state: &AppState,
+    repo_id: RepoId,
+) -> crate::model::ConflictLoadRequestId {
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .unwrap()
+        .conflict_state
+        .load_request()
+}
+
+fn begin_conflict_load(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: &str,
+    mode: crate::model::ConflictFileLoadMode,
+) -> Effect {
+    let mut effects = reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: path.into(),
+            mode,
+        },
+    );
+    assert_eq!(effects.len(), 1);
+    effects.remove(0)
+}
+
+fn complete_conflict_load(
+    repos: &mut RepositoryRuntimes,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    effect: &Effect,
+    result: Result<Option<ConflictFile>>,
+) {
+    let Effect::LoadConflictFile {
+        request,
+        repo_id,
+        path,
+        ..
+    } = effect
+    else {
+        panic!("expected conflict load");
+    };
+    reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request: *request,
+            repo_id: *repo_id,
+            path: path.clone(),
+            result: Box::new(result),
+            conflict_session: None,
+        }),
+    );
+}
+
+#[test]
+fn conflict_load_same_path_rejects_stale_error_after_success() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &fresh,
+        Ok(Some(sample_marker_conflict_file("file.txt"))),
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &old,
+        Err(Error::new(ErrorKind::Backend("obsolete".into()))),
+    );
+    assert!(matches!(
+        state.repos[0].conflict_state.conflict_file,
+        Loadable::Ready(Some(_))
+    ));
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, revision);
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
+}
+
+#[test]
+fn conflict_load_return_to_path_rejects_stale_success() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "other.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &fresh,
+        Ok(Some(sample_marker_conflict_file("file.txt"))),
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    complete_conflict_load(&mut repos, &id_alloc, &mut state, &old, Ok(None));
+    assert!(matches!(
+        state.repos[0].conflict_state.conflict_file,
+        Loadable::Ready(Some(_))
+    ));
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, revision);
+}
+
+#[test]
+fn conflict_load_stale_current_only_cannot_replace_full_session() {
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::CurrentOnly,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &fresh,
+        Ok(Some(sample_marker_conflict_file("file.txt"))),
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    let provisional = ConflictFile::from_loaded_stage_parts(
+        PathBuf::from("file.txt"),
+        (None, None),
+        (None, None),
+        (None, None),
+        (
+            None,
+            Some("<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n".into()),
+        ),
+    );
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &old,
+        Ok(Some(provisional)),
+    );
+    assert!(
+        !state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .base
+            .is_absent()
+    );
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, revision);
+}
+
+#[test]
+fn conflict_load_stale_success_preserves_pending_restore_until_current_reply() {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+    let mut repos = RepositoryRuntimes::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 1,
+            choice: crate::msg::ConflictRegionChoice::Theirs,
+        },
+    );
+    let Loadable::Ready(Some(file)) = state.repos[0].conflict_state.conflict_file.clone() else {
+        panic!("loaded conflict")
+    };
+    let old = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let fresh = begin_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        repo_id,
+        "file.txt",
+        crate::model::ConflictFileLoadMode::Full,
+    );
+    let revision = state.repos[0].conflict_state.conflict_rev;
+    complete_conflict_load(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        &old,
+        Ok(Some(file.clone())),
+    );
+    let conflict = &state.repos[0].conflict_state;
+    assert!(conflict.conflict_file.is_loading());
+    assert!(conflict.conflict_session.is_none());
+    assert_eq!(conflict.conflict_rev, revision);
+    assert_eq!(
+        conflict.session_pending_restore.as_ref().unwrap().regions[1].resolution,
+        ConflictRegionResolution::PickTheirs
+    );
+    complete_conflict_load(&mut repos, &id_alloc, &mut state, &fresh, Ok(Some(file)));
+    let conflict = &state.repos[0].conflict_state;
+    assert!(conflict.session_pending_restore.is_none());
+    assert_eq!(
+        conflict.conflict_session.as_ref().unwrap().regions[1].resolution,
+        ConflictRegionResolution::PickTheirs
+    );
+}
+
 #[test]
 fn conflict_file_loaded_builds_session_with_regions() {
     let mut repos: RepositoryRuntimes = Default::default();
@@ -121,11 +416,13 @@ fn conflict_file_loaded_builds_session_with_regions() {
         current: Some(current_text.clone()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -182,11 +479,13 @@ fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
         current: Some(current.into()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(current_only))),
@@ -233,11 +532,13 @@ fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
         ConflictPayload::Text("theirs\n".into()),
         current.into(),
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -297,11 +598,13 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
         theirs: None,
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(current_only))),
@@ -344,11 +647,13 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
         theirs: Some(theirs.into()),
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(full))),
@@ -407,11 +712,13 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
         theirs: None,
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(current_only))),
@@ -451,11 +758,13 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
         theirs: Some("value  =  1\n".into()),
         current: Some(current.into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(full))),
@@ -505,11 +814,13 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
         current: Some("modified\n".to_string().into()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("deleted.txt"),
             result: Box::new(Ok(Some(file))),
@@ -560,11 +871,13 @@ fn conflict_file_loaded_builds_binary_session() {
         current: None,
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
@@ -602,11 +915,13 @@ fn conflict_file_loaded_clears_session_on_error() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Err(Error::new(ErrorKind::Backend("test error".into())))),
@@ -653,11 +968,13 @@ fn load_conflict_file_clears_previous_session() {
         ),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -717,11 +1034,13 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -785,11 +1104,13 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -876,11 +1197,13 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
         ConflictPayload::Absent,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -965,11 +1288,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1109,11 +1434,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1173,11 +1500,13 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
         "file.txt",
         FileConflictKind::BothModified,
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -1329,11 +1658,13 @@ theirs only\n\
         theirs: Some("theirs only\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1402,11 +1733,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1503,11 +1836,13 @@ theirs one\n\
         theirs: Some("theirs one\n".into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1578,11 +1913,13 @@ same content\n\
         theirs: Some("same content\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1665,11 +2002,13 @@ fn whitespace_only_conflicts_stay_manual_until_the_bulk_choice_clears_them() {
         current: Some(current.into()),
     };
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -1783,11 +2122,13 @@ fn conflict_apply_autosolve_history_stays_manual_and_updates_session() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(history_conflict_file()))),
@@ -1865,11 +2206,13 @@ same content\n\
     };
 
     let load = |repos: &mut RepositoryRuntimes, state: &mut AppState, file: ConflictFile| {
+        let request = current_conflict_request(state, repo_id);
         reduce(
             repos,
             &id_alloc,
             state,
             Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path: PathBuf::from("file.txt"),
                 result: Box::new(Ok(Some(file))),
@@ -1922,11 +2265,13 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = two_region_marker_conflict_file("file.txt", current);
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2017,11 +2362,13 @@ theirs one\n\
         theirs: Some("theirs one\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2103,11 +2450,13 @@ theirs two\n\
         theirs: Some("theirs\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2194,11 +2543,13 @@ theirs two\n\
         theirs: Some("theirs one\ntheirs two\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2267,11 +2618,13 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
         theirs: None,
         current: Some("ours only\n".to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2327,11 +2680,13 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
         FileConflictKind::BothModified,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2406,11 +2761,13 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
         theirs: None,
         current: None,
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
@@ -2488,11 +2845,13 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
         theirs: None,
         current: None,
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
@@ -2592,11 +2951,13 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
     );
 
     // Load a normal session.
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2694,11 +3055,13 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
         "file.txt",
         FileConflictKind::BothModified,
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2762,11 +3125,13 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
         theirs: Some("theirs only\n".to_string().into()),
         current: Some("theirs only\n".to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2815,11 +3180,13 @@ fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_our
         "file.txt",
         FileConflictKind::BothModified,
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
@@ -2880,11 +3247,13 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
         theirs: Some("theirs only\n".to_string().into()),
         current: Some("theirs only\n".to_string().into()),
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -2973,11 +3342,13 @@ fn setup_two_conflict_file(
         theirs: Some("theirs one\ntheirs two\nmiddle\ntheirs three\n".into()),
         current: Some(current.to_string().into()),
     };
+    let request = current_conflict_request(state, repo_id);
     reduce(
         repos,
         id_alloc,
         state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -3255,11 +3626,13 @@ fn conflict_split_geometry_survives_same_path_reload() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(loaded_file))),
@@ -3391,11 +3764,13 @@ fn conflict_join_geometry_survives_same_path_reload() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(loaded_file))),
@@ -3611,11 +3986,13 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
         current: Some(current.to_string().into()),
     };
     let load = |repos: &mut RepositoryRuntimes, state: &mut AppState| {
+        let request = current_conflict_request(state, repo_id);
         reduce(
             repos,
             &id_alloc,
             state,
             Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path: PathBuf::from("file.txt"),
                 result: Box::new(Ok(Some(make_file()))),
@@ -3734,11 +4111,13 @@ fn same_path_explicit_full_load_restores_session_resolutions() {
         ConflictRegionResolution::PickTheirs,
     );
 
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -3792,11 +4171,13 @@ fn failed_same_path_reload_keeps_stash_for_retry() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Err(Error::new(ErrorKind::Backend("transient".into())))),
@@ -3822,11 +4203,13 @@ fn failed_same_path_reload_keeps_stash_for_retry() {
             mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
@@ -3881,11 +4264,13 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
             current: Some("".into()),
         }
     };
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(make_file(0..40)))),
@@ -3913,11 +4298,13 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
             mode: crate::model::ConflictFileLoadMode::CurrentOnly,
         },
     );
+    let request = current_conflict_request(&state, repo_id);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(make_file(33..40)))),

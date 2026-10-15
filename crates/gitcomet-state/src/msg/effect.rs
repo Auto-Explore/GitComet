@@ -248,10 +248,12 @@ pub enum Effect {
         load_file_image: bool,
     },
     LoadSelectedConflictFile {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         mode: ConflictFileLoadMode,
     },
     LoadConflictFile {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         path: PathBuf,
         mode: ConflictFileLoadMode,

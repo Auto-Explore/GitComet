@@ -5,6 +5,175 @@ use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
 use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
+fn conflict_load_effects_preserve_request_identity_with_available_or_unavailable_git() {
+    for selected in [false, true] {
+        for available in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let repo_id = RepoId(73);
+            let spec = RepoSpec {
+                workdir: directory.path().to_path_buf(),
+            };
+            let mut state = AppState::test_default();
+            let mut repo = RepoState::new_opening(repo_id, spec.clone());
+            repo.open = Loadable::Ready(());
+            let path = PathBuf::from("conflicted.txt");
+            repo.set_conflict_file_path(Some(path.clone()));
+            let mode = crate::model::ConflictFileLoadMode::Full;
+            repo.begin_conflict_load(mode, true);
+            let request = repo.begin_conflict_load(mode, true);
+            state.repos.push(repo);
+            if !available {
+                state.git_runtime.availability =
+                    gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                        detail: "git missing".into(),
+                    };
+            }
+            let effect = if selected {
+                Effect::LoadSelectedConflictFile {
+                    request,
+                    repo_id,
+                    mode,
+                }
+            } else {
+                Effect::LoadConflictFile {
+                    request,
+                    repo_id,
+                    path: path.clone(),
+                    mode,
+                }
+            };
+            let mut repos = RepositoryRuntimes::default();
+            repos.attach_repository_for_test(
+                repo_id,
+                Arc::new(UnsupportedRepo {
+                    spec,
+                    delete_branch_calls: None,
+                    cancel_delete_branch: None,
+                }),
+            );
+            let executor = super::super::executor::TaskExecutor::new(1);
+            let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+            let (tx, rx) = std::sync::mpsc::channel();
+            schedule_effect_with_state_for_test(
+                &executor, &executor, &backend, &mut repos, state, tx, effect,
+            );
+            executor.join();
+            let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: completed,
+                repo_id: completed_repo,
+                path: completed_path,
+                result,
+                conflict_session,
+            }) = rx.try_recv().expect("conflict completion")
+            else {
+                panic!("conflict completion")
+            };
+            assert_eq!(completed, request);
+            assert_eq!(completed_repo, repo_id);
+            assert_eq!(completed_path, path);
+            assert!(result.is_err());
+            assert!(conflict_session.is_none());
+            assert!(rx.try_recv().is_err());
+        }
+    }
+}
+
+#[test]
+fn conflict_load_blocked_older_effect_cannot_replace_reopened_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo_id = RepoId(74);
+    let spec = RepoSpec {
+        workdir: directory.path().to_path_buf(),
+    };
+    let mut state = AppState::test_default();
+    let mut repo = RepoState::new_opening(repo_id, spec.clone());
+    repo.open = Loadable::Ready(());
+    state.repos.push(repo);
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(
+        repo_id,
+        Arc::new(UnsupportedRepo {
+            spec,
+            delete_branch_calls: None,
+            cancel_delete_branch: None,
+        }),
+    );
+    let id_alloc = AtomicU64::new(1);
+    let path = PathBuf::from("tracked.txt");
+    let old_executor = super::super::executor::TaskExecutor::new(1);
+    let fresh_executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    old_executor.spawn(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    entered_rx.recv().unwrap();
+    let old = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: path.clone(),
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (old_tx, old_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &old_executor,
+        &old_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        old_tx,
+        old,
+    );
+    let fresh = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path,
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (fresh_tx, fresh_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &fresh_executor,
+        &fresh_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        fresh_tx,
+        fresh,
+    );
+    fresh_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        fresh_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+    release_tx.send(()).unwrap();
+    old_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        old_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+}
+
+#[test]
 fn file_history_blocked_older_effect_cannot_replace_reopened_result() {
     let repo_id = RepoId(72);
     let spec = RepoSpec {
@@ -349,6 +518,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::CurrentOnly,
@@ -359,6 +529,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -578,6 +749,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -588,6 +760,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -830,6 +1003,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -840,6 +1014,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -1090,6 +1265,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -1100,6 +1276,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -1376,6 +1553,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -1391,6 +1569,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
             );
             match msg_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                    request: _,
                     repo_id: rid,
                     path,
                     result,
@@ -2203,6 +2382,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadConflictFile {
+                request: crate::model::ConflictLoadRequestId::default(),
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
                 mode: crate::model::ConflictFileLoadMode::CurrentOnly,
@@ -2211,6 +2391,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadSelectedConflictFile {
+                request: crate::model::ConflictLoadRequestId::default(),
                 repo_id,
                 mode: crate::model::ConflictFileLoadMode::CurrentOnly,
             },

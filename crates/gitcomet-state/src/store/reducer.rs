@@ -2182,6 +2182,7 @@ fn reduce_inner(
             result,
         }) => effects::blame_loaded(inputs, state, repo_id, path, source, result),
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            request,
             repo_id,
             path,
             result,
@@ -2190,6 +2191,7 @@ fn reduce_inner(
             inputs,
             state,
             repo_id,
+            request,
             path,
             *result,
             conflict_session.map(|session| *session),

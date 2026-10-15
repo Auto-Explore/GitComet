@@ -1528,6 +1528,7 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
         effects.as_slice(),
         [
             Effect::LoadSelectedConflictFile {
+                request: _,
                 repo_id: RepoId(1),
                 mode: crate::model::ConflictFileLoadMode::CurrentOnly
             },
@@ -1593,6 +1594,7 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
         effects.as_slice(),
         [
             Effect::LoadSelectedConflictFile {
+                request: _,
                 repo_id: RepoId(1),
                 mode: crate::model::ConflictFileLoadMode::CurrentOnly
             },
@@ -3955,6 +3957,7 @@ fn select_conflict_diff_sets_target_and_resets_content_preview() {
     assert!(effects.iter().any(|e| matches!(
         e,
         Effect::LoadSelectedConflictFile {
+            request: _,
             repo_id: RepoId(1),
             ..
         }

@@ -292,12 +292,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("result", result)
                 .finish(),
             InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path,
                 result,
                 conflict_session,
             } => f
                 .debug_struct("ConflictFileLoaded")
+                .field("request", request)
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .field("result", result)

@@ -629,37 +629,15 @@ pub(super) fn start_conflict_target_reload_with_mode(
     effects
 }
 
-pub(super) fn reset_conflict_target_reload_state(
-    repo_state: &mut RepoState,
-    mode: ConflictFileLoadMode,
-    same_path: bool,
-) {
-    repo_state.set_conflict_file_load_mode(mode);
-    repo_state.set_conflict_file(Loadable::Loading);
-    if !same_path {
-        repo_state.conflict_state.session_pending_restore = None;
-    }
-    // section 30 split/join round-trip: stash (not drop) the session across
-    // same-path reloads so `conflict_file_loaded` restores resolutions and
-    // does not re-run the on-open autosolve. Dropping it outright wiped
-    // unsaved resolutions on every watcher reload.
-    if let Some(session) = repo_state.conflict_state.conflict_session.take() {
-        if same_path {
-            repo_state.conflict_state.session_pending_restore = Some(session);
-        }
-        repo_state.bump_conflict_rev();
-    }
-    repo_state.set_conflict_hide_resolved(false);
-}
-
 fn append_start_current_conflict_target_reload_with_mode(
     effects: &mut impl EffectAccumulator,
     repo_state: &mut RepoState,
     mode: ConflictFileLoadMode,
 ) {
     debug_assert!(repo_state.conflict_state.conflict_file_path.is_some());
-    reset_conflict_target_reload_state(repo_state, mode, true);
+    let request = repo_state.begin_conflict_load(mode, true);
     effects.push_effect(Effect::LoadSelectedConflictFile {
+        request,
         repo_id: repo_state.id,
         mode,
     });
@@ -677,8 +655,9 @@ fn append_start_conflict_target_reload_with_mode(
     }
 
     repo_state.set_conflict_file_path(Some(path.to_path_buf()));
-    reset_conflict_target_reload_state(repo_state, mode, false);
+    let request = repo_state.begin_conflict_load(mode, false);
     effects.push_effect(Effect::LoadSelectedConflictFile {
+        request,
         repo_id: repo_state.id,
         mode,
     });
