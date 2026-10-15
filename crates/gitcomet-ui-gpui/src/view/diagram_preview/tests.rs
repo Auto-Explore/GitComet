@@ -172,22 +172,22 @@ fn viewport_defaults_centers_fitting_graphs_and_pads_overflow() {
     assert!(viewport.keys(1, 2.0, whole(&viewport)).len() <= 6);
 }
 #[test]
-fn viewport_zoom_preserves_center_and_clamps_pan_reset_and_steps() {
+fn viewport_zoom_keeps_its_anchor_and_clamps_pan_reset_and_steps() {
     let mut view = Viewport::default();
     view.resize(600.0, 320.0, (1000.0, 1000.0));
     let point = ((300.0 - view.pan.0), 160.0 - view.pan.1);
-    view.zoom_by(1);
+    view.zoom_by(1, (300.0, 160.0));
     assert_eq!((300.0 - view.pan.0) / 1.25, point.0);
     assert_eq!((160.0 - view.pan.1) / 1.25, point.1);
     view.dragging = Some((0.0, 0.0));
     view.drag_to((1e9, -1e9));
     assert_eq!(view.pan, (568.0, 32.0 - 1250.0));
     for _ in 0..20 {
-        view.zoom_by(1);
+        view.zoom_by(1, (300.0, 160.0));
     }
     assert_eq!(view.zoom, 7);
     for _ in 0..20 {
-        view.zoom_by(-1);
+        view.zoom_by(-1, (300.0, 160.0));
     }
     assert_eq!(view.zoom, 0);
     view.reset();
@@ -293,7 +293,7 @@ fn pan_zoom_and_dpr_changes_reuse_layout_but_request_new_tiles() {
     view.resize(600.0, 320.0, (scene.scene.width(), scene.scene.height()));
     let generation = AtomicU64::new(0);
     for (delta, dpr) in [(0, 1.0), (1, 1.0), (0, 2.0), (-1, 1.0)] {
-        view.zoom_by(delta);
+        view.zoom_by(delta, (300.0, 160.0));
         for key in view.keys(scene.id, dpr, whole(&view)) {
             cache.tile(&scene, key, &generation, 0).unwrap();
         }
@@ -553,6 +553,47 @@ fn a_zoomed_pane_requests_only_the_rows_inside_it(cx: &mut gpui::TestAppContext)
     });
 }
 
+/// Ctrl/Cmd+scroll zooms around the pointer. Zooming around the viewport's
+/// centre pushed the point under the pointer away, out of sight on a block
+/// taller than the window.
+#[gpui::test]
+fn ctrl_scroll_keeps_the_point_under_the_pointer(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, state, cx) = open_interaction_harness(cx);
+    let bounds = cx.debug_bounds("diagram_viewport").unwrap();
+    let pointer = bounds.origin + gpui::point(px(30.0), px(20.0));
+    let local = (
+        f32::from(pointer.x - bounds.origin.x),
+        f32::from(pointer.y - bounds.origin.y),
+    );
+    let under_pointer = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let viewport = &state.read(app).viewport;
+            let scale = ZOOM_STEPS[viewport.zoom as usize];
+            (
+                (local.0 - viewport.pan.0) / scale,
+                (local.1 - viewport.pan.1) / scale,
+            )
+        })
+    };
+    let before = under_pointer(cx);
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: pointer,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(40.0))),
+        modifiers: gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    assert_eq!(cx.update(|_, app| state.read(app).viewport.zoom), 3);
+    let after = under_pointer(cx);
+    assert!(
+        (after.0 - before.0).abs() < 0.01 && (after.1 - before.1).abs() < 0.01,
+        "the scene point under the pointer moved: {before:?} -> {after:?}"
+    );
+}
+
 #[test]
 fn shared_scenes_keep_independent_preview_viewports() {
     let cache = DiagramCache::default();
@@ -562,7 +603,7 @@ fn shared_scenes_keep_independent_preview_viewports() {
     let mut a = Viewport::default();
     a.resize(600.0, 320.0, (first.scene.width(), first.scene.height()));
     let b = a.clone();
-    a.zoom_by(3);
+    a.zoom_by(3, (300.0, 160.0));
     a.dragging = Some((0.0, 0.0));
     a.drag_to((100.0, 50.0));
     assert_eq!(b.zoom, 2);

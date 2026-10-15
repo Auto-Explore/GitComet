@@ -77,26 +77,32 @@ impl Viewport {
             axis(self.pan.1, self.size.1, self.natural.1),
         );
     }
-    pub(super) fn zoom_by(&mut self, delta: i8) {
+    /// Zooms `delta` steps, keeping the scene point under `anchor` (in
+    /// viewport coordinates) where it is.
+    pub(super) fn zoom_by(&mut self, delta: i8, anchor: (f32, f32)) {
         let old = ZOOM_STEPS[self.zoom as usize];
         self.zoom = (self.zoom as i8 + delta).clamp(0, 7) as u8;
         let ratio = ZOOM_STEPS[self.zoom as usize] / old;
-        // Keep the scene point under the viewport center stationary.
         self.pan = (
-            self.size.0 / 2.0 - (self.size.0 / 2.0 - self.pan.0) * ratio,
-            self.size.1 / 2.0 - (self.size.1 / 2.0 - self.pan.1) * ratio,
+            anchor.0 - (anchor.0 - self.pan.0) * ratio,
+            anchor.1 - (anchor.1 - self.pan.1) * ratio,
         );
         self.clamp();
     }
-    /// Ctrl/Cmd+scroll; whether it took a zoom step.
-    pub(super) fn wheel_zoom(&mut self, event: &gpui::ScrollWheelEvent) -> bool {
+    /// Ctrl/Cmd+scroll at `pointer`; whether it took a zoom step.
+    pub(super) fn wheel_zoom(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        pointer: (f32, f32),
+    ) -> bool {
         let Some(step) = self.zoom_wheel.step(event) else {
             return false;
         };
-        self.zoom_by(match step {
+        let delta = match step {
             ZoomStep::In => 1,
             ZoomStep::Out => -1,
-        });
+        };
+        self.zoom_by(delta, pointer);
         true
     }
     pub(super) fn drag_to(&mut self, position: (f32, f32)) {

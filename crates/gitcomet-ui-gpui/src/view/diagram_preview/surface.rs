@@ -134,9 +134,12 @@ impl DiagramState {
                     }
                 });
                 let state = state_for_paint.clone();
+                let origin = hitbox.origin;
                 crate::view::zoom_wheel::on_zoom_wheel(window, hitbox, move |event, _, cx| {
+                    let pointer = event.position - origin;
+                    let pointer = (pointer.x.into(), pointer.y.into());
                     state.update(cx, |this, cx| {
-                        if this.viewport.wheel_zoom(event) {
+                        if this.viewport.wheel_zoom(event, pointer) {
                             this.invalidate_tiles();
                             cx.notify();
                         }
