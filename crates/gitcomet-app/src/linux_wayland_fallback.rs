@@ -160,7 +160,7 @@ pub(crate) fn maybe_relaunch_with_linux_x11_fallback(mode: &AppMode) -> Option<i
 
     match env.fallback_action_after_failed_wayland_preflight() {
         LinuxWaylandFallbackAction::ExitWithError => Some(exit_code::ERROR),
-        LinuxWaylandFallbackAction::RelaunchUnderX11 => relaunch_under_x11_fallback(),
+        LinuxWaylandFallbackAction::RelaunchUnderX11 => Some(relaunch_under_x11_fallback()),
     }
 }
 
@@ -177,10 +177,13 @@ fn app_mode_uses_gpui(mode: &AppMode) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn relaunch_under_x11_fallback() -> Option<i32> {
+fn relaunch_under_x11_fallback() -> i32 {
+    use std::io::Write as _;
+    use std::os::unix::process::CommandExt as _;
+
     let Ok(current_exe) = std::env::current_exe() else {
         eprintln!("Failed to locate the current executable for X11 fallback relaunch.");
-        return Some(exit_code::ERROR);
+        return exit_code::ERROR;
     };
 
     eprintln!(
@@ -195,13 +198,12 @@ fn relaunch_under_x11_fallback() -> Option<i32> {
     relaunch.env_remove("WAYLAND_DISPLAY");
     relaunch.env_remove("WAYLAND_SOCKET");
 
-    match relaunch.spawn() {
-        Ok(_) => Some(exit_code::SUCCESS),
-        Err(err) => {
-            eprintln!("Failed to relaunch under X11 fallback: {err}");
-            Some(exit_code::ERROR)
-        }
-    }
+    // Replace this process: `git mergetool` and `git difftool` wait on this
+    // PID and trust its exit code, so the tool must be the process they see.
+    let _ = std::io::stdout().flush();
+    let err = relaunch.exec();
+    eprintln!("Failed to relaunch under X11 fallback: {err}");
+    exit_code::ERROR
 }
 
 #[cfg(target_os = "linux")]
