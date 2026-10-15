@@ -160,7 +160,7 @@ impl MainPaneView {
     /// file of its section: Space, and the bottom bar's Stage button. A
     /// multi-file status selection wins over the shown file, and conflict
     /// markers ask first. `false` when the shown diff is not a working-tree
-    /// file.
+    /// file, or the file is open read-only.
     pub(in crate::view) fn toggle_stage_shown_file(
         &mut self,
         window: &mut Window,
@@ -175,7 +175,11 @@ impl MainPaneView {
         let Some(repo) = self.active_repo() else {
             return false;
         };
-        let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone() else {
+        let diff_state = self.bound_diff_state(repo);
+        if diff_state.content_preview {
+            return false;
+        }
+        let Some(diff_target) = diff_state.diff_target.clone() else {
             return false;
         };
         let DiffTarget::WorkingTree { path, area, .. } = &diff_target else {
@@ -452,7 +456,8 @@ impl MainPaneView {
             handled = true;
         }
 
-        // Stage leaves the bar while editing, and its key goes with it.
+        // Stage leaves the bar while editing or viewing a file read-only, and
+        // its key goes with it.
         if !handled
             && key == "space"
             && !mods.control
@@ -503,6 +508,7 @@ impl MainPaneView {
                 .is_focused(window)
             && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
+            && !self.bound_diff_state(repo).content_preview
             && let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone()
             && let DiffTarget::WorkingTree { path, area, .. } = &diff_target
         {
