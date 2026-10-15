@@ -480,3 +480,24 @@ End of round: full workspace run on all CI contexts, the Linux display-profile s
    module-prefix mapping".
 6. The plan itself is committed as the first slice: `docs/refactor-round-2.md` (linked from
    `docs/rust-refactor.md`) plus `scripts/ci/ratchets.py` with today's baseline.
+
+## Progress
+
+### 0.1 Shared dependency artifacts
+
+Dependencies build with one setting set (`opt-level = 1`, line-table debug info)
+that the test profile inherits, so `cargo build` and `cargo test` reuse each
+other's dependency artifacts. The test profile no longer packs split debug info,
+and its gpui and taffy overrides now follow the dev profile's opt-level 2.
+`ci-test` keeps dependency debug info off, so CI artifacts are unchanged.
+
+| Measurement (this machine, 32 cores) | Before | After |
+|---|---|---|
+| Dependency units `cargo test -p gitcomet-ui-gpui --lib --no-run` compiles after `cargo build -p gitcomet` | all of them | 48 of 995 |
+| UI suite, `--test-threads=8`, 4,809 tests | 249 s | 226 s |
+| UI test binary plus `.dwp` | 584 MB + 1,395 MB | 1,637 MB |
+
+The 48 remaining units are workspace crates, the gpui family (built with its
+`test-support` feature) and test-only crates such as criterion and proptest.
+The dev application now runs its dependencies at opt-level 1, so
+dev-build timings are not comparable with captures taken before this change.

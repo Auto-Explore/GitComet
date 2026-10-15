@@ -320,6 +320,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(gitcomet_probe_legacy_repo
 incremental = true
 opt-level = 0
 
+# Dependencies use the same settings under `cargo build` and `cargo test` (the
+# test profile inherits this), so switching between them reuses every artifact.
+[profile.dev.package."*"]
+opt-level = 1
+debug = "line-tables-only"
+
 # Keep application code quick to rebuild while optimizing the layout/render
 # dependencies. Windows measurements and reproduction: scripts/profiling/README.md.
 [profile.dev.package.gpui-ce]
@@ -352,17 +358,6 @@ opt-level = 2
 
 [profile.test]
 opt-level = 1
-split-debuginfo = "packed"
-
-# Test profiles inherit dev package overrides; retain their measured settings.
-[profile.test.package.gpui-ce]
-opt-level = 1
-
-[profile.test.package.gpui_ce_windows]
-opt-level = 1
-
-[profile.test.package.taffy]
-opt-level = 1
 
 # CI avoids generating and packaging debugger symbols on ephemeral runners.
 # Keep algorithm/dependency optimization; the large UI crate favors fast builds.
@@ -376,6 +371,10 @@ codegen-units = 256
 incremental = false
 debug-assertions = true
 overflow-checks = true
+
+# Overrides the inherited dev dependency debug info.
+[profile.ci-test.package."*"]
+debug = 0
 
 [profile.ci-test.package.gitcomet-ui-gpui]
 opt-level = 0
