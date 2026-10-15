@@ -501,6 +501,43 @@ mod tests {
         assert_eq!(status[Path::new("new.bin")].additions, None);
     }
 
+    /// Past the edit cap the comparison drops the edits of its tracked files,
+    /// not the counts of its untracked ones.
+    #[test]
+    fn untracked_counts_survive_the_edit_cap() {
+        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        let tracked = super::super::log::COMMIT_STATS_MAX_FILES + 1;
+        for ix in 0..tracked {
+            write_file(dir, &format!("tracked/{ix:03}.txt"), "base\n");
+        }
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-q", "-m", "seed"]);
+        for ix in 0..tracked {
+            write_file(dir, &format!("tracked/{ix:03}.txt"), "edited\n");
+        }
+        write_file(dir, "new.txt", "a\nb\n");
+
+        let files = against_the_worktree_with_untracked(&open_repo(dir));
+        let file = |path: &str| {
+            files
+                .iter()
+                .find(|file| file.path == Path::new(path))
+                .unwrap()
+        };
+
+        let new = file("new.txt");
+        assert_eq!((new.additions, new.deletions), (Some(2), Some(0)));
+        assert!(new.edit.is_some(), "the edit comes with the counts");
+        let edited = file("tracked/000.txt");
+        assert_eq!(
+            (edited.additions, edited.deletions, edited.edit),
+            (Some(1), Some(1), None)
+        );
+    }
+
     fn against_the_worktree_with_untracked(repo: &GixRepo) -> Vec<CommitFileChange> {
         let head = super::super::history::gix_head_id_or_none(&repo.repo())
             .unwrap()
