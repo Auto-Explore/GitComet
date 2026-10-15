@@ -228,6 +228,21 @@ fn sync_view_with_store(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<Gi
     cx.run_until_parked();
 }
 
+/// Waits for `ready` to hold in the store, then syncs the view. Syncing
+/// first could hand the view the snapshot from just before `ready` held.
+fn wait_for_store(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    description: &str,
+    ready: impl Fn() -> bool,
+) {
+    wait_until(cx, description, |cx| {
+        let ready = ready();
+        sync_view_with_store(cx, view);
+        ready
+    });
+}
+
 /// Waits for `expected` to be selected in the store and for the history view
 /// to have caught up with it.
 fn wait_for_selection(
@@ -1500,8 +1515,7 @@ fn wait_for_find_request(
     store: &AppStore,
     query: Option<HistoryFindQuery>,
 ) -> u64 {
-    wait_until(cx, "the search request", |cx| {
-        sync_view_with_store(cx, view);
+    wait_for_store(cx, view, "the search request", || {
         store_find(store).query == query
     });
     store_find(store).generation()
@@ -1532,8 +1546,7 @@ fn report_scan(
         seq: before.generation(),
         result,
     }));
-    wait_until(cx, "the scan report", |cx| {
-        sync_view_with_store(cx, view);
+    wait_for_store(cx, view, "the scan report", || {
         store_find(store).rev != before.rev
     });
     draw_and_park(cx);
@@ -1740,10 +1753,7 @@ fn indexed_history_find_scans_the_whole_index_and_selects_the_first_match(
 
     open_find_with_shortcut(cx, &view);
     type_query(cx, "fix");
-    wait_until(cx, "the scan to finish", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "the scan to finish", || store_find(&store).done);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
 
     let results = store_find(&store);
@@ -1903,8 +1913,7 @@ fn indexed_history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::Test
         ("1234567 wip", vec![STASH_ROW]),
     ] {
         retype_query(cx, query);
-        wait_until(cx, "the scan to finish", |cx| {
-            sync_view_with_store(cx, &view);
+        wait_for_store(cx, &view, "the scan to finish", || {
             let results = store_find(&store);
             results.query == plain_query(query) && results.done
         });
@@ -1999,8 +2008,7 @@ fn indexed_history_find_asks_again_when_an_unfinished_scan_is_dropped(
         query: None,
         index: None,
     }));
-    wait_until(cx, "the search to be asked for again", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "the search to be asked for again", || {
         let results = store_find(&store);
         results.query == plain_query("fix") && results.generation() == generation + 2
     });
@@ -2123,8 +2131,7 @@ fn indexed_history_find_reports_a_failed_scan(cx: &mut gpui::TestAppContext) {
 
     open_find_with_shortcut(cx, &view);
     type_query(cx, "fix");
-    wait_until(cx, "the scan to fail", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "the scan to fail", || {
         store_find(&store).error.is_some()
     });
     draw_and_park(cx);
@@ -2432,8 +2439,7 @@ fn indexed_history_rejected_selections_do_not_move_where_down_starts(
             assert!(history.history_select_adjacent_commit(1, cx));
         });
     });
-    wait_until(cx, "the next selection", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "the next selection", || {
         store_selected(&store).as_deref() != Some(&indexed_find_id(0))
     });
     assert_selection_settles_on(
@@ -2503,14 +2509,10 @@ fn indexed_history_find_does_not_resend_while_the_snapshot_is_pending(
 fn indexed_history_find_reuses_commit_text_between_queries(cx: &mut gpui::TestAppContext) {
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
     open_and_find(cx, &view, &store, "fix");
-    wait_until(cx, "first scan", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "first scan", || store_find(&store).done);
     let reads = backend.scans_started();
     retype_query(cx, "fix typo");
-    wait_until(cx, "narrower scan", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "narrower scan", || {
         let find = store_find(&store);
         find.query == plain_query("fix typo") && find.done
     });
@@ -2521,8 +2523,7 @@ fn indexed_history_find_reuses_commit_text_between_queries(cx: &mut gpui::TestAp
         "a second query must reuse decoded text"
     );
     retype_query(cx, "bob");
-    wait_until(cx, "unrelated query", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "unrelated query", || {
         let find = store_find(&store);
         find.query == plain_query("bob") && find.done
     });
@@ -2552,11 +2553,11 @@ fn history_find_reselecting_a_commit_leaves_range_comparison(cx: &mut gpui::Test
     let (view, store, cx) = mount_find_fixture(cx, repo);
     open_find_with_shortcut(cx, &view);
     type_query(cx, "Fix login");
-    wait_until(
+    wait_for_store(
         cx,
+        &view,
         "single commit details instead of the range comparison",
-        |cx| {
-            sync_view_with_store(cx, &view);
+        || {
             store.snapshot().repos[0]
                 .history_state
                 .range_selection
@@ -2642,8 +2643,7 @@ fn history_find_input_observes_typed_text(cx: &mut gpui::TestAppContext) {
 fn indexed_history_find_enter_retries_a_transient_failure(cx: &mut gpui::TestAppContext) {
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::FailOnce);
     open_and_find(cx, &view, &store, "fix");
-    wait_until(cx, "transient failure", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "transient failure", || {
         store_find(&store).error.is_some()
     });
     assert_eq!(find_label(cx, &view), "Search failed");
@@ -2656,10 +2656,7 @@ fn indexed_history_find_enter_retries_a_transient_failure(cx: &mut gpui::TestApp
         "failure must not cause a busy retry loop"
     );
     cx.simulate_keystrokes("enter");
-    wait_until(cx, "retry to finish", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "retry to finish", || store_find(&store).done);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
     assert_eq!(backend.scans_started(), 2);
     assert_eq!(find_label(cx, &view), "1/3");
@@ -2709,8 +2706,7 @@ fn indexed_history_find_clearing_and_reopening_do_not_restore_a_stale_count(
     report_matches(cx, &view, &store, &[2, 7], true);
     wait_for_selection(cx, &view, &store, &indexed_find_id(2));
     cx.simulate_keystrokes("escape");
-    wait_until(cx, "closed search", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "closed search", || {
         store_find(&store).query.is_none()
     });
     open_find_with_shortcut(cx, &view);
@@ -2742,8 +2738,7 @@ fn indexed_history_find_switching_repos_releases_the_previous_search(
         model.update(app, |model, cx| model.set_state(state, cx));
     });
     cx.run_until_parked();
-    wait_until(cx, "search in the second repo", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "search in the second repo", || {
         let state = store.snapshot();
         state.repos[0].history_state.find.query.is_none()
             && state.repos[1].history_state.find.query == plain_query("fix")
@@ -2894,16 +2889,12 @@ fn history_find_stash_details_highlight_only_the_row_summary(cx: &mut gpui::Test
 fn indexed_history_find_panic_reports_failure_and_can_retry(cx: &mut gpui::TestAppContext) {
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::PanicOnce);
     open_and_find(cx, &view, &store, "fix");
-    wait_until(cx, "panic reported as search failure", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "panic reported as search failure", || {
         store_find(&store).error.is_some()
     });
     assert_eq!(find_label(cx, &view), "Search failed");
     cx.simulate_keystrokes("enter");
-    wait_until(cx, "retry after panic", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "retry after panic", || store_find(&store).done);
     assert_eq!(backend.scans_started(), 2);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
 }
@@ -2947,10 +2938,7 @@ fn history_find_step_after_tab_switch_uses_the_active_repos_page(cx: &mut gpui::
 fn indexed_history_find_loading_stashes_restarts_the_same_query(cx: &mut gpui::TestAppContext) {
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
     open_and_find(cx, &view, &store, "main");
-    wait_until(cx, "initial search", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "initial search", || store_find(&store).done);
     assert!(find_matches(cx, &view).is_empty());
     let old_index = store.snapshot().repos[0]
         .history_state

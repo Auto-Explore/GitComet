@@ -977,16 +977,23 @@ fn image_preview_regression_hosted_panes_zoom_without_changing_window_scale(
             "image fixture appears in the hosted list"
         );
         click_debug_selector(cx, file);
-        settle(cx, &view, &store, "hosted image preview", |cx| {
+        // The second pick moves the first into a new previous pane, which
+        // loads on its own; wait for both before wheeling over them.
+        settle(cx, &view, &store, "hosted image previews", |cx| {
             cx.update(|_, app| {
-                let current = changes.read(app).current().unwrap();
-                let pane = current
-                    .view()
-                    .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
-                    .unwrap();
-                pane.read(app)
-                    .renderer()
-                    .is_some_and(|renderer| renderer.read(app).image_preview_active)
+                let changes = changes.read(app);
+                changes
+                    .current()
+                    .into_iter()
+                    .chain(changes.previous())
+                    .all(|pane| {
+                        pane.view()
+                            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                            .unwrap()
+                            .read(app)
+                            .renderer()
+                            .is_some_and(|renderer| renderer.read(app).image_preview_active)
+                    })
             })
         });
     }
