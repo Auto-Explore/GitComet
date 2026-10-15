@@ -454,51 +454,61 @@ struct SettingsMenu {
 impl Render for SettingsMenu {
     fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let ui_scale = crate::ui_scale::UiScale::current(cx);
-        div()
-            .flex()
-            .flex_col()
-            .children(self.items.iter().enumerate().map(|(index, item)| {
-                match item {
-                    HostedMenuItem::Header(label) => {
-                        div().px_2().child(label.clone()).into_any_element()
-                    }
-                    HostedMenuItem::Separator => div()
-                        .h(px(1.0))
-                        .bg(self.theme.colors.stroke.subtle)
+        components::context_menu(
+            self.theme,
+            div()
+                .flex()
+                .flex_col()
+                .children(self.items.iter().enumerate().map(|(index, item)| {
+                    match item {
+                        HostedMenuItem::Header(label) => components::context_menu_header(
+                            self.theme,
+                            ui_scale,
+                            label.clone(),
+                            None,
+                            cx,
+                        )
                         .into_any_element(),
-                    HostedMenuItem::Action {
-                        action,
-                        icon,
-                        disabled,
-                        ..
-                    } => {
-                        let action = action.clone();
-                        let parent = self.parent.clone();
-                        let mut button = components::Button::new(
-                            format!("settings_hosted_action_{index}"),
-                            action.label().clone(),
-                        );
-                        if let Some(icon) = icon.clone() {
-                            button = button.start_slot(crate::view::icons::svg_icon(
-                                icon,
-                                self.theme.colors.foreground.secondary,
-                                ui_scale.px(14.0),
-                            ));
+                        HostedMenuItem::Separator => {
+                            components::context_menu_separator(self.theme, ui_scale)
+                                .into_any_element()
                         }
-                        button
+                        HostedMenuItem::Action {
+                            action,
+                            icon,
+                            disabled,
+                            ..
+                        } => {
+                            let action = action.clone();
+                            let parent = self.parent.clone();
+                            let icon = match icon {
+                                Some(path) => components::ContextMenuIconSlot::Icon(path.clone()),
+                                None => components::ContextMenuIconSlot::None,
+                            };
+                            components::ContextMenuEntry::new(
+                                format!("settings_hosted_action_{index}"),
+                                action.label().clone(),
+                            )
+                            .icon(icon)
+                            .tone(components::ContextMenuTone::Neutral)
                             .disabled(*disabled)
-                            .on_click(self.theme, cx, move |_, _, window, cx| {
+                            .on_select(self.theme, ui_scale, cx, move |_, _, window, cx| {
                                 let _ = parent
                                     .update(cx, |view, cx| view.close_hosted_dialog(window, cx));
                                 action.invoke(cx);
                             })
+                            .debug_selector(move || format!("settings_hosted_action_{index}"))
                             .into_any_element()
+                        }
+                        _ => gpui::Empty.into_any_element(),
                     }
-                    _ => gpui::Empty.into_any_element(),
-                }
-            }))
+                })),
+        )
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 pub(super) struct SettingsDialog {
     pub id: u64,

@@ -389,6 +389,7 @@ impl DocumentPicker {
                                 "documents_remove_recent",
                                 components::ContextMenuText::new("Remove from recent documents"),
                             )
+                            .tone(components::ContextMenuTone::Danger)
                             .on_select(
                                 theme,
                                 ui_scale::current(cx).percent,

@@ -198,9 +198,6 @@ pub mod source_guards {
         unscaled
     }
 
-    /// Menu icon literals (`icon: Some("icons/..")`,
-    /// `ContextMenuIconSlot::Icon("icons/..")`) and those the context menu
-    /// would draw as an empty slot.
     pub fn unresolved_menu_icons(src_dir: &Path) -> (usize, Vec<String>) {
         let mut unresolved = Vec::new();
         let mut seen = 0usize;
@@ -224,9 +221,7 @@ pub mod source_guards {
                         continue;
                     };
                     seen += 1;
-                    if crate::components::context_menu_icon_path(&literal, "").map(str::to_owned)
-                        != Some(literal.clone())
-                    {
+                    if crate::assets::KitAssets::load_static(&literal).is_none() {
                         unresolved.push(format!("{relative}: {literal}"));
                     }
                 }

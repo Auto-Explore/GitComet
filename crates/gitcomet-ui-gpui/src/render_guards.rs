@@ -95,15 +95,13 @@ mod tests {
         );
     }
 
-    /// An icon path the context menu does not list renders an empty, still
-    /// indented slot, so every menu icon literal must resolve to itself.
     #[test]
     fn every_menu_icon_literal_in_the_crate_resolves() {
         let (seen, unresolved) = unresolved_menu_icons(&src_dir());
         assert!(seen > 100, "the scan found only {seen} menu icons");
         assert!(
             unresolved.is_empty(),
-            "add these to context_menu_icon_path:\n{}",
+            "menu icons must name an existing asset:\n{}",
             unresolved.join("\n")
         );
     }

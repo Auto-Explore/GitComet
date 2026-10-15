@@ -42,9 +42,13 @@ Conflict loads issue a separate [`ConflictLoadRequestId`](../crates/gitcomet-sta
 
 The worker's private [`RepositoryRuntimes`](../crates/gitcomet-state/src/store/repository_runtime.rs) pairs backend connections, ordinary repository load scopes, and linked-worktree cache leases with each model repository lifetime. These live resources belong to the worker. Calls within the same load epoch reuse an active scope; replacing it cancels the previous scope while retaining the connection and lease. Removing a repository retires the owner; disposal outside the state write lock revokes the lease, releases cache ownership, and cancels its load scope. Tasks retaining a lease cannot repopulate a cache after its owner closes. Signature verification and history find retain independent cancellation protocols.
 
-## Documents and diff presentation
+## Reusable UI components
 
 The reusable [`TextInput`](../crates/gitcomet-ui-kit/src/text_input.rs) owns text-edit history and selection/composition bookkeeping. Platform typing, IME composition and programmatic range replacements share one private edit operation. Composition selections are relative to the inserted text, and new replacements invalidate redo history. Entry points retain their focus, read-only and protected-content rules; programmatic view-preserving replacements retain their caret and scroll policy.
+
+[`ContextMenuEntry`](../crates/gitcomet-ui-kit/src/components/context_menu.rs) receives an explicit asset path and `ContextMenuTone`. Git action names and English-label inference belong to the host's [menu presentation policy](../crates/gitcomet-ui-gpui/src/view/menu_presentation.rs); supplied assets take precedence over inferred icons. TextInput and settings-hosted menus share the entry's disabled gate, focus preservation and activation on completed clicks. Settings closes its menu and restores focus before invoking the action.
+
+## Documents and diff presentation
 
 Each `WindowHost` shares one [`DocumentOwner`](../crates/gitcomet-ui-gpui/src/view/documents/buffers.rs) among its panes. The repository window's [UI model](../crates/gitcomet-ui-gpui/src/view/app_model.rs) creates the owner used by repository editors, standalone documents, and hosted diff panes. The [settings host](../crates/gitcomet-ui-gpui/src/view/settings_window/extension_host.rs) supplies its own owner with read-only services. A `BufferId` identifies an editing session independently of its path; disk identity and version track the file being edited. Dirty text, format choices, content fingerprints, and pending writes belong to the buffer. Save completion matches the operation and compares the current fingerprint with the submitted one, preserving edits made after the write was submitted.
 

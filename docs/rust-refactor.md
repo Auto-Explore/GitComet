@@ -240,6 +240,15 @@ reactivation issue new identities, so stale results for the same path are reject
 identity, including the provisional `CurrentOnly` to `Full` upgrade; conflict
 editing revisions and repository load epochs remain separate protocols.
 
+`ContextMenuIconSlot::Icon` now takes the asset path to draw directly. Migrate
+semantic icon names or inferred labels to explicit paths, and select appearance
+with `ContextMenuEntry::tone(ContextMenuTone::...)`. The default tone is `Accent`;
+`Neutral`, `Success`, `Warning` and `Danger` express the other supported roles.
+The removed `components::context_menu_icon_path` helper is replaced by presentation
+policy at the caller; the GitComet host owns its Git and English-label mapping in
+`view::menu_presentation`. Explicit `icons/` and `extensions/` assets keep their
+identity even when an action label would infer a different icon.
+
 Test harnesses using `AppStore::insert_repo_for_test` must first seed the matching
 repository through `replace_snapshot_for_test`. The runtime uses that model's
 lifetime; a backend inserted without a repository model is invalid test setup.

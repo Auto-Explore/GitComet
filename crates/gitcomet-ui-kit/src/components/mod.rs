@@ -48,9 +48,9 @@ pub use containers::{
 #[cfg(any(test, feature = "test-support"))]
 pub use containers::{panel, pill};
 pub use context_menu::{
-    ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, MENU_SCROLL_ARROW_HEIGHT_PX,
-    MenuScrollDirection, context_menu, context_menu_description, context_menu_group,
-    context_menu_header, context_menu_icon_path, context_menu_label, context_menu_scroll_arrow,
+    ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, ContextMenuTone,
+    MENU_SCROLL_ARROW_HEIGHT_PX, MenuScrollDirection, context_menu, context_menu_description,
+    context_menu_group, context_menu_header, context_menu_label, context_menu_scroll_arrow,
     context_menu_separator,
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};

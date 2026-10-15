@@ -438,17 +438,18 @@ pub(super) fn layer(
                 if !disabled {
                     nav_ix += 1;
                 }
-                let icon_slot = match icon {
-                    Some(icon) => components::ContextMenuIconSlot::Icon(icon),
-                    None if reserve_icon_column => components::ContextMenuIconSlot::Reserved,
-                    None => components::ContextMenuIconSlot::None,
-                };
+                let (icon_slot, tone) = crate::view::menu_presentation::entry_presentation(
+                    label.as_ref(),
+                    icon,
+                    reserve_icon_column,
+                );
                 list = list.child(
                     components::ContextMenuEntry::new(
                         ("picker_row_action", ix),
                         components::ContextMenuText::new(label),
                     )
                     .icon(icon_slot)
+                    .tone(tone)
                     .disabled(disabled)
                     .selected(selected)
                     .on_select(theme, ui_scale_percent, cx, move |this, _e, window, cx| {

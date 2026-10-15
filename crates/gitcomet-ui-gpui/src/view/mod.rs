@@ -288,6 +288,7 @@ mod large_file_card;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 mod markdown_preview;
+mod menu_presentation;
 mod mod_helpers;
 mod native_transfers;
 mod open_source_licenses_data;

@@ -2916,18 +2916,18 @@ impl PopoverHost {
                             let tooltip_text_for_move = tooltip_text.clone();
                             let tooltip_host_for_hover = tooltip_host.clone();
                             let activate_on_release = model_for_mouse.clone();
-                            let icon_slot = match icon {
-                                Some(icon) => components::ContextMenuIconSlot::Icon(icon),
-                                None if reserve_icon_column => {
-                                    components::ContextMenuIconSlot::Reserved
-                                }
-                                None => components::ContextMenuIconSlot::None,
-                            };
+                            let (icon_slot, tone) =
+                                crate::view::menu_presentation::entry_presentation(
+                                    label.as_ref(),
+                                    icon,
+                                    reserve_icon_column,
+                                );
                             let row = components::ContextMenuEntry::new(
                                 ("context_menu_entry", ix),
                                 label,
                             )
                             .icon(icon_slot)
+                            .tone(tone)
                             .shortcut(shortcut)
                             .shortcut_keycaps(shortcut_keycaps)
                             .selected(selected)

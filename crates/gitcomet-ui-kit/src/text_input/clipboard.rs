@@ -1,7 +1,7 @@
 use super::shaping::{primary_modifier_label, with_alpha};
 use super::state::*;
 use super::*;
-use crate::interaction::ControlInteractionExt as _;
+use crate::components::{ContextMenuEntry, ContextMenuText, ContextMenuTone};
 
 impl TextInput {
     pub(super) fn show_character_palette(
@@ -103,39 +103,15 @@ impl TextInput {
         cx.notify();
     }
 
-    pub(super) fn context_menu_entry_row(
-        &self,
-        label: &'static str,
-        shortcut: SharedString,
-        disabled: bool,
-        cx: &mut App,
-    ) -> gpui::Stateful<Div> {
-        let mut menu_theme = self.style.menu_theme;
-        menu_theme.metrics = self.appearance_metrics;
-        crate::menu::menu_item(
-            label,
-            menu_theme,
-            crate::ui_scale::UiScale::current(cx),
-            false,
-            disabled,
-        )
-        .w_full()
-        .child(label)
-        .child(
-            div()
-                .text_size(gpui::rems(self.appearance_metrics.ui_text(12.0) / 16.0))
-                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                .text_color(self.style.menu_theme.colors.foreground.secondary)
-                .child(shortcut),
-        )
-    }
-
     pub(super) fn render_context_menu(
         &mut self,
         state: TextInputContextMenuState,
         cx: &mut Context<Self>,
     ) -> Div {
         let menu_ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
+        let mut menu_theme = self.style.menu_theme;
+        menu_theme.metrics = self.appearance_metrics;
         let primary = primary_modifier_label();
         let undo_disabled = self.read_only || self.selection.undo_stack.is_empty();
         let redo_disabled = self.read_only || self.selection.redo_stack.is_empty();
@@ -145,22 +121,21 @@ impl TextInput {
         let delete_disabled = self.read_only || self.selection.range.is_empty();
         let select_all_disabled = self.content.is_empty();
 
-        // Closing, focus preservation and release activation are common to
-        // every entry. Each action supplies only its operation.
         let item = |label: &'static str,
                     shortcut: SharedString,
                     disabled: bool,
                     action: fn(&mut Self, &mut Window, &mut Context<Self>),
                     cx: &mut Context<Self>| {
-            self.context_menu_entry_row(label, shortcut, disabled, cx)
-                .on_menu_activate(
-                    disabled,
-                    cx.listener(move |this, _, window, cx| {
-                        this.interaction.context_menu = None;
-                        action(this, window, cx);
-                        cx.notify();
-                    }),
-                )
+            ContextMenuEntry::new(label, ContextMenuText::new(label).max_lines(1))
+                .tone(ContextMenuTone::Neutral)
+                .shortcut(Some(shortcut))
+                .disabled(disabled)
+                .on_select(menu_theme, ui_scale, cx, move |this, _, window, cx| {
+                    this.interaction.context_menu = None;
+                    action(this, window, cx);
+                    cx.notify();
+                })
+                .w_full()
         };
         let undo_row = item(
             "Undo",

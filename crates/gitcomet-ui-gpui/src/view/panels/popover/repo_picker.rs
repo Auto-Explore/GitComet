@@ -766,6 +766,7 @@ fn sort_menu(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl In
             } else {
                 components::ContextMenuIconSlot::Reserved
             })
+            .tone(components::ContextMenuTone::Accent)
             .selected(selected_index == Some(ix))
             .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                 apply_sort(this, sort, cx);
@@ -977,12 +978,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             let Some(label) = label else {
                 continue;
             };
+            let tone = crate::view::menu_presentation::context_menu_tone(label.as_ref(), None);
             let entry = entry.clone();
             menu = menu.child(
                 components::ContextMenuEntry::new(
                     ("repo_item", ix),
                     components::ContextMenuText::path_single_line(label),
                 )
+                .tone(tone)
                 .tooltip_host(this.tooltip_host.clone())
                 .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                     activate(this, entry.clone(), cx);
