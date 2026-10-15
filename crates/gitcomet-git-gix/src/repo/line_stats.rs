@@ -183,7 +183,7 @@ impl super::GixRepo {
                     (stats.additions, stats.deletions, stats.edit);
                 continue;
             }
-            if !edits || file.edit.is_some() || file.additions.is_none() || file.is_submodule {
+            if !edits || file.edit.is_some() || file.additions.is_none() {
                 continue;
             }
             cancellation.check_cancelled()?;
