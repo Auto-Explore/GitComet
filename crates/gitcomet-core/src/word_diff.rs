@@ -1,3 +1,4 @@
+//! Word-level diff ranges between two lines, capped for long lines.
 use std::ops::Range;
 
 const WORD_DIFF_MAX_BYTES_PER_SIDE: usize = 4 * 1024;
@@ -5,10 +6,10 @@ const WORD_DIFF_MAX_TOTAL_BYTES: usize = 8 * 1024;
 
 #[cfg(test)]
 type WordDiffRangePair = (Vec<Range<usize>>, Vec<Range<usize>>);
-pub(crate) type CompactWordDiffRangePair = (WordDiffRanges, WordDiffRanges);
+pub type CompactWordDiffRangePair = (WordDiffRanges, WordDiffRanges);
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) enum WordDiffRanges {
+pub enum WordDiffRanges {
     #[default]
     Empty,
     One(Range<usize>),
@@ -24,7 +25,7 @@ impl WordDiffRanges {
         }
     }
 
-    pub(crate) fn as_slice(&self) -> &[Range<usize>] {
+    pub fn as_slice(&self) -> &[Range<usize>] {
         match self {
             Self::Empty => &[],
             Self::One(range) => std::slice::from_ref(range),
@@ -32,7 +33,7 @@ impl WordDiffRanges {
         }
     }
 
-    pub(crate) fn into_vec(self) -> Vec<Range<usize>> {
+    pub fn into_vec(self) -> Vec<Range<usize>> {
         match self {
             Self::Empty => Vec::new(),
             Self::One(range) => vec![range],
@@ -40,7 +41,7 @@ impl WordDiffRanges {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         matches!(self, Self::Empty)
     }
 }
@@ -578,17 +579,14 @@ fn word_diff_ranges_with_bufs(
     )
 }
 
-pub(super) fn capped_word_diff_ranges(
-    old: &str,
-    new: &str,
-) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+pub fn capped_word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
     let (old_ranges, new_ranges) = compact_capped_word_diff_ranges(old, new);
     (old_ranges.into_vec(), new_ranges.into_vec())
 }
 
-pub(super) fn capped_word_diff_ranges_for_file_diff_texts(
-    old: &gitcomet_core::file_diff::FileDiffLineText,
-    new: &gitcomet_core::file_diff::FileDiffLineText,
+pub fn capped_word_diff_ranges_for_file_diff_texts(
+    old: &crate::file_diff::FileDiffLineText,
+    new: &crate::file_diff::FileDiffLineText,
 ) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
     if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
         || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
@@ -600,7 +598,7 @@ pub(super) fn capped_word_diff_ranges_for_file_diff_texts(
     capped_word_diff_ranges(old.as_ref(), new.as_ref())
 }
 
-pub(crate) fn compact_capped_word_diff_ranges(old: &str, new: &str) -> CompactWordDiffRangePair {
+pub fn compact_capped_word_diff_ranges(old: &str, new: &str) -> CompactWordDiffRangePair {
     if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
         || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
         || old.len().saturating_add(new.len()) > WORD_DIFF_MAX_TOTAL_BYTES
@@ -702,13 +700,13 @@ mod tests {
 
     #[test]
     fn capped_word_diff_ranges_for_file_diff_texts_checks_len_before_loading() {
-        let old = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+        let old = crate::file_diff::FileDiffLineText::file_slice(
             std::sync::Arc::new(std::path::PathBuf::from("/definitely/missing/gitcomet-old")),
             0..WORD_DIFF_MAX_BYTES_PER_SIDE.saturating_add(1),
             true,
             false,
         );
-        let new = gitcomet_core::file_diff::FileDiffLineText::from("small");
+        let new = crate::file_diff::FileDiffLineText::from("small");
 
         let (old_ranges, new_ranges) = capped_word_diff_ranges_for_file_diff_texts(&old, &new);
         assert!(old_ranges.is_empty());

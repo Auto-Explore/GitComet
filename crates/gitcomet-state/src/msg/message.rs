@@ -219,20 +219,7 @@ pub struct ConflictRegionResolutionUpdate {
     pub resolution: gitcomet_core::conflict_session::ConflictRegionResolution,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ConflictAutosolveStats {
-    pub pass1: usize,
-    pub pass2_split: usize,
-    pub pass1_after_split: usize,
-    pub regex: usize,
-    pub history: usize,
-}
-
-impl ConflictAutosolveStats {
-    pub fn total_resolved(self) -> usize {
-        self.pass1 + self.pass2_split + self.pass1_after_split + self.regex + self.history
-    }
-}
+pub use gitcomet_core::conflict_session::ConflictAutosolveStats;
 
 /// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

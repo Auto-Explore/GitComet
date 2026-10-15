@@ -335,7 +335,7 @@ mod update_check;
 mod workspace_picker;
 pub(crate) use update_check::{update_checks_available, update_checks_disabled_by_environment};
 mod user_survey;
-mod word_diff;
+use gitcomet_core::word_diff;
 
 use app_model::AppUiModel;
 use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};

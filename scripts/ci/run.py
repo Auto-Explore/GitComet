@@ -40,8 +40,8 @@ WATCHER_FILTER = ('package(=gitcomet-fs-watch) | (package(=gitcomet-state) & '
 # Audited in-memory tests: no process-global environment, filesystem, or native
 # resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
 PURE_BATCHES = {
-    "gitcomet-core": ("conflict_session::", "text_search::", "text_format::"),
-    UI: ("view::word_diff::tests::", "view::history_graph::walk::tests::"),
+    "gitcomet-core": ("conflict_session::", "text_search::", "text_format::", "word_diff::"),
+    UI: ("view::history_graph::walk::tests::",),
 }
 # The example product builds alone, so it never relies on (or leaks) the
 # workspace's feature unification: it enables the application's GUI, which the

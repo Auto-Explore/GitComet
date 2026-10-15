@@ -278,8 +278,8 @@ async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpu
     let repo_id = gitcomet_state::model::RepoId(965);
     let workdir = unique_workdir("file_editor_actual_syntax_rs_click");
     let file_rel = std::path::PathBuf::from("syntax.rs");
-    let source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../gitcomet-syntax/src/lib.rs");
+    let source_path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gitcomet-syntax/src/lib.rs");
     let mut contents = std::fs::read_to_string(&source_path).expect("read actual syntax.rs");
     for module in [
         "prepared/drop_queue.rs",
