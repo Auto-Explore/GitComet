@@ -109,7 +109,11 @@ fn structured_non_auth_outcomes_ignore_historical_prompts() {
             outcome_error(
                 outcome,
                 GitFailureId::CommandFailed,
-                "error: Your local changes would be overwritten by merge.\nSSH key passphrase prompt:\nEnter passphrase for key '/tmp/key':",
+                // Without the structured outcome, this text alone asks for a
+                // passphrase. The outcome must take precedence over it.
+                "Load key \"/tmp/key\": incorrect passphrase supplied to decrypt private key\n\
+                 git@example.invalid: Permission denied (publickey).\n\
+                 SSH key passphrase prompt:\nEnter passphrase for key '/tmp/key':",
             ),
         );
         assert_terminal_failure(&state);
@@ -386,6 +390,7 @@ fn cancel_or_replacement_invalidates_validation_and_late_cache_writes() {
 
 #[test]
 fn username_password_retries_keep_rejections_inline_and_later_git_failures_terminal() {
+    let _lock = super::super::staged_auth_test_lock();
     let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
     let challenge = AuthChallenge::from_prompt(
         GitAuthKind::UsernamePassword,
@@ -476,6 +481,7 @@ fn username_password_retries_keep_rejections_inline_and_later_git_failures_termi
 
 #[test]
 fn structured_rejected_credentials_and_new_key_challenges_preserve_their_identity() {
+    let _lock = super::super::staged_auth_test_lock();
     let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
     let challenge = AuthChallenge::from_prompt(
         GitAuthKind::UsernamePassword,

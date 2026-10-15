@@ -1283,7 +1283,7 @@ pub(super) fn clone_repo_finished(
             Ok(_) => CloneOpStatus::FinishedOk,
             Err(ref error)
                 if matches!(op.status, CloneOpStatus::Cancelling)
-                    && is_plain_clone_abort_error(error) =>
+                    && (handled_by_auth_prompt || is_plain_clone_abort_error(error)) =>
             {
                 CloneOpStatus::Cancelled
             }

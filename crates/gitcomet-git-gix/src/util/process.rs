@@ -726,7 +726,12 @@ fn run_command_with_timeout_auth_stdin(
         });
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        if !status.success() {
+        // The trailer explains a request for a passphrase. On a failure with
+        // another cause, such as a pull refused for local changes, it misleads.
+        if matches!(
+            auth_outcome,
+            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+        ) {
             append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
         }
     }
@@ -1034,7 +1039,12 @@ where
         });
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        if !status.success() {
+        // The trailer explains a request for a passphrase. On a failure with
+        // another cause, such as a pull refused for local changes, it misleads.
+        if matches!(
+            auth_outcome,
+            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+        ) {
             append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
         }
     }

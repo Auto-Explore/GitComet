@@ -400,6 +400,47 @@ fn cancelling_auth_does_not_remove_an_unrelated_clone() {
 }
 
 #[test]
+fn aborting_a_clone_that_exits_for_credentials_cancels_without_a_prompt() {
+    let _lock = super::super::staged_auth_test_lock();
+    let mut repos = FxHashMap::default();
+    let mut state = AppState::test_default();
+    let id_alloc = AtomicU64::new(1);
+    let url = "git@github.com:private/repo.git".to_string();
+    let dest = PathBuf::from("/tmp/private-repo");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: url.clone(),
+            dest: dest.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+    // Git had already exited to ask for credentials when the abort arrived.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::CloneRepoFinished {
+            url,
+            dest,
+            result: Err(windows_ssh_error("git clone")),
+        }),
+    );
+    assert!(state.auth_prompt.is_none());
+    assert_eq!(
+        state.clone.as_ref().unwrap().status,
+        CloneOpStatus::Cancelled
+    );
+}
+
+#[test]
 fn a_second_auth_failure_does_not_silently_discard_the_pending_prompt() {
     let _lock = super::super::staged_auth_test_lock();
     let repo_id = RepoId(1);

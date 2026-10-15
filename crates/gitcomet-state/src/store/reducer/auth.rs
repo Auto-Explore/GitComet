@@ -666,9 +666,15 @@ pub(super) fn clone_repo_finished(
         .err()
         .and_then(|error| auth_prompt_for_clone(&url, &dest, error))
         .filter(|prompt| may_install_auth_prompt(state, prompt));
+    // An abort that races the clone exiting for credentials ends the clone
+    // quietly rather than asking for credentials the user no longer wants.
+    let abort_requested = state.clone.as_ref().is_some_and(|operation| {
+        operation.dest.as_ref() == &dest
+            && matches!(operation.status, crate::model::CloneOpStatus::Cancelling)
+    });
     let effects =
         repo_management::clone_repo_finished(state, url, dest, result, auth_prompt.is_some());
-    if let Some(prompt) = auth_prompt {
+    if let Some(prompt) = auth_prompt.filter(|_| !abort_requested) {
         clear_staged_git_auth_env();
         install_auth_prompt(state, prompt);
     }

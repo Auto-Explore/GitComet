@@ -339,6 +339,10 @@ fn unlocked_ssh_key_survives_pull_refused_for_local_changes() {
     assert!(String::from_utf8_lossy(refused.stderr()).contains("would be overwritten"));
     assert!(!String::from_utf8_lossy(refused.stderr()).contains(PASSPHRASE));
     assert!(
+        !String::from_utf8_lossy(refused.stderr()).contains(SSH_PASSPHRASE_PROMPT_MARKER),
+        "a local refusal must not read as a passphrase request"
+    );
+    assert!(
         load_session_passphrases()
             .iter()
             .any(|entry| entry.prompt == prompt)

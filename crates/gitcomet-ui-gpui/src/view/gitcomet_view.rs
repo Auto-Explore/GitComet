@@ -2905,7 +2905,8 @@ impl GitCometView {
     }
 
     /// Focuses a new prompt's first field so the user can type at once,
-    /// unless they are typing in another field or working in an overlay: the
+    /// unless they are typing in another field or the terminal, or working in
+    /// an overlay: the
     /// prompt then waits for a click rather than swallowing their keystrokes.
     pub(super) fn focus_new_auth_prompt(
         &mut self,
@@ -2918,7 +2919,7 @@ impl GitCometView {
             && window
                 .context_stack()
                 .iter()
-                .any(|context| context.contains("TextInput"));
+                .any(|context| context.contains("TextInput") || context.contains("Terminal"));
         if typing_elsewhere
             || self.is_overlay_open(cx)
             || self.command_palette_open
