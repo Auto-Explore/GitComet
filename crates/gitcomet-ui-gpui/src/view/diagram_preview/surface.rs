@@ -71,11 +71,12 @@ impl DiagramState {
                 let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
                 let tiles = state.update(cx, |this, cx| {
                     let natural = (diagram.scene.width(), diagram.scene.height());
-                    if this.viewport.resize(
+                    let resized = this.viewport.borrow_mut().resize(
                         bounds.size.width.into(),
                         bounds.size.height.into(),
                         natural,
-                    ) {
+                    );
+                    if resized {
                         this.invalidate_tiles();
                     }
                     let dpr = window.scale_factor();
@@ -94,9 +95,9 @@ impl DiagramState {
                         f32::from(left - bounds.left())..f32::from(right - bounds.left()),
                         f32::from(top - bounds.top())..f32::from(bottom - bounds.top()),
                     );
-                    let keys = this.viewport.keys(diagram.id, dpr, visible);
+                    let keys = this.viewport.borrow().keys(diagram.id, dpr, visible);
                     this.request_tiles(diagram.clone(), keys.clone(), cx);
-                    let pan = this.viewport.pan;
+                    let pan = this.viewport.borrow().pan;
                     keys.into_iter()
                         .filter_map(|key| {
                             let image = this.cache.peek_tile(key)?;
@@ -140,7 +141,8 @@ impl DiagramState {
                     let pointer = event.position - origin;
                     let pointer = (pointer.x.into(), pointer.y.into());
                     state.update(cx, |this, cx| {
-                        if this.viewport.wheel_zoom(event, pointer) {
+                        let zoomed = this.viewport.borrow_mut().wheel_zoom(event, pointer);
+                        if zoomed {
                             this.invalidate_tiles();
                             cx.notify();
                         }
@@ -154,14 +156,16 @@ impl DiagramState {
                         return;
                     }
                     state.update(cx, |this, cx| {
-                        if this.viewport.dragging.is_none() {
+                        let mut viewport = this.viewport.borrow_mut();
+                        if viewport.dragging.is_none() {
                             return;
                         }
                         if !event.dragging() {
-                            this.viewport.dragging = None;
+                            viewport.dragging = None;
+                            drop(viewport);
                         } else {
-                            this.viewport
-                                .drag_to((event.position.x.into(), event.position.y.into()));
+                            viewport.drag_to((event.position.x.into(), event.position.y.into()));
+                            drop(viewport);
                             // Invalidate immediately, even if the canvas was virtualized
                             // out between this event and the next frame.
                             this.invalidate_tiles();
@@ -175,7 +179,7 @@ impl DiagramState {
                         && event.button == gpui::MouseButton::Left
                     {
                         state.update(cx, |this, cx| {
-                            if this.viewport.dragging.take().is_some() {
+                            if this.viewport.borrow_mut().dragging.take().is_some() {
                                 cx.notify();
                             }
                         });
@@ -194,7 +198,7 @@ impl DiagramState {
                 Some(height) => d.h(px(height)).flex_shrink_0(),
                 None => d.flex_1().min_h(px(160.0)),
             })
-            .cursor(if self.viewport.dragging.is_some() {
+            .cursor(if self.viewport.borrow().dragging.is_some() {
                 gpui::CursorStyle::ClosedHand
             } else {
                 gpui::CursorStyle::OpenHand
@@ -207,17 +211,66 @@ impl DiagramState {
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                     if event.click_count == 2 {
-                        this.viewport.reset();
+                        this.viewport.borrow_mut().reset();
                         this.invalidate_tiles();
                     } else {
-                        this.viewport.dragging =
+                        this.viewport.borrow_mut().dragging =
                             Some((event.position.x.into(), event.position.y.into()));
                     }
                     cx.stop_propagation();
                     cx.notify();
                 }),
             )
+            .on_scroll_wheel(cx.listener(
+                move |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                    // A pane has nothing else to scroll; a markdown block leaves
+                    // vertical wheels to its document.
+                    let mut viewport = this.viewport.borrow_mut();
+                    let before = viewport.pan;
+                    let taken = viewport.wheel_pan(event, height.is_none(), window.line_height());
+                    let moved = viewport.pan != before;
+                    drop(viewport);
+                    if moved {
+                        this.invalidate_tiles();
+                        cx.notify();
+                    }
+                    if taken {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .relative()
             .child(canvas)
+            .children(self.scrollbars(cx))
             .into_any_element()
+    }
+
+    /// Scrollbars on both axes, which read the shared viewport as this frame
+    /// lays it out: where the diagram runs past it, the cue that there is more
+    /// and a way to get there; where it fits, nothing.
+    fn scrollbars(&self, cx: &mut gpui::Context<Self>) -> Vec<AnyElement> {
+        use crate::view::components::{Scrollbar, ScrollbarAxis};
+        let driver = super::pan_scrollbar::PanScrollDriver {
+            viewport: self.viewport.clone(),
+            state: cx.weak_entity(),
+        };
+        // The canvas is white in every theme; the light theme's bars read on it.
+        let theme = AppTheme::default_for_window_appearance(gpui::WindowAppearance::Light);
+        [ScrollbarAxis::Horizontal, ScrollbarAxis::Vertical]
+            .into_iter()
+            .map(|axis| {
+                let id = match axis {
+                    ScrollbarAxis::Horizontal => "diagram_scrollbar_horizontal",
+                    ScrollbarAxis::Vertical => "diagram_scrollbar_vertical",
+                };
+                let bar = match axis {
+                    ScrollbarAxis::Horizontal => Scrollbar::horizontal(id, driver.clone()),
+                    ScrollbarAxis::Vertical => Scrollbar::new(id, driver.clone()),
+                };
+                #[cfg(test)]
+                let bar = bar.debug_selector(id);
+                bar.render(theme).into_any_element()
+            })
+            .collect()
     }
 }

@@ -6,6 +6,20 @@ fn render(cache: &DiagramCache, source: &str) -> Arc<RasterDiagram> {
         .render(DiagramKind::Mermaid, Arc::from(source))
         .unwrap()
 }
+fn scrolled_of(
+    state: &Entity<DiagramState>,
+    app: &App,
+    axis: crate::view::components::ScrollbarAxis,
+) -> f32 {
+    state.read(app).viewport.borrow().scrolled(axis)
+}
+fn overflow_of(
+    state: &Entity<DiagramState>,
+    app: &App,
+    axis: crate::view::components::ScrollbarAxis,
+) -> f32 {
+    state.read(app).viewport.borrow().overflow(axis)
+}
 fn whole(view: &Viewport) -> (std::ops::Range<f32>, std::ops::Range<f32>) {
     (0.0..view.size.0, 0.0..view.size.1)
 }
@@ -181,7 +195,7 @@ fn viewport_zoom_keeps_its_anchor_and_clamps_pan_reset_and_steps() {
     assert_eq!((160.0 - view.pan.1) / 1.25, point.1);
     view.dragging = Some((0.0, 0.0));
     view.drag_to((1e9, -1e9));
-    assert_eq!(view.pan, (568.0, 32.0 - 1250.0));
+    assert_eq!(view.pan, (16.0, 320.0 - 1282.0 + 16.0));
     for _ in 0..20 {
         view.zoom_by(1, (300.0, 160.0));
     }
@@ -303,6 +317,103 @@ fn the_tile_cache_grows_to_twice_what_is_shown() {
     assert_eq!(capacity(), 2 * (50 + 40));
     assert!(cache.inner.lock().unwrap().shown.is_empty());
 }
+/// Scrollbars read the pan as a position in the diagram plus the padding a
+/// reset leaves around it.
+#[test]
+fn viewport_scroll_geometry_follows_the_pan() {
+    use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
+    let mut view = Viewport::default();
+    view.resize(600.0, 320.0, (1000.0, 200.0));
+    assert_eq!(view.pan, (16.0, 60.0));
+    assert_eq!(view.overflow(Horizontal), 1000.0 + 32.0 - 600.0);
+    assert_eq!(view.overflow(Vertical), 0.0, "the diagram fits its height");
+    assert_eq!(view.scrolled(Horizontal), 0.0);
+    view.scroll_to(Horizontal, 100.0);
+    assert_eq!(view.pan.0, 16.0 - 100.0);
+    assert_eq!(view.scrolled(Horizontal), 100.0);
+    view.scroll_to(Horizontal, 1e9);
+    assert_eq!(view.scrolled(Horizontal), view.overflow(Horizontal));
+    view.zoom_by(3, (0.0, 0.0));
+    assert_eq!(view.overflow(Vertical), 200.0 * 2.0 + 32.0 - 320.0);
+
+    // A full-height block that layout rounded half a pixel short still fits.
+    let mut view = Viewport::default();
+    view.resize(600.0, full_height(400.0) - 0.5, (500.0, 400.0));
+    assert_eq!(view.overflow(Vertical), 0.0);
+}
+/// Dragging and the scrollbars share one pan range: where the diagram
+/// overflows it stops where the bar ends, and where it fits it stays inside.
+#[test]
+fn dragging_stays_within_the_scrollbar_range() {
+    use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
+    let mut view = Viewport::default();
+    view.resize(600.0, 320.0, (1000.0, 200.0));
+    view.dragging = Some((0.0, 0.0));
+    view.drag_to((1e9, 1e9));
+    assert_eq!(view.scrolled(Horizontal), 0.0);
+    assert_eq!(
+        view.pan,
+        (16.0, 320.0 - 200.0 - 16.0),
+        "the left edge; the bottom"
+    );
+    view.drag_to((-1e9, -1e9));
+    assert_eq!(view.scrolled(Horizontal), view.overflow(Horizontal));
+    assert_eq!(
+        view.pan,
+        (600.0 - 1000.0 - 16.0, 16.0),
+        "the right edge; the top"
+    );
+    assert_eq!(view.scrolled(Vertical), 0.0);
+}
+/// A plain wheel pans a diagram sideways where it overflows; a block leaves a
+/// vertical wheel to its document, and a wheel at an edge is still taken.
+#[test]
+fn a_plain_wheel_pans_where_the_diagram_overflows() {
+    use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
+    let wheel = |dx: f32, dy: f32, shift: bool| gpui::ScrollWheelEvent {
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(dx), px(dy))),
+        modifiers: gpui::Modifiers {
+            shift,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let line = px(20.0);
+    let mut view = Viewport::default();
+    view.resize(600.0, 320.0, (1000.0, 200.0));
+    assert!(view.wheel_pan(&wheel(-100.0, 0.0, false), false, line));
+    assert_eq!(view.scrolled(Horizontal), 100.0);
+    assert!(
+        !view.wheel_pan(&wheel(0.0, -100.0, false), false, line),
+        "a block leaves a vertical wheel to the document"
+    );
+    assert!(view.wheel_pan(&wheel(0.0, -50.0, true), false, line));
+    assert_eq!(
+        view.scrolled(Horizontal),
+        150.0,
+        "Shift+wheel goes sideways"
+    );
+    view.scroll_to(Horizontal, 1e9);
+    let edge = view.pan;
+    assert!(view.wheel_pan(&wheel(-100.0, 0.0, false), false, line));
+    assert_eq!(view.pan, edge, "taken at the edge, without moving");
+    assert!(
+        !view.wheel_pan(&wheel(0.0, -100.0, false), true, line),
+        "a pane's vertical wheel pans only where the diagram overflows"
+    );
+    assert_eq!(view.scrolled(Vertical), 0.0);
+    assert!(!view.wheel_pan(
+        &gpui::ScrollWheelEvent {
+            modifiers: gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            ..wheel(-100.0, 0.0, false)
+        },
+        false,
+        line
+    ));
+}
 #[test]
 fn pan_zoom_and_dpr_changes_reuse_layout_but_request_new_tiles() {
     let cache = DiagramCache::default();
@@ -325,7 +436,7 @@ fn stale_completion_cannot_replace_current_source_or_scene() {
     let mut state = DiagramState {
         cache,
         viewport_id: 0,
-        viewport: Viewport::default(),
+        viewport: Rc::default(),
         hidden_above: 0.0,
         generation: Arc::new(AtomicU64::new(0)),
         source_generation: Arc::new(AtomicU64::new(0)),
@@ -416,7 +527,7 @@ fn open_interaction_harness(
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         crate::view::test_support::redraw(cx);
-        if cx.update(|_, app| state.read(app).viewport.initialized) {
+        if cx.update(|_, app| state.read(app).viewport.borrow().initialized) {
             break;
         }
         assert!(std::time::Instant::now() < deadline);
@@ -441,25 +552,25 @@ fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
     crate::view::test_support::redraw(cx);
     cx.update(|_, app| {
         assert!(view.read(app).scroll.offset().y < px(0.0));
-        assert_eq!(state.read(app).viewport.zoom, 2);
+        assert_eq!(state.read(app).viewport.borrow().zoom, 2);
     });
     let bounds = cx.debug_bounds("diagram_viewport").unwrap();
-    let before = cx.update(|_, app| state.read(app).viewport.pan);
+    let before = cx.update(|_, app| state.read(app).viewport.borrow().pan);
     let outside = bounds.bottom_right() + gpui::point(px(100.0), px(50.0));
     cx.simulate_mouse_down(bounds.center(), gpui::MouseButton::Left, Default::default());
     cx.simulate_mouse_move(outside, Some(gpui::MouseButton::Left), Default::default());
     cx.update(|_, app| {
-        assert_ne!(state.read(app).viewport.pan, before);
-        assert!(state.read(app).viewport.dragging.is_some());
+        assert_ne!(state.read(app).viewport.borrow().pan, before);
+        assert!(state.read(app).viewport.borrow().dragging.is_some());
     });
     cx.simulate_mouse_up(outside, gpui::MouseButton::Left, Default::default());
     let released = cx.update(|_, app| {
-        assert!(state.read(app).viewport.dragging.is_none());
-        state.read(app).viewport.pan
+        assert!(state.read(app).viewport.borrow().dragging.is_none());
+        state.read(app).viewport.borrow().pan
     });
     cx.simulate_mouse_move(bounds.center(), None, Default::default());
     cx.update(|_, app| {
-        assert_eq!(state.read(app).viewport.pan, released);
+        assert_eq!(state.read(app).viewport.borrow().pan, released);
         assert_eq!(
             state.read(app).cache.preparations.load(Ordering::Relaxed),
             1
@@ -485,7 +596,9 @@ fn smooth_ctrl_scroll_steps_the_diagram_zoom_once_per_40_px(cx: &mut gpui::TestA
             touch_phase: gpui::TouchPhase::Moved,
         });
     };
-    let zoom = |cx: &mut gpui::VisualTestContext| cx.update(|_, app| state.read(app).viewport.zoom);
+    let zoom = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| state.read(app).viewport.borrow().zoom)
+    };
     for _ in 0..8 {
         wheel(cx, 15.0);
     }
@@ -551,7 +664,7 @@ fn a_zoomed_pane_requests_only_the_rows_inside_it(cx: &mut gpui::TestAppContext)
     let dpr = cx.update(|window, _| window.scale_factor());
     cx.update(|_, app| {
         let state = state.read(app);
-        let viewport = &state.viewport;
+        let viewport = state.viewport.borrow();
         assert_eq!(viewport.zoom, 6);
         let tile = TILE_SIZE as f32 / dpr;
         let scale = ZOOM_STEPS[viewport.zoom as usize];
@@ -587,7 +700,7 @@ fn ctrl_scroll_keeps_the_point_under_the_pointer(cx: &mut gpui::TestAppContext) 
     );
     let under_pointer = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_, app| {
-            let viewport = &state.read(app).viewport;
+            let viewport = state.read(app).viewport.borrow();
             let scale = ZOOM_STEPS[viewport.zoom as usize];
             (
                 (local.0 - viewport.pan.0) / scale,
@@ -605,7 +718,10 @@ fn ctrl_scroll_keeps_the_point_under_the_pointer(cx: &mut gpui::TestAppContext) 
         },
         touch_phase: gpui::TouchPhase::Moved,
     });
-    assert_eq!(cx.update(|_, app| state.read(app).viewport.zoom), 3);
+    assert_eq!(
+        cx.update(|_, app| state.read(app).viewport.borrow().zoom),
+        3
+    );
     let after = under_pointer(cx);
     assert!(
         (after.0 - before.0).abs() < 0.01 && (after.1 - before.1).abs() < 0.01,
@@ -704,6 +820,205 @@ fn side_by_side_diagrams_settle_on_a_large_screen(cx: &mut gpui::TestAppContext)
         settled,
         "no tile is drawn twice once settled"
     );
+}
+
+/// A diagram wider than its block shows a scrollbar along the bottom, and
+/// clicking its far end pans to the diagram's right edge.
+#[gpui::test]
+fn a_wide_diagram_scrolls_sideways_with_its_scrollbar(cx: &mut gpui::TestAppContext) {
+    use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
+    let _guard = crate::test_support::lock_visual_test();
+    let source: String = std::iter::once("flowchart LR".to_string())
+        .chain((1..30).map(|node| format!("N{}-->N{node}", node - 1)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let key = DiagramKey::new(DiagramKind::Mermaid, source.into());
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let cache = cache(cx);
+        InteractionHarness {
+            state: cx.new(|cx| DiagramState::new(DiagramInput::Key(key.clone()), cache, cx)),
+            scroll: gpui::ScrollHandle::new(),
+            key: key.clone(),
+        }
+    });
+    let state = cx.update(|_, app| view.read(app).state.clone());
+    for _ in 0..3 {
+        crate::view::test_support::redraw(cx);
+    }
+    cx.update(|_, app| {
+        let viewport = state.read(app).viewport.borrow();
+        assert!(viewport.overflow(Horizontal) > 0.0);
+        assert_eq!(viewport.overflow(Vertical), 0.0);
+    });
+    let bar = cx
+        .debug_bounds("diagram_scrollbar_horizontal")
+        .expect("a horizontal scrollbar");
+    let end = gpui::point(bar.right() - px(6.0), bar.center().y);
+    cx.simulate_click(end, gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    cx.update(|_, app| {
+        let viewport = state.read(app).viewport.borrow();
+        assert_eq!(
+            viewport.scrolled(Horizontal),
+            viewport.overflow(Horizontal),
+            "panned to the right edge"
+        );
+    });
+}
+
+/// A sideways swipe over a diagram wider than its block pans it, and leaves
+/// the document where it is.
+#[gpui::test]
+fn a_sideways_swipe_pans_a_wide_diagram(cx: &mut gpui::TestAppContext) {
+    use crate::view::components::ScrollbarAxis::Horizontal;
+    let _guard = crate::test_support::lock_visual_test();
+    let source: String = std::iter::once("flowchart LR".to_string())
+        .chain((1..30).map(|node| format!("N{}-->N{node}", node - 1)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let key = DiagramKey::new(DiagramKind::Mermaid, source.into());
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let cache = cache(cx);
+        InteractionHarness {
+            state: cx.new(|cx| DiagramState::new(DiagramInput::Key(key.clone()), cache, cx)),
+            scroll: gpui::ScrollHandle::new(),
+            key: key.clone(),
+        }
+    });
+    let state = cx.update(|_, app| view.read(app).state.clone());
+    for _ in 0..3 {
+        crate::view::test_support::redraw(cx);
+    }
+    let center = cx.debug_bounds("diagram_viewport").unwrap().center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: center,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(-120.0), px(0.0))),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    crate::view::test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert_eq!(scrolled_of(&state, app, Horizontal), 120.0);
+        assert_eq!(
+            view.read(app).scroll.offset().y,
+            px(0.0),
+            "the document stays"
+        );
+    });
+}
+
+/// After a reset (Collapse, Show full diagram) a diagram that fits gives its
+/// scrollbars nothing to scroll.
+#[gpui::test]
+fn a_reset_diagram_that_fits_has_nothing_to_scroll(cx: &mut gpui::TestAppContext) {
+    use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, state, cx) = open_interaction_harness(cx);
+    cx.update(|_, app| {
+        state.update(app, |state, _| {
+            *state.viewport.borrow_mut() = Viewport::default()
+        });
+        view.update(app, |_, cx| cx.notify());
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_, app| {
+        assert_eq!(overflow_of(&state, app, Horizontal), 0.0);
+        assert_eq!(overflow_of(&state, app, Vertical), 0.0);
+    });
+}
+
+/// Collapsing a tall diagram gives it a vertical scrollbar that scrolls it,
+/// and no horizontal one.
+#[gpui::test]
+fn a_collapsed_tall_diagram_scrolls_with_its_vertical_scrollbar(cx: &mut gpui::TestAppContext) {
+    use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
+    let _guard = crate::test_support::lock_visual_test();
+    let key = DiagramKey::new(
+        DiagramKind::Mermaid,
+        "flowchart TD;A-->B;B-->C;C-->D;D-->E;E-->F;F-->G".into(),
+    );
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let cache = cache(cx);
+        InteractionHarness {
+            state: cx.new(|cx| DiagramState::new(DiagramInput::Key(key.clone()), cache, cx)),
+            scroll: gpui::ScrollHandle::new(),
+            key: key.clone(),
+        }
+    });
+    let state = cx.update(|_, app| view.read(app).state.clone());
+    for _ in 0..3 {
+        crate::view::test_support::redraw(cx);
+    }
+    cx.update(|_, app| assert_eq!(overflow_of(&state, app, Vertical), 0.0));
+    let toggle = cx.debug_bounds("diagram_block_height_toggle").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    crate::view::test_support::redraw(cx);
+    cx.update(|_, app| {
+        assert!(overflow_of(&state, app, Vertical) > 0.0);
+        assert_eq!(overflow_of(&state, app, Horizontal), 0.0);
+    });
+    let bar = cx.debug_bounds("diagram_scrollbar_vertical").unwrap();
+    cx.simulate_click(
+        gpui::point(bar.center().x, bar.bottom() - px(6.0)),
+        gpui::Modifiers::default(),
+    );
+    cx.update(|_, app| {
+        assert_eq!(
+            scrolled_of(&state, app, Vertical),
+            overflow_of(&state, app, Vertical)
+        );
+    });
+}
+
+/// A diagram that fits until its window narrows then has a scrollbar, and a
+/// click at the bar's end pans to the diagram's right edge.
+#[gpui::test]
+fn narrowing_the_window_gives_a_fitting_diagram_its_scrollbar(cx: &mut gpui::TestAppContext) {
+    use crate::view::components::ScrollbarAxis::Horizontal;
+    let _guard = crate::test_support::lock_visual_test();
+    let source: String = std::iter::once("flowchart LR".to_string())
+        .chain((1..6).map(|node| format!("N{}-->N{node}", node - 1)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let key = DiagramKey::new(DiagramKind::Mermaid, source.into());
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let cache = cache(cx);
+        InteractionHarness {
+            state: cx.new(|cx| DiagramState::new(DiagramInput::Key(key.clone()), cache, cx)),
+            scroll: gpui::ScrollHandle::new(),
+            key: key.clone(),
+        }
+    });
+    let state = cx.update(|_, app| view.read(app).state.clone());
+    let overflow = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| state.read(app).viewport.borrow().overflow(Horizontal))
+    };
+    for _ in 0..3 {
+        crate::view::test_support::redraw(cx);
+    }
+    assert_eq!(overflow(cx), 0.0, "fits the wide window");
+
+    cx.simulate_resize(gpui::size(px(500.0), px(600.0)));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(overflow(cx) > 0.0, "overflows the narrow one");
+    let bar = cx
+        .debug_bounds("diagram_scrollbar_horizontal")
+        .expect("a horizontal scrollbar");
+    cx.simulate_click(
+        gpui::point(bar.right() - px(6.0), bar.center().y),
+        gpui::Modifiers::default(),
+    );
+    cx.update(|_, app| {
+        assert_eq!(
+            scrolled_of(&state, app, Horizontal),
+            overflow_of(&state, app, Horizontal)
+        );
+    });
 }
 
 #[test]

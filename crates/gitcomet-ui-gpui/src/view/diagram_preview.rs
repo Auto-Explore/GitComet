@@ -325,7 +325,8 @@ struct DiagramState {
     /// This viewport's id in the cache's count of the tiles shown.
     viewport_id: u64,
     choices: BlockChoices,
-    viewport: Viewport,
+    /// Shared with the scrollbars, which read it as this frame laid it out.
+    viewport: Rc<RefCell<Viewport>>,
     /// How far the viewport's top was above the visible area when last drawn.
     hidden_above: f32,
     generation: Arc<AtomicU64>,
@@ -344,7 +345,7 @@ impl DiagramState {
         let mut state = Self {
             viewport_id: cache.viewport_id(),
             cache: cache.clone(),
-            viewport: Viewport::default(),
+            viewport: Rc::default(),
             hidden_above: 0.0,
             generation: Arc::new(AtomicU64::new(0)),
             source_generation: Arc::new(AtomicU64::new(0)),
@@ -362,7 +363,7 @@ impl DiagramState {
     }
 
     fn load(&mut self, cache: Arc<DiagramCache>, cx: &mut gpui::Context<Self>) {
-        self.viewport = Viewport::default();
+        *self.viewport.borrow_mut() = Viewport::default();
         self.invalidate_tiles();
         self.cache = cache.clone();
         self.seq = self.seq.wrapping_add(1);
@@ -559,7 +560,7 @@ impl DiagramState {
                 }
                 this.choices.update(&key, |choice| choice.height = next);
                 // Show the whole diagram, or its top, from 100%.
-                this.viewport = Viewport::default();
+                *this.viewport.borrow_mut() = Viewport::default();
                 this.invalidate_tiles();
                 cx.notify();
             })
@@ -576,6 +577,7 @@ impl Drop for DiagramState {
     }
 }
 
+mod pan_scrollbar;
 mod surface;
 
 #[derive(gpui::IntoElement)]
