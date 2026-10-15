@@ -778,3 +778,7 @@ under 3,000 lines (`diff_search.rs`, `history_canvas.rs`, `details.rs`,
 `merge/plan.rs`, gix `repo/diff.rs`) and shrank `panes/sidebar.rs` by 530 lines.
 Production files over 3,000 lines: 17 to 9. The remaining nine need real
 splits; small cohesive inline tests stay where they are.
+
+Two more files came under the limit: the syntax heuristic's keyword tables
+(1,676 lines) moved to `heuristic/keywords.rs`, and gix `repo/status.rs`'s
+`pub(crate) mod tests` (1,616 lines) to `status/tests.rs`. Seven remain.

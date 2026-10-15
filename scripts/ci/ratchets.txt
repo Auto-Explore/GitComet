@@ -5,7 +5,7 @@ super_glob_imports_in_ui_production max 332
 impl_gitcomet_view_files_outside_root max 23
 set_theme_calls_in_ui max 29
 kit_gitcomet_core_refs max 0
-production_files_over_3000_lines max 9
+production_files_over_3000_lines max 7
 state_repo_iter_mut_find_sites max 213
 gix_integration_test_binaries max 1
 gpui_test_packages min 5
