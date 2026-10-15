@@ -36,11 +36,11 @@ pub use markdown::{MarkdownView, MarkdownViewImpl};
 pub mod panes;
 pub mod presentation;
 pub use presentation::{HostedAction, HostedMenuItem, NotificationKind};
+#[cfg(feature = "test-support")]
+pub mod fake_host;
 pub mod registry;
 pub mod services;
 pub mod storage;
-#[cfg(feature = "test-support")]
-pub mod fake_host;
 pub use services::{RepositoryReader, StoreView, SyntaxService};
 
 pub use contributions::{
