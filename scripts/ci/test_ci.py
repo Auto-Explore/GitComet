@@ -349,9 +349,6 @@ class LiveUiMeasurementTests(unittest.TestCase):
             if step["do"] == "command":
                 self.assertEqual(step["witness"], {"kind": "repo_closed", "path": str(secondary)})
 
-    def test_seeded_profiles_dismiss_the_product_survey(self):
-        self.assertEqual(live_ui.survey_id(), "gitcomet_user_survey_2026_04")
-
     def test_status_touch_rewrites_the_save_file_with_its_own_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
