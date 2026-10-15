@@ -11,6 +11,8 @@ import re
 import statistics
 import subprocess
 
+from cache import CACHE_ALLOWANCE_BYTES, COMPILED_BUDGETS_MIB
+
 LEGACY_LANES = {
     "Linux Headless Suite (x86_64-linux / ubuntu-22.04)": "native/ubuntu22-x64",
     "Linux Headless Suite (aarch64-linux / ubuntu-22.04-arm)": "native/ubuntu22-arm64",
@@ -257,6 +259,10 @@ def obsolete_caches(caches):
         if context is None:
             continue
         scope = cache.get("ref", "")
+        # No lane restores a compiled bundle for a context without a budget any more.
+        if cache["key"].startswith("gitcomet-ci-v2-deps-") and context.removeprefix("deps/") not in COMPILED_BUDGETS_MIB:
+            obsolete.append(cache)
+            continue
         # Retire the former source-only allocations only after the OS fallback exists.
         if cache["key"].startswith("gitcomet-ci-v1-") and ("benchmarks-ci-bench" in context or context.endswith("-clippy")):
             os_family = "windows" if "windows" in context else "darwin" if "macos" in context else "linux"
@@ -280,12 +286,13 @@ def manage_caches(repository, prune):
     removed = {cache["id"] for cache in obsolete} if prune else set()
     owned = [cache for cache in caches if cache_context(cache["key"]) and cache["id"] not in removed]
     total = sum(cache["size_in_bytes"] for cache in owned)
-    report = {"validation_cache_bytes": total, "budget_bytes": 8_000_000_000,
+    report = {"validation_cache_bytes": total, "budget_bytes": CACHE_ALLOWANCE_BYTES,
               "cache_count": len(owned), "obsolete_count": len(obsolete), "pruned": prune}
     print(json.dumps(report, indent=2))
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-            stream.write(f"\nValidation caches: {total / 1e9:.2f} GB / 8 GB in {len(owned)} entries.\n")
+            stream.write(f"\nValidation caches: {total / 1e9:.2f} GB / {CACHE_ALLOWANCE_BYTES / 1e9:.0f} GB"
+                         f" in {len(owned)} entries.\n")
     if total > report["budget_bytes"]:
         raise RuntimeError("Validation cache budget exceeded; reduce cache quotas before adding contexts")
 

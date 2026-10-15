@@ -237,14 +237,6 @@ jobs:
         with:
           name: ${{ matrix.name }}
           source-writer: ${{ matrix.name == 'ubuntu22-x64' || matrix.name == 'macos15-arm64' || matrix.name == 'windows-x64' }}
-          source-key: ${{ steps.setup.outputs.source-key }}
-          source-hit: ${{ steps.setup.outputs.source-hit }}
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}
-          # Ubuntu x64 and Windows also compile the headless app context.
-          # Keep the total active cache set below 8 GB.
-          budget-mib: ${{ matrix.name == 'ubuntu22-x64' && '1200' || (runner.os == 'Windows' && '800' || '700') }}
 
   fedora:
     name: Linux Headless Suite (Fedora container)
@@ -304,6 +296,3 @@ jobs:
         if: always()
         with:
           name: fedora41-x64
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}

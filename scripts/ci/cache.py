@@ -10,12 +10,26 @@ from pathlib import Path
 import platform
 import re
 import subprocess
+import sys
 import tarfile
 import time
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFIX = "gitcomet-ci-v2-"
+MIB = 1024**2
+# report.py fails a dev push whose CI caches exceed this; GitHub itself evicts beyond 10 GB.
+CACHE_ALLOWANCE_BYTES = 8_000_000_000
+# Compiled bundles for the three longest jobs. Measured bundles (2026-10-15): macos15-x64 1454 MiB,
+# ubuntu22-arm64 1497 MiB, ubuntu22-x64 1640 MiB with its app context, which Windows also builds.
+COMPILED_BUDGETS_MIB = {
+    "macos15-x64-workspace-ci-test": 1664,
+    "windows-x64-workspace-ci-test": 2048,
+    "windows-arm64-workspace-ci-test": 2048,
+}
+# One per OS family: crate files, the sparse index and git databases (522 MiB on Linux).
+SOURCES_BUDGET_MIB = 600
+UNIT_HASH = re.compile(r"-([0-9a-f]{16})(?:\..*)?$")
 
 
 def output(key, value):
@@ -63,8 +77,26 @@ def cache_keys(context):
             "source-key": source_prefix + dependency_hash, "source-restore-key": source_prefix}
 
 
-def dependency_entries(target, metadata):
-    """Cache complete external dependency artifacts, never partial file groups."""
+def built_units(reports):
+    """Unit hashes this job's cargo builds compiled or found fresh, from run.py's recorded messages."""
+    logs = sorted(reports.glob("*/cargo-messages.jsonl"))
+    if not logs:
+        raise RuntimeError(f"no */cargo-messages.jsonl under {reports}; compile with scripts/ci/run.py before packing")
+    units = set()
+    for log in logs:
+        for line in log.read_text(encoding="utf-8").splitlines():
+            message = json.loads(line)
+            paths = [*message.get("filenames", []), *([message["out_dir"]] if "out_dir" in message else [])]
+            for path in map(Path, paths):
+                # deps/libname-HASH.rlib, build/name-HASH/build-script-build, build/name-HASH/out
+                match = UNIT_HASH.search(path.name) or UNIT_HASH.search(path.parent.name)
+                if match:
+                    units.add(match[1])
+    return units
+
+
+def dependency_entries(target, metadata, units):
+    """Complete external units this job used; a prefix restore's stale units stay behind."""
     names = set()
     for package in metadata["packages"]:
         if not package.get("source"):
@@ -78,17 +110,45 @@ def dependency_entries(target, metadata):
             if not directory.is_dir():
                 continue
             for path in sorted(directory.iterdir()):
-                stem = re.sub(r"-[0-9a-f]{16}(?:\..*)?$", "", path.name)
-                if stem in (lib_names if kind == "deps" else names):
+                match = UNIT_HASH.search(path.name)
+                if match and match[1] in units and path.name[:match.start()] in (lib_names if kind == "deps" else names):
                     yield path, "target/" + str(path.relative_to(target)).replace(os.sep, "/")
 
 
-def source_entries(cargo_home):
-    # Preserve source timestamps with compiled artifacts (including -sys crates).
-    for name in ("registry/cache", "registry/index", "registry/src", "git/db", "git/checkouts"):
-        path = cargo_home / name
-        if path.is_dir():
-            yield path, "cargo/" + name
+def cargo_metadata():
+    return json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
+
+
+def registry_crates(metadata):
+    return {f"{package['name']}-{package['version']}" for package in metadata["packages"]
+            if (package.get("source") or "").startswith("registry+")}
+
+
+def registry_entries(cargo_home, kind, crates):
+    # Only the current lockfile's crates, so prefix restores never accumulate old versions.
+    root = cargo_home / "registry" / kind
+    for index in sorted(root.iterdir()) if root.is_dir() else ():
+        for path in sorted(index.iterdir()):
+            if path.name.removesuffix(".crate") in crates:
+                yield path, f"cargo/registry/{kind}/{index.name}/{path.name}"
+
+
+def directory_entries(cargo_home, *names):
+    for name in names:
+        if (cargo_home / name).is_dir():
+            yield cargo_home / name, "cargo/" + name
+
+
+def fetched_entries(cargo_home, crates):
+    """What cargo downloads otherwise: crate files (needed even when unpacked), the index, git databases."""
+    yield from registry_entries(cargo_home, "cache", crates)
+    yield from directory_entries(cargo_home, "registry/index", "git/db")
+
+
+def extracted_entries(cargo_home, crates):
+    """Unpacked sources keep the timestamps compiled build-script fingerprints compare against."""
+    yield from registry_entries(cargo_home, "src", crates)
+    yield from directory_entries(cargo_home, "git/checkouts")
 
 
 def write_bundle(destination, entries, *, mode=None):
@@ -110,47 +170,22 @@ def write_bundle(destination, entries, *, mode=None):
             archive.add(source, arcname=name, filter=allowed)
 
 
-def pack(destination, cargo_home, target, budget, compiled, report_name="cache"):
+def pack(destination, entries, *, mode, budget_mib, reports):
+    """Write one bundle; one over its budget fails rather than evicting other lanes or shrinking silently."""
     start = time.monotonic()
-    sources = list(source_entries(cargo_home))
-    entries = list(sources)
-    mode = "sources"
-    if compiled:
-        metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
-        artifacts = list(dependency_entries(target, metadata))
-        entries += artifacts
-        if artifacts:
-            mode = "dependencies"
+    if not entries:
+        raise RuntimeError(f"nothing to cache for the {mode} bundle")
     write_bundle(destination, entries, mode=mode)
-    attempts = {mode: destination.stat().st_size}
-    if destination.stat().st_size > budget and compiled:
-        # Never publish an oversized cache which evicts other platforms.
-        mode = "sources"
-        entries = sources
-        write_bundle(destination, entries, mode=mode)
-        attempts[mode] = destination.stat().st_size
-    if destination.stat().st_size > budget:
-        # Compressed crate downloads give useful reuse even on very small budgets.
-        mode = "downloads"
-        downloads = cargo_home / "registry/cache"
-        entries = [(downloads, "cargo/registry/cache")] if downloads.is_dir() else []
-        write_bundle(destination, entries, mode=mode)
-        attempts[mode] = destination.stat().st_size
-    size = destination.stat().st_size
-    save = size <= budget and bool(entries)
-    output("save", str(save).lower())
-    output("bytes", size)
-    output("mode", mode)
-    report = dict(bytes=size, budget=budget, mode=mode, save=save, attempts=attempts,
-                  seconds=round(time.monotonic() - start, 3))
-    report_dir = ROOT / "target/ci-reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / f"{report_name}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    if compiled and mode != "dependencies":
-        print(f"::warning::Compiled dependency cache fell back to {mode}; compilation reuse is unavailable")
-    if not save:
+    size, budget = destination.stat().st_size, budget_mib * MIB
+    report = dict(mode=mode, bytes=size, budget=budget, seconds=round(time.monotonic() - start, 3))
+    reports.mkdir(parents=True, exist_ok=True)
+    report_name = "cache" if mode == "dependencies" else "cache-sources"
+    (reports / f"{report_name}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if size > budget:
         destination.unlink()
-        print("Cache is empty or exceeds its budget; leaving this cache unsaved")
+        raise RuntimeError(f"{mode} cache bundle is {size // MIB} MiB, over its {budget_mib} MiB budget; "
+                           "raise it in scripts/ci/cache.py within the repository cache limit")
+    print(f"Packed {mode} cache: {size // MIB} of {budget_mib} MiB")
 
 
 def restore(bundle, cargo_home, target):
@@ -168,7 +203,7 @@ def restore(bundle, cargo_home, target):
                 if not member.isfile() or member.size > 4096:
                     raise ValueError("Invalid cache manifest")
                 manifest = json.load(archive.extractfile(member))
-                if manifest.get("version") != 2 or manifest.get("mode") not in ("dependencies", "sources", "downloads"):
+                if manifest.get("version") != 2 or manifest.get("mode") not in ("dependencies", "sources"):
                     raise ValueError("Unsupported cache manifest")
                 mode = manifest["mode"]
                 continue
@@ -205,22 +240,32 @@ def report_restore():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["key", "pack", "restore", "state"])
+    parser.add_argument("operation", choices=["key", "pack", "pack-sources", "restore", "state"])
     parser.add_argument("--context", default="local")
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--cargo-home", type=Path, default=Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")))
     parser.add_argument("--target", type=Path, default=ROOT / "target")
-    parser.add_argument("--budget-mib", type=int, default=700)
-    parser.add_argument("--compiled", action="store_true")
-    parser.add_argument("--report-name", default="cache")
     args = parser.parse_args()
     if args.operation == "key":
         for key, value in cache_keys(args.context).items():
             output(key, value)
+        output("compiled", str(args.context in COMPILED_BUDGETS_MIB).lower())
     elif args.operation == "state":
         report_restore()
+    elif args.operation == "pack-sources":
+        crates = registry_crates(cargo_metadata())
+        pack(args.bundle, list(fetched_entries(args.cargo_home, crates)), mode="sources",
+             budget_mib=SOURCES_BUDGET_MIB, reports=args.target / "ci-reports")
     elif args.operation == "pack":
-        pack(args.bundle, args.cargo_home, args.target, args.budget_mib * 1024**2, args.compiled, args.report_name)
+        if args.context not in COMPILED_BUDGETS_MIB:
+            parser.error(f"{args.context} has no compiled bundle budget in COMPILED_BUDGETS_MIB")
+        units = built_units(args.target / "ci-reports")
+        metadata = cargo_metadata()
+        crates = registry_crates(metadata)
+        entries = [*fetched_entries(args.cargo_home, crates), *extracted_entries(args.cargo_home, crates),
+                   *dependency_entries(args.target, metadata, units)]
+        pack(args.bundle, entries, mode="dependencies", budget_mib=COMPILED_BUDGETS_MIB[args.context],
+             reports=args.target / "ci-reports")
     else:
         report = restore(args.bundle, args.cargo_home, args.target)
         directory = ROOT / "target/ci-reports"
@@ -229,4 +274,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as error:
+        print(f"::error::{error}", file=sys.stderr)
+        sys.exit(1)

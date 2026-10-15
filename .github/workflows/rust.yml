@@ -111,7 +111,6 @@ jobs:
           context: ubuntu22-x64-clippy
           cold-cache: ${{ inputs.cold-cache }}
           nextest: "false"
-          compiled: "false"
       - name: Clippy (libraries)
         run: cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
       - name: Clippy (headless app)
@@ -122,10 +121,6 @@ jobs:
         if: always()
         with:
           name: clippy
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}
-          compiled: "false"
 
   ui-clippy:
     name: UI and extension API lint
@@ -143,7 +138,6 @@ jobs:
           context: ubuntu22-x64-ui-clippy
           cold-cache: ${{ inputs.cold-cache }}
           nextest: "false"
-          compiled: "false"
       - name: Lint public libraries and host
         run: cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
       - name: Build public documentation
@@ -156,10 +150,6 @@ jobs:
         if: always()
         with:
           name: ui-clippy
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}
-          compiled: "false"
 
   headless:
     name: Headless builds and package test suites
@@ -195,7 +185,3 @@ jobs:
         if: always()
         with:
           name: headless
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}
-          budget-mib: "400"
