@@ -251,6 +251,69 @@ fn stash_apply_staged_overlap_still_merges_into_conflict() {
     assert_eq!(entry.conflict, Some(FileConflictKind::BothModified));
 }
 
+/// When a stashed untracked file cannot be restored because the path now
+/// exists, the leftover merge wrote conflict markers into the file at that
+/// path, following a symlink at or above it: a tracked `notes -> ~/.bashrc`
+/// or `dir -> ~/.ssh` from upstream got the stashed text merged into the file
+/// it leads to.
+#[cfg(unix)]
+#[test]
+fn stash_apply_never_merges_an_untracked_file_through_a_symlink() {
+    for (link, untracked) in [("notes", "notes"), ("dir", "dir/notes")] {
+        let _ = ensure_isolated_git_test_env();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("notes"), "precious\n").unwrap();
+        let link_target = if link == "dir" {
+            outside.clone()
+        } else {
+            outside.join("notes")
+        };
+        let repo = repo.as_path();
+
+        run_git(repo, &["init"]);
+        run_git(repo, &["config", "user.email", "you@example.com"]);
+        run_git(repo, &["config", "user.name", "You"]);
+        run_git(repo, &["config", "commit.gpgsign", "false"]);
+        write(repo, "a.txt", "base\n");
+        run_git(repo, &["add", "a.txt"]);
+        run_git(repo, &["commit", "-m", "init"]);
+
+        let backend = GixBackend;
+        let opened = backend.open(repo).unwrap();
+        write(repo, untracked, "stashed secret\n");
+        opened.stash_create("wip", true).unwrap();
+
+        symlink(&link_target, repo.join(link)).unwrap();
+        run_git(repo, &["add", link]);
+        run_git(repo, &["commit", "-m", "upstream adds a symlink"]);
+
+        let err = opened
+            .stash_apply(0)
+            .expect_err("the untracked file cannot be restored over the symlink");
+        assert_git_failure(
+            &err,
+            "git stash apply",
+            GitFailureId::UntrackedRestoreConflict,
+        );
+        assert_eq!(
+            fs::read_to_string(outside.join("notes")).unwrap(),
+            "precious\n",
+            "{untracked}"
+        );
+        assert!(
+            fs::symlink_metadata(repo.join(link))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{untracked}"
+        );
+    }
+}
+
 #[test]
 fn stash_apply_allows_merge_when_only_untracked_restore_fails() {
     let _ = ensure_isolated_git_test_env();
