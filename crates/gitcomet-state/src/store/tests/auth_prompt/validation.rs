@@ -385,10 +385,102 @@ fn cancel_or_replacement_invalidates_validation_and_late_cache_writes() {
 }
 
 #[test]
+fn username_password_retries_keep_rejections_inline_and_later_git_failures_terminal() {
+    let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
+    let challenge = AuthChallenge::from_prompt(
+        GitAuthKind::UsernamePassword,
+        "Password for 'https://alice@example.com':",
+    );
+    finish_pull(
+        &mut repos,
+        &mut state,
+        outcome_error(
+            AuthOutcome::NeedsInput(challenge.clone()),
+            GitFailureId::CommandFailed,
+            "fatal: could not read Password for 'https://alice@example.com': terminal prompts disabled",
+        ),
+    );
+    assert_auth_attempt_is_recoverable(&state);
+
+    for (attempt, secret) in ["wrong-password", "correct-password"]
+        .into_iter()
+        .enumerate()
+    {
+        let prompt = state.auth_prompt.clone().expect("credential prompt");
+        assert_eq!(prompt.kind, AuthPromptKind::UsernamePassword);
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(1),
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                generation: prompt.generation,
+                username: Some(" alice ".into()),
+                secret: secret.into(),
+            },
+        );
+        assert!(state.auth_prompt.is_none());
+        assert_eq!(state.repos[0].pull_in_flight, 1);
+        let auth = effects
+            .iter()
+            .find_map(Effect::git_auth)
+            .expect("HTTPS retry carries credentials");
+        assert_eq!(auth.kind, GitAuthKind::UsernamePassword);
+        assert_eq!(auth.username.as_deref(), Some("alice"));
+        assert_eq!(auth.secret, secret);
+        assert_eq!(auth.challenge.as_ref(), Some(&challenge));
+
+        if attempt == 0 {
+            finish_pull(
+                &mut repos,
+                &mut state,
+                outcome_error(
+                    AuthOutcome::Rejected(challenge.clone()),
+                    GitFailureId::CommandFailed,
+                    "fatal: Authentication failed for 'https://example.com/repo.git/'",
+                ),
+            );
+            assert_auth_attempt_is_recoverable(&state);
+            let rejected = state.auth_prompt.as_ref().unwrap();
+            assert_eq!(rejected.status, AuthPromptStatus::Rejected);
+            assert_ne!(rejected.generation, prompt.generation);
+            assert_eq!(rejected.challenge.as_ref(), Some(&challenge));
+            assert!(rejected.reason.contains("credentials were rejected"));
+            assert_eq!(state.repos[0].feedback.command_log.len(), 2);
+        }
+    }
+
+    finish_pull(
+        &mut repos,
+        &mut state,
+        outcome_error(
+            AuthOutcome::Supplied,
+            GitFailureId::WorktreeWouldBeOverwritten,
+            "error: Your local changes to README.md would be overwritten by merge.\nPassword for 'https://alice@example.com':",
+        ),
+    );
+    assert_terminal_failure(&state);
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+    let log = &state.repos[0].feedback.command_log;
+    assert_eq!(log.len(), 3);
+    assert!(log.iter().all(|entry| {
+        [
+            entry.command.as_str(),
+            entry.summary.as_str(),
+            entry.stdout.as_ref(),
+            entry.stderr.as_ref(),
+        ]
+        .iter()
+        .all(|text| !text.contains("wrong-password") && !text.contains("correct-password"))
+    }));
+}
+
+#[test]
 fn structured_rejected_credentials_and_new_key_challenges_preserve_their_identity() {
     let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
-    let mut challenge = key_challenge(None);
-    challenge.kind = GitAuthKind::UsernamePassword;
+    let challenge = AuthChallenge::from_prompt(
+        GitAuthKind::UsernamePassword,
+        "Password for 'https://example.com':",
+    );
     finish_pull(
         &mut repos,
         &mut state,
@@ -399,6 +491,7 @@ fn structured_rejected_credentials_and_new_key_challenges_preserve_their_identit
         ),
     );
     let first = state.auth_prompt.clone().unwrap();
+    assert_eq!(first.kind, AuthPromptKind::UsernamePassword);
     assert_eq!(first.status, AuthPromptStatus::Rejected);
     assert_eq!(first.challenge, Some(challenge));
     assert_auth_attempt_is_recoverable(&state);

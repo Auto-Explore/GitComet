@@ -369,7 +369,8 @@ impl Render for GitCometView {
 
         if let Some(prompt) = self.state.auth_prompt.clone() {
             let prompt_key = prompt.generation;
-            if self.auth_prompt_key.as_ref() != Some(&prompt_key) {
+            let is_new_prompt = self.auth_prompt_key != Some(prompt_key);
+            if is_new_prompt {
                 self.auth_prompt_key = Some(prompt_key);
                 self.auth_prompt_username_input
                     .update(cx, |input, cx| input.set_text("", cx));
@@ -389,6 +390,17 @@ impl Render for GitCometView {
                 input.set_masked(!is_host_verification, cx);
                 input.set_read_only(is_validating, cx);
             });
+            if is_new_prompt && !is_validating {
+                match prompt.kind {
+                    AuthPromptKind::UsernamePassword => {
+                        window.focus(&self.auth_prompt_username_input.read(cx).focus_handle(), cx);
+                    }
+                    AuthPromptKind::Passphrase => {
+                        window.focus(&self.auth_prompt_secret_input.read(cx).focus_handle(), cx);
+                    }
+                    AuthPromptKind::HostVerification => {}
+                }
+            }
 
             let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
             let title = match prompt.kind {
