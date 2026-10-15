@@ -420,6 +420,7 @@ fn hosted_parent_saves_keep_their_binding_when_a_nested_repository_is_open(
     let (dir, store, view, cx) = open_repository(cx);
     let nested = dir.path().join("nested");
     std::fs::create_dir(&nested).unwrap();
+    let nested = canonicalize_or_original(nested);
     git(&nested, &["init", "-q", "-b", "main"]);
     let path = nested.join("child.rs");
     std::fs::write(&path, "nested original\n").unwrap();

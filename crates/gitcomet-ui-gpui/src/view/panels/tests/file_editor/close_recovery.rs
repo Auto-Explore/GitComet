@@ -135,7 +135,7 @@ fn close_repository_and_save_retained_buffer(cx: &mut gpui::TestAppContext, case
             let path = directory.path().join(name);
             std::fs::create_dir(&path).unwrap();
             std::fs::write(path.join("main.rs"), "original\n").unwrap();
-            path.canonicalize().unwrap()
+            gitcomet_core::path_utils::canonicalize_or_original(path)
         })
         .collect();
     let (store, events) = AppStore::new_test(Arc::new(OpeningBackend));
