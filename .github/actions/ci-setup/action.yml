@@ -27,25 +27,25 @@ runs:
         rustup show active-toolchain
         rustc -vV
     - uses: ./.github/actions/setup-mold
-    - name: Compute dependency cache key
+    - name: Compute cache keys
       id: key
       shell: bash
       env:
         CI_CACHE_CONTEXT: ${{ inputs.context }}
       run: python3 scripts/ci/cache.py key --context "$CI_CACHE_CONTEXT"
-    - name: Restore dependency cache
+    - name: Restore compiled dependency cache
       if: inputs.cold-cache != 'true' && steps.key.outputs.compiled == 'true'
       id: cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ${{ runner.temp }}/gitcomet-ci-cache.tar.gz
+        path: ${{ runner.temp }}/gitcomet-ci-compiled.tar.gz
         key: ${{ steps.key.outputs.key }}
         restore-keys: ${{ steps.key.outputs.restore-key }}
-    - name: Unpack dependency cache
+    - name: Unpack compiled dependency cache
       if: steps.cache.outputs.cache-matched-key != ''
       shell: bash
-      run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-cache.tar.gz"
-    - name: Restore shared sources after dependency miss (otherwise lookup only)
+      run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-compiled.tar.gz"
+    - name: Restore shared sources after a compiled miss (otherwise lookup only)
       if: inputs.cold-cache != 'true'
       id: sources
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

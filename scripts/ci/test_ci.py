@@ -484,9 +484,9 @@ class CacheTests(unittest.TestCase):
             source.write_text("retained timestamp")
             os.utime(source, (1700000000, 1700000000))
             bundle = root / "cache.tar.gz"
-            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, "target/ci-test/deps/libexternal.rlib")], mode="dependencies")
+            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, "target/ci-test/deps/libexternal.rlib")], mode="compiled")
             details = cache.restore(bundle, root / "cargo", root / "target")
-            self.assertEqual(details["mode"], "dependencies")
+            self.assertEqual(details["mode"], "compiled")
             self.assertEqual((root / "cargo/registry/src/source").stat().st_mtime, 1700000000)
             self.assertTrue((root / "target/ci-test/deps/libexternal.rlib").exists())
             reports = root / "target/ci-reports"
@@ -494,7 +494,7 @@ class CacheTests(unittest.TestCase):
             (reports / "cache-unpack.json").write_text(json.dumps(details))
             cache.report_restore()
             state = json.loads((reports / "cache-restore.json").read_text())
-            self.assertEqual(state["mode"], "dependencies")
+            self.assertEqual(state["mode"], "compiled")
             self.assertEqual(state["CI_CACHE_HIT"], "false")
             self.assertEqual(state["CI_CACHE_RESTORED"], "true")
             with patch.dict(os.environ, {"CI_COLD_CACHE": "true"}):
@@ -505,9 +505,9 @@ class CacheTests(unittest.TestCase):
         def entry(key, created_at, scope="refs/heads/dev"):
             return {"key": key, "ref": scope, "created_at": created_at}
         with patch.object(report, "COMPILED_BUDGETS_MIB", {"windows-x64-workspace-ci-test": 1}):
-            older = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-old", "2026-09-19")
-            newer = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new", "2026-09-20")
-            other_scope = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-old", "2026-09-19",
+            older = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-old", "2026-09-19")
+            newer = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-new", "2026-09-20")
+            other_scope = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-old", "2026-09-19",
                                 "refs/heads/main")
             sources = entry("gitcomet-ci-v2-sources-windows-layout1-deps", "2026-09-19")
             relaid_sources = entry("gitcomet-ci-v2-sources-windows-layout2-deps", "2026-09-20")
@@ -643,7 +643,7 @@ class CacheTests(unittest.TestCase):
             root = Path(directory)
             cargo, target, metadata = self.cache_job(root)
             bundle = root / "bundle.tar.gz"
-            self.run_cache(root, metadata, "pack", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+            self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
                            "--cargo-home", str(cargo), "--target", str(target))
             self.assertEqual(self.restored_files(root, bundle), {
                 "cargo-home/registry/cache/index-0000/serde-1.0.2.crate",
@@ -665,11 +665,11 @@ class CacheTests(unittest.TestCase):
             (target / "ci-test/deps/libserde-1111111111111111.rlib").write_bytes(os.urandom(2 * 1024**2))
             bundle = root / "bundle.tar.gz"
             with self.assertRaisesRegex(RuntimeError, "over its 1 MiB budget"):
-                self.run_cache(root, metadata, "pack", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
                                "--cargo-home", str(cargo), "--target", str(target))
             self.assertFalse(bundle.exists())
-            report = json.loads((target / "ci-reports/cache.json").read_text())
-            self.assertEqual(report["mode"], "dependencies")
+            report = json.loads((target / "ci-reports/cache-compiled.json").read_text())
+            self.assertEqual(report["mode"], "compiled")
             self.assertGreater(report["bytes"], 1024**2)
 
     def test_compiled_pack_refuses_without_this_jobs_cargo_messages(self):
@@ -680,7 +680,7 @@ class CacheTests(unittest.TestCase):
             (target / "ci-reports/workspace/cargo-messages.jsonl").unlink()
             bundle = root / "bundle.tar.gz"
             with self.assertRaisesRegex(RuntimeError, "cargo-messages.jsonl"):
-                self.run_cache(root, metadata, "pack", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
                                "--cargo-home", str(cargo), "--target", str(target))
             self.assertFalse(bundle.exists())
 
@@ -751,7 +751,7 @@ class CacheTests(unittest.TestCase):
 
     def test_contexts_without_a_compiled_budget_lose_their_bundles(self):
         def entry(context, created_at, scope="refs/heads/dev"):
-            return {"key": f"gitcomet-ci-v2-deps-{context}-compat0123456789-deps0123456789",
+            return {"key": f"gitcomet-ci-v2-compiled-{context}-compat0123456789-deps0123456789",
                     "ref": scope, "created_at": created_at}
         budgeted_old = entry("fixture-workspace-ci-test", "2026-10-14")
         budgeted_new = entry("fixture-workspace-ci-test", "2026-10-15")

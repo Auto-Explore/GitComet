@@ -69,7 +69,7 @@ def cache_keys(context):
         # Windows exposes environment-variable names in uppercase.
         if name.upper() in ("IMAGEOS", "IMAGEVERSION") or name.startswith(("CARGO_PROFILE_", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "CFLAGS", "CMAKE")):
             compatibility.update(f"{name}={value}".encode())
-    restore_key = f"{PREFIX}deps-{context}-{compatibility.hexdigest()[:16]}-"
+    restore_key = f"{PREFIX}compiled-{context}-{compatibility.hexdigest()[:16]}-"
     # Sources restore by prefix, so a packing change must not fall back to older bundles.
     layout = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
     source_prefix = f"{PREFIX}sources-{platform.system().lower()}-{layout}-"
@@ -179,8 +179,7 @@ def pack(destination, entries, *, mode, budget_mib):
     size, budget = destination.stat().st_size, budget_mib * MIB
     report = dict(mode=mode, bytes=size, budget=budget, seconds=round(time.monotonic() - start, 3))
     REPORTS.mkdir(parents=True, exist_ok=True)
-    report_name = "cache" if mode == "dependencies" else "cache-sources"
-    (REPORTS / f"{report_name}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (REPORTS / f"cache-{mode}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if size > budget:
         destination.unlink()
         raise RuntimeError(f"{mode} cache bundle is {size // MIB} MiB, over its {budget_mib} MiB budget; "
@@ -203,7 +202,7 @@ def restore(bundle, cargo_home, target):
                 if not member.isfile() or member.size > 4096:
                     raise ValueError("Invalid cache manifest")
                 manifest = json.load(archive.extractfile(member))
-                if manifest.get("version") != 2 or manifest.get("mode") not in ("dependencies", "sources"):
+                if manifest.get("version") != 2 or manifest.get("mode") not in ("compiled", "sources"):
                     raise ValueError("Unsupported cache manifest")
                 mode = manifest["mode"]
                 continue
@@ -239,7 +238,7 @@ def report_restore():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["key", "pack", "pack-sources", "restore", "state"])
+    parser.add_argument("operation", choices=["key", "pack-compiled", "pack-sources", "restore", "state"])
     parser.add_argument("--context", default="local")
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--cargo-home", type=Path, default=Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")))
@@ -255,7 +254,7 @@ def main():
         crates = registry_crates(cargo_metadata())
         pack(args.bundle, list(fetched_entries(args.cargo_home, crates)), mode="sources",
              budget_mib=SOURCES_BUDGET_MIB)
-    elif args.operation == "pack":
+    elif args.operation == "pack-compiled":
         if args.context not in COMPILED_BUDGETS_MIB:
             parser.error(f"{args.context} has no compiled bundle budget in COMPILED_BUDGETS_MIB")
         units = built_units()
@@ -263,7 +262,7 @@ def main():
         crates = registry_crates(metadata)
         entries = [*fetched_entries(args.cargo_home, crates), *extracted_entries(args.cargo_home, crates),
                    *dependency_entries(args.target, metadata, units)]
-        pack(args.bundle, entries, mode="dependencies", budget_mib=COMPILED_BUDGETS_MIB[args.context])
+        pack(args.bundle, entries, mode="compiled", budget_mib=COMPILED_BUDGETS_MIB[args.context])
     else:
         report = restore(args.bundle, args.cargo_home, args.target)
         REPORTS.mkdir(parents=True, exist_ok=True)

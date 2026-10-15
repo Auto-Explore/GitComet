@@ -128,10 +128,9 @@ def summarize(records):
 
 
 def cache_context(key):
-    if key.startswith("gitcomet-ci-v2-deps-"):
-        return "deps/" + key.removeprefix("gitcomet-ci-v2-deps-").rsplit("-", 2)[0]
+    if key.startswith("gitcomet-ci-v2-compiled-"):
+        return "compiled/" + key.removeprefix("gitcomet-ci-v2-compiled-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-v2-sources-"):
-        # Also parses pre-layout keys (os-deps), so new bundles retire those.
         return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 2)[0]
     if key.startswith("gitcomet-ci-audit-"):
         return "gitcomet-ci-audit"
@@ -253,8 +252,8 @@ def obsolete_caches(caches):
         if context is None:
             continue
         scope = cache.get("ref", "")
-        # No lane restores a compiled bundle for a context without a budget any more.
-        if cache["key"].startswith("gitcomet-ci-v2-deps-") and context.removeprefix("deps/") not in COMPILED_BUDGETS_MIB:
+        # No lane restores a compiled bundle for a context without a budget.
+        if context.startswith("compiled/") and context.removeprefix("compiled/") not in COMPILED_BUDGETS_MIB:
             obsolete.append(cache)
             continue
         identity = (scope, context)
