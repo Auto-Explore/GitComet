@@ -196,10 +196,10 @@ pub(super) fn external_change_reloads_diff(
         && change.worktree
         && (target
             .file_path()
-            .is_none_or(|path| change.paths.may_contain(path))
+            .is_none_or(|path| change.paths.may_have_changed(path))
             || target
                 .old_file_path()
-                .is_some_and(|path| change.paths.may_contain(path)))
+                .is_some_and(|path| change.paths.may_have_changed(path)))
 }
 
 pub(super) fn repo_externally_changed(
