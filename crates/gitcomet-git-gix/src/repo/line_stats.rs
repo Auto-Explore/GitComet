@@ -1,6 +1,6 @@
 use super::log::{
-    CommitStatsScratch, commit_file_line_stats, commit_stats_looks_binary, line_stats_from_bytes,
-    read_commit_stats_blob,
+    COMMIT_STATS_MAX_BLOB_BYTES, CommitStatsScratch, commit_file_line_stats,
+    commit_stats_looks_binary, line_stats_from_bytes, read_commit_stats_blob,
 };
 use crate::util::path_buf_from_git_bytes;
 use gitcomet_core::domain::{
@@ -12,9 +12,6 @@ use gix::error::ResultExt as _;
 use gix::prelude::FindExt as _;
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
-
-/// Mirrors the blob-side cap in `commit_stats`.
-pub(super) const WORKTREE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 type LineStatsKey = (DiffArea, Option<gix::ObjectId>, Option<gix::ObjectId>);
 
@@ -513,7 +510,7 @@ impl<'repo> WorktreeReader<'repo> {
             out.extend_from_slice(target.as_ref());
             return true;
         }
-        if !metadata.is_file() || metadata.len() > WORKTREE_MAX_BYTES {
+        if !metadata.is_file() || metadata.len() > COMMIT_STATS_MAX_BLOB_BYTES as u64 {
             return false;
         }
         let Some((pipeline, index)) = self.pipeline.as_mut() else {
@@ -1236,7 +1233,7 @@ mod tests {
         git_success(workdir, &["commit", "-m", "binary"]);
         std::fs::write(workdir.join("blob.bin"), b"\0\0\0changed\0\0").expect("edit binary");
         std::fs::write(workdir.join("new.bin"), b"\0\0\0new\0\0").expect("write binary");
-        let oversized = "line\n".repeat(WORKTREE_MAX_BYTES as usize / 5 + 1);
+        let oversized = "line\n".repeat(COMMIT_STATS_MAX_BLOB_BYTES / 5 + 1);
         write_file(workdir, "oversized.txt", &oversized);
 
         let stats = open_repo(workdir)

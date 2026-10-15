@@ -7,7 +7,8 @@ pub(crate) const COMMIT_STATS_MAX_FILES: usize = 400;
 /// Large-file badges cost ~1-2.5 us per file (measured on 20k-file commits),
 /// far less than line stats, so asset imports keep them.
 pub(crate) const COMMIT_POINTER_MAX_FILES: usize = 10_000;
-/// Blobs larger than this are treated as "stats unknown" instead of diffed.
+/// Blobs, and worktree files on the uncommitted lanes, larger than this are
+/// treated as "stats unknown" instead of diffed.
 pub(crate) const COMMIT_STATS_MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
 /// Git's binary heuristic: a NUL byte within the leading window.
 pub(crate) const COMMIT_STATS_BINARY_SNIFF_BYTES: usize = 8000;

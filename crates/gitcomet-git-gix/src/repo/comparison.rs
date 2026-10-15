@@ -438,8 +438,7 @@ mod tests {
         git_success(dir, &["add", "."]);
         git_success(dir, &["commit", "-m", "seed"]);
         write_file(dir, "small.txt", "a\nb\n");
-        let oversized =
-            "line\n".repeat(super::super::line_stats::WORKTREE_MAX_BYTES as usize / 5 + 1);
+        let oversized = "line\n".repeat(super::super::log::COMMIT_STATS_MAX_BLOB_BYTES / 5 + 1);
         std::fs::write(dir.join("big.txt"), oversized).unwrap();
 
         let files = against_the_worktree_with_untracked(&open_repo(dir));
