@@ -436,6 +436,8 @@ impl DiagramState {
             Some(key) => self.choices.get(key).mode,
             None => RenderedPreviewMode::Rendered,
         };
+        // No tiles until the viewport, if this frame draws one, asks for them.
+        self.cache.show_tiles(self.viewport_id, 0);
         let mut body = div()
             .w_full()
             .min_w(px(0.0))

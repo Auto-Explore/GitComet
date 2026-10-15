@@ -1021,6 +1021,34 @@ fn narrowing_the_window_gives_a_fitting_diagram_its_scrollbar(cx: &mut gpui::Tes
     });
 }
 
+/// A block showing its source draws no tiles, so it no longer counts toward
+/// the tiles the cache must hold.
+#[gpui::test]
+fn a_block_showing_its_source_shows_no_tiles(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, state, cx) = open_interaction_harness(cx);
+    crate::view::test_support::redraw(cx);
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let state = state.read(app);
+            let inner = state.cache.inner.lock().unwrap();
+            inner.shown.get(&state.viewport_id).copied()
+        })
+    };
+    assert!(shown(cx).is_some_and(|tiles| tiles > 0));
+    cx.update(|_, app| {
+        let key = view.read(app).key.clone();
+        state.update(app, |state, _| {
+            state
+                .choices
+                .update(&key, |choice| choice.mode = RenderedPreviewMode::Source)
+        });
+        view.update(app, |_, cx| cx.notify());
+    });
+    crate::view::test_support::redraw(cx);
+    assert_eq!(shown(cx), None);
+}
+
 #[test]
 fn shared_scenes_keep_independent_preview_viewports() {
     let cache = DiagramCache::default();
