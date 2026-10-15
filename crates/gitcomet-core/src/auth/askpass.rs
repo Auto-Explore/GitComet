@@ -28,6 +28,8 @@ pub const GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV: &str =
     "GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG";
 const RESPONSE_LOG_ENV: &str = "GITCOMET_ASKPASS_RESPONSE_LOG";
 const TARGET_PROMPT_ENV: &str = "GITCOMET_AUTH_TARGET_PROMPT";
+const USERNAME_PROMPT_ENV: &str = "GITCOMET_AUTH_USERNAME_PROMPT";
+const PASSWORD_PROMPT_ENV: &str = "GITCOMET_AUTH_PASSWORD_PROMPT";
 #[cfg(test)]
 #[path = "askpass_tests.rs"]
 mod outcome_tests;
@@ -154,10 +156,19 @@ fi
 kind="${GITCOMET_AUTH_KIND:-}"
 answer=""
 if [ "$kind" = "username_password" ]; then
-  case "$lower_prompt" in
-    *username*) answer="${GITCOMET_AUTH_USERNAME:-}" ;;
-    *password*) answer="${GITCOMET_AUTH_SECRET:-}" ;;
-  esac
+  if [ -n "${GITCOMET_AUTH_USERNAME_PROMPT:-}" ] \
+    && [ "$prompt" = "$GITCOMET_AUTH_USERNAME_PROMPT" ]; then
+    answer="${GITCOMET_AUTH_USERNAME:-}"
+  elif [ -n "${GITCOMET_AUTH_PASSWORD_PROMPT:-}" ] \
+    && [ "$prompt" = "$GITCOMET_AUTH_PASSWORD_PROMPT" ]; then
+    answer="${GITCOMET_AUTH_SECRET:-}"
+  elif [ -z "${GITCOMET_AUTH_TARGET_PROMPT:-}" ] \
+    || [ "$prompt" = "$GITCOMET_AUTH_TARGET_PROMPT" ]; then
+    case "$lower_prompt" in
+      *username*) answer="${GITCOMET_AUTH_USERNAME:-}" ;;
+      *password*) answer="${GITCOMET_AUTH_SECRET:-}" ;;
+    esac
+  fi
 elif [ "$kind" = "passphrase" ]; then
   case "$lower_prompt" in
     *passphrase*|*enter\ pin*)
@@ -231,6 +242,18 @@ if not "!GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG!"=="" (
 )
 set "answer="
 if /I "!GITCOMET_AUTH_KIND!"=="username_password" (
+  if not "!GITCOMET_AUTH_USERNAME_PROMPT!"=="" if "!prompt!"=="!GITCOMET_AUTH_USERNAME_PROMPT!" (
+    set "answer=!GITCOMET_AUTH_USERNAME!"
+    goto respond
+  )
+  if not "!GITCOMET_AUTH_PASSWORD_PROMPT!"=="" if "!prompt!"=="!GITCOMET_AUTH_PASSWORD_PROMPT!" (
+    set "answer=!GITCOMET_AUTH_SECRET!"
+    goto cached
+  )
+  set "bound="
+  if "!GITCOMET_AUTH_TARGET_PROMPT!"=="" set "bound=1"
+  if "!prompt!"=="!GITCOMET_AUTH_TARGET_PROMPT!" set "bound=1"
+  if not defined bound goto cached
   "!findstr!" /I "username" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
   if not errorlevel 1 (
     set "answer=!GITCOMET_AUTH_USERNAME!"
@@ -350,6 +373,8 @@ fn configure_prompt_env(
     cmd.env("SSH_ASKPASS_REQUIRE", "force");
     cmd.env(RESPONSE_LOG_ENV, &askpass.response_log_path);
     cmd.env_remove(TARGET_PROMPT_ENV);
+    cmd.env_remove(USERNAME_PROMPT_ENV);
+    cmd.env_remove(PASSWORD_PROMPT_ENV);
     cmd.env(
         GITCOMET_ASKPASS_PROMPT_LOG_ENV,
         &askpass.host_prompt_log_path,
@@ -379,6 +404,13 @@ fn configure_prompt_env(
                 cmd.env(GITCOMET_AUTH_SECRET_ENV, auth.secret());
                 if let Some(challenge) = explicit.challenge.as_ref() {
                     cmd.env(TARGET_PROMPT_ENV, normalized_prompt(&challenge.prompt));
+                    if explicit.kind == GitAuthKind::UsernamePassword
+                        && let Some((username_prompt, password_prompt)) =
+                            credential_prompt_pair(&challenge.prompt, auth.username())
+                    {
+                        cmd.env(USERNAME_PROMPT_ENV, normalized_prompt(&username_prompt));
+                        cmd.env(PASSWORD_PROMPT_ENV, normalized_prompt(&password_prompt));
+                    }
                 }
                 if session_cache {
                     configure_cached_passphrases(cmd, &load_session_passphrases());
@@ -396,6 +428,36 @@ fn configure_prompt_env(
         cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
         cmd.env_remove(GITCOMET_AUTH_SECRET_ENV);
     }
+}
+
+/// Git asks `Username for '<url>': ` and then `Password for '<user>@<url>': `
+/// with `<user>` percent-encoded (`credential.c`). Typed credentials answer
+/// that pair for the challenge's URL only: the same command can reach other
+/// hosts (`fetch --all`, a submodule), and those must not receive them.
+fn credential_prompt_pair(
+    challenge_prompt: &str,
+    username: Option<&str>,
+) -> Option<(String, String)> {
+    let prompt = challenge_prompt.trim_end();
+    let url = prompt
+        .strip_prefix("Username for '")
+        .or_else(|| prompt.strip_prefix("Password for '"))?
+        .strip_suffix("':")?;
+    let (scheme, rest) = url.split_once("://")?;
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let host_and_path = match rest[..authority_end].rfind('@') {
+        Some(at) => &rest[at + 1..],
+        None => rest,
+    };
+    let username_prompt = format!("Username for '{scheme}://{host_and_path}': ");
+    let password_prompt = match username.filter(|username| !username.is_empty()) {
+        Some(username) => format!(
+            "Password for '{scheme}://{}@{host_and_path}': ",
+            crate::url_encoding::encode_component(username)
+        ),
+        None => format!("Password for '{scheme}://{host_and_path}': "),
+    };
+    Some((username_prompt, password_prompt))
 }
 
 fn normalized_prompt(prompt: &str) -> String {

@@ -285,6 +285,91 @@ fn credential_and_host_requests_keep_their_typed_challenges() {
     clear_session_passphrase();
 }
 
+/// Typed credentials answered every username and password prompt of the
+/// replayed command, so a `fetch --all` or a submodule on another host was
+/// sent the username and password typed for the first one. Git spells the
+/// username in its password prompt percent-encoded, and the challenge may
+/// carry the username the user just replaced.
+#[test]
+fn typed_credentials_answer_only_their_own_host() {
+    let _lock = auth_test_lock();
+    clear_session_passphrase();
+    for (challenge_prompt, username, password_prompt) in [
+        (
+            "Username for 'https://git.example.com': ",
+            "alice",
+            "Password for 'https://alice@git.example.com': ",
+        ),
+        (
+            "Password for 'https://git.example.com': ",
+            "alice",
+            "Password for 'https://alice@git.example.com': ",
+        ),
+        (
+            "Username for 'https://git.example.com': ",
+            "alice@example.com",
+            "Password for 'https://alice%40example.com@git.example.com': ",
+        ),
+        (
+            "Password for 'https://alice@git.example.com': ",
+            "bob",
+            "Password for 'https://bob@git.example.com': ",
+        ),
+        (
+            "Password for 'https://git.example.com': ",
+            "username",
+            "Password for 'https://username@git.example.com': ",
+        ),
+    ] {
+        let request = AuthChallenge::from_prompt(
+            GitAuthKind::UsernamePassword,
+            normalized_prompt(challenge_prompt),
+        );
+        let auth = PromptAuth::Explicit(StagedGitAuth {
+            kind: GitAuthKind::UsernamePassword,
+            username: Some(username.to_string()),
+            secret: "test-password".to_string(),
+            challenge: Some(request),
+        });
+        let askpass = create_askpass_script().expect("askpass helper");
+        let case = format!("{challenge_prompt:?} typed as {username:?}");
+
+        assert_eq!(
+            answer(
+                &askpass,
+                Some(&auth),
+                "Username for 'https://git.example.com': "
+            ),
+            username,
+            "{case}"
+        );
+        assert_eq!(
+            answer(&askpass, Some(&auth), password_prompt),
+            "test-password",
+            "{case}"
+        );
+        assert_eq!(
+            answer(
+                &askpass,
+                Some(&auth),
+                "Username for 'https://other.example.net': "
+            ),
+            "",
+            "another host's username prompt after {case}"
+        );
+        assert_eq!(
+            answer(
+                &askpass,
+                Some(&auth),
+                "Password for 'https://alice@other.example.net': "
+            ),
+            "",
+            "another host's password prompt after {case}"
+        );
+    }
+    clear_session_passphrase();
+}
+
 #[test]
 fn verified_cache_is_independent_of_git_result_and_invalidates_replaced_keys() {
     let _lock = auth_test_lock();
