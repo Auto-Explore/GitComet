@@ -16,6 +16,7 @@ import time
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
+REPORTS = ROOT / "target/ci-reports"
 PREFIX = "gitcomet-ci-v2-"
 MIB = 1024**2
 # report.py fails a dev push whose CI caches exceed this; GitHub itself evicts beyond 10 GB.
@@ -77,11 +78,11 @@ def cache_keys(context):
             "source-key": source_prefix + dependency_hash, "source-restore-key": source_prefix}
 
 
-def built_units(reports):
+def built_units():
     """Unit hashes this job's cargo builds compiled or found fresh, from run.py's recorded messages."""
-    logs = sorted(reports.glob("*/cargo-messages.jsonl"))
+    logs = sorted(REPORTS.glob("*/cargo-messages.jsonl"))
     if not logs:
-        raise RuntimeError(f"no */cargo-messages.jsonl under {reports}; compile with scripts/ci/run.py before packing")
+        raise RuntimeError(f"no */cargo-messages.jsonl under {REPORTS}; compile with scripts/ci/run.py before packing")
     units = set()
     for log in logs:
         for line in log.read_text(encoding="utf-8").splitlines():
@@ -169,7 +170,7 @@ def write_bundle(destination, entries, *, mode=None):
             archive.add(source, arcname=name, filter=allowed)
 
 
-def pack(destination, entries, *, mode, budget_mib, reports):
+def pack(destination, entries, *, mode, budget_mib):
     """Write one bundle; one over its budget fails rather than evicting other lanes or shrinking silently."""
     start = time.monotonic()
     if not entries:
@@ -177,9 +178,9 @@ def pack(destination, entries, *, mode, budget_mib, reports):
     write_bundle(destination, entries, mode=mode)
     size, budget = destination.stat().st_size, budget_mib * MIB
     report = dict(mode=mode, bytes=size, budget=budget, seconds=round(time.monotonic() - start, 3))
-    reports.mkdir(parents=True, exist_ok=True)
+    REPORTS.mkdir(parents=True, exist_ok=True)
     report_name = "cache" if mode == "dependencies" else "cache-sources"
-    (reports / f"{report_name}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (REPORTS / f"{report_name}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if size > budget:
         destination.unlink()
         raise RuntimeError(f"{mode} cache bundle is {size // MIB} MiB, over its {budget_mib} MiB budget; "
@@ -222,9 +223,8 @@ def restore(bundle, cargo_home, target):
 
 
 def report_restore():
-    directory = ROOT / "target/ci-reports"
-    directory.mkdir(parents=True, exist_ok=True)
-    unpack = directory / "cache-unpack.json"
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    unpack = REPORTS / "cache-unpack.json"
     matched = os.environ.get("CI_CACHE_MATCHED_KEY") or os.environ.get("CI_SOURCE_MATCHED_KEY")
     if os.environ.get("CI_COLD_CACHE") == "true":
         details = {"mode": "bypassed"}
@@ -233,7 +233,7 @@ def report_restore():
     details.update({name: os.environ.get(name, "") for name in (
         "CI_CACHE_HIT", "CI_CACHE_RESTORED", "CI_COLD_CACHE", "CI_CACHE_CONTEXT",
         "CI_CACHE_KEY", "CI_CACHE_MATCHED_KEY", "CI_SOURCE_KEY", "CI_SOURCE_MATCHED_KEY")})
-    (directory / "cache-restore.json").write_text(json.dumps(details, indent=2) + "\n", encoding="utf-8")
+    (REPORTS / "cache-restore.json").write_text(json.dumps(details, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(details, indent=2))
 
 
@@ -254,22 +254,20 @@ def main():
     elif args.operation == "pack-sources":
         crates = registry_crates(cargo_metadata())
         pack(args.bundle, list(fetched_entries(args.cargo_home, crates)), mode="sources",
-             budget_mib=SOURCES_BUDGET_MIB, reports=args.target / "ci-reports")
+             budget_mib=SOURCES_BUDGET_MIB)
     elif args.operation == "pack":
         if args.context not in COMPILED_BUDGETS_MIB:
             parser.error(f"{args.context} has no compiled bundle budget in COMPILED_BUDGETS_MIB")
-        units = built_units(args.target / "ci-reports")
+        units = built_units()
         metadata = cargo_metadata()
         crates = registry_crates(metadata)
         entries = [*fetched_entries(args.cargo_home, crates), *extracted_entries(args.cargo_home, crates),
                    *dependency_entries(args.target, metadata, units)]
-        pack(args.bundle, entries, mode="dependencies", budget_mib=COMPILED_BUDGETS_MIB[args.context],
-             reports=args.target / "ci-reports")
+        pack(args.bundle, entries, mode="dependencies", budget_mib=COMPILED_BUDGETS_MIB[args.context])
     else:
         report = restore(args.bundle, args.cargo_home, args.target)
-        directory = ROOT / "target/ci-reports"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / "cache-unpack.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        REPORTS.mkdir(parents=True, exist_ok=True)
+        (REPORTS / "cache-unpack.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

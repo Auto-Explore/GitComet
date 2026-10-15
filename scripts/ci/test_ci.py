@@ -475,6 +475,7 @@ class CacheTests(unittest.TestCase):
 
     def test_compatible_prefix_restore_reports_actual_bundle_mode(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache, "REPORTS", Path(directory) / "target/ci-reports"), \
                 patch.dict(os.environ, {"CI_CACHE_HIT": "false", "CI_CACHE_RESTORED": "true",
                                        "CI_CACHE_MATCHED_KEY": "compatible-older-lockfile", "CI_COLD_CACHE": "false"}, clear=True), \
                 redirect_stdout(io.StringIO()):
@@ -626,7 +627,8 @@ class CacheTests(unittest.TestCase):
         return cargo, target, metadata
 
     def run_cache(self, root, metadata, *arguments):
-        with patch.object(cache, "ROOT", root), patch.object(sys, "argv", ["cache.py", *arguments]), \
+        with patch.object(cache, "ROOT", root), patch.object(cache, "REPORTS", root / "target/ci-reports"), \
+                patch.object(sys, "argv", ["cache.py", *arguments]), \
                 patch.object(cache.subprocess, "check_output", return_value=json.dumps(metadata).encode()), \
                 redirect_stdout(io.StringIO()) as printed:
             cache.main()
