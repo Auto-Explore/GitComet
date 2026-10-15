@@ -621,3 +621,14 @@ tests keep the engine's test-mode cache scoping they ran with before; items only
 the engine's own tests use stay `cfg(test)`. All 482 engine tests (3 ignored)
 pass in the new crate, and the UI suite count drops by exactly those tests. The
 UI crate lost 14,338 production lines.
+
+Rebuilding only the UI crate under `ci-test` (non-incremental), three paired
+runs against the commit before the move, on a machine shared with other builds:
+
+| Measurement | Before | After |
+|---|---|---|
+| Median wall time | 259.6 s | 203.4 s |
+| Median CPU time (user + system) | 2,796 s | 2,729 s |
+
+Every pair favoured the move. CPU time fell 2.4%, in line with the code removed;
+wall times varied by up to 40% between runs because of the other load.
