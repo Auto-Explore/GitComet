@@ -146,16 +146,29 @@ def directory_entries(cargo_home, *names):
             yield cargo_home / name, "cargo/" + name
 
 
-def fetched_entries(cargo_home, crates):
+def git_checkouts(cargo_home, metadata):
+    """Checkouts of the revisions the lockfile pins; cargo names each by a short prefix of its commit."""
+    revisions = {package["source"].rpartition("#")[2] for package in metadata["packages"]
+                 if (package.get("source") or "").startswith("git+")}
+    root = cargo_home / "git/checkouts"
+    return [checkout for repository in (sorted(root.iterdir()) if root.is_dir() else ())
+            for checkout in sorted(repository.iterdir())
+            if any(revision.startswith(checkout.name) for revision in revisions)]
+
+
+def fetched_entries(cargo_home, crates, checkouts):
     """What cargo downloads otherwise: crate files (needed even when unpacked), the index, git databases."""
     yield from registry_entries(cargo_home, "cache", crates)
-    yield from directory_entries(cargo_home, "registry/index", "git/db")
+    yield from directory_entries(cargo_home, "registry/index")
+    for repository in sorted({checkout.parent.name for checkout in checkouts}):
+        yield from directory_entries(cargo_home, f"git/db/{repository}")
 
 
-def extracted_entries(cargo_home, crates):
+def extracted_entries(cargo_home, crates, checkouts):
     """Unpacked sources of built crates keep the timestamps their build-script fingerprints compare against."""
     yield from registry_entries(cargo_home, "src", crates)
-    yield from directory_entries(cargo_home, "git/checkouts")
+    for checkout in checkouts:
+        yield checkout, f"cargo/git/checkouts/{checkout.parent.name}/{checkout.name}"
 
 
 def write_bundle(destination, entries, *, mode=None):
@@ -258,16 +271,18 @@ def main():
     elif args.operation == "state":
         report_restore()
     elif args.operation == "pack-sources":
-        crates = registry_crates(cargo_metadata())
-        pack(args.bundle, list(fetched_entries(args.cargo_home, crates)), mode="sources",
+        metadata = cargo_metadata()
+        entries = fetched_entries(args.cargo_home, registry_crates(metadata), git_checkouts(args.cargo_home, metadata))
+        pack(args.bundle, list(entries), mode="sources",
              budget_mib=SOURCES_BUDGET_MIB)
     elif args.operation == "pack-compiled":
         if args.context not in COMPILED_BUDGETS_MIB:
             parser.error(f"{args.context} has no compiled bundle budget in COMPILED_BUDGETS_MIB")
         units, built_crates = build_record()
         metadata = cargo_metadata()
-        entries = [*fetched_entries(args.cargo_home, registry_crates(metadata)),
-                   *extracted_entries(args.cargo_home, built_crates),
+        checkouts = git_checkouts(args.cargo_home, metadata)
+        entries = [*fetched_entries(args.cargo_home, registry_crates(metadata), checkouts),
+                   *extracted_entries(args.cargo_home, built_crates, checkouts),
                    *dependency_entries(args.target, metadata, units)]
         pack(args.bundle, entries, mode="compiled", budget_mib=COMPILED_BUDGETS_MIB[args.context])
     else:

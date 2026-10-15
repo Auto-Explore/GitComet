@@ -526,7 +526,7 @@ class CacheTests(unittest.TestCase):
             os.utime(source, (1700000000, 1700000000))
             (cargo / "credentials.toml").write_text("never archive")
             bundle = root / "bundle.tar.gz"
-            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"demo-1.0"})))
+            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"demo-1.0"}, [])))
             restored = root / "restored"
             cache.restore(bundle, restored, root / "target")
             result = restored / source.relative_to(cargo)
@@ -547,7 +547,7 @@ class CacheTests(unittest.TestCase):
                 path.parent.mkdir(parents=True)
                 path.write_text("content")
             bundle = root / "bundle.tar.gz"
-            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"cc-1.4.7"})))
+            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"cc-1.4.7"}, [checkout])))
             restored = root / "restored"
             cache.restore(bundle, restored, root / "target")
             for kept in (module, nested):
@@ -595,6 +595,9 @@ class CacheTests(unittest.TestCase):
             "cargo-home/registry/src/index-0000/windows-0.62.2/src/lib.rs": "source this platform never builds",
             "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack": "git database",
             "cargo-home/git/checkouts/gpui-0000/abcdef0/src/lib.rs": "checkout",
+            "cargo-home/git/checkouts/gpui-0000/1234567/src/lib.rs": "older lockfile's checkout",
+            "cargo-home/git/db/dropped-0000/objects/pack/pack-2.pack": "a repository the lockfile dropped",
+            "cargo-home/git/checkouts/dropped-0000/7654321/src/lib.rs": "a repository the lockfile dropped",
             "target/ci-test/deps/libserde-1111111111111111.rlib": "current unit",
             "target/ci-test/deps/libserde-2222222222222222.rlib": "stale unit",
             "target/ci-test/.fingerprint/serde-1111111111111111/lib-serde": "current fingerprint",
@@ -624,6 +627,8 @@ class CacheTests(unittest.TestCase):
              "targets": [{"name": "serde"}]},
             {"name": "windows", "version": "0.62.2", "source": "registry+https://github.com/rust-lang/crates.io-index",
              "targets": [{"name": "windows"}]},
+            {"name": "gpui", "version": "0.2.2", "source": "git+https://example.com/gpui.git?rev=abcdef0#"
+             "abcdef0123456789abcdef0123456789abcdef01", "targets": [{"name": "gpui"}]},
             {"name": "gitcomet-core", "version": "0.3.0", "source": None, "targets": [{"name": "gitcomet_core"}]},
         ]}
         return cargo, target, metadata
