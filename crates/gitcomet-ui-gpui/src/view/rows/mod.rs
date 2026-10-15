@@ -1237,7 +1237,7 @@ mod canvas_text;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;
-pub(in crate::view) use diff::BlameLabelCache;
+pub(in crate::view) use diff::blame_presentation::BlameLabelCache;
 
 /// A comparison/multi-selection card's per-commit strings, prepared once.
 pub(in crate::view) struct CommitCard {
@@ -1311,7 +1311,7 @@ pub(crate) mod benchmarks;
 pub(in crate::view) use self::conflict_resolver::{
     resolved_output_gutter_width, resolved_output_line_no_width,
 };
-pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
+pub(in crate::view) use self::diff::blame_presentation::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
 #[cfg(test)]
 pub(in crate::view) use self::history::take_markdown_image_stats_for_tests;
@@ -1375,10 +1375,13 @@ pub(in crate::view) use diff_text::{
 #[cfg(test)]
 pub(in crate::view) use diff_text::{OCCURRENCE_MAX_TEXT_BYTES, SyntaxPairKind};
 
+pub(in crate::view) use self::diff_canvas::annotation::{
+    DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX, DIFF_ANNOTATION_MIN_WIDTH_PX,
+};
+
 pub(in crate::view) use self::diff_canvas::{
-    AnnotArea, DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX,
-    DIFF_ANNOTATION_MIN_WIDTH_PX, DiffStageHover, DiffStageSlot, DiffTextWrapSlice,
-    DiffWrapByteRange, diff_change_bar_width as diff_canvas_change_bar_width,
+    AnnotArea, DiffStageHover, DiffStageSlot, DiffTextWrapSlice, DiffWrapByteRange,
+    diff_change_bar_width as diff_canvas_change_bar_width,
     diff_inline_text_start as diff_canvas_inline_text_start,
     diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
     diff_single_column_text_start as diff_canvas_single_column_text_start,

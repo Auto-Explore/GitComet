@@ -156,7 +156,7 @@ impl DiffRenderer {
                     // `is_context = false` so uncommitted lines fall back to the
                     // blamed area's default (staged area → "Staged", unstaged area
                     // → "Unstaged") rather than being mislabeled.
-                    super::diff::build_row_blame_paint(
+                    super::build_row_blame_paint(
                         ctx,
                         false,
                         None,
