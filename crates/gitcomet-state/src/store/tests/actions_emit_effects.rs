@@ -3821,6 +3821,116 @@ fn report_error_lands_on_its_repo_or_as_an_app_notification() {
 }
 
 #[test]
+fn feedback_waits_unbounded_until_acknowledged_and_keeps_newer_entries() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::test_default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let lifetime = state.repos[0].lifetime();
+    for ix in 0..250 {
+        for msg in [
+            Msg::ReportError {
+                repo_id: None,
+                message: format!("app {ix}"),
+            },
+            Msg::ReportError {
+                repo_id: Some(repo_id),
+                message: format!("repo {ix}"),
+            },
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::FetchAll,
+                result: Err(Error::new(ErrorKind::Backend(format!("offline {ix}")))),
+            }),
+        ] {
+            reduce(&mut repos, &id_alloc, &mut state, msg);
+        }
+    }
+    let feedback = &state.repos[0].feedback;
+    assert_eq!(state.notifications.len(), 250);
+    assert_eq!(feedback.diagnostics.len(), 250);
+    assert_eq!(feedback.command_log.len(), 250);
+
+    // The window showed the first 240 of each; the rest arrived while its
+    // acknowledgements were queued.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcknowledgeNotifications { through_seq: 240 },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcknowledgeRepoFeedback {
+            repo_id,
+            lifetime,
+            diagnostics_through_seq: 240,
+            command_log_through_seq: 240,
+        },
+    );
+    let feedback = &state.repos[0].feedback;
+    assert_eq!(state.notifications[0].message, "app 240");
+    assert_eq!(state.notifications.len(), 10);
+    assert_eq!(feedback.diagnostics[0].message, "repo 240");
+    assert_eq!(feedback.diagnostics.len(), 10);
+    assert!(feedback.command_log[0].stderr.contains("offline 240"));
+    assert_eq!(feedback.command_log.len(), 10);
+
+    // Another lifetime of the same repository id releases nothing here.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcknowledgeRepoFeedback {
+            repo_id,
+            lifetime: lifetime + 1,
+            diagnostics_through_seq: 250,
+            command_log_through_seq: 250,
+        },
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 10);
+    assert_eq!(state.repos[0].feedback.command_log.len(), 10);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcknowledgeNotifications { through_seq: 250 },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcknowledgeRepoFeedback {
+            repo_id,
+            lifetime,
+            diagnostics_through_seq: 250,
+            command_log_through_seq: 250,
+        },
+    );
+    let feedback = &state.repos[0].feedback;
+    assert!(state.notifications.is_empty());
+    assert!(feedback.diagnostics.is_empty());
+    assert!(feedback.command_log.is_empty());
+    assert_eq!(
+        (
+            state.notifications_seq,
+            feedback.diagnostics_seq,
+            feedback.command_log_seq
+        ),
+        (250, 250, 250)
+    );
+}
+
+#[test]
 fn submodule_add_progress_starts_when_trust_check_proceeds() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);

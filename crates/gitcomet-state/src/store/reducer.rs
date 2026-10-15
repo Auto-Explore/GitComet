@@ -795,6 +795,39 @@ fn reduce_inner(
             }
             Vec::new()
         }
+        Msg::AcknowledgeNotifications { through_seq } => {
+            util::drop_acknowledged(
+                &mut state.notifications,
+                state.notifications_seq,
+                through_seq,
+            );
+            Vec::new()
+        }
+        Msg::AcknowledgeRepoFeedback {
+            repo_id,
+            lifetime,
+            diagnostics_through_seq,
+            command_log_through_seq,
+        } => {
+            if let Some(repo_state) = state
+                .repos
+                .iter_mut()
+                .find(|r| r.id == repo_id && r.lifetime() == lifetime)
+            {
+                let feedback = &mut repo_state.feedback;
+                util::drop_acknowledged(
+                    &mut feedback.diagnostics,
+                    feedback.diagnostics_seq,
+                    diagnostics_through_seq,
+                );
+                util::drop_acknowledged(
+                    &mut feedback.command_log,
+                    feedback.command_log_seq,
+                    command_log_through_seq,
+                );
+            }
+            Vec::new()
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,

@@ -1092,30 +1092,31 @@ pub(super) fn canonicalize_path(path: PathBuf) -> PathBuf {
 }
 
 pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind, message: String) {
-    const MAX_NOTIFICATIONS: usize = 200;
+    state.notifications_seq = state.notifications_seq.wrapping_add(1);
     state.notifications.push(AppNotification {
         time: SystemTime::now(),
         kind,
         message,
     });
-    if state.notifications.len() > MAX_NOTIFICATIONS {
-        let extra = state.notifications.len() - MAX_NOTIFICATIONS;
-        state.notifications.drain(0..extra);
-    }
 }
 
 pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
-    const MAX_DIAGNOSTICS: usize = 200;
     repo_state.feedback.diagnostics_seq = repo_state.feedback.diagnostics_seq.wrapping_add(1);
     repo_state.feedback.diagnostics.push(DiagnosticEntry {
         time: SystemTime::now(),
         kind,
         message,
     });
-    if repo_state.feedback.diagnostics.len() > MAX_DIAGNOSTICS {
-        let extra = repo_state.feedback.diagnostics.len() - MAX_DIAGNOSTICS;
-        repo_state.feedback.diagnostics.drain(0..extra);
-    }
+}
+
+/// Drops the entries the window has acknowledged from the front of a feedback
+/// queue whose newest entry is number `seq`. Entries appended after the
+/// acknowledgement was sent stay queued, and an acknowledgement from before
+/// the numbering restarted (a reopened repository) drops nothing.
+pub(super) fn drop_acknowledged<T>(entries: &mut Vec<T>, seq: u64, through_seq: u64) {
+    let unacknowledged = usize::try_from(seq.wrapping_sub(through_seq)).unwrap_or(usize::MAX);
+    let acknowledged = entries.len().saturating_sub(unacknowledged);
+    entries.drain(..acknowledged);
 }
 
 pub(super) fn handle_session_persist_result(
@@ -1154,12 +1155,10 @@ pub(super) fn push_command_log(
     error: Option<&Error>,
     handled_by_auth_prompt: bool,
 ) {
-    const MAX_COMMAND_LOG: usize = 200;
-
     let (command_text, summary) = summarize_command(command, output, ok, error);
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
 
-    repo_state.feedback.command_log.push(CommandLogEntry {
+    let entry = CommandLogEntry {
         time: SystemTime::now(),
         ok,
         command: command_text,
@@ -1179,11 +1178,8 @@ pub(super) fn push_command_log(
             _ => None,
         }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
-    });
-    if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
-        let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
-        repo_state.feedback.command_log.drain(0..extra);
-    }
+    };
+    append_command_log_entry(repo_state, entry);
 }
 
 pub(super) fn push_action_log(
@@ -1194,10 +1190,8 @@ pub(super) fn push_action_log(
     error: Option<&Error>,
     handled_by_auth_prompt: bool,
 ) {
-    const MAX_COMMAND_LOG: usize = 200;
-
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
-    repo_state.feedback.command_log.push(CommandLogEntry {
+    let entry = CommandLogEntry {
         time: SystemTime::now(),
         ok,
         command,
@@ -1213,11 +1207,14 @@ pub(super) fn push_action_log(
             _ => None,
         }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
-    });
-    if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
-        let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
-        repo_state.feedback.command_log.drain(0..extra);
-    }
+    };
+    append_command_log_entry(repo_state, entry);
+}
+
+fn append_command_log_entry(repo_state: &mut RepoState, entry: CommandLogEntry) {
+    let feedback = &mut repo_state.feedback;
+    feedback.command_log_seq = feedback.command_log_seq.wrapping_add(1);
+    feedback.command_log.push(entry);
 }
 
 /// Nested command completion already carries its exact reporting owner. Mark
@@ -2257,7 +2254,7 @@ mod tests {
     }
 
     #[test]
-    fn push_notification_and_diagnostic_cap_old_entries() {
+    fn push_notification_and_diagnostic_count_every_entry_without_a_cap() {
         let mut state = AppState::test_default();
         for ix in 0..205 {
             push_notification(
@@ -2266,19 +2263,36 @@ mod tests {
                 format!("notification-{ix}"),
             );
         }
-        assert_eq!(state.notifications.len(), 200);
-        assert_eq!(state.notifications[0].message, "notification-5");
+        assert_eq!(state.notifications.len(), 205);
+        assert_eq!(state.notifications_seq, 205);
+        assert_eq!(state.notifications[0].message, "notification-0");
 
         let mut repo = repo_state(3);
         for ix in 0..205 {
             push_diagnostic(&mut repo, DiagnosticKind::Info, format!("diagnostic-{ix}"));
         }
-        assert_eq!(repo.feedback.diagnostics.len(), 200);
-        assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-5");
+        assert_eq!(repo.feedback.diagnostics.len(), 205);
+        assert_eq!(repo.feedback.diagnostics_seq, 205);
+        assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-0");
     }
 
     #[test]
-    fn command_and_action_logs_use_expected_stderr_and_trim_history() {
+    fn drop_acknowledged_keeps_entries_appended_after_the_acknowledgement() {
+        // Entries 4 to 6 are queued; 1 to 3 were acknowledged earlier.
+        let mut entries = vec![4, 5, 6];
+        drop_acknowledged(&mut entries, 6, 5);
+        assert_eq!(entries, [6]);
+        drop_acknowledged(&mut entries, 6, 6);
+        assert!(entries.is_empty());
+
+        // Numbered past the queue: sent before the numbering restarted.
+        let mut entries = vec![1, 2];
+        drop_acknowledged(&mut entries, 2, 40);
+        assert_eq!(entries, [1, 2]);
+    }
+
+    #[test]
+    fn command_and_action_logs_use_expected_stderr_and_keep_history() {
         let mut repo = repo_state(4);
         repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
         push_command_log(
@@ -2289,8 +2303,9 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(repo.feedback.command_log.len(), 200);
-        assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
+        assert_eq!(repo.feedback.command_log.len(), 201);
+        assert_eq!(repo.feedback.command_log_seq, 1);
+        assert_eq!(repo.feedback.command_log[0].command, "cmd-0");
         assert_eq!(
             repo.feedback
                 .command_log
@@ -2311,8 +2326,9 @@ mod tests {
             ))),
             false,
         );
-        assert_eq!(repo.feedback.command_log.len(), 200);
-        assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
+        assert_eq!(repo.feedback.command_log.len(), 201);
+        assert_eq!(repo.feedback.command_log_seq, 2);
+        assert_eq!(repo.feedback.command_log[0].command, "cmd-0");
     }
 
     #[test]

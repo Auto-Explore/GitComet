@@ -1231,6 +1231,11 @@ pub struct GitCometView {
     /// identified by the outer Git operation, so pre- and post-hooks from one
     /// command share the same presentation lifecycle.
     pub(super) pending_hook_activity_open: Option<(RepoId, GitOperationId)>,
+    /// Command results collected while the opt-in scenario driver waits on an
+    /// operation. The store drops command-log entries once this window has
+    /// shown them, so a driver polling the log could miss the result.
+    pub(super) scenario_command_results:
+        Option<Vec<(RepoId, gitcomet_state::model::CommandLogEntry)>>,
     /// Active chains the user minimized, or that began behind another overlay.
     /// They stay represented by the compact progress toast and must not
     /// auto-open again when another hook in the same Git command starts.

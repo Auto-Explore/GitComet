@@ -211,7 +211,7 @@ fn closing_a_repo_drops_its_errors_only(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppContext) {
+fn review_errors_after_many_diagnostics_still_arrive(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::{DiagnosticEntry, DiagnosticKind};
     let (view, cx) = open_view(cx);
     let id = RepoId(9694);
@@ -232,7 +232,8 @@ fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppCon
     });
     crate::view::test_support::drain_store_worker(&view, cx);
     let state = cx.update(|_, app| view.read(app).store.snapshot());
-    assert_eq!(state.repos[0].feedback.diagnostics.len(), 200);
+    // The window acknowledged the old diagnostics; only the new one waits.
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
     assert_eq!(state.repos[0].feedback.diagnostics_seq, 1);
     super::shortcuts::apply_state(cx, &view, state.clone());
     assert_eq!(errors(cx, &view).len(), 1);
@@ -368,8 +369,7 @@ Please commit your changes or stash them before you merge.\nAborting\n";
         assert!(!root.documents_active);
         assert!(state.auth_prompt.is_none());
         assert_eq!(
-            state.repos[0].feedback.command_log.len(),
-            1,
+            state.repos[0].feedback.command_log_seq, 0,
             "reviewing must not stash or retry"
         );
     });

@@ -517,6 +517,151 @@ Enter passphrase for key 'C:\\Users\\sampo/.ssh/id_ed25519':";
 const AUTH_PROMPT_KINDS: [AuthPromptKind; 2] =
     [AuthPromptKind::Passphrase, AuthPromptKind::UsernamePassword];
 
+fn announced_command(summary: &str) -> gitcomet_state::model::CommandLogEntry {
+    gitcomet_state::model::CommandLogEntry {
+        time: std::time::SystemTime::now(),
+        ok: true,
+        command: "git push".into(),
+        summary: summary.into(),
+        stdout: "".into(),
+        stderr: "".into(),
+        announce_success: true,
+        handled_by_auth_prompt: false,
+        failure_id: None,
+        hook_operation_id: None,
+    }
+}
+
+fn warning(message: &str) -> gitcomet_state::model::AppNotification {
+    gitcomet_state::model::AppNotification {
+        time: std::time::SystemTime::now(),
+        kind: gitcomet_state::model::AppNotificationKind::Warning,
+        message: message.into(),
+    }
+}
+
+#[gpui::test]
+fn toasts_follow_feedback_sequences_after_shown_entries_are_dropped(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut repo = open_repo_state_with_workdir("/tmp/acknowledged-feedback");
+    for ix in 1..=3 {
+        repo.feedback.command_log_seq += 1;
+        repo.feedback
+            .command_log
+            .push(announced_command(&format!("Pushed {ix}")));
+    }
+    let mut state = AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        notifications: vec![warning("Warning 1")],
+        notifications_seq: 1,
+        ..AppState::test_default()
+    };
+    apply_notification_snapshot(cx, &view, &state);
+
+    // The store dropped what the window acknowledged and one more of each
+    // arrived meanwhile: both queues got shorter, yet each holds news.
+    state.notifications = vec![warning("Warning 2")];
+    state.notifications_seq = 2;
+    let feedback = &mut state.repos[0].feedback;
+    feedback.command_log = vec![announced_command("Pushed 4")];
+    feedback.command_log_seq = 4;
+    apply_notification_snapshot(cx, &view, &state);
+    apply_notification_snapshot(cx, &view, &state);
+
+    let toasts = all_toasts(cx, &view)
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        toasts,
+        [
+            "Warning 1",
+            "Pushed 1",
+            "Pushed 2",
+            "Pushed 3",
+            "Warning 2",
+            "Pushed 4"
+        ]
+    );
+}
+
+#[gpui::test]
+fn shown_feedback_is_released_from_the_store(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let store = cx.update(|_window, app| view.read(app).store.clone());
+    // Still opening, so the view requests no loads that would add feedback.
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/released-feedback"),
+        },
+    );
+    repo.feedback.command_log_seq = 1;
+    repo.feedback.command_log.push(announced_command("Pushed"));
+    repo.feedback.diagnostics_seq = 1;
+    repo.feedback
+        .diagnostics
+        .push(gitcomet_state::model::DiagnosticEntry {
+            time: std::time::SystemTime::now(),
+            kind: DiagnosticKind::Error,
+            message: "Disk full".into(),
+        });
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        active_repo: Some(repo_id),
+        repos: vec![repo],
+        notifications: vec![warning("Low on space")],
+        notifications_seq: 1,
+        ..AppState::test_default()
+    }));
+    let show_store_state = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+        });
+        test_support::drain_store_worker(&view, cx);
+    };
+    let queued = |store: &AppStore| {
+        let state = store.snapshot();
+        let feedback = &state.repos[0].feedback;
+        (
+            state.notifications.len(),
+            feedback.diagnostics.len(),
+            feedback.command_log.len(),
+        )
+    };
+
+    show_store_state(cx);
+    assert_eq!(
+        all_toasts(cx, &view)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>(),
+        ["Low on space", "Pushed", "Disk full"]
+    );
+    assert_eq!(queued(&store), (0, 0, 0), "the window acknowledged them");
+
+    store.dispatch(Msg::ReportError {
+        repo_id: Some(repo_id),
+        message: "Disk still full".into(),
+    });
+    test_support::drain_store_worker(&view, cx);
+    assert_eq!(queued(&store), (0, 1, 0));
+    show_store_state(cx);
+    assert_eq!(
+        error_toasts(cx, &view),
+        vec![
+            (Some(repo_id), "Disk still full".to_string()),
+            (Some(repo_id), "Disk full".to_string()),
+        ]
+    );
+    assert_eq!(queued(&store), (0, 0, 0));
+}
+
 fn auth_challenge(kind: AuthPromptKind) -> &'static str {
     match kind {
         AuthPromptKind::Passphrase => WINDOWS_SSH_PASSPHRASE_CHALLENGE,

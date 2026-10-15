@@ -164,6 +164,11 @@ impl Driver {
             "scenario_operation",
             json!({"op": op, "name": name, "state": "started"}),
         );
+        cx.update(|cx| {
+            self.view.update(cx, |view, _| {
+                view.scenario_command_results = Some(Vec::new());
+            });
+        });
         {
             let _scope = op_trace::scope(op);
             store.dispatch(msg);
@@ -215,17 +220,22 @@ impl Driver {
                         .map_or_else(|| !operation.before.contains(&item.id), |id| item.id == id)
             });
             // Silent commands can discard their transient hook activity on
-            // completion. Their user-visible command log still witnesses the
-            // result; never interpret mere disappearance as success.
+            // completion. Their command result still witnesses it; never
+            // interpret mere disappearance as success.
             let Some(item) = item else {
-                return repo.feedback.command_log.iter().rev().find_map(|entry| {
-                    completion_from_log(
-                        entry,
-                        operation.label,
-                        operation.started_wall,
-                        operation.cancel_at.is_some(),
-                    )
-                });
+                let results = self.view.read(cx).scenario_command_results.as_ref()?;
+                return results
+                    .iter()
+                    .rev()
+                    .filter(|(repo_id, _)| *repo_id == operation.repo)
+                    .find_map(|(_, entry)| {
+                        completion_from_log(
+                            entry,
+                            operation.label,
+                            operation.started_wall,
+                            operation.cancel_at.is_some(),
+                        )
+                    });
             };
             operation.id = Some(item.id);
             Some(match item.status {
@@ -270,6 +280,14 @@ impl Driver {
         Ok(())
     }
 
+    fn finish_operation(&mut self, cx: &mut AsyncApp) {
+        self.operation.take();
+        cx.update(|cx| {
+            self.view
+                .update(cx, |view, _| view.scenario_command_results = None);
+        });
+    }
+
     pub(super) async fn wait_operation(
         &mut self,
         timeout_ms: u64,
@@ -283,7 +301,7 @@ impl Driver {
         loop {
             match self.operation_status(cx) {
                 Some(Ok(Some(was_cancelled))) => {
-                    self.operation.take();
+                    self.finish_operation(cx);
                     return if was_cancelled == cancelled {
                         Ok(())
                     } else {
@@ -291,7 +309,7 @@ impl Driver {
                     };
                 }
                 Some(Err(error)) => {
-                    self.operation.take();
+                    self.finish_operation(cx);
                     return Err(error);
                 }
                 _ => {}

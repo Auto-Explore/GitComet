@@ -2023,6 +2023,7 @@ impl GitCometView {
             pending_submodule_trust_prompt: None,
             pending_submodule_trust_check: None,
             pending_hook_activity_open: None,
+            scenario_command_results: None,
             minimized_hook_activity_chains: FxHashSet::default(),
             minimized_hook_activity_repos: FxHashSet::default(),
             pending_worktree_branch_removals: FxHashMap::default(),

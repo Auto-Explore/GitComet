@@ -143,7 +143,11 @@ pub struct AppState {
     /// Store-wide sequence; acknowledgements must not reset retry baselines.
     pub repo_open_failure_revision: u64,
     pub clone: Option<CloneOpState>,
+    /// Notifications the window has not acknowledged yet
+    /// (`Msg::AcknowledgeNotifications`).
     pub notifications: Vec<AppNotification>,
+    /// Number pushed, including notifications already acknowledged and dropped.
+    pub notifications_seq: u64,
     pub auth_prompt: Option<AuthPromptState>,
     /// Every new authentication request has a distinct identity, including
     /// repeated requests for the same key and operation.
