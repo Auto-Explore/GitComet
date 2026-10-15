@@ -19,7 +19,7 @@ use gitcomet_core::process::current_git_runtime;
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, AuthPromptStatus, BranchExistsPromptOperation,
     BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
     FileBrowserSettings, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable,
     MaintenanceSettings, RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,

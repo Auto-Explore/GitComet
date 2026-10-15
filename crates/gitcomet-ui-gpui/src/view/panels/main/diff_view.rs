@@ -160,7 +160,7 @@ impl MainPaneView {
     /// file of its section: Space, and the bottom bar's Stage button. A
     /// multi-file status selection wins over the shown file, and conflict
     /// markers ask first. `false` when the shown diff is not a working-tree
-    /// file.
+    /// file, or the file is open read-only.
     pub(in crate::view) fn toggle_stage_shown_file(
         &mut self,
         window: &mut Window,
@@ -175,7 +175,11 @@ impl MainPaneView {
         let Some(repo) = self.active_repo() else {
             return false;
         };
-        let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone() else {
+        let diff_state = self.bound_diff_state(repo);
+        if diff_state.content_preview {
+            return false;
+        }
+        let Some(diff_target) = diff_state.diff_target.clone() else {
             return false;
         };
         let DiffTarget::WorkingTree { path, area, .. } = &diff_target else {
@@ -281,25 +285,26 @@ impl MainPaneView {
 
         let mut handled = false;
 
-        // While the editable buffer has focus every keystroke belongs to it, with
-        // one exception: Ctrl/Cmd+S saves and returns to the originating view.
-        // Outside the editor that chord stages the file, and both meanings can
-        // coexist precisely because they are separated by focus.
-        if self
+        let buffer_focused = self
             .file_editor_input
             .read(cx)
             .focus_handle()
-            .is_focused(window)
+            .is_focused(window);
+        // While the editor is open, Ctrl/Cmd+S is its Save wherever focus is,
+        // and returns to the originating view. Outside the editor it stages.
+        if (buffer_focused || self.is_file_editor_active())
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.shift
+            && !mods.function
+            && key == "s"
         {
-            if (mods.control || mods.platform)
-                && !mods.alt
-                && !mods.shift
-                && !mods.function
-                && key == "s"
-            {
-                self.save_file_editor_buffer_and_exit(window, cx);
-                return true;
-            }
+            self.save_file_editor_buffer_and_exit(window, cx);
+            return true;
+        }
+
+        // While the editable buffer has focus every other keystroke belongs to it.
+        if buffer_focused {
             if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
                 self.toggle_file_editor(window, cx);
                 return true;
@@ -451,12 +456,15 @@ impl MainPaneView {
             handled = true;
         }
 
+        // Stage leaves the bar while editing or viewing a file read-only, and
+        // its key goes with it.
         if !handled
             && key == "space"
             && !mods.control
             && !mods.alt
             && !mods.platform
             && !mods.function
+            && !self.is_file_editor_active()
             && !self
                 .diff_raw_input
                 .read(cx)
@@ -500,6 +508,7 @@ impl MainPaneView {
                 .is_focused(window)
             && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
+            && !self.bound_diff_state(repo).content_preview
             && let Some(diff_target) = self.bound_diff_state(repo).diff_target.clone()
             && let DiffTarget::WorkingTree { path, area, .. } = &diff_target
         {

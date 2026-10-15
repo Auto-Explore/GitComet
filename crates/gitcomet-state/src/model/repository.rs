@@ -210,7 +210,7 @@ pub struct SidebarDataRequest {
     pub stashes: bool,
 }
 
-/// User-visible repository feedback and bounded diagnostic/activity history.
+/// User-visible repository feedback and bounded activity history.
 ///
 /// Keeping this together makes the lifecycle explicit: a successful reopen can
 /// reset repository feedback without touching loaded Git data or navigation.
@@ -218,10 +218,16 @@ pub struct SidebarDataRequest {
 pub struct RepoFeedbackState {
     pub missing_on_disk: bool,
     pub last_error: Option<String>,
+    /// Diagnostics the window has not acknowledged yet
+    /// (`Msg::AcknowledgeRepoFeedback`).
     pub diagnostics: Vec<DiagnosticEntry>,
-    /// Number appended, including entries evicted from the bounded history.
+    /// Number appended, including entries already acknowledged and dropped.
     pub diagnostics_seq: u64,
+    /// Command results the window has not acknowledged yet
+    /// (`Msg::AcknowledgeRepoFeedback`).
     pub command_log: Vec<CommandLogEntry>,
+    /// Number appended, including entries already acknowledged and dropped.
+    pub command_log_seq: u64,
     pub hook_activity: Vec<GitHookOperation>,
     pub hook_activity_rev: u64,
     /// Set only while reducing the existing command completion nested inside a

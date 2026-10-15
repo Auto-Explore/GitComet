@@ -1388,8 +1388,8 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     // …and leaves the editor when it is already up.
     assert!(press(cx, "alt-e"));
 
-    // Ctrl/Cmd+S only saves while the buffer has focus; with the editor
-    // unfocused it stays out of the way of the staging shortcut.
+    // Ctrl/Cmd+S saves from the focused buffer; status_staging covers the
+    // other focus places, where it saves instead of staging.
     cx.update(|window, app| {
         main_pane.update(app, |pane, cx| {
             let handle = pane.file_editor_input.read(cx).focus_handle().clone();

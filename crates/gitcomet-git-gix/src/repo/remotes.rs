@@ -201,7 +201,7 @@ fn safe_push_ref_display(remote: &str, branch: &str) -> String {
     format!("{remote}/{branch}")
 }
 
-fn output_mentions_missing_remote_ref(output: &std::process::Output) -> bool {
+fn output_mentions_missing_remote_ref(output: &crate::util::GitOutput) -> bool {
     let mut text = bytes_to_text_preserving_utf8(&output.stderr);
     text.push('\n');
     text.push_str(&bytes_to_text_preserving_utf8(&output.stdout));
@@ -2198,14 +2198,18 @@ impl GixRepo {
         } else {
             format!("{lead}\n\n{output}")
         };
-        Error::new(ErrorKind::Git(GitFailure::new(
+        let mut conflict_failure = GitFailure::new(
             failure.command(),
             GitFailureId::StoppedAtConflicts,
             failure.exit_code(),
             failure.stdout().to_vec(),
             failure.stderr().to_vec(),
             Some(detail),
-        )))
+        );
+        if let Some(auth_outcome) = failure.auth_outcome() {
+            conflict_failure = conflict_failure.with_auth_outcome(auth_outcome.clone());
+        }
+        Error::new(ErrorKind::Git(conflict_failure))
     }
 
     pub(super) fn squash_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {

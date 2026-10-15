@@ -662,6 +662,40 @@ impl GitCometView {
         self.select_routed_for_repo(repo, RoutedArea::Main, index, window, cx);
     }
 
+    pub(in crate::view) fn review_local_changes(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .cloned()
+        else {
+            return;
+        };
+        self.show_repository_canvas(cx);
+        self.select_routed_for_repo(repo.clone(), RoutedArea::Main, None, window, cx);
+        self.select_routed_for_repo(repo, RoutedArea::Details, None, window, cx);
+        self.set_details_collapsed(false, cx);
+        self.store.dispatch(Msg::SetActiveRepo { repo_id });
+        self.store.dispatch(Msg::ClearCommitSelection {
+            request_id: None,
+            repo_id,
+        });
+        let section = match self.change_tracking_view {
+            ChangeTrackingView::Combined => StatusSection::CombinedUnstaged,
+            ChangeTrackingView::SplitUntracked => StatusSection::Unstaged,
+        };
+        self.details_pane.update(cx, |pane, cx| {
+            pane.focus_status_section(section, window, cx);
+        });
+        cx.notify();
+    }
+
     fn select_routed_for_repo(
         &mut self,
         repo: RepoState,

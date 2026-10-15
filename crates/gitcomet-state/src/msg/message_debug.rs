@@ -3,6 +3,13 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::AuthPromptValidated {
+                generation, result, ..
+            } => f
+                .debug_struct("AuthPromptValidated")
+                .field("generation", generation)
+                .field("result", result)
+                .finish_non_exhaustive(),
             InternalMsg::TagPushPreviewLoaded {
                 repo_id,
                 mode,

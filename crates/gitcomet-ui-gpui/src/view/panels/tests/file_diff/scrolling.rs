@@ -3201,3 +3201,101 @@ fn collapsed_diff_short_gap_merge_moves_following_file_row(cx: &mut gpui::TestAp
         "expected the first visible row after a short-gap merge to move down when rows are inserted before it (before={row_top_before}, after={row_top_after})"
     );
 }
+
+/// The annotation column is painted before the text, so the horizontal range
+/// has to include it: a line overflowing by less than the column's width used
+/// to get no scrollbar, and the end of a longer one was out of reach.
+fn assert_annotation_widens_horizontal_range(
+    cx: &mut gpui::TestAppContext,
+    repo_id: gitcomet_state::model::RepoId,
+    diff_view: DiffViewMode,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let target = push_working_tree_full_file_horizontal_scroll_fixture_state(
+        cx,
+        &view,
+        repo_id,
+        &format!("annotate_hscroll_{diff_view:?}"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+        diff_view,
+        1,
+        1,
+        true,
+        true,
+    );
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Full);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = diff_view;
+            pane.annotate_enabled = true;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "annotated full-file diff overflows",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+        },
+        |pane| {
+            format!(
+                "active={} target={:?} left_max={:?}",
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_target,
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    let (content, annotation, viewport, max_x) = cx.update(|_window, app| {
+        let percent = crate::ui_scale::UiScale::current(app).percent();
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.annotation_active(), "{diff_view:?}: blame is on");
+        let handle = pane.diff_scroll.0.borrow().base_handle.clone();
+        (
+            pane.diff_horizontal_content_width_for_column(
+                crate::view::panes::main::DiffHorizontalScrollColumn::Primary,
+            ),
+            pane.annotate_column_width_px(percent),
+            handle.bounds().size.width,
+            handle.max_offset().x,
+        )
+    });
+    assert!(
+        content > px(0.0) && viewport > px(0.0) && annotation > px(0.0),
+        "{diff_view:?}: measured (content {content:?}, viewport {viewport:?}, annotation {annotation:?})"
+    );
+    assert!(
+        max_x + viewport >= content + annotation - px(1.0),
+        "{diff_view:?}: the range must reach the end of the longest line past the annotation \
+         column (max offset {max_x:?}, viewport {viewport:?}, content {content:?}, annotation {annotation:?})"
+    );
+}
+
+#[gpui::test]
+fn inline_annotate_widens_the_horizontal_range(cx: &mut gpui::TestAppContext) {
+    assert_annotation_widens_horizontal_range(
+        cx,
+        gitcomet_state::model::RepoId(970),
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn split_annotate_widens_the_horizontal_range(cx: &mut gpui::TestAppContext) {
+    assert_annotation_widens_horizontal_range(
+        cx,
+        gitcomet_state::model::RepoId(980),
+        DiffViewMode::Split,
+    );
+}

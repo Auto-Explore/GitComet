@@ -1,11 +1,11 @@
 use crate::msg::Msg;
-use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::auth::askpass::{
     AskPassScript, GIT_COMMAND_TIMEOUT_ENV, PromptAuth, append_host_prompt_to_stderr,
-    configure_git_auth_prompt, create_askpass_script, git_command_timeout,
-    remember_successful_prompt_auth, resolve_git_auth,
+    configure_git_auth_prompt, create_askpass_script, git_command_timeout, resolve_auth_outcome,
+    resolve_git_auth,
 };
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::auth::{AuthOutcome, StagedGitAuth};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::process::{bytes_to_text_preserving_utf8, git_command};
 use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::CommandOutput;
@@ -404,6 +404,16 @@ pub(super) fn schedule_clone_repo(
         };
         let stdout_str = stdout_handle.join().unwrap_or_default();
         let mut stderr_bytes = stderr_handle.join().unwrap_or_default();
+        let auth_outcome = if timed_out || active_clone.cancel_requested() {
+            AuthOutcome::Unknown
+        } else {
+            resolve_auth_outcome(
+                prompt_auth.as_ref(),
+                &askpass_script,
+                &stderr_bytes,
+                status.as_ref().is_ok_and(|status| status.success()),
+            )
+        };
         append_host_prompt_to_stderr(&mut stderr_bytes, &askpass_script);
         let stderr_acc = bytes_to_text_preserving_utf8(&stderr_bytes);
 
@@ -427,12 +437,17 @@ pub(super) fn schedule_clone_repo(
                         Ok(out)
                     } else {
                         let combined = out.combined();
-                        let message = if combined.is_empty() {
-                            format!("{} failed", out.command)
-                        } else {
-                            format!("{} failed: {combined}", out.command)
-                        };
-                        Err(Error::new(ErrorKind::Backend(message)))
+                        Err(Error::new(ErrorKind::Git(
+                            GitFailure::new(
+                                out.command,
+                                GitFailureId::CommandFailed,
+                                out.exit_code,
+                                out.stdout.into_bytes(),
+                                out.stderr.into_bytes(),
+                                (!combined.is_empty()).then_some(combined),
+                            )
+                            .with_auth_outcome(auth_outcome),
+                        )))
                     }
                 }
             }
@@ -446,10 +461,6 @@ pub(super) fn schedule_clone_repo(
                     Err(err) => Error::new(ErrorKind::Backend(format!("{err}; {cleanup_err}"))),
                 });
             }
-
-        if result.is_ok() {
-            remember_successful_prompt_auth(prompt_auth.as_ref(), &askpass_script);
-        }
 
         let ok = result.is_ok();
         send_or_log(

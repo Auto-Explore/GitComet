@@ -64,6 +64,17 @@ fn outer_failure_after_hooks(operation: &GitHookOperation) -> bool {
             .any(|hook| hook.status == GitHookRunStatus::Failed)
 }
 
+/// How many entries at the end of a feedback queue arrived after the previous
+/// snapshot. The store drops entries once the window acknowledges them, so
+/// the queue's length says nothing on its own; its sequence counts every
+/// append. Snapshots assembled without a sequence fall back to the length.
+fn new_feedback_entries(len: usize, seq: u64, old_len: usize, old_seq: u64) -> usize {
+    usize::try_from(seq.wrapping_sub(old_seq))
+        .unwrap_or(usize::MAX)
+        .max(len.saturating_sub(old_len))
+        .min(len)
+}
+
 impl GitCometView {
     pub(super) fn sync_workspace_and_registry(&mut self, cx: &mut gpui::Context<Self>) {
         let session_repos = session::snapshot_repos_from_state(self.state.as_ref());
@@ -268,13 +279,19 @@ impl GitCometView {
         // Reported once each after the diff: some failures are recorded both
         // as a notification and as a diagnostic, and one event is one error.
         let mut error_reports: Vec<ErrorReport> = Vec::new();
-        let old_notification_len = self.state.notifications.len();
-        let new_notifications = next
-            .notifications
-            .iter()
-            .skip(old_notification_len.min(next.notifications.len()))
-            .cloned()
-            .collect::<Vec<_>>();
+        let new_notification_count = new_feedback_entries(
+            next.notifications.len(),
+            next.notifications_seq,
+            self.state.notifications.len(),
+            self.state.notifications_seq,
+        );
+        if new_notification_count > 0 {
+            follow_up_msgs.push(Msg::AcknowledgeNotifications {
+                through_seq: next.notifications_seq,
+            });
+        }
+        let new_notifications =
+            next.notifications[next.notifications.len() - new_notification_count..].to_vec();
         for notification in new_notifications {
             let kind = match notification.kind {
                 AppNotificationKind::Warning => components::ToastKind::Warning,
@@ -290,34 +307,37 @@ impl GitCometView {
         }
 
         for next_repo in &next.repos {
-            let (old_diag_len, old_diag_seq, old_cmd_len) = self
+            let feedback = &next_repo.feedback;
+            let old_feedback = self
                 .state
                 .repos
                 .iter()
                 .find(|r| r.id == next_repo.id)
-                .map(|r| {
-                    (
-                        r.feedback.diagnostics.len(),
-                        r.feedback.diagnostics_seq,
-                        r.feedback.command_log.len(),
-                    )
-                })
-                .unwrap_or((0, 0, 0));
-            let diagnostics = &next_repo.feedback.diagnostics;
-            let appended = usize::try_from(
-                next_repo
-                    .feedback
-                    .diagnostics_seq
-                    .wrapping_sub(old_diag_seq),
-            )
-            .unwrap_or(usize::MAX)
-            .max(diagnostics.len().saturating_sub(old_diag_len));
+                .map(|r| &r.feedback);
+            let new_diagnostic_count = new_feedback_entries(
+                feedback.diagnostics.len(),
+                feedback.diagnostics_seq,
+                old_feedback.map_or(0, |old| old.diagnostics.len()),
+                old_feedback.map_or(0, |old| old.diagnostics_seq),
+            );
+            let new_command_count = new_feedback_entries(
+                feedback.command_log.len(),
+                feedback.command_log_seq,
+                old_feedback.map_or(0, |old| old.command_log.len()),
+                old_feedback.map_or(0, |old| old.command_log_seq),
+            );
+            if new_diagnostic_count > 0 || new_command_count > 0 {
+                follow_up_msgs.push(Msg::AcknowledgeRepoFeedback {
+                    repo_id: next_repo.id,
+                    lifetime: next_repo.lifetime(),
+                    diagnostics_through_seq: feedback.diagnostics_seq,
+                    command_log_through_seq: feedback.command_log_seq,
+                });
+            }
 
-            let new_diag_messages = next_repo
-                .feedback
-                .diagnostics
+            let new_diag_messages = feedback.diagnostics
+                [feedback.diagnostics.len() - new_diagnostic_count..]
                 .iter()
-                .skip(diagnostics.len().saturating_sub(appended))
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
@@ -330,14 +350,19 @@ impl GitCometView {
                 error_reports.push(ErrorReport::message(Some(next_repo.id), msg));
             }
 
-            let new_command_entries = next_repo
-                .feedback
-                .command_log
+            let new_command_entries = feedback.command_log
+                [feedback.command_log.len() - new_command_count..]
                 .iter()
-                .skip(old_cmd_len.min(next_repo.feedback.command_log.len()))
                 .collect::<Vec<_>>();
+            if let Some(results) = self.scenario_command_results.as_mut() {
+                results.extend(
+                    new_command_entries
+                        .iter()
+                        .map(|entry| (next_repo.id, (*entry).clone())),
+                );
+            }
             for entry in &new_command_entries {
-                if entry.command.starts_with("telemetry.") {
+                if entry.command.starts_with("telemetry.") || entry.handled_by_auth_prompt {
                     continue;
                 }
 
@@ -380,10 +405,7 @@ impl GitCometView {
                             .find(|operation| operation.id == operation_id)
                             .is_some_and(outer_failure_after_hooks);
                     if outer_failure_after_hooks {
-                        error_reports.push(ErrorReport::message(
-                            Some(next_repo.id),
-                            entry.summary.clone(),
-                        ));
+                        error_reports.push(ErrorReport::command_failure(next_repo.id, entry));
                     }
                     continue;
                 }
@@ -393,20 +415,16 @@ impl GitCometView {
                         self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
                     }
                 } else {
-                    error_reports.push(ErrorReport::message(
-                        Some(next_repo.id),
-                        entry.summary.clone(),
-                    ));
+                    error_reports.push(ErrorReport::command_failure(next_repo.id, entry));
                 }
             }
 
             let previous_repo = self.state.repos.iter().find(|repo| repo.id == next_repo.id);
-            for operation in next_repo
-                .feedback
-                .hook_activity
-                .iter()
-                .filter(|operation| operation.is_reportable() && !operation.status.is_active())
-            {
+            for operation in next_repo.feedback.hook_activity.iter().filter(|operation| {
+                operation.is_reportable()
+                    && !operation.status.is_active()
+                    && !operation.handled_by_auth_prompt
+            }) {
                 let was_completed = previous_repo
                     .and_then(|repo| {
                         repo.feedback
@@ -578,7 +596,6 @@ impl GitCometView {
             .hook_activity_workflow_repo_id(cx)
             .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
         self.toast_host.update(cx, |host, cx| {
-            host.set_errors_hidden(next.auth_prompt.is_some(), cx);
             host.sync_clone_progress(next.clone.as_ref(), cx);
             host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
             host.sync_hook_progress(next_hook_progress, cx);
@@ -700,7 +717,26 @@ impl GitCometView {
             self.startup_repo_bootstrap_pending = false;
         }
         if prev_auth_prompt != self.state.auth_prompt {
-            self.auth_prompt_key = None;
+            let generation_changed = prev_auth_prompt.as_ref().map(|prompt| prompt.generation)
+                != self
+                    .state
+                    .auth_prompt
+                    .as_ref()
+                    .map(|prompt| prompt.generation);
+            let validating = self
+                .state
+                .auth_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.status == AuthPromptStatus::Validating);
+            self.auth_prompt_input_error = None;
+            if !validating || generation_changed {
+                self.auth_prompt_submitted_generation = None;
+            }
+            if generation_changed || !validating {
+                self.auth_prompt_key = None;
+                self.auth_prompt_secret_input
+                    .update(cx, |input, cx| input.set_text("", cx));
+            }
         }
         if prev_branch_exists_prompt != self.state.branch_exists_prompt {
             self.pending_branch_exists_prompt = self.state.branch_exists_prompt.clone();
@@ -848,6 +884,7 @@ mod tests {
             time: SystemTime::UNIX_EPOCH,
             duration: Some(Duration::from_millis(50)),
             status,
+            handled_by_auth_prompt: false,
             hooks: vec![gitcomet_state::model::GitHookRun {
                 id: HookExecutionId {
                     sid: Arc::from("test-session"),

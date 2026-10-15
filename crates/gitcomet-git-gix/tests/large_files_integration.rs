@@ -14,7 +14,6 @@ use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const ANNEX_KEY: &str =
     "SHA256E-s5--2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824.bin";
@@ -1685,6 +1684,7 @@ fn lfs_lock_listing_does_not_consume_credentials_staged_for_a_command() {
     git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
     let opened = GixBackend.open(&repo).unwrap();
     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".into()),
         secret: "test-token".into(),
@@ -2218,6 +2218,7 @@ fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
 #[cfg(unix)]
 fn with_lfs_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
     const CHILD: &str = "GITCOMET_LFS_TEST_ROOT";
     let Some(root) = std::env::var_os(CHILD) else {
         let root = tempfile::tempdir().unwrap();
@@ -2288,6 +2289,7 @@ esac
             let command = LargeFileCommand::LfsPull { paths };
             {
                 let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                    challenge: None,
                     kind: GitAuthKind::UsernamePassword,
                     username: Some("test".into()),
                     secret: "lfs-test-secret".into(),

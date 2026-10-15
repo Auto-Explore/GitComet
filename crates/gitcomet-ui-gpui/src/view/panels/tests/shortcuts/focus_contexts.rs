@@ -785,3 +785,86 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
         "expected dismissing change-tracking settings to restore diff-panel focus"
     );
 }
+
+#[gpui::test]
+fn authentication_prompt_waits_while_the_commit_message_is_being_typed(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_state::model::{
+        AuthPromptKind, AuthPromptState, AuthPromptStatus, AuthRetryOperation,
+    };
+
+    for kind in [AuthPromptKind::Passphrase, AuthPromptKind::UsernamePassword] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+        // Typing reaches only an active window.
+        cx.update(|window, _app| window.activate());
+        cx.run_until_parked();
+        let repo_id = RepoId(7062);
+        let commit_id = CommitId("1111222233338888".into());
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_auth_prompt_while_typing",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("src/lib.rs");
+        let repo = simple_worktree_repo(
+            repo_id,
+            &workdir,
+            &commit_id,
+            std::slice::from_ref(&path),
+            &path,
+        );
+        apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+        focus_commit_message_input(cx, &view);
+        cx.simulate_input("half a commit mess");
+        assert!(
+            cx.update(|window, _app| window
+                .context_stack()
+                .iter()
+                .any(|context| context.contains("TextInput"))),
+            "the commit box is on screen and holds the keyboard"
+        );
+
+        // A pull started earlier now needs credentials.
+        let mut state = (*app_state_with_active_repo(repo)).clone();
+        state.auth_prompt = Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: AuthPromptStatus::AwaitingInput,
+            kind,
+            reason: "authentication required".into(),
+            operation: AuthRetryOperation::RepoCommand {
+                repo_id,
+                command: gitcomet_state::msg::RepoCommandKind::Pull {
+                    mode: gitcomet_core::services::PullMode::Default,
+                },
+            },
+        });
+        apply_state(cx, &view, Arc::new(state));
+        cx.simulate_input("age");
+
+        assert!(
+            commit_message_input_is_focused(cx, &view),
+            "a new {kind:?} prompt must not interrupt typing in another field"
+        );
+        cx.update(|_window, app| {
+            let view = view.read(app);
+            let commit_message = view
+                .details_pane
+                .read(app)
+                .commit_message_input
+                .read(app)
+                .text()
+                .to_string();
+            assert!(
+                commit_message.ends_with("age"),
+                "keystrokes after the {kind:?} prompt arrived stay in the commit box: \
+                 {commit_message:?}"
+            );
+            assert!(view.auth_prompt_username_input.read(app).text().is_empty());
+            assert!(view.auth_prompt_secret_input.read(app).text().is_empty());
+        });
+    }
+}

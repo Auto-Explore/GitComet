@@ -89,8 +89,8 @@ impl MainPaneView {
     }
 
     /// What the bar's Stage button would do, the same as Space: `None` unless
-    /// the window's own pane shows a working-tree file outside the conflict
-    /// resolver and staging is allowed.
+    /// the window's own pane shows a working-tree file's diff outside the
+    /// conflict resolver and staging is allowed.
     pub(in crate::view) fn stage_action(
         &self,
         repo_id: RepoId,
@@ -106,9 +106,12 @@ impl MainPaneView {
             return None;
         }
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area, .. } =
-            self.bound_diff_state(repo).diff_target.as_ref()?
-        else {
+        let diff_state = self.bound_diff_state(repo);
+        // A file opened read-only shows content, not changes to stage.
+        if diff_state.content_preview {
+            return None;
+        }
+        let DiffTarget::WorkingTree { path, area, .. } = diff_state.diff_target.as_ref()? else {
             return None;
         };
         let (area, path) = (*area, path.clone());

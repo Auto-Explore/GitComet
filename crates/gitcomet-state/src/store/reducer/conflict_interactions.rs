@@ -800,6 +800,7 @@ pub(super) fn record_autosolve_telemetry(
                 stats,
             ),
             None,
+            false,
         );
     }
     Vec::new()

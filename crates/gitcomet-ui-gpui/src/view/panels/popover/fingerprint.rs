@@ -33,6 +33,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                     CloneOpStatus::Cancelling => 1u8.hash(&mut hasher),
                     CloneOpStatus::FinishedOk => 2u8.hash(&mut hasher),
                     CloneOpStatus::Cancelled => 3u8.hash(&mut hasher),
+                    CloneOpStatus::WaitingForAuthentication => 5u8.hash(&mut hasher),
                     CloneOpStatus::FinishedErr(err) => {
                         4u8.hash(&mut hasher);
                         err.hash(&mut hasher);
