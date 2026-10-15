@@ -255,11 +255,6 @@ impl DiffRenderer {
 
                 let cached_styled = this.worktree_preview_segments_cache_get(ix);
                 let styled = pending_styled.as_ref().or(cached_styled);
-                let raw_text = diff_canvas::diff_text_paint_raw_text(
-                    &raw_text,
-                    streamed_spec.as_ref(),
-                    this.reveal_whitespace_chars,
-                );
 
                 diff_canvas::worktree_preview_row_canvas(tab_width,
                     theme,
@@ -273,7 +268,7 @@ impl DiffRenderer {
                     line_no,
                     styled,
                     streamed_spec,
-                    raw_text,
+                    Some(diff_canvas::DiffRowText::Line(&raw_text)),
                     this.reveal_whitespace_chars,
                     wrap,
                 )

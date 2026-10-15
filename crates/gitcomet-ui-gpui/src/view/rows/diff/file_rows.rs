@@ -437,11 +437,6 @@ pub(super) fn render_collapsed_diff_rows(
                         )
                     };
 
-                    let raw_text = diff_canvas::diff_text_paint_raw_text(
-                        &row.text,
-                        streamed_spec.as_ref(),
-                        reveal_whitespace_chars,
-                    );
                     diff_row(
                         DiffRowStyle {
                             tab_width,
@@ -464,7 +459,7 @@ pub(super) fn render_collapsed_diff_rows(
                             header_display: None,
                             styled,
                             streamed_spec,
-                            raw_text,
+                            raw_text: Some(diff_canvas::DiffRowText::Line(&row.text)),
                             context_menu_active: false,
                             wrap,
                             row_blame: blame_ctx.as_ref().and_then(|ctx| {
@@ -786,14 +781,6 @@ pub(super) fn render_file_diff_rows(
                 (line, cache_epoch, styled)
             };
             let _ = cache_epoch;
-            let raw_text = match render_data.as_ref() {
-                Some(row) => diff_canvas::diff_text_paint_raw_text(
-                    &row.text,
-                    streamed_spec.as_ref(),
-                    reveal_whitespace_chars,
-                ),
-                None => Some(diff_content_text(&line)),
-            };
 
             diff_row(
                 DiffRowStyle {
@@ -817,7 +804,10 @@ pub(super) fn render_file_diff_rows(
                     header_display: None,
                     styled,
                     streamed_spec,
-                    raw_text,
+                    raw_text: render_data
+                        .as_ref()
+                        .map(|row| diff_canvas::DiffRowText::Line(&row.text))
+                        .or_else(|| Some(diff_canvas::DiffRowText::Str(diff_content_text(&line)))),
                     context_menu_active: false,
                     wrap,
                     row_blame: blame_ctx.as_ref().and_then(|ctx| {

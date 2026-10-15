@@ -371,7 +371,7 @@ pub(super) struct DiffRowDecor<'a> {
     pub(super) header_display: Option<SharedString>,
     pub(super) styled: Option<&'a CachedDiffStyledText>,
     pub(super) streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
-    pub(super) raw_text: Option<&'a str>,
+    pub(super) raw_text: Option<diff_canvas::DiffRowText<'a>>,
     pub(super) context_menu_active: bool,
     pub(super) wrap: Option<diff_canvas::DiffTextWrapSlice>,
     pub(super) row_blame: Option<diff_canvas::RowBlamePaint>,
@@ -1014,13 +1014,6 @@ pub(super) fn patch_split_column_row(
             line_kind,
         )
     });
-    let raw_text = match column {
-        PatchSplitColumn::Left => row.old.as_ref(),
-        PatchSplitColumn::Right => row.new.as_ref(),
-    }
-    .and_then(|text| {
-        diff_canvas::diff_text_paint_raw_text(text, streamed_spec.as_ref(), reveal_whitespace_chars)
-    });
 
     diff_canvas::patch_split_column_row_canvas(
         tab_width,
@@ -1037,7 +1030,11 @@ pub(super) fn patch_split_column_row(
         line_no,
         styled,
         streamed_spec,
-        raw_text,
+        match column {
+            PatchSplitColumn::Left => row.old.as_ref(),
+            PatchSplitColumn::Right => row.new.as_ref(),
+        }
+        .map(diff_canvas::DiffRowText::Line),
         reveal_whitespace_chars,
         show_line_numbers,
         wrap,
@@ -1751,11 +1748,13 @@ pub(super) fn render_patch_diff_rows(
                     header_display,
                     styled,
                     streamed_spec,
-                    raw_text: Some(if matches!(click_kind, DiffClickKind::Line) {
-                        diff_content_text(&line)
-                    } else {
-                        line.text.as_ref()
-                    }),
+                    raw_text: Some(diff_canvas::DiffRowText::Str(
+                        if matches!(click_kind, DiffClickKind::Line) {
+                            diff_content_text(&line)
+                        } else {
+                            line.text.as_ref()
+                        },
+                    )),
                     context_menu_active,
                     wrap,
                     row_blame: blame_ctx.as_ref().and_then(|ctx| {
