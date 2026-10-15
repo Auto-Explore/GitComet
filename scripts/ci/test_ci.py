@@ -745,6 +745,13 @@ class CacheTests(unittest.TestCase):
         for gate in gates:
             self.assertIn("!cancelled() && job.status == 'success' && ", gate)
 
+    def test_every_python_setup_pins_the_same_version(self):
+        github = Path(__file__).resolve().parents[2] / ".github"
+        pins = {(path.name, version) for path in sorted(github.rglob("*.yml"))
+                for version in re.findall(r'python-version: "([^"]+)"', path.read_text())}
+        self.assertGreaterEqual(len(pins), 3)
+        self.assertEqual(len({version for _, version in pins}), 1, pins)
+
     def test_every_job_running_ci_helpers_sets_up_their_python(self):
         # The runners' system Python 3.10 has no tomllib, which cache.py (and report.py through it) imports.
         for workflow in sorted((Path(__file__).resolve().parents[2] / ".github/workflows").glob("*.yml")):
