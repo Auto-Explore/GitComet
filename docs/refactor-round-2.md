@@ -782,3 +782,16 @@ splits; small cohesive inline tests stay where they are.
 Two more files came under the limit: the syntax heuristic's keyword tables
 (1,676 lines) moved to `heuristic/keywords.rs`, and gix `repo/status.rs`'s
 `pub(crate) mod tests` (1,616 lines) to `status/tests.rs`. Seven remain.
+
+Four more host files were split along their seams: the context menu's action
+dispatcher (1,392 lines) to `context_menu/activate.rs`; history's column widths
+and cache building to `history/columns.rs` and `history/cache_build.rs`; the
+sidebar's file browser rendering to `sidebar/file_browser_view.rs`. The new
+files import what they use explicitly, written by
+`scripts/dev/expand_glob_imports.py` (the 3.1 tool: it drops `use super::*`,
+checks the package, and imports each name the compiler reports from `super::`,
+or traits from the path the compiler suggests). Explicit imports cost lines, so
+the production-line ratchet records 64 more. Three production files remain
+over 3,000 lines (`gitcomet_view.rs`, `panes/diff/diff_text.rs`,
+`rows/conflict_resolver.rs`), plus `rows/benchmarks/conflict.rs`, which the
+size guard counts as production code.
