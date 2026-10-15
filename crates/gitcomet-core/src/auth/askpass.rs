@@ -30,6 +30,7 @@ const RESPONSE_LOG_ENV: &str = "GITCOMET_ASKPASS_RESPONSE_LOG";
 const TARGET_PROMPT_ENV: &str = "GITCOMET_AUTH_TARGET_PROMPT";
 const USERNAME_PROMPT_ENV: &str = "GITCOMET_AUTH_USERNAME_PROMPT";
 const PASSWORD_PROMPT_ENV: &str = "GITCOMET_AUTH_PASSWORD_PROMPT";
+const HOST_KEY_PROMPT_ENV: &str = "GITCOMET_AUTH_HOST_KEY_PROMPT";
 #[cfg(test)]
 #[path = "askpass_tests.rs"]
 mod outcome_tests;
@@ -178,7 +179,11 @@ elif [ "$kind" = "passphrase" ]; then
   esac
 elif [ "$kind" = "host_verification" ]; then
   case "$lower_prompt" in
-    *continue\ connecting*|*yes/no*|*fingerprint*) answer="${GITCOMET_AUTH_SECRET:-}" ;;
+    *continue\ connecting*|*yes/no*|*fingerprint*)
+      unaddressed=$(printf '%s' "$prompt" | sed "1s/ ([^()]*)'/'/")
+      if [ -n "${GITCOMET_AUTH_HOST_KEY_PROMPT:-}" ] && [ "$unaddressed" = "$GITCOMET_AUTH_HOST_KEY_PROMPT" ]; then
+        answer="${GITCOMET_AUTH_SECRET:-}"
+      fi ;;
   esac
 fi
 if [ -z "$answer" ]; then
@@ -272,7 +277,9 @@ if /I "!GITCOMET_AUTH_KIND!"=="passphrase" (
 )
 if /I "!GITCOMET_AUTH_KIND!"=="host_verification" (
   "!findstr!" /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
-  if not errorlevel 1 set "answer=!GITCOMET_AUTH_SECRET!"
+  if not errorlevel 1 (
+    if not "!GITCOMET_AUTH_TARGET_PROMPT!"=="" if "!prompt!"=="!GITCOMET_AUTH_TARGET_PROMPT!" set "answer=!GITCOMET_AUTH_SECRET!"
+  )
 )
 :cached
 if "!answer!"=="" (
@@ -375,6 +382,7 @@ fn configure_prompt_env(
     cmd.env_remove(TARGET_PROMPT_ENV);
     cmd.env_remove(USERNAME_PROMPT_ENV);
     cmd.env_remove(PASSWORD_PROMPT_ENV);
+    cmd.env_remove(HOST_KEY_PROMPT_ENV);
     cmd.env(
         GITCOMET_ASKPASS_PROMPT_LOG_ENV,
         &askpass.host_prompt_log_path,
@@ -410,6 +418,12 @@ fn configure_prompt_env(
                     {
                         cmd.env(USERNAME_PROMPT_ENV, normalized_prompt(&username_prompt));
                         cmd.env(PASSWORD_PROMPT_ENV, normalized_prompt(&password_prompt));
+                    }
+                    if explicit.kind == GitAuthKind::HostVerification {
+                        cmd.env(
+                            HOST_KEY_PROMPT_ENV,
+                            host_key_prompt_without_address(&challenge.prompt),
+                        );
                     }
                 }
                 if session_cache {
@@ -458,6 +472,27 @@ fn credential_prompt_pair(
         None => format!("Password for '{scheme}://{host_and_path}': "),
     };
     Some((username_prompt, password_prompt))
+}
+
+/// OpenSSH names the host and the address it reached, `'github.com
+/// (140.82.121.3)'`, and a round-robin host answers the replay from another
+/// address. A confirmation binds the host name and key, so the POSIX helper
+/// drops the address the same way (`sed "1s/ ([^()]*)'/'/"`) before comparing.
+fn host_key_prompt_without_address(prompt: &str) -> String {
+    let prompt = prompt.trim_end_matches('\n');
+    let (first, rest) = prompt.split_once('\n').unwrap_or((prompt, ""));
+    let mut first = first.to_string();
+    if let Some(close) = first.find(")'")
+        && let Some(open) = first[..close].rfind(" (")
+        && !first[open + 2..close].contains(['(', ')'])
+    {
+        first.replace_range(open..close + 1, "");
+    }
+    if prompt.contains('\n') {
+        format!("{first}\n{rest}")
+    } else {
+        first
+    }
 }
 
 fn normalized_prompt(prompt: &str) -> String {
@@ -617,6 +652,20 @@ pub fn resolve_auth_outcome(
     {
         super::challenge::forget_challenge(challenge);
         return AuthOutcome::Rejected(challenge.clone());
+    }
+    // An unanswered host-key or credential prompt aborts its connection (an
+    // unused key passphrase does not), so a replay that answered a later
+    // host still has to ask about this one.
+    if !local_failure
+        && let Some((_, challenge)) = responses.iter().find(|(supplied, challenge)| {
+            !supplied
+                && match challenge.kind {
+                    GitAuthKind::HostVerification | GitAuthKind::UsernamePassword => true,
+                    GitAuthKind::Passphrase => false,
+                }
+        })
+    {
+        return AuthOutcome::NeedsInput(challenge.clone());
     }
     if responses
         .iter()

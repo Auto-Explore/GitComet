@@ -573,6 +573,137 @@ Are you sure you want to continue connecting (yes/no/[fingerprint])?";
     );
 }
 
+/// Confirming one host's key answered "yes" to every host-key prompt of the
+/// replayed command, so a second unknown host reached by `fetch --all` or a
+/// submodule was trusted without the user ever seeing its fingerprint.
+#[test]
+fn host_key_confirmation_answers_only_the_host_the_user_saw() {
+    let _lock = auth_test_lock();
+    clear_session_passphrase();
+    let host_prompt = |host: &str, address: &str, fingerprint: &str| {
+        format!(
+            "The authenticity of host '{host} ({address})' can't be established.\n\
+             ED25519 key fingerprint is SHA256:{fingerprint}.\n\
+             This key is not known by any other names.\n\
+             Are you sure you want to continue connecting (yes/no/[fingerprint])?"
+        )
+    };
+    let confirmed = host_prompt(
+        "git.example.com",
+        "192.0.2.1",
+        "confirmedFingerprintForTestOnly",
+    );
+    let other = host_prompt(
+        "other.example.net",
+        "192.0.2.1",
+        "otherFingerprintForTestOnly",
+    );
+    let other_key = host_prompt(
+        "git.example.com",
+        "192.0.2.1",
+        "otherFingerprintForTestOnly",
+    );
+    let request =
+        AuthChallenge::from_prompt(GitAuthKind::HostVerification, normalized_prompt(&confirmed));
+    let auth = explicit_auth(&request, "yes");
+    let askpass = create_askpass_script().expect("askpass helper");
+    let answer_multiline = |prompt: &str| {
+        let mut command = multiline_prompt_command(&askpass, prompt);
+        configure_git_auth_prompt(&mut command, Some(&auth), &askpass);
+        let output = command.output().expect("run real askpass helper");
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    assert_eq!(answer_multiline(&confirmed), "yes");
+    assert_eq!(answer_multiline(&other), "");
+    assert_eq!(answer_multiline(&other_key), "");
+    // A round-robin host answers the replay from another address; only the
+    // POSIX helper drops it (the Windows one still asks once more).
+    #[cfg(not(windows))]
+    assert_eq!(
+        answer_multiline(&host_prompt(
+            "git.example.com",
+            "192.0.2.77",
+            "confirmedFingerprintForTestOnly"
+        )),
+        "yes"
+    );
+
+    let unbound = PromptAuth::Explicit(StagedGitAuth {
+        kind: GitAuthKind::HostVerification,
+        username: None,
+        secret: "yes".to_string(),
+        challenge: None,
+    });
+    let mut command = multiline_prompt_command(&askpass, &confirmed);
+    configure_git_auth_prompt(&mut command, Some(&unbound), &askpass);
+    let output = command.output().expect("run real askpass helper");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "",
+        "a confirmation for no prompt in particular confirms nothing"
+    );
+    clear_session_passphrase();
+}
+
+/// The first run of a two-host `fetch --all` asks about the last host only.
+/// Its replay answers that host and leaves the first one unanswered, which
+/// used to end in a bare failure instead of asking about the first host.
+#[test]
+fn a_replay_asks_about_an_earlier_host_left_unanswered() {
+    let _lock = auth_test_lock();
+    clear_session_passphrase();
+    let host_prompt = |host: &str| {
+        format!(
+            "The authenticity of host '{host} (192.0.2.1)' can't be established.\n\
+             ED25519 key fingerprint is SHA256:fingerprintFor{host}.\n\
+             Are you sure you want to continue connecting (yes/no/[fingerprint])?"
+        )
+    };
+    for (first, second, kind, secret) in [
+        (
+            host_prompt("one.example.com"),
+            host_prompt("two.example.net"),
+            GitAuthKind::HostVerification,
+            "yes",
+        ),
+        (
+            "Username for 'https://one.example.com': ".to_string(),
+            "Username for 'https://two.example.net': ".to_string(),
+            GitAuthKind::UsernamePassword,
+            "test-password",
+        ),
+    ] {
+        let confirmed = AuthChallenge::from_prompt(kind, normalized_prompt(&second));
+        let auth = PromptAuth::Explicit(StagedGitAuth {
+            kind,
+            username: Some("alice".to_string()),
+            secret: secret.to_string(),
+            challenge: Some(confirmed),
+        });
+        let askpass = create_askpass_script().expect("askpass helper");
+        for prompt in [&first, &second] {
+            let mut command = multiline_prompt_command(&askpass, prompt);
+            configure_git_auth_prompt(&mut command, Some(&auth), &askpass);
+            assert!(
+                command
+                    .output()
+                    .expect("run real askpass helper")
+                    .status
+                    .success()
+            );
+        }
+
+        assert_eq!(
+            resolve_auth_outcome(Some(&auth), &askpass, b"fatal: could not fetch one", false),
+            AuthOutcome::NeedsInput(AuthChallenge::from_prompt(kind, normalized_prompt(&first))),
+            "{kind:?}"
+        );
+    }
+    clear_session_passphrase();
+}
+
 #[test]
 fn security_key_pin_requests_reopen_input_and_are_answered() {
     let _lock = auth_test_lock();
