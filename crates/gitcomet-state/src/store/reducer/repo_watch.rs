@@ -118,14 +118,10 @@ pub(super) fn worktree_changed(
         .as_ref()
         .is_some_and(|inline| {
             inline.submodule_repo_path == path
-                && (change.index
-                    || change.git_state
-                    || change.text_attributes
-                    || change.worktree
-                        && inline
-                            .target
-                            .file_path()
-                            .is_none_or(|file| change.paths.may_contain(file)))
+                && super::external_and_history::external_change_reloads_diff(
+                    &inline.target,
+                    &change,
+                )
         });
     let mut effects: Vec<_> =
         super::effects::request_worktree_dirty_path_effect(repo, path.clone())

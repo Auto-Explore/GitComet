@@ -372,23 +372,11 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
     );
 }
 
-fn reloads_selected_diff(effects: &[Effect]) -> bool {
-    effects.iter().any(|effect| {
-        matches!(
-            effect,
-            Effect::LoadDiff { .. }
-                | Effect::LoadDiffFile { .. }
-                | Effect::LoadSubmoduleSummary { .. }
-                | Effect::LoadDiffFileImage { .. }
-                | Effect::LoadDiffPreviewTextFile { .. }
-                | Effect::LoadSelectedDiff { .. }
-        )
-    })
-}
-
 #[test]
-fn external_worktree_change_reloads_the_selected_diff_only_for_its_paths() {
+fn external_changes_reload_the_selected_diff_only_when_they_can_alter_it() {
+    use crate::msg::{ChangedPaths, RepoExternalChange};
     let unstaged = |path: &str| DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged);
+    let staged = |path: &str| DiffTarget::working_tree(PathBuf::from(path), DiffArea::Staged);
     let to_worktree = |path: &str| {
         DiffTarget::commit_range(
             CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
@@ -396,12 +384,26 @@ fn external_worktree_change_reloads_the_selected_diff_only_for_its_paths() {
             Some(PathBuf::from(path)),
         )
     };
-    for (target, changed, reloads) in [
-        (unstaged("a.txt"), "b.txt", false),
-        (unstaged("a.txt"), "a.txt", true),
-        (unstaged("vendor/sub"), "vendor/sub/src/lib.rs", true),
-        (to_worktree("a.txt"), "b.txt", false),
-        (to_worktree("a.txt"), "a.txt", true),
+    let saved = |path: &str| RepoExternalChange {
+        paths: ChangedPaths::known(vec![path.into()]),
+        ..RepoExternalChange::worktree()
+    };
+    // The watcher reports a `.gitattributes` edit without its path.
+    let attributes = RepoExternalChange {
+        text_attributes: true,
+        paths: ChangedPaths::none(),
+        ..RepoExternalChange::worktree()
+    };
+    for (target, change, reloads) in [
+        (unstaged("a.txt"), saved("b.txt"), false),
+        (unstaged("a.txt"), saved("a.txt"), true),
+        (unstaged("vendor/sub"), saved("vendor/sub/src/lib.rs"), true),
+        (unstaged("a.txt"), attributes.clone(), true),
+        (staged("a.txt"), saved("a.txt"), false),
+        (staged("a.txt"), attributes.clone(), true),
+        (to_worktree("a.txt"), saved("b.txt"), false),
+        (to_worktree("a.txt"), saved("a.txt"), true),
+        (to_worktree("a.txt"), attributes, true),
     ] {
         let mut repos: RepositoryRuntimes = Default::default();
         let id_alloc = AtomicU64::new(1);
@@ -440,16 +442,15 @@ fn external_worktree_change_reloads_the_selected_diff_only_for_its_paths() {
             &mut state,
             Msg::RepoExternallyChanged {
                 repo_id: RepoId(1),
-                change: crate::msg::RepoExternalChange {
-                    paths: crate::msg::ChangedPaths::known(vec![changed.into()]),
-                    ..crate::msg::RepoExternalChange::worktree()
-                },
+                change: change.clone(),
             },
         );
         assert_eq!(
-            reloads_selected_diff(&effects),
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadDiff { .. })),
             reloads,
-            "{target:?} after a change to {changed}"
+            "{target:?} after {change:?}"
         );
     }
 }

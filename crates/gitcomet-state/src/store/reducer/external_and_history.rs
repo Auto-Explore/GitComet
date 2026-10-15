@@ -171,22 +171,35 @@ fn file_browser_refresh_for_external_change(
     super::effects::request_file_browser_load(repo_state)
 }
 
+/// Whether `change` can alter `target`'s diff. Index, HEAD and attribute
+/// changes reach every live target; worktree edits reach the files they name
+/// in a diff that reads the worktree. Commits never change.
 pub(super) fn external_change_reloads_diff(
     target: &DiffTarget,
     change: &RepoExternalChange,
 ) -> bool {
-    match target {
-        DiffTarget::WorkingTree { area, .. } => {
-            change.git_state
-                || change.index
-                || (*area == DiffArea::Unstaged && change.worktree_edits_reach(target))
-        }
-        DiffTarget::Commit { .. } => false,
-        DiffTarget::CommitRange { to_commit_id, .. } => {
-            to_commit_id.is_none()
-                && (change.git_state || change.index || change.worktree_edits_reach(target))
-        }
+    let reads_worktree = match target {
+        DiffTarget::Commit { .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: Some(_),
+            ..
+        } => return false,
+        DiffTarget::WorkingTree { area, .. } => *area == DiffArea::Unstaged,
+        DiffTarget::CommitRange {
+            to_commit_id: None, ..
+        } => true,
+    };
+    if change.index || change.git_state || change.text_attributes {
+        return true;
     }
+    reads_worktree
+        && change.worktree
+        && (target
+            .file_path()
+            .is_none_or(|path| change.paths.may_contain(path))
+            || target
+                .old_file_path()
+                .is_some_and(|path| change.paths.may_contain(path)))
 }
 
 pub(super) fn repo_externally_changed(
