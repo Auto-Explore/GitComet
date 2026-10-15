@@ -384,6 +384,44 @@ fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
     );
 }
 
+/// Numstat counts a gitlink's "Subproject commit" line; a submodule pointer
+/// has no line counts here, as in a commit's file list.
+#[test]
+fn a_submodule_pointer_has_no_line_counts_against_the_working_tree() {
+    use gitcomet_core::services::GitRepository;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path();
+    init_test_repo(repo);
+    write_file(repo, "keep.txt", "one\n");
+    git_success(repo, &["add", "."]);
+    git_success(repo, &["commit", "-m", "base"]);
+    let from = git_stdout(repo, &["rev-parse", "HEAD"]);
+    fs::create_dir_all(repo.join("vendor/sub")).expect("create gitlink dir");
+    git_success(
+        repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!(
+                "160000,{},vendor/sub",
+                "1".repeat(gix::open(repo).unwrap().object_hash().len_in_hex())
+            ),
+        ],
+    );
+
+    let files = open_repo(repo)
+        .diff_range_files(&CommitId(from.into()), None)
+        .expect("diff_range_files should succeed");
+    let gitlink = files
+        .iter()
+        .find(|f| f.path.to_string_lossy() == "vendor/sub")
+        .expect("the gitlink should be listed");
+
+    assert_eq!((gitlink.additions, gitlink.deletions), (None, None));
+}
+
 /// A rename is the one `git diff --raw` record that carries *two* path
 /// fields instead of one. Mis-counting them shifts every following record by
 /// a field, silently pairing paths with the wrong statuses for the rest of

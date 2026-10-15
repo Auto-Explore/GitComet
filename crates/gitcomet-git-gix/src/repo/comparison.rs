@@ -238,7 +238,12 @@ fn git_worktree_changes(
                 || counts.contains_key(&change.path)
         })
         .map(|change| {
-            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
+            // A gitlink's numstat counts its "Subproject commit" line, not content.
+            let (additions, deletions) = counts
+                .get(&change.path)
+                .filter(|_| !change.is_submodule)
+                .cloned()
+                .unwrap_or((None, None));
             CommitFileChange::new(change.path, change.kind)
                 .with_submodule(change.is_submodule)
                 .with_line_counts(additions, deletions)
