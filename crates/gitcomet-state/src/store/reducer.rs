@@ -7,10 +7,12 @@ mod branch_exists_prompt;
 #[cfg(test)]
 mod comparison_tests;
 mod conflict_interactions;
+mod conflict_load;
 mod diff_selection;
 mod diff_session;
 mod effects;
 mod external_and_history;
+mod file_history;
 mod filesystem;
 mod git_hook_activity;
 mod git_operations;
@@ -1089,7 +1091,7 @@ fn reduce_inner(
             repo_id,
             path,
             mode,
-        } => effects::load_conflict_file(state, repo_id, path, mode),
+        } => conflict_load::load_conflict_file(state, repo_id, path, mode),
         Msg::LoadReflog { repo_id } => effects::load_reflog(state, repo_id),
         Msg::LoadHoverCommitMessage { repo_id, commit_id } => {
             effects::load_hover_commit_message(state, repo_id, commit_id)
@@ -1101,7 +1103,7 @@ fn reduce_inner(
             repo_id,
             path,
             limit,
-        } => effects::load_file_history(state, repo_id, path, limit),
+        } => file_history::load_file_history(state, repo_id, path, limit),
         Msg::LoadBlame {
             repo_id,
             path,
@@ -2174,7 +2176,9 @@ fn reduce_inner(
             path,
             cursor,
             result,
-        }) => effects::file_history_loaded(inputs, state, repo_id, request, path, cursor, result),
+        }) => {
+            file_history::file_history_loaded(inputs, state, repo_id, request, path, cursor, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,
@@ -2187,7 +2191,7 @@ fn reduce_inner(
             path,
             result,
             conflict_session,
-        }) => effects::conflict_file_loaded(
+        }) => conflict_load::conflict_file_loaded(
             inputs,
             state,
             repo_id,

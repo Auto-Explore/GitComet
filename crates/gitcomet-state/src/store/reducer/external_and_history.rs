@@ -1,4 +1,5 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
+use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
 use super::effects::{append_ensure_sidebar_data_effects, select_commit_and_load_details};
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
@@ -8,7 +9,6 @@ use super::util::{
     SelectedConflictTarget, append_auto_background_metadata_effects,
     append_requested_status_refresh_effects, diff_reload_effects, push_diagnostic,
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
-    start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use super::{diff_selection, repo_management};
 use crate::model::{

@@ -1,7 +1,9 @@
 mod clone;
 mod commit_details;
+mod conflict_load;
 mod control;
 mod diff_session;
+mod file_history;
 mod history_authors;
 mod history_find;
 mod indexed_history;
@@ -296,12 +298,12 @@ pub(super) fn schedule_effect(
         } => {
             if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
                 let encoding = repo_load::file_encoding_override(thread_state, repo_id, &path);
-                repo_load::schedule_load_conflict_file(
+                conflict_load::schedule_load_conflict_file(
                     executor,
                     repos,
                     msg_tx,
                     repo_id,
-                    repo_load::ConflictFileRequest {
+                    conflict_load::ConflictFileRequest {
                         request,
                         path,
                         mode,
@@ -357,12 +359,12 @@ pub(super) fn schedule_effect(
             cursor,
         } => {
             if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
-                repo_load::schedule_load_file_history(
+                file_history::schedule_load_file_history(
                     executor,
                     repos,
                     msg_tx,
                     repo_id,
-                    repo_load::FileHistoryPageRequest {
+                    file_history::FileHistoryPageRequest {
                         request,
                         path,
                         limit,
@@ -778,12 +780,12 @@ pub(super) fn schedule_effect(
                 && let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id)
             {
                 let encoding = repo_load::file_encoding_override(thread_state, repo_id, &path);
-                repo_load::schedule_load_conflict_file(
+                conflict_load::schedule_load_conflict_file(
                     executor,
                     repos,
                     msg_tx,
                     repo_id,
-                    repo_load::ConflictFileRequest {
+                    conflict_load::ConflictFileRequest {
                         request,
                         path,
                         mode,

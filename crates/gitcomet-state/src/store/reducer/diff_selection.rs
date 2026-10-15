@@ -1,9 +1,11 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
+use super::conflict_load::{
+    start_conflict_target_reload, start_conflict_target_reload_with_mode,
+    start_current_conflict_target_reload,
+};
 use super::util::{
     SelectedConflictTarget, SelectedDiffLoadPlan, apply_selected_diff_load_plan_state,
     diff_target_preview_flags, selected_conflict_target, selected_diff_load_plan,
-    start_conflict_target_reload, start_conflict_target_reload_with_mode,
-    start_current_conflict_target_reload,
 };
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView, InlineSubmoduleDiffEntry,

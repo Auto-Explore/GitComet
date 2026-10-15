@@ -1,3 +1,5 @@
+use super::super::conflict_load::{conflict_file_loaded, load_conflict_file};
+use super::super::file_history::{file_history_loaded, load_file_history};
 use super::*;
 use crate::model::LoadKind;
 use crate::model::{
@@ -5,10 +7,12 @@ use crate::model::{
 };
 use crate::msg::{ReferenceEffect, StatusEffect};
 use crate::store::repository_runtime::RepositoryRuntimes;
+use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
     DiffArea, DiffTarget, FileConflictKind, FileEntry, FileEntryKind, FileSource, FileStatus,
     LogScope, RemoteBranch, RepoSpec,
 };
+use gitcomet_core::domain::{LogCursor, LogPage};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

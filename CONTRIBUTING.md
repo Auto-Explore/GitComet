@@ -126,6 +126,12 @@ run. The `app` context disables GUI features. Run the same commands with
 `--context example` to check the downstream extension product in its separate
 feature context. Recompile a context after changing its code.
 
+Large unit-test suites use private child modules and stay in their original crate
+harness. For test moves, use [inventory.py](scripts/ci/inventory.py) to snapshot
+the compiled harnesses before and after the change, then compare names and ignore
+flags. Record intentional additions or replacements separately from mechanical
+moves; retain the existing GPUI process isolation and visual/clipboard locks.
+
 The backend's `test-support` feature exposes test Git environments and mergetool
 consent overrides. In-tree tests enable it through dev dependencies; external test
 harnesses must opt in. Normal app builds leave it disabled. See the

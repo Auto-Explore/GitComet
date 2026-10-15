@@ -1,8 +1,10 @@
+use super::conflict_load::{
+    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
+};
 use super::effects::append_ensure_sidebar_data_effects;
 use super::util::{
     EffectAccumulator, SelectedConflictTarget, append_auto_background_metadata_effects,
     append_refresh_full_effects, append_refresh_primary_effects,
-    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
     background_metadata_effect_capacity, format_failure_summary, handle_session_persist_result,
     push_diagnostic, push_notification, refresh_full_effect_capacity, refresh_full_effects,
     refresh_primary_effect_capacity, selected_conflict_target, selected_diff_load_plan,

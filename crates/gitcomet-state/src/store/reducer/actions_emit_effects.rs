@@ -1,9 +1,9 @@
+use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
 use super::util::{
     DiffReloadMode, SelectedConflictTarget, apply_selected_diff_load_plan_state,
     apply_selected_diff_load_plan_state_with_reload_mode, diff_reload_effects,
     format_failure_summary, push_action_log, push_command_log, refresh_full_effects,
     refresh_primary_effects, selected_conflict_target, selected_diff_load_plan,
-    start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{
     AppState, InteractiveCherryPickSetup, InteractiveRebaseSetup, LoadKind, Loadable, RepoId,
