@@ -4,8 +4,7 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 
-#[path = "test_git_env.rs"]
-mod test_git_env;
+use crate::test_git_env;
 
 pub fn git(repo: &Path, args: &[&str]) -> String {
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
