@@ -49,7 +49,7 @@ impl GixRepo {
     }
 
     /// `git maintenance is-needed --auto`: exit 0 when needed, 1 when not.
-    fn is_needed(&self, task: Option<&str>) -> Result<std::process::Output> {
+    fn is_needed(&self, task: Option<&str>) -> Result<crate::util::GitOutput> {
         let mut cmd = self.git_workdir_cmd();
         cmd.args(["maintenance", "is-needed", "--auto"]);
         if let Some(task) = task {

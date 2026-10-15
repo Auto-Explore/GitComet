@@ -1,7 +1,8 @@
+use gitcomet_core::auth::AuthOutcome;
 use gitcomet_core::auth::askpass::{
     GIT_COMMAND_TIMEOUT_ENV, PromptAuth, append_host_prompt_to_stderr,
     append_passphrase_prompt_to_stderr, configure_git_auth_prompt, create_askpass_script,
-    remember_successful_prompt_auth, take_pending_git_auth,
+    resolve_auth_outcome, take_pending_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -12,13 +13,23 @@ use gitcomet_core::process::{configure_background_command, git_command};
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use std::io::{self, BufRead as _, Read};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdout, Command, Output, Stdio};
+use std::process::{ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) use gitcomet_core::auth::askpass::git_command_timeout;
+
+/// The process exit and its authentication exchange are independent: a pull
+/// can unlock its key and fetch successfully before a local merge fails.
+#[derive(Debug)]
+pub(crate) struct GitOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) auth_outcome: AuthOutcome,
+}
 
 thread_local! {
     static SHARED_GIT_AUTH: std::cell::RefCell<Option<Option<PromptAuth>>> = const {

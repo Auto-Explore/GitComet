@@ -150,7 +150,7 @@ pub(super) fn pathspec_from_file_arg(path: &Path) -> std::ffi::OsString {
     arg
 }
 
-pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &std::process::Output) {
+pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &crate::util::GitOutput) {
     append_command_output(
         acc,
         CommandOutput {
@@ -810,7 +810,7 @@ impl GixRepo {
         &self,
         cmd: Command,
         label: &str,
-    ) -> Result<(CommandOutput, std::process::Output)> {
+    ) -> Result<(CommandOutput, crate::util::GitOutput)> {
         let mut acc = CommandOutput {
             command: label.to_string(),
             stdout: String::new(),
@@ -1126,7 +1126,7 @@ impl GixRepo {
         &self,
         cmd: Command,
         label: &str,
-    ) -> Result<(CommandOutput, std::process::Output)> {
+    ) -> Result<(CommandOutput, crate::util::GitOutput)> {
         let mut acc = CommandOutput {
             command: label.to_string(),
             stdout: String::new(),
@@ -1758,7 +1758,7 @@ impl GixRepo {
         entries: &[InteractiveRebaseEntry],
         stopped: usize,
         label: &str,
-        output: std::process::Output,
+        output: crate::util::GitOutput,
     ) -> Error {
         let short = |entry: &InteractiveRebaseEntry| short_commit_id(&entry.commit_id).to_string();
         let conflicted = self.index_has_conflicts();
@@ -1791,14 +1791,17 @@ impl GixRepo {
         if !git_said.trim().is_empty() {
             let _ = write!(detail, "\n\n{}", git_said.trim());
         }
-        Error::new(ErrorKind::Git(GitFailure::new(
-            label,
-            GitFailureId::CommandFailed,
-            output.status.code(),
-            output.stdout,
-            output.stderr,
-            Some(detail),
-        )))
+        Error::new(ErrorKind::Git(
+            GitFailure::new(
+                label,
+                GitFailureId::CommandFailed,
+                output.status.code(),
+                output.stdout,
+                output.stderr,
+                Some(detail),
+            )
+            .with_auth_outcome(output.auth_outcome),
+        ))
     }
 
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {

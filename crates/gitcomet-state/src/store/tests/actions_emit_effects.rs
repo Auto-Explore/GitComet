@@ -4286,6 +4286,7 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
         },
     ));
     let auth = gitcomet_core::auth::StagedGitAuth {
+        challenge: None,
         kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
         secret: "token".to_string(),

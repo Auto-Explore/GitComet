@@ -1776,8 +1776,7 @@ impl GitCometView {
                 let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
 
                 if escape_pressed {
-                    this.store.dispatch(Msg::CancelAuthPrompt);
-                    cx.notify();
+                    this.cancel_auth_prompt(cx);
                     return;
                 }
                 if enter_pressed {
@@ -1793,8 +1792,7 @@ impl GitCometView {
                 let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
 
                 if escape_pressed {
-                    this.store.dispatch(Msg::CancelAuthPrompt);
-                    cx.notify();
+                    this.cancel_auth_prompt(cx);
                     return;
                 }
                 if enter_pressed {
@@ -2036,6 +2034,9 @@ impl GitCometView {
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,
+            auth_prompt_submitted_generation: None,
+            auth_prompt_input_error: None,
+            auth_prompt_focus_return: None,
             active_context_menu_invoker: None,
         };
 
@@ -2834,6 +2835,12 @@ impl GitCometView {
         let Some(prompt) = self.state.auth_prompt.as_ref() else {
             return;
         };
+        if prompt.status == AuthPromptStatus::Validating
+            || self.auth_prompt_submitted_generation == Some(prompt.generation)
+        {
+            return;
+        }
+        let generation = prompt.generation;
         let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
         let secret_required_message = match prompt.kind {
             AuthPromptKind::UsernamePassword => "Password is required.",
@@ -2850,27 +2857,95 @@ impl GitCometView {
         let secret = self.auth_prompt_secret_input.read(cx).text().to_string();
 
         if requires_username && username.is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                "Username is required.".to_string(),
-                cx,
-            );
+            self.auth_prompt_input_error = Some("Username is required.".to_string());
+            cx.notify();
             return;
         }
         if secret.trim().is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                secret_required_message.to_string(),
-                cx,
-            );
+            self.auth_prompt_input_error = Some(secret_required_message.to_string());
+            cx.notify();
             return;
         }
 
+        // The worker may not have published Validating yet. Latch immediately
+        // so a second click/Enter cannot submit the same challenge twice.
+        self.auth_prompt_submitted_generation = Some(generation);
+        self.auth_prompt_input_error = None;
+        self.auth_prompt_secret_input
+            .update(cx, |input, cx| input.set_text("", cx));
         self.store.dispatch(Msg::SubmitAuthPrompt {
+            generation,
             username: requires_username.then_some(username),
             secret,
         });
         cx.notify();
+    }
+
+    pub(super) fn cancel_auth_prompt(&mut self, cx: &mut gpui::Context<Self>) {
+        self.auth_prompt_secret_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.auth_prompt_username_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.auth_prompt_input_error = None;
+        self.store.dispatch(Msg::CancelAuthPrompt);
+        cx.notify();
+    }
+
+    fn auth_prompt_has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.auth_prompt_username_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window)
+            || self
+                .auth_prompt_secret_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+    }
+
+    /// Focuses a new prompt's first field so the user can type at once,
+    /// unless they are typing in another field or the terminal, or working in
+    /// an overlay: the
+    /// prompt then waits for a click rather than swallowing their keystrokes.
+    pub(super) fn focus_new_auth_prompt(
+        &mut self,
+        input: &Entity<components::TextInput>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let prompt_has_focus = self.auth_prompt_has_focus(window, cx);
+        let typing_elsewhere = !prompt_has_focus
+            && window
+                .context_stack()
+                .iter()
+                .any(|context| context.contains("TextInput") || context.contains("Terminal"));
+        if typing_elsewhere
+            || self.is_overlay_open(cx)
+            || self.command_palette_open
+            || self.reveal_commit_open
+        {
+            return;
+        }
+        // A retry keeps the place the first prompt of the exchange took.
+        if self.auth_prompt_focus_return.is_none() && !prompt_has_focus {
+            self.auth_prompt_focus_return = Some(window.focused(cx));
+        }
+        window.focus(&input.read(cx).focus_handle(), cx);
+    }
+
+    /// The prompt took the keyboard by itself, so give it back once the prompt
+    /// is gone, unless the user has since moved it elsewhere.
+    pub(super) fn restore_focus_after_auth_prompt(&mut self, window: &mut Window, cx: &mut App) {
+        let Some(previous) = self.auth_prompt_focus_return.take() else {
+            return;
+        };
+        if !self.auth_prompt_has_focus(window, cx) {
+            return;
+        }
+        match previous {
+            Some(focus) => window.focus(&focus, cx),
+            None => window.blur(cx),
+        }
     }
 
     pub(super) fn push_toast(

@@ -15,7 +15,6 @@ pub(super) struct ToastHost {
     root_view: WeakEntity<GitCometView>,
 
     toasts: Vec<ToastState>,
-    errors_hidden: bool,
     /// Monotonic, so an id is never reused. Deriving the next id from
     /// `toasts.last()` restarted numbering whenever the list emptied, and both
     /// removal paths are deferred — the TTL timer below and the launch
@@ -88,6 +87,15 @@ fn apply_clone_progress_sync(
     clone_progress_dest: &mut Option<std::sync::Arc<std::path::PathBuf>>,
     next_clone: Option<&CloneOpState>,
 ) -> CloneProgressSyncAction {
+    if let Some(op) = next_clone
+        && clone_progress_dest
+            .as_ref()
+            .is_some_and(|dest| !std::sync::Arc::ptr_eq(dest, &op.dest))
+    {
+        // A fresh clone attempt owns a new destination Arc, even at the same
+        // path. Detect retries when both Waiting and Running were coalesced.
+        *clone_progress_last_seq = 0;
+    }
     match next_clone {
         Some(op) => match &op.status {
             CloneOpStatus::Running | CloneOpStatus::Cancelling => {
@@ -113,6 +121,18 @@ fn apply_clone_progress_sync(
                         progress_changed: false,
                         notice: None,
                     }
+                }
+            }
+            CloneOpStatus::WaitingForAuthentication => {
+                let had_progress = clone_progress.take().is_some();
+                // A retry starts its sequence again. It can finish before the
+                // UI sees Running, so the challenge's sequence must not mask
+                // the eventual success or terminal failure.
+                *clone_progress_last_seq = 0;
+                *clone_progress_dest = None;
+                CloneProgressSyncAction {
+                    progress_changed: had_progress,
+                    notice: None,
                 }
             }
             CloneOpStatus::FinishedOk => {
@@ -203,7 +223,6 @@ impl ToastHost {
             theme,
             root_view,
             toasts: Vec::new(),
-            errors_hidden: false,
             next_toast_id: 1,
             clone_progress: None,
             clone_progress_last_seq: 0,
@@ -216,13 +235,6 @@ impl ToastHost {
             hook_activity_dialog_repo: None,
             #[cfg(any(test, feature = "benchmarks"))]
             render_count: 0,
-        }
-    }
-
-    pub(super) fn set_errors_hidden(&mut self, hidden: bool, cx: &mut gpui::Context<Self>) {
-        if self.errors_hidden != hidden {
-            self.errors_hidden = hidden;
-            cx.notify();
         }
     }
 
@@ -1367,6 +1379,29 @@ impl ToastHost {
                 this.open_error_details(id, window, cx);
             })
             .debug_selector(move || format!("toast_error_show_{id}"));
+        let review = notice
+            .actions
+            .iter()
+            .find_map(|action| match action {
+                ErrorAction::ReviewLocalChanges { repo_id } => Some(*repo_id),
+                _ => None,
+            })
+            .map(|repo_id| {
+                components::Button::new(format!("toast_error_review_{id}"), "Review local changes")
+                    .style(components::ButtonStyle::Filled)
+                    .on_click(theme, cx, move |this, _e, window, cx| {
+                        let root = this.root_view.clone();
+                        let window_handle = window.window_handle();
+                        cx.defer(move |cx| {
+                            let _ = window_handle.update(cx, |_root, window, cx| {
+                                let _ = root.update(cx, |root, cx| {
+                                    root.review_local_changes(repo_id, window, cx);
+                                });
+                            });
+                        });
+                    })
+                    .debug_selector(move || format!("toast_error_review_{id}"))
+            });
         div()
             .flex()
             .flex_col()
@@ -1421,6 +1456,7 @@ impl ToastHost {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .children(review)
                     .child(show),
             )
     }
@@ -1486,11 +1522,7 @@ impl Render for ToastHost {
         }
         let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };
-        let visible = self
-            .toasts
-            .iter()
-            .rev()
-            .filter(|toast| !self.errors_hidden || !matches!(toast.body, ToastBody::Error(_)));
+        let visible = self.toasts.iter().rev();
         let mut displayed = visible.clone().take(max_other).cloned().collect::<Vec<_>>();
         // Errors never expire, so ones pushed out of view must stay reachable.
         let hidden_errors = visible
@@ -1875,6 +1907,159 @@ mod tests {
                 progress_changed: false,
                 notice: None,
             }
+        );
+    }
+
+    #[test]
+    fn clone_authentication_wait_clears_progress_without_a_notice_and_allows_fast_retry() {
+        let dest = Arc::new(PathBuf::from("/tmp/repo"));
+        let waiting = clone_op(
+            Arc::clone(&dest),
+            CloneOpStatus::WaitingForAuthentication,
+            CloneProgressStage::Loading,
+            0,
+            1,
+        );
+        let mut progress = Some(clone_op(
+            Arc::clone(&dest),
+            CloneOpStatus::Running,
+            CloneProgressStage::Loading,
+            0,
+            0,
+        ));
+        let mut last_seq = 0;
+        let mut tracked_dest = Some(dest);
+
+        let action = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&waiting),
+        );
+        assert!(action.progress_changed);
+        assert!(action.notice.is_none());
+        assert!(progress.is_none());
+        assert!(tracked_dest.is_none());
+        assert_eq!(last_seq, 0);
+
+        // The retry completes before the UI observes its Running snapshot,
+        // and reuses the challenge's sequence number.
+        let finished = clone_op(
+            Arc::new(PathBuf::from("/tmp/repo")),
+            CloneOpStatus::FinishedOk,
+            CloneProgressStage::RemoteObjects,
+            100,
+            waiting.seq,
+        );
+        let action = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&finished),
+        );
+        assert_eq!(
+            action.notice,
+            Some((
+                components::ToastKind::Success,
+                "Clone finished: /tmp/repo".to_string(),
+            ))
+        );
+        let repeated = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&finished),
+        );
+        assert!(repeated.notice.is_none());
+    }
+
+    #[test]
+    fn clone_retry_completion_is_reported_when_waiting_and_running_snapshots_are_skipped() {
+        for status in [
+            CloneOpStatus::FinishedOk,
+            CloneOpStatus::FinishedErr("Clone failed: network disconnected".into()),
+        ] {
+            let dest = Arc::new(PathBuf::from("/tmp/repo"));
+            let mut progress = Some(clone_op(
+                Arc::clone(&dest),
+                CloneOpStatus::Running,
+                CloneProgressStage::Loading,
+                0,
+                1,
+            ));
+            let mut last_seq = 1;
+            let mut tracked_dest = Some(dest);
+            let expected_kind = if matches!(&status, CloneOpStatus::FinishedOk) {
+                components::ToastKind::Success
+            } else {
+                components::ToastKind::Error
+            };
+            let finished = clone_op(
+                Arc::new(PathBuf::from("/tmp/repo")),
+                status,
+                CloneProgressStage::Loading,
+                0,
+                1,
+            );
+
+            let action = apply_clone_progress_sync(
+                &mut progress,
+                &mut last_seq,
+                &mut tracked_dest,
+                Some(&finished),
+            );
+            assert!(action.progress_changed);
+            assert_eq!(action.notice.map(|(kind, _)| kind), Some(expected_kind));
+            assert!(progress.is_none());
+            let repeated = apply_clone_progress_sync(
+                &mut progress,
+                &mut last_seq,
+                &mut tracked_dest,
+                Some(&finished),
+            );
+            assert!(repeated.notice.is_none());
+        }
+    }
+
+    #[test]
+    fn cancelling_clone_authentication_is_quiet_but_terminal_retry_failure_is_reported() {
+        let waiting = clone_op(
+            Arc::new(PathBuf::from("/tmp/repo")),
+            CloneOpStatus::WaitingForAuthentication,
+            CloneProgressStage::Loading,
+            0,
+            1,
+        );
+        let mut progress = None;
+        let mut last_seq = 0;
+        let mut tracked_dest = None;
+
+        for next in [Some(&waiting), Some(&waiting), None] {
+            let action =
+                apply_clone_progress_sync(&mut progress, &mut last_seq, &mut tracked_dest, next);
+            assert!(action.notice.is_none());
+            assert!(progress.is_none());
+        }
+
+        let failed = clone_op(
+            Arc::new(PathBuf::from("/tmp/repo")),
+            CloneOpStatus::FinishedErr("Clone failed: network disconnected".into()),
+            CloneProgressStage::Loading,
+            0,
+            1,
+        );
+        let action = apply_clone_progress_sync(
+            &mut progress,
+            &mut last_seq,
+            &mut tracked_dest,
+            Some(&failed),
+        );
+        assert_eq!(
+            action.notice,
+            Some((
+                components::ToastKind::Error,
+                "Clone failed: network disconnected".into(),
+            ))
         );
     }
 

@@ -40,6 +40,23 @@ pub enum GitFailureId {
     LfsUploadFailed,
 }
 
+/// Git refused for a local reason (working-tree changes, merge or branch
+/// reconciliation). Any credential exchange earlier in the same command, such
+/// as a pull's fetch, did its job and is not why the command failed.
+pub fn git_output_reports_local_refusal(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    [
+        "would be overwritten",
+        "automatic merge failed",
+        "cannot pull with rebase: you have unstaged changes",
+        "cannot pull with rebase: your index contains uncommitted changes",
+        "not possible to fast-forward",
+        "need to specify how to reconcile divergent branches",
+    ]
+    .iter()
+    .any(|refusal| lower.contains(refusal))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitFailure {
     command: String,
@@ -48,7 +65,14 @@ pub struct GitFailure {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     detail: Option<String>,
-    apply_file_change_retry: Option<Box<crate::domain::ApplyFileChangeRetry>>,
+    extras: Option<Box<GitFailureExtras>>,
+}
+
+/// Rarely present details, boxed together so [`Error`] stays small.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct GitFailureExtras {
+    apply_file_change_retry: Option<crate::domain::ApplyFileChangeRetry>,
+    auth_outcome: Option<crate::auth::AuthOutcome>,
 }
 
 impl GitFailure {
@@ -67,8 +91,12 @@ impl GitFailure {
             stdout,
             stderr,
             detail,
-            apply_file_change_retry: None,
+            extras: None,
         }
+    }
+
+    fn extras_mut(&mut self) -> &mut GitFailureExtras {
+        self.extras.get_or_insert_default()
     }
 
     pub fn command(&self) -> &str {
@@ -77,6 +105,16 @@ impl GitFailure {
 
     pub fn id(&self) -> GitFailureId {
         self.id
+    }
+
+    /// Authoritative authentication information, separate from Git's output.
+    pub fn auth_outcome(&self) -> Option<&crate::auth::AuthOutcome> {
+        self.extras.as_ref()?.auth_outcome.as_ref()
+    }
+
+    pub fn with_auth_outcome(mut self, outcome: crate::auth::AuthOutcome) -> Self {
+        self.extras_mut().auth_outcome = Some(outcome);
+        self
     }
 
     pub fn exit_code(&self) -> Option<i32> {
@@ -99,12 +137,12 @@ impl GitFailure {
         mut self,
         retry: crate::domain::ApplyFileChangeRetry,
     ) -> Self {
-        self.apply_file_change_retry = Some(Box::new(retry));
+        self.extras_mut().apply_file_change_retry = Some(retry);
         self
     }
 
     pub fn apply_file_change_retry(&self) -> Option<&crate::domain::ApplyFileChangeRetry> {
-        self.apply_file_change_retry.as_deref()
+        self.extras.as_ref()?.apply_file_change_retry.as_ref()
     }
 }
 

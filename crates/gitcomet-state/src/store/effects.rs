@@ -147,6 +147,7 @@ fn effect_requires_available_git(effect: &Effect) -> bool {
     !matches!(
         effect,
         Effect::Filesystem(_)
+            | Effect::ValidateAuthPrompt { .. }
             | Effect::UpdateRepositoryPreferences { .. }
             | Effect::PersistSession { .. }
             | Effect::PersistRecentRepo { .. }
@@ -197,6 +198,28 @@ pub(super) fn schedule_effect(
     }
 
     match effect {
+        Effect::ValidateAuthPrompt {
+            generation,
+            challenge,
+            auth,
+            cancellation,
+        } => {
+            executor.spawn(move || {
+                let result = gitcomet_core::auth::askpass::validate_passphrase(
+                    &challenge,
+                    &auth,
+                    &cancellation,
+                );
+                util::send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::AuthPromptValidated {
+                        generation,
+                        result,
+                        auth,
+                    }),
+                );
+            });
+        }
         Effect::Filesystem(request) => {
             super::executor::filesystem_executor().spawn(move || {
                 // The engine ticks once per item and every dispatch deep-copies

@@ -585,8 +585,8 @@ impl super::GixRepo {
         );
         let failed: Vec<&AnnexItem> = items.iter().filter(|item| !item.success).collect();
         if let Err(error) = run {
-            // SSH diagnostics and askpass markers in stderr drive credential
-            // recovery. Add the file details without replacing that failure
+            // Structured authentication outcomes drive credential recovery.
+            // Add file details without replacing that failure
             // or changing non-Git errors such as cancellation.
             if let ErrorKind::Git(failure) = error.kind()
                 && !failed.is_empty()
@@ -595,14 +595,18 @@ impl super::GixRepo {
                 if let Some(original) = failure.detail() {
                     detail = format!("{original}\n\n{detail}");
                 }
-                return Err(Error::new(ErrorKind::Git(GitFailure::new(
+                let mut detailed_failure = GitFailure::new(
                     failure.command(),
                     failure.id(),
                     failure.exit_code(),
                     failure.stdout().to_vec(),
                     failure.stderr().to_vec(),
                     Some(detail),
-                ))));
+                );
+                if let Some(auth_outcome) = failure.auth_outcome() {
+                    detailed_failure = detailed_failure.with_auth_outcome(auth_outcome.clone());
+                }
+                return Err(Error::new(ErrorKind::Git(detailed_failure)));
             }
             return Err(error);
         }
@@ -728,7 +732,7 @@ impl super::GixRepo {
                                 .chain(std::iter::once(b'\n'))
                         })
                         .collect();
-                    return Err(Error::new(ErrorKind::Git(GitFailure::new(
+                    let mut combined_failure = GitFailure::new(
                         first.command(),
                         first.id(),
                         first.exit_code(),
@@ -738,7 +742,22 @@ impl super::GixRepo {
                             .collect(),
                         stderr,
                         Some(detail),
-                    ))));
+                    );
+                    let auth_outcome = failures
+                        .iter()
+                        .filter_map(|(_, failure)| failure.auth_outcome())
+                        .find(|outcome| {
+                            matches!(
+                                outcome,
+                                gitcomet_core::auth::AuthOutcome::NeedsInput(_)
+                                    | gitcomet_core::auth::AuthOutcome::Rejected(_)
+                            )
+                        })
+                        .or_else(|| first.auth_outcome());
+                    if let Some(auth_outcome) = auth_outcome {
+                        combined_failure = combined_failure.with_auth_outcome(auth_outcome.clone());
+                    }
+                    return Err(Error::new(ErrorKind::Git(combined_failure)));
                 }
                 Ok(CommandOutput {
                     command: "git annex get".to_string(),

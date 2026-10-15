@@ -646,6 +646,7 @@ fn remove_repo(
     {
         state.branch_exists_prompt = None;
     }
+    super::auth::discard_auth_prompt_for_repo(state, repo_id);
     let mut effects = Vec::with_capacity(3 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
     let Some(removed_repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         effects.push(persist_session_effect(
@@ -1273,6 +1274,7 @@ pub(super) fn clone_repo_finished(
     url: String,
     dest: PathBuf,
     result: std::result::Result<CommandOutput, Error>,
+    handled_by_auth_prompt: bool,
 ) -> Vec<Effect> {
     if let Some(op) = state.clone.as_mut()
         && op.dest.as_ref() == &dest
@@ -1282,10 +1284,11 @@ pub(super) fn clone_repo_finished(
             Ok(_) => CloneOpStatus::FinishedOk,
             Err(ref error)
                 if matches!(op.status, CloneOpStatus::Cancelling)
-                    && is_plain_clone_abort_error(error) =>
+                    && (handled_by_auth_prompt || is_plain_clone_abort_error(error)) =>
             {
                 CloneOpStatus::Cancelled
             }
+            Err(_) if handled_by_auth_prompt => CloneOpStatus::WaitingForAuthentication,
             Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
         };
         op.seq = op.seq.wrapping_add(1);
@@ -1295,6 +1298,7 @@ pub(super) fn clone_repo_finished(
             dest: Arc::new(dest),
             status: match result {
                 Ok(_) => CloneOpStatus::FinishedOk,
+                Err(_) if handled_by_auth_prompt => CloneOpStatus::WaitingForAuthentication,
                 Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
             },
             progress: CloneProgressMeter::default(),

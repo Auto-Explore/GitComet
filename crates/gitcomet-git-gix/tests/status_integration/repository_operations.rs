@@ -3339,7 +3339,11 @@ fn checkout_remote_branch_overwrite_dirty_worktree_failure_keeps_existing_branch
             CheckoutRemoteBranchMode::Overwrite,
         )
         .expect_err("dirty checkout should fail");
-    assert_git_failure(&err, "git checkout --track", GitFailureId::CommandFailed);
+    assert_git_failure(
+        &err,
+        "git checkout --track",
+        GitFailureId::WorktreeWouldBeOverwritten,
+    );
 
     assert_eq!(
         run_git_output(&clone, &["rev-parse", "topic"]),

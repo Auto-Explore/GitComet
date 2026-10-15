@@ -1249,7 +1249,12 @@ pub struct GitCometView {
 
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,
-    pub(super) auth_prompt_key: Option<String>,
+    pub(super) auth_prompt_key: Option<u64>,
+    pub(super) auth_prompt_submitted_generation: Option<u64>,
+    pub(super) auth_prompt_input_error: Option<String>,
+    /// Where the keyboard was before a prompt focused itself (`Some(None)`:
+    /// nothing was focused), returned when the prompt goes away.
+    pub(super) auth_prompt_focus_return: Option<Option<FocusHandle>>,
     pub(super) active_context_menu_invoker: Option<SharedString>,
 }
 
