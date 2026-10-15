@@ -33,6 +33,15 @@ pub(in crate::view) fn take_search_matchers_built_for_tests() -> usize {
     gitcomet_core::text_search::take_text_search_matchers_built_for_tests()
 }
 
+/// The matcher a non-empty query searches with. The query is kept verbatim:
+/// leading and trailing spaces are part of what the user searches for.
+pub(in crate::view) fn diff_search_query_matcher(
+    query: &str,
+    options: DiffSearchOptions,
+) -> Option<DiffSearchMatcher> {
+    (!query.is_empty()).then(|| DiffSearchMatcher::new(query, options))
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::view) struct AsciiCaseInsensitiveNeedle<'a> {
     bytes: &'a [u8],

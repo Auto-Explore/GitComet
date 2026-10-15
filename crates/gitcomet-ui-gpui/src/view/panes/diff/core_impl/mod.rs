@@ -730,8 +730,8 @@ impl DiffRenderer {
         {
             self.diff_text_query_cache_query = query.to_string().into();
             self.diff_text_query_cache_options = options;
-            self.diff_text_query_cache_matcher_shared = (!query.is_empty())
-                .then(|| Arc::new(super::diff_search::DiffSearchMatcher::new(query, options)));
+            self.diff_text_query_cache_matcher_shared =
+                super::diff_search::diff_search_query_matcher(query, options).map(Arc::new);
             self.diff_text_query_cache_generation =
                 self.diff_text_query_cache_generation.wrapping_add(1);
         }

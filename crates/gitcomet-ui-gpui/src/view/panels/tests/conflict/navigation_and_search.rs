@@ -2775,3 +2775,87 @@ fn conflict_resolver_search_scrolls_sideways_with_whitespace_revealed(
         true,
     );
 }
+
+/// The merge tool's columns reuse the pane's search matcher across frames;
+/// building one per list pass compiled a regex query up to nine times a frame.
+#[gpui::test]
+fn redrawing_the_merge_tool_under_an_unchanged_search_does_not_rebuild_the_matcher(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(1634);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_search_matcher_reuse",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/resolver_search_matcher_reuse.txt");
+    let abs_path = workdir.join(&file_rel);
+    let base_text = build_conflict_scroll_matrix_text("base", 'B');
+    let ours_text = build_conflict_scroll_matrix_text("ours", 'O');
+    let theirs_text = build_conflict_scroll_matrix_text("theirs", 'T');
+    let current_text = build_conflict_scroll_matrix_current_text(&ours_text, &theirs_text);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver matcher fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver matcher fixture");
+
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver matcher fixture initialized",
+        |pane| pane.conflict_resolver.path.as_ref() == Some(&file_rel),
+        |pane| format!("path={:?}", pane.conflict_resolver.path.clone()),
+    );
+
+    for mode in [
+        ConflictResolverViewMode::ThreeWay,
+        ConflictResolverViewMode::TwoWayDiff,
+    ] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
+                    pane.conflict_resolver_set_view_mode(mode, cx);
+                    pane.diff_search_active = true;
+                    pane.diff_search_query = "line 00".into();
+                    pane.diff_search_input
+                        .update(cx, |input, cx| input.set_text("line 00", cx));
+                    pane.diff_search_recompute_matches_and_scroll_to_first();
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+        draw_and_drain_test_window(cx);
+
+        crate::view::panes::diff::diff_search::take_search_matchers_built_for_tests();
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                window.refresh();
+                let _ = window.draw(app);
+            });
+        }
+        assert_eq!(
+            crate::view::panes::diff::diff_search::take_search_matchers_built_for_tests(),
+            0,
+            "{mode:?}: each frame built new search matchers although the query did not change"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
