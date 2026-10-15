@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 ///
 /// `std::env::var`, never `env!`: the latter would bake in this crate's own
 /// directory at the time *this* crate was compiled, which is the same wrong
-/// answer for all nine callers.
+/// answer for every caller.
 fn manifest_dir() -> PathBuf {
     PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"))
 }
@@ -26,8 +26,8 @@ fn manifest_dir() -> PathBuf {
 ///
 /// `tree-sitter generate` writes a private copy of `parser.h` -- and, for a
 /// grammar with an external scanner, `alloc.h` and `array.h` -- into each
-/// grammar's `src/tree_sitter/`. Nine vendored grammars meant nine identical
-/// copies, so they live once in `vendor/tree-sitter-headers` instead. See the
+/// grammar's `src/tree_sitter/`. Each vendored grammar carried its own identical
+/// copy, so they live once in `vendor/tree-sitter-headers` instead. See the
 /// README there, including what to do after regenerating a grammar.
 fn shared_tree_sitter_headers(manifest: &Path) -> PathBuf {
     manifest
