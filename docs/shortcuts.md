@@ -177,7 +177,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Same unit as Previous change. With nothing selected, goes to the first change block. |
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Enter or leave the file editor | `Option-E` | `Alt-E` | Not while a text field has focus. Escape also leaves the editor. |
-| Save the edited file | `Cmd-S` | `Ctrl-S` | Only while the editor's buffer has focus; outside it the same chord stages the file. |
+| Save the edited file | `Cmd-S` | `Ctrl-S` | While the file editor is open, wherever focus is. Outside the editor the same chord stages the file. |
 | Switch to split diff | `Option-S` | `Alt-S` | Raw file diff only. |
 | Toggle whitespace characters | `Option-W` | `Alt-W` | Text diff / conflict diff only. |
 | Stage or unstage the current working-tree file and advance to the adjacent file | `Space` | `Space` | Raw working-tree file diff only, and not while the diff search input has focus. |
