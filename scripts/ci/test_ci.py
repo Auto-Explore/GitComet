@@ -51,6 +51,21 @@ lfs_performance = importlib.util.module_from_spec(lfs_spec)
 lfs_spec.loader.exec_module(lfs_performance)
 
 
+GIT_REPOSITORY_ENVIRONMENT = patch.dict(os.environ)
+
+
+def setUpModule():
+    # Hooks and `git rebase --exec` export GIT_DIR and friends; tests run git in temporary repositories.
+    GIT_REPOSITORY_ENVIRONMENT.start()
+    local = subprocess.run(["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True)
+    for name in local.stdout.split():
+        os.environ.pop(name, None)
+
+
+def tearDownModule():
+    GIT_REPOSITORY_ENVIRONMENT.stop()
+
+
 def nextest_compile_output(name, command, *, output=None, **kwargs):
     # `cargo nextest list --cargo-message-format json-render-diagnostics`: cargo's messages, then the binary list.
     if name.endswith("-compile"):
@@ -1905,6 +1920,24 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(boundaries.main(), 1)
         self.assertIn("skip gitcomet-ui-kit", out.getvalue())
         self.assertIn("gitcomet (--no-default-features --features gix) reaches forbidden packages: gpui-ce", err.getvalue())
+
+
+class GitIsolationTests(unittest.TestCase):
+    def test_git_location_variables_never_reach_temporary_repositories(self):
+        # `git rebase --exec` and hooks export GIT_DIR; a test's `git add` would then stage into that repository.
+        with tempfile.TemporaryDirectory() as directory:
+            sentinel = Path(directory) / "sentinel"
+            git = ["git", "-c", "maintenance.auto=false", "-C", str(sentinel)]
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", str(sentinel)], check=True)
+            (sentinel / "kept.txt").write_text("kept")
+            subprocess.run([*git, "add", "kept.txt"], check=True)
+            index = subprocess.run([*git, "ls-files", "--stage"], capture_output=True, text=True, check=True).stdout
+            child = subprocess.run([sys.executable, "-B", "-m", "unittest", "test_ci.IdentityLiteralTests"],
+                                   cwd=Path(__file__).parent, capture_output=True, text=True,
+                                   env={**os.environ, "GIT_DIR": str(sentinel / ".git")})
+            self.assertEqual(child.returncode, 0, child.stderr[-2000:])
+            after = subprocess.run([*git, "ls-files", "--stage"], capture_output=True, text=True, check=True).stdout
+            self.assertEqual(after, index)
 
 
 class IdentityLiteralTests(unittest.TestCase):
