@@ -1570,7 +1570,7 @@ impl DetailsPaneView {
                     _ => Default::default(),
                 };
                 gitcomet_core::domain::CommitFileChange::new(entry.path.clone(), entry.kind)
-                    .with_line_counts(stats.additions, stats.deletions)
+                    .with_line_stats(stats)
             })
             .collect();
 
