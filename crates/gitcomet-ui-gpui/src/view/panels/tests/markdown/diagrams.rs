@@ -609,3 +609,33 @@ fn a_diagrams_code_view_stays_when_its_block_is_rebuilt(cx: &mut gpui::TestAppCo
     );
     fixture.cleanup();
 }
+
+/// A rebuilt block whose diagram is already prepared draws it in its first
+/// frame. It used to show "Rendering diagram…" for a frame, so the document
+/// measured a short block and jumped when the diagram arrived.
+#[gpui::test]
+fn a_prepared_diagram_draws_in_the_first_frame_of_its_block(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx, fixture) = open_diagram_preview(
+        cx,
+        9714,
+        "markdown_diagram_first_frame",
+        &stacked_flowchart(4),
+    );
+    let edited = format!("Inserted above.\n\n{}", stacked_flowchart(4));
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
+                crate::view::markdown_preview::parse_markdown(&edited).unwrap(),
+            ));
+            cx.notify();
+        });
+    });
+    // One frame, with no background work allowed to finish first.
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(cx.debug_bounds("diagram_loading").is_none());
+    assert!(cx.debug_bounds("diagram_viewport").is_some());
+    fixture.cleanup();
+}

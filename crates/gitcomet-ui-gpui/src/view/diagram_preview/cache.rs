@@ -241,6 +241,10 @@ impl DiagramCache {
         flight.ready.notify_all();
         result
     }
+    /// `key`'s prepared result, when there is one.
+    pub(super) fn prepared(&self, key: &DiagramKey) -> Option<RasterResult> {
+        self.inner.lock().unwrap().entries.get(key).cloned()
+    }
     /// The height of `key`'s scene at 100% and its diagnostic count, when it
     /// is prepared.
     pub(super) fn scene_facts(&self, key: &DiagramKey) -> Option<(f32, usize)> {

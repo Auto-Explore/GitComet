@@ -365,6 +365,15 @@ impl DiagramState {
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
         self.source_generation.store(seq, Ordering::Relaxed);
+        // A prepared diagram is ready in this frame, rather than after one of
+        // "Rendering diagram…" at a height the document would then correct.
+        // Only a Key: a Text would hash its source here, a File would read disk.
+        if let DiagramInput::Key(key) = &self.input
+            && let Some(result) = cache.prepared(key)
+        {
+            self.complete(seq, result);
+            return;
+        }
         let generation = self.source_generation.clone();
         self.result = Loadable::Loading;
         let input = self.input.clone();
