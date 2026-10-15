@@ -978,16 +978,6 @@ impl GixRepo {
         .ok_or_else(|| Error::new(ErrorKind::Backend(format!("gix resolve commit {spec}"))))
     }
 
-    pub(in super::super) fn diff_range_files_impl(
-        &self,
-        from: &CommitId,
-        to: Option<&CommitId>,
-    ) -> Result<Vec<CommitFileChange>> {
-        let direct = gitcomet_core::services::ComparisonOptions::direct();
-        self.compare_files_impl(from, to, &direct, &CancellationToken::new())
-            .map(|comparison| comparison.files)
-    }
-
     pub(in super::super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {
         let repo = self.repo();
         ids.iter()

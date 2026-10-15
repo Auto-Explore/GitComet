@@ -1059,7 +1059,9 @@ impl GitRepository for GixRepo {
         from: &CommitId,
         to: Option<&CommitId>,
     ) -> Result<Vec<CommitFileChange>> {
-        self.diff_range_files_impl(from, to)
+        let direct = gitcomet_core::services::ComparisonOptions::direct();
+        self.compare_files_impl(from, to, &direct, &CancellationToken::new())
+            .map(|comparison| comparison.files)
     }
 
     fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
