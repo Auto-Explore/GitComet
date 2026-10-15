@@ -1943,8 +1943,24 @@ impl DiffRenderer {
             self.pending_target = None;
         }
         if fingerprint == self.notify_fingerprint && !resolved_pending {
+            let next_repositories: &[RepoState] = if self.hosted_decor.is_some() {
+                next.repository().map_or(&[], std::slice::from_ref)
+            } else {
+                next.repository_state()
+                    .map_or(&[], |state| state.repos.as_slice())
+            };
+            let repositories_changed = !self
+                .repositories()
+                .iter()
+                .map(|repo| (repo.id, repo.lifetime()))
+                .eq(next_repositories
+                    .iter()
+                    .map(|repo| (repo.id, repo.lifetime())));
             self.input = next;
             self.release_stale_submodule_summary_cache();
+            if repositories_changed {
+                self.prune_orphaned_file_editor_stash(cx);
+            }
             return false;
         }
         self.notify_fingerprint = fingerprint;
