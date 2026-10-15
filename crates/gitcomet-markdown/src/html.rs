@@ -619,7 +619,7 @@ pub(crate) fn current_link_url(link_stack: &[Option<SharedString>]) -> Option<Sh
 
 /// Where a link destination points, when the preview can offer it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MarkdownLinkTarget {
+pub enum MarkdownLinkTarget {
     /// An `http(s)://` URL, opened in the browser.
     Web(SharedString),
     /// A path relative to the document (or to the repository root when it
@@ -637,7 +637,7 @@ pub(crate) enum MarkdownLinkTarget {
 /// `mailto:`/`javascript:`/`data:` have no meaning here, so they render as
 /// links but are never offered. A Windows drive (`C:`) reads as a flat
 /// scheme, which is right: an absolute OS path is not a repository file.
-pub(crate) fn classify_markdown_link_destination(dest_url: &str) -> Option<MarkdownLinkTarget> {
+pub fn classify_markdown_link_destination(dest_url: &str) -> Option<MarkdownLinkTarget> {
     let trimmed = dest_url.trim();
     if let Some(fragment) = trimmed.strip_prefix('#') {
         return (!fragment.is_empty())

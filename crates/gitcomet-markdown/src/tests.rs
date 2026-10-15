@@ -367,7 +367,7 @@ fn fenced_code_block_one_row_per_line() {
     assert_eq!(code_rows[2].text.as_ref(), "}");
     assert_eq!(
         code_rows[0].code_language,
-        Some(crate::view::rows::DiffSyntaxLanguage::Rust)
+        Some(gitcomet_syntax::DiffSyntaxLanguage::Rust)
     );
 }
 
@@ -466,7 +466,7 @@ fn fenced_code_block_language_aliases_are_resolved() {
     assert_eq!(code_rows.len(), 1);
     assert_eq!(
         code_rows[0].code_language,
-        Some(crate::view::rows::DiffSyntaxLanguage::TypeScript)
+        Some(gitcomet_syntax::DiffSyntaxLanguage::TypeScript)
     );
 }
 
@@ -1567,73 +1567,6 @@ fn identical_content_diff_produces_no_change_hints() {
     }
 }
 
-#[test]
-fn markdown_diff_scrollbar_markers_show_added_rows_for_one_sided_preview() {
-    let preview = build_markdown_diff_preview("", "# New\n").unwrap();
-
-    assert_eq!(
-        scrollbar_markers_for_diff_preview(&preview),
-        vec![crate::view::components::ScrollbarMarker {
-            start: 0.0,
-            end: 1.0,
-            kind: crate::view::components::ScrollbarMarkerKind::Add,
-        }]
-    );
-}
-
-#[test]
-fn markdown_diff_scrollbar_markers_show_removed_rows_for_one_sided_preview() {
-    let preview = build_markdown_diff_preview("# Gone\n", "").unwrap();
-
-    assert_eq!(
-        scrollbar_markers_for_diff_preview(&preview),
-        vec![crate::view::components::ScrollbarMarker {
-            start: 0.0,
-            end: 1.0,
-            kind: crate::view::components::ScrollbarMarkerKind::Remove,
-        }]
-    );
-}
-
-#[test]
-fn markdown_diff_scrollbar_markers_merge_replacements_into_modify_markers() {
-    let preview = build_markdown_diff_preview("old\n", "new\n").unwrap();
-
-    assert_eq!(
-        scrollbar_markers_for_diff_preview(&preview),
-        vec![crate::view::components::ScrollbarMarker {
-            start: 0.0,
-            end: 1.0,
-            kind: crate::view::components::ScrollbarMarkerKind::Modify,
-        }]
-    );
-}
-
-#[test]
-fn markdown_diff_scrollbar_markers_split_disjoint_change_regions() {
-    let preview = build_markdown_diff_preview(
-        "- old one\n- keep two\n- keep three\n- keep four\n- old five\n",
-        "- new one\n- keep two\n- keep three\n- keep four\n- new five\n",
-    )
-    .unwrap();
-
-    assert_eq!(
-        scrollbar_markers_for_diff_preview(&preview),
-        vec![
-            crate::view::components::ScrollbarMarker {
-                start: 0.0,
-                end: 0.2,
-                kind: crate::view::components::ScrollbarMarkerKind::Modify,
-            },
-            crate::view::components::ScrollbarMarker {
-                start: 0.8,
-                end: 1.0,
-                kind: crate::view::components::ScrollbarMarkerKind::Modify,
-            },
-        ]
-    );
-}
-
 // ── Code span inside code block is not styled ────────────────────────
 
 #[test]
@@ -2576,7 +2509,7 @@ fn link_destinations_survive_whitespace_normalisation_and_table_alignment() {
 /// Inline spans become `gpui` text runs, and `gpui` shapes a line by
 /// splitting the text at each run boundary. A span that lands inside a
 /// multi-byte character aborts the process in `str::split_at`, so the
-/// parser must never emit one — see [`crate::text_runs`] for the guard on
+/// parser must never emit one — see the UI kit's `text_runs` for the guard on
 /// the render side.
 fn assert_rows_span_aligned(source: &str, doc: &MarkdownPreviewDocument) {
     for (row_ix, row) in doc.rows.iter().enumerate() {
@@ -2970,15 +2903,6 @@ fn a_band_never_splits_a_block_on_either_side() {
     );
 }
 
-#[test]
-fn measured_change_extents_become_markers_where_they_were_drawn() {
-    // 1000px of content, an addition drawn at 800..850.
-    let markers = scrollbar_markers_for_extents(&[(800.0, 850.0, 1)], 1000.0);
-    assert_eq!(markers.len(), 1, "{markers:?}");
-    assert!((markers[0].start - 0.8).abs() < 0.01, "{markers:?}");
-    assert!((markers[0].end - 0.85).abs() < 0.01, "{markers:?}");
-}
-
 // ── Known rendering bugs: regression tests written before the fixes ──────
 
 /// Text and kind of each row, for readable failure messages.
@@ -3070,7 +2994,7 @@ fn list_item_continuation_rows_do_not_repeat_the_marker() {
             .iter()
             .find(|row| row.text.as_ref() == text)
             .unwrap_or_else(|| panic!("no row {text:?}: {:?}", row_summary(doc)));
-        crate::view::rows::markdown_preview_marker_label(row).map(|label| label.to_string())
+        markdown_preview_row_marker(row).map(|label| label.to_string())
     };
 
     // A second paragraph in a loose item.

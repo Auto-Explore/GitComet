@@ -6,7 +6,7 @@ use super::*;
 ///
 /// Returns `None` if the source exceeds `MAX_PREVIEW_SOURCE_BYTES`
 /// or the parsed document exceeds `MAX_PREVIEW_ROWS`.
-pub(crate) fn parse_markdown(source: &str) -> Option<MarkdownPreviewDocument> {
+pub fn parse_markdown(source: &str) -> Option<MarkdownPreviewDocument> {
     if source.len() > MAX_PREVIEW_SOURCE_BYTES {
         return None;
     }
@@ -41,8 +41,8 @@ pub(crate) fn parse_markdown_diff(
     Some((old_doc, new_doc))
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn build_markdown_diff_preview(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn build_markdown_diff_preview(
     old_source: &str,
     new_source: &str,
 ) -> Option<MarkdownPreviewDiff> {
@@ -51,7 +51,7 @@ pub(crate) fn build_markdown_diff_preview(
 
 /// The diff preview of a change that may add or delete the file: `None` is a
 /// side the file is not on.
-pub(crate) fn build_markdown_diff_preview_of(
+pub fn build_markdown_diff_preview_of(
     old_source: Option<&str>,
     new_source: Option<&str>,
 ) -> Option<MarkdownPreviewDiff> {
@@ -84,18 +84,6 @@ pub(crate) fn build_markdown_diff_preview_of(
         document.index_anchors_if_linked();
     }
     Some(diff)
-}
-
-pub(crate) fn scrollbar_markers_for_diff_preview(
-    preview: &MarkdownPreviewDiff,
-) -> Vec<crate::view::components::ScrollbarMarker> {
-    scrollbar_markers_for_documents(&[&preview.old, &preview.new])
-}
-
-pub(crate) fn scrollbar_markers_for_document(
-    document: &MarkdownPreviewDocument,
-) -> Vec<crate::view::components::ScrollbarMarker> {
-    scrollbar_markers_for_documents(&[document])
 }
 
 /// Annotate change hints on a pair of preview documents using diff row data.
@@ -450,9 +438,9 @@ fn same_table_presentation(old: &MarkdownPreviewRow, new: &MarkdownPreviewRow) -
 
 // ── Internal helpers ────────────────────────────────────────────────────
 
-pub(crate) fn scrollbar_markers_for_documents(
-    documents: &[&MarkdownPreviewDocument],
-) -> Vec<crate::view::components::ScrollbarMarker> {
+/// Change flags (1 added, 2 removed, both modified) for up to 240 buckets
+/// spanning the longest of `documents`.
+pub fn scrollbar_bucket_flags(documents: &[&MarkdownPreviewDocument]) -> Vec<u8> {
     let max_len = documents
         .iter()
         .map(|document| document.rows.len())
@@ -484,17 +472,15 @@ pub(crate) fn scrollbar_markers_for_documents(
         }
     }
 
-    super::super::diff_utils::scrollbar_markers_from_flags(bucket_count, |bucket_ix| {
-        buckets.get(bucket_ix).copied().unwrap_or(0)
-    })
+    buckets
 }
 
-/// Markers for changes measured at `(top, bottom, flag)` in a scroll content
-/// `content_height` tall.
-pub(crate) fn scrollbar_markers_for_extents(
+/// Change flags for 240 buckets of a scroll content `content_height` tall, from
+/// changes measured at `(top, bottom, flag)`.
+pub fn scrollbar_bucket_flags_for_extents(
     extents: &[(f32, f32, u8)],
     content_height: f32,
-) -> Vec<crate::view::components::ScrollbarMarker> {
+) -> Vec<u8> {
     const BUCKETS: usize = 240;
     let mut buckets = [0u8; BUCKETS];
     for &(top, bottom, flag) in extents {
@@ -505,10 +491,10 @@ pub(crate) fn scrollbar_markers_for_extents(
             *cell |= flag;
         }
     }
-    super::super::diff_utils::scrollbar_markers_from_flags(BUCKETS, |ix| buckets[ix])
+    buckets.to_vec()
 }
 
-pub(crate) fn scrollbar_flag_for_change_hint(hint: MarkdownChangeHint) -> u8 {
+pub fn scrollbar_flag_for_change_hint(hint: MarkdownChangeHint) -> u8 {
     match hint {
         MarkdownChangeHint::None => 0,
         MarkdownChangeHint::Added => 1,
@@ -569,5 +555,24 @@ pub(crate) fn line_range_change_hint(
         MarkdownChangeHint::Removed
     } else {
         MarkdownChangeHint::Added
+    }
+}
+
+/// The marker a row shows before its text: a list number or bullet, a
+/// footnote label, or the details disclosure. Continuation rows show none.
+pub fn markdown_preview_row_marker(row: &MarkdownPreviewRow) -> Option<SharedString> {
+    if let Some(label) = row.footnote_label.as_ref() {
+        return Some(format!("[^{}]:", label.as_ref()).into());
+    }
+
+    // A later paragraph or line of an item sits under the item's marker.
+    if row.continues_item {
+        return None;
+    }
+    match row.kind {
+        MarkdownPreviewRowKind::DetailsSummary => Some("v".into()),
+        MarkdownPreviewRowKind::ListItem { number: Some(n) } => Some(format!("{n}.").into()),
+        MarkdownPreviewRowKind::ListItem { number: None } => Some("•".into()),
+        _ => None,
     }
 }

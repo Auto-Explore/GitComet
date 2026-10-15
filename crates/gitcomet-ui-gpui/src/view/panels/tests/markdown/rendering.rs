@@ -16,7 +16,7 @@ fn auth_token_readme_tables_render_multiline_code_inside_cells(cx: &mut gpui::Te
         &view,
         gitcomet_state::model::RepoId(168),
         "auth_token_readme_tables",
-        include_str!("../../../markdown_preview/fixtures/auth_token_tables.md"),
+        include_str!("../../../../../../gitcomet-markdown/src/fixtures/auth_token_tables.md"),
     );
     let rows = table_row_ixs(&fixture);
     assert_eq!(rows.len(), 6);

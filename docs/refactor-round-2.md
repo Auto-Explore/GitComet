@@ -643,3 +643,17 @@ its message path). The split-row styled-text cache is presentation state and
 moved to the host's `view/conflict_style_cache.rs` with its test. Test- and
 benchmark-only items the UI's tests use compile under `test-support`, as for the
 syntax engine. All 248 model tests pass (245 without the benchmark feature).
+
+### 2.3 `gitcomet-markdown`
+
+`view/markdown_preview/` (5.1k production and 4.9k test lines) is now
+`crates/gitcomet-markdown`, depending on core, `gitcomet-diagrams` and
+`gitcomet-syntax`. Two cuts differ from the plan. Code-fence languages come from
+`gitcomet-syntax` directly instead of through a `CodeHighlighter` trait: the
+engine is already GPUI-free, so a trait would add a seam without removing a
+dependency. Scrollbar markers stay in the host: the model returns per-bucket
+flags and the host's `view/markdown_scrollbar.rs` turns them into markers with
+the existing diff helper, taking the five marker tests with it. Unifying the
+host's marker builders in the kit is left to 1.4. The per-row styled-text cache
+holds the renderer's type behind `Any`, so the model never names GPUI styles.
+All 256 model tests pass under nextest; the UI suite runs 3,798 tests, 256 fewer.

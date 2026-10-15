@@ -23,6 +23,7 @@ benchmarks = [
     "dep:gitcomet-git-gix",
     "dep:gitcomet-perf",
     "gitcomet-conflict-resolver/benchmarks",
+    "gitcomet-markdown/benchmarks",
     "gitcomet-syntax/benchmarks",
     "gpui/test-support",
 ]
@@ -35,6 +36,7 @@ gitcomet-conflict-resolver = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-diagrams = { workspace = true }
 gitcomet-extension-api = { workspace = true }
+gitcomet-markdown = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-perf = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
@@ -96,6 +98,7 @@ gitcomet-git-gix = { workspace = true }
 # Activate the optional sidecar writer for the measurement tests.
 gitcomet-perf = { workspace = true }
 gitcomet-conflict-resolver = { workspace = true, features = ["test-support"] }
+gitcomet-markdown = { workspace = true, features = ["test-support"] }
 gitcomet-syntax = { workspace = true, features = ["test-support"] }
 # Only entries that add features over `[dependencies]` belong here — a plain
 # restatement is dead weight, since tests already see every regular dependency.

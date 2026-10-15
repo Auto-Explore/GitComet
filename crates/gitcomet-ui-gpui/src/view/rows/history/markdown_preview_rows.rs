@@ -1,5 +1,6 @@
 use super::*;
 use crate::kit::interaction as controls;
+pub(in crate::view) use crate::view::markdown_preview::markdown_preview_row_marker;
 
 pub(in crate::view) const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
 pub(in crate::view) const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
@@ -1296,25 +1297,6 @@ pub(in crate::view) fn markdown_preview_row_styled_text(
             &highlights,
         )
     })
-}
-
-pub(in crate::view) fn markdown_preview_row_marker(
-    row: &MarkdownPreviewRow,
-) -> Option<SharedString> {
-    if let Some(label) = row.footnote_label.as_ref() {
-        return Some(format!("[^{}]:", label.as_ref()).into());
-    }
-
-    // A later paragraph or line of an item sits under the item's marker.
-    if row.continues_item {
-        return None;
-    }
-    match row.kind {
-        MarkdownPreviewRowKind::DetailsSummary => Some("v".into()),
-        MarkdownPreviewRowKind::ListItem { number: Some(n) } => Some(format!("{n}.").into()),
-        MarkdownPreviewRowKind::ListItem { number: None } => Some("•".into()),
-        _ => None,
-    }
 }
 
 pub(in crate::view) fn markdown_preview_alert_color(

@@ -85,7 +85,7 @@ struct OpenCodeBlock {
     start: usize,
     after_fence: bool,
     info: Option<String>,
-    language: Option<crate::view::rows::DiffSyntaxLanguage>,
+    language: Option<gitcomet_syntax::DiffSyntaxLanguage>,
 }
 
 struct OpenTable {
@@ -373,9 +373,7 @@ impl<'a> Flattener<'a> {
                     },
                     language: match &kind {
                         CodeBlockKind::Fenced(info) => {
-                            crate::view::rows::diff_syntax_language_for_code_fence_info(
-                                info.as_ref(),
-                            )
+                            gitcomet_syntax::diff_syntax_language_for_code_fence_info(info.as_ref())
                         }
                         CodeBlockKind::Indented => None,
                     },
@@ -1373,7 +1371,7 @@ impl<'a> Flattener<'a> {
         code: &str,
         first_line: usize,
         last_line: usize,
-        language: Option<crate::view::rows::DiffSyntaxLanguage>,
+        language: Option<gitcomet_syntax::DiffSyntaxLanguage>,
     ) -> Option<()> {
         let code = code.strip_suffix('\n').unwrap_or(code);
         let lines: Vec<&str> = if code.is_empty() {
@@ -1409,7 +1407,7 @@ impl<'a> Flattener<'a> {
         let last_line =
             byte_offset_to_line(front_matter.content.end.saturating_sub(1), self.line_starts);
         let language =
-            crate::view::rows::diff_syntax_language_for_code_fence_info(front_matter.language);
+            gitcomet_syntax::diff_syntax_language_for_code_fence_info(front_matter.language);
         let source = self.source;
         self.push_code_rows(
             &source[front_matter.content.clone()],

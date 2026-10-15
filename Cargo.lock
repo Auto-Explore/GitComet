@@ -2550,6 +2550,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-markdown"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-core",
+ "gitcomet-diagrams",
+ "gitcomet-syntax",
+ "gpui_ce_shared_string",
+ "memchr",
+ "pulldown-cmark",
+ "rustc-hash 2.1.3",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "gitcomet-perf"
 version = "0.3.0"
 dependencies = [
@@ -2707,6 +2721,7 @@ dependencies = [
  "gitcomet-extension-api",
  "gitcomet-extension-example",
  "gitcomet-git-gix",
+ "gitcomet-markdown",
  "gitcomet-perf",
  "gitcomet-state",
  "gitcomet-syntax",

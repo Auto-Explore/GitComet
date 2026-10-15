@@ -87,8 +87,7 @@ pub(in crate::view) use syntax::SyntaxPairKind;
 pub(in crate::view) use syntax::{
     DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument,
     LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, SyntaxPair,
-    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
-    shared_byte_affix_bounds,
+    diff_syntax_language_for_path, shared_byte_affix_bounds,
 };
 pub(in crate::view) use syntax::{live_syntax_document_supported, live_syntax_reparse};
 

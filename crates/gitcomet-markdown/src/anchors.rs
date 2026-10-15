@@ -6,8 +6,8 @@ use std::sync::{Arc, OnceLock};
 /// character other than a letter, mark, digit, `-` or `_` dropped. Marks stay:
 /// they spell the word in scripts such as Devanagari (and in decomposed
 /// accents).
-pub(in crate::view) fn markdown_heading_slug(text: &str) -> String {
-    #[cfg(test)]
+pub fn markdown_heading_slug(text: &str) -> String {
+    #[cfg(any(test, feature = "test-support"))]
     HEADING_SLUGS.with(|slugs| slugs.set(slugs.get() + 1));
     text.trim()
         .chars()
@@ -23,14 +23,14 @@ pub(in crate::view) fn markdown_heading_slug(text: &str) -> String {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static HEADING_SLUGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Headings slugged since the last call, which resets the count.
-#[cfg(test)]
-pub(in crate::view) fn take_heading_slugs_for_tests() -> usize {
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_heading_slugs_for_tests() -> usize {
     HEADING_SLUGS.with(|slugs| slugs.replace(0))
 }
 
@@ -39,7 +39,7 @@ pub(in crate::view) fn take_heading_slugs_for_tests() -> usize {
 /// link and every click on one used to slug each heading again. Derived from
 /// the rows, so equality ignores it.
 #[derive(Clone, Debug, Default)]
-pub(in crate::view) struct MarkdownAnchorIndexCell(OnceLock<Arc<MarkdownAnchorIndex>>);
+pub struct MarkdownAnchorIndexCell(OnceLock<Arc<MarkdownAnchorIndex>>);
 
 impl PartialEq for MarkdownAnchorIndexCell {
     fn eq(&self, _other: &Self) -> bool {
@@ -50,7 +50,7 @@ impl PartialEq for MarkdownAnchorIndexCell {
 impl Eq for MarkdownAnchorIndexCell {}
 
 #[derive(Debug, Default)]
-pub(in crate::view) struct MarkdownAnchorIndex {
+pub struct MarkdownAnchorIndex {
     /// Each id and its heading's row. Ids are unique: repeats are numbered.
     exact: FxHashMap<String, usize>,
     /// ASCII-lowercased ids, each with the first heading that has it.
@@ -91,7 +91,7 @@ impl MarkdownPreviewDocument {
     /// up, so the first hover over one does not: parsing runs off the UI
     /// thread.
     pub(super) fn index_anchors_if_linked(&self) {
-        let is_anchor = |url: &Option<gpui::SharedString>| {
+        let is_anchor = |url: &Option<gpui_shared_string::SharedString>| {
             url.as_deref()
                 .is_some_and(|url| url.trim_start().starts_with('#'))
         };
@@ -114,7 +114,7 @@ impl MarkdownPreviewDocument {
 
 /// Row of the heading `#fragment` names. An exact match wins over one that
 /// differs only in case.
-pub(in crate::view) fn markdown_preview_anchor_row(
+pub fn markdown_preview_anchor_row(
     document: &MarkdownPreviewDocument,
     fragment: &str,
 ) -> Option<usize> {

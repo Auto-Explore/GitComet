@@ -288,7 +288,8 @@ pub(crate) mod hosted;
 mod large_file_card;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
-mod markdown_preview;
+use gitcomet_markdown as markdown_preview;
+mod markdown_scrollbar;
 mod menu_presentation;
 mod mod_helpers;
 mod native_transfers;

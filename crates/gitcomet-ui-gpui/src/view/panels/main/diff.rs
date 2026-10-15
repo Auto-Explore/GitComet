@@ -1065,7 +1065,7 @@ impl DiffRenderer {
         let content_height =
             f32::from(scroll.bounds().size.height + scroll.max_offset().y.max(px(0.0)));
         if measured_key == Some(key) && !measured.is_empty() && content_height > 0.0 {
-            return crate::view::markdown_preview::scrollbar_markers_for_extents(
+            return crate::view::markdown_scrollbar::scrollbar_markers_for_extents(
                 &measured,
                 content_height,
             );
@@ -1077,10 +1077,10 @@ impl DiffRenderer {
         }
         match self.diff_view {
             DiffViewMode::Inline => {
-                crate::view::markdown_preview::scrollbar_markers_for_document(&preview.inline)
+                crate::view::markdown_scrollbar::scrollbar_markers_for_document(&preview.inline)
             }
             DiffViewMode::Split => {
-                crate::view::markdown_preview::scrollbar_markers_for_diff_preview(preview)
+                crate::view::markdown_scrollbar::scrollbar_markers_for_diff_preview(preview)
             }
         }
     }

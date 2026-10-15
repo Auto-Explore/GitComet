@@ -8,29 +8,29 @@ use super::*;
 /// text instead of displacing it, and only a picture that is alone on its line
 /// becomes a block of its own.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MarkdownInlineImage {
+pub struct MarkdownInlineImage {
     /// Byte offset in the row's text where the picture belongs.
-    pub(crate) byte_offset: usize,
+    pub byte_offset: usize,
     /// Byte offset in the *source document* where the picture was written.
     ///
     /// Unique across the document, which makes it the element id a renderer
     /// can key on without allocating one, and the only thing left to tie a
     /// picture back to the line it came from once its row is built.
-    pub(crate) source_byte: usize,
-    pub(crate) image: Arc<MarkdownImage>,
+    pub source_byte: usize,
+    pub image: Arc<MarkdownImage>,
     /// Description shown when the picture cannot be drawn.
-    pub(crate) alt: SharedString,
+    pub alt: SharedString,
     /// The link the picture stands in for, when it is wrapped in one.
-    pub(crate) link_url: Option<SharedString>,
+    pub link_url: Option<SharedString>,
 }
 
 /// An image a preview row draws, with whatever size the document declared.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MarkdownImage {
+pub struct MarkdownImage {
     /// The source exactly as written in the document.
-    pub(crate) source: SharedString,
-    pub(crate) width_px: Option<u32>,
-    pub(crate) height_px: Option<u32>,
+    pub source: SharedString,
+    pub width_px: Option<u32>,
+    pub height_px: Option<u32>,
 }
 
 impl MarkdownImage {
@@ -42,7 +42,7 @@ impl MarkdownImage {
     /// taller than it is wide, which keeps small images from reserving a
     /// screenful of blank space. `object_fit: contain` letterboxes anything
     /// that turns out to be taller.
-    pub(crate) fn reserved_height_px(&self) -> u32 {
+    pub fn reserved_height_px(&self) -> u32 {
         // A declared size of zero says nothing, so each dimension is judged
         // on its own: `height="0"` falls through to a usable width.
         self.height_px
@@ -55,9 +55,9 @@ impl MarkdownImage {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MarkdownInlineSpan {
-    pub(crate) byte_range: Range<usize>,
-    pub(crate) style: MarkdownInlineStyle,
+pub struct MarkdownInlineSpan {
+    pub byte_range: Range<usize>,
+    pub style: MarkdownInlineStyle,
     /// Destination of the link this span sits inside: a web URL or a local
     /// file path (see `classify_markdown_link_destination`).
     ///
@@ -65,7 +65,7 @@ pub(crate) struct MarkdownInlineSpan {
     /// byte remapping that whitespace normalisation and table alignment apply,
     /// and independently of `style` because a bold or code span inside a link
     /// resolves to that style while still being clickable.
-    pub(crate) link_url: Option<SharedString>,
+    pub link_url: Option<SharedString>,
 }
 
 impl MarkdownInlineSpan {
@@ -79,7 +79,7 @@ impl MarkdownInlineSpan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MarkdownInlineStyle {
+pub enum MarkdownInlineStyle {
     Normal,
     Bold,
     Italic,
@@ -91,7 +91,7 @@ pub(crate) enum MarkdownInlineStyle {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum MarkdownChangeHint {
+pub enum MarkdownChangeHint {
     #[default]
     None,
     Added,
@@ -100,7 +100,7 @@ pub(crate) enum MarkdownChangeHint {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum MarkdownAlertKind {
+pub enum MarkdownAlertKind {
     Note,
     Tip,
     Important,
@@ -124,7 +124,7 @@ pub(crate) struct MarkdownPreviewRowInput<'a> {
     pub(crate) kind: MarkdownPreviewRowKind,
     pub(crate) text: &'a str,
     pub(crate) inline_spans: &'a [MarkdownInlineSpan],
-    pub(crate) code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
+    pub(crate) code_language: Option<gitcomet_syntax::DiffSyntaxLanguage>,
     pub(crate) source_line_range: Range<usize>,
     pub(crate) indent_level: u8,
     pub(crate) blockquote_level: u8,
@@ -158,7 +158,7 @@ impl<'a> MarkdownPreviewRowInput<'a> {
         kind: MarkdownPreviewRowKind,
         text: &'a str,
         source_line_range: Range<usize>,
-        code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
+        code_language: Option<gitcomet_syntax::DiffSyntaxLanguage>,
         indent_level: u8,
         blockquote_level: u8,
     ) -> Self {
@@ -212,13 +212,16 @@ pub(crate) struct MarkdownPreviewRowDecoration {
     pub(crate) align: MarkdownTextAlign,
 }
 
-/// A row's styled text for the theme it was last drawn with.
+type RenderedRow = Arc<dyn std::any::Any + Send + Sync>;
+
+/// A row's styled text for the theme it was last drawn with, in whatever type
+/// the renderer uses.
 ///
 /// Keyed by a signature of the theme's colours, not its darkness: two dark
 /// themes colour links and code differently, and a switch between them has to
 /// restyle rows that were parsed before it.
-#[derive(Debug, Default)]
-pub(crate) struct MarkdownPreviewRowStyledTextCache(Mutex<Option<(u64, CachedDiffStyledText)>>);
+#[derive(Default)]
+pub struct MarkdownPreviewRowStyledTextCache(Mutex<Option<(u64, RenderedRow)>>);
 
 impl Clone for MarkdownPreviewRowStyledTextCache {
     fn clone(&self) -> Self {
@@ -230,23 +233,30 @@ impl Clone for MarkdownPreviewRowStyledTextCache {
     }
 }
 
+impl std::fmt::Debug for MarkdownPreviewRowStyledTextCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MarkdownPreviewRowStyledTextCache")
+    }
+}
+
 impl MarkdownPreviewRowStyledTextCache {
-    pub(crate) fn get_or_insert_with(
+    pub fn get_or_insert_with<T: Clone + Send + Sync + 'static>(
         &self,
         theme_signature: u64,
-        compute: impl FnOnce() -> CachedDiffStyledText,
-    ) -> CachedDiffStyledText {
+        compute: impl FnOnce() -> T,
+    ) -> T {
         let mut slot = match self.0.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         if let Some((signature, styled)) = slot.as_ref()
             && *signature == theme_signature
+            && let Some(styled) = styled.downcast_ref::<T>()
         {
             return styled.clone();
         }
         let styled = compute();
-        *slot = Some((theme_signature, styled.clone()));
+        *slot = Some((theme_signature, Arc::new(styled.clone())));
         styled
     }
 }
@@ -271,7 +281,7 @@ impl Eq for MarkdownPreviewRowStyledTextCache {}
 /// hit testing are all keyed by row index, so the flowing renderer hands the
 /// same indices to the same machinery the row preview used.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MarkdownBlock {
+pub enum MarkdownBlock {
     Heading {
         level: u8,
         row_ix: usize,
@@ -289,7 +299,7 @@ pub(crate) enum MarkdownBlock {
 
 impl MarkdownBlock {
     /// Rows this block paints, in document order.
-    pub(crate) fn row_range(&self) -> Range<usize> {
+    pub fn row_range(&self) -> Range<usize> {
         match self {
             Self::Heading { row_ix, .. }
             | Self::Paragraph(row_ix)
@@ -308,7 +318,7 @@ impl MarkdownBlock {
 ///
 /// Spacer rows are dropped: the layout expresses the separation they stand
 /// for as one interactive gap element between blocks.
-pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Vec<MarkdownBlock> {
+pub fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Vec<MarkdownBlock> {
     markdown_blocks_in(document, 0..document.rows.len(), 0)
 }
 
@@ -317,7 +327,7 @@ pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Ve
 /// block, whatever else it is — a list, code, or a table inside a quote is
 /// drawn inside that quote's bar. The renderer groups a quote block's rows
 /// again one level deeper.
-pub(crate) fn markdown_blocks_in(
+pub fn markdown_blocks_in(
     document: &MarkdownPreviewDocument,
     range: Range<usize>,
     quote_depth: u8,
@@ -449,12 +459,12 @@ pub(crate) fn take_run(
 /// either side crosses its edges, so the taller side sets its height and the
 /// other is left with blank space, which is what keeps the two lined up.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MarkdownDiffBand {
+pub struct MarkdownDiffBand {
     /// Aligned row indices, the same on both sides.
-    pub(crate) rows: Range<usize>,
+    pub rows: Range<usize>,
     /// Indices into each side's blocks.
-    pub(crate) old_blocks: Range<usize>,
-    pub(crate) new_blocks: Range<usize>,
+    pub old_blocks: Range<usize>,
+    pub new_blocks: Range<usize>,
 }
 
 /// Cut an aligned diff into bands at every row boundary that no block on
@@ -506,7 +516,7 @@ pub(crate) fn markdown_diff_bands(
 
 /// Return a user-facing reason why a single-document markdown preview is
 /// unavailable for a source of `source_len` bytes.
-pub(crate) fn single_preview_unavailable_reason(source_len: usize) -> &'static str {
+pub fn single_preview_unavailable_reason(source_len: usize) -> &'static str {
     if source_len > MAX_PREVIEW_SOURCE_BYTES {
         "Markdown preview unavailable: file exceeds the 1 MiB preview limit."
     } else {
@@ -521,7 +531,7 @@ pub(crate) const TOO_MANY_ROWS_TO_RENDER_MESSAGE: &str =
     "Markdown preview unavailable: document is too large to render; showing source.";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum MarkdownPreviewRefusal {
+pub enum MarkdownPreviewRefusal {
     /// Unreadable, or past the source-size or parsed-row cap.
     Unavailable(String),
     /// A diff whose inline form holds more rows than one document may.
@@ -535,7 +545,7 @@ impl From<String> for MarkdownPreviewRefusal {
 }
 
 impl MarkdownPreviewRefusal {
-    pub(crate) fn into_message(self) -> String {
+    pub fn into_message(self) -> String {
         match self {
             Self::Unavailable(reason) => reason,
             Self::TooManyRowsToRender => TOO_MANY_ROWS_TO_RENDER_MESSAGE.to_owned(),
@@ -543,14 +553,14 @@ impl MarkdownPreviewRefusal {
     }
 
     /// True when the reader is better served by the source than by an error.
-    pub(crate) fn prefers_source(&self) -> bool {
+    pub fn prefers_source(&self) -> bool {
         matches!(self, Self::TooManyRowsToRender)
     }
 }
 
 /// Return a user-facing reason why a two-sided diff markdown preview is
 /// unavailable for sources of `combined_len` bytes.
-pub(crate) fn diff_preview_unavailable_reason(combined_len: usize) -> &'static str {
+pub fn diff_preview_unavailable_reason(combined_len: usize) -> &'static str {
     if combined_len > MAX_DIFF_PREVIEW_SOURCE_BYTES {
         "Markdown preview unavailable: diff exceeds the 2 MiB preview limit."
     } else {
