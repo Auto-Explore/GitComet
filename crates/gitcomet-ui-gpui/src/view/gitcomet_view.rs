@@ -1672,7 +1672,7 @@ impl GitCometView {
             crate::workspaces::mark_window_active(cx, this.window_handle.window_id());
             if !this.has_repo_tabs() {
                 // Another window may have opened or closed repositories.
-                this.refresh_home_repositories();
+                this.home.update(cx, |home, _| home.refresh_repositories());
                 cx.notify();
             }
             let self_initiated_grab =
@@ -1776,18 +1776,21 @@ impl GitCometView {
             input
         });
 
-        let home_search_input = cx.new(|cx| {
-            components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "Search workspaces and repositories".into(),
-                    ..Default::default()
-                },
+        let home = cx.new(|cx| {
+            let mut home = super::home::HomeView::new(
+                window.window_handle(),
+                tooltip_host.downgrade(),
+                ui_session.pinned_repos.clone(),
+                ui_session.recent_repos.clone(),
                 window,
                 cx,
-            )
+            );
+            home.set_workspace_id(workspace_id);
+            home
         });
-        let home_search_input_subscription = cx.observe(&home_search_input, |this, input, cx| {
-            this.handle_home_search_input(&input, cx);
+        let home_subscription = cx.subscribe(&home, |this, _, event, cx| match event {
+            super::home::HomeEvent::OpenWorkspace(id) => this.open_workspace_from_home(*id, cx),
+            super::home::HomeEvent::OpenRepository(path) => this.open_repo_path(path.clone(), cx),
         });
 
         let open_repo_input_subscription = cx.observe(&open_repo_input, |this, input, cx| {
@@ -1905,7 +1908,7 @@ impl GitCometView {
             _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _open_repo_input_subscription: open_repo_input_subscription,
-            _home_search_input_subscription: home_search_input_subscription,
+            _home_subscription: home_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             _toast_errors_subscription: toast_errors_subscription,
             view_mode,
@@ -2007,14 +2010,7 @@ impl GitCometView {
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
-            home_search_input,
-            home_search_query: String::new(),
-            home_rows: Default::default(),
-            home_selected: None,
-            home_workspaces_scroll: gpui::UniformListScrollHandle::new(),
-            home_repositories_scroll: gpui::UniformListScrollHandle::new(),
-            home_pinned_repos: ui_session.pinned_repos.clone(),
-            home_recent_repos: ui_session.recent_repos.clone(),
+            home,
             external_drag_paths: None,
             file_operations: file_operations::FileOperationsUi::default(),
             documents,
@@ -2091,7 +2087,8 @@ impl GitCometView {
 
         view.sync_workspace_and_registry(cx);
         if view.is_home_screen_active() {
-            view.focus_home_search(window, cx);
+            let focus = view.home.read(cx).search_focus_handle(cx);
+            window.focus(&focus, cx);
         }
 
         view

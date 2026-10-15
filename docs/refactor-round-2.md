@@ -748,10 +748,23 @@ settings window in its render, and pop-outs follow their main window.
 `TextInput::set_theme` is gone: an input restyles from its window's theme when
 it renders, bumping its shaping epoch only when the style changed. That removed
 every host call that themed an input, so host `set_theme` calls dropped from
-130 to 30, and an unused rebase-onto input in the popover host went with them.
+130 to 29, and an unused rebase-onto input in the popover host went with them.
 
 The remaining 23 calls are the root's fan-out to its panes. Several panes do
 more than store the theme (the diff renderer clears style caches, documents
 re-run syntax, the commit hover drops its body, extension hosts emit
 `ThemeChanged`), and some read their theme from async completions, where no
 window is current. Those move with 3.2, when each pane becomes its own entity.
+
+### 3.2 Home out of the root
+
+Home's search box, filtered lists, selection, scroll handles and pinned and
+recent repositories moved from nine root fields into `HomeView`
+(`view/home.rs`). It emits `HomeEvent::OpenWorkspace` and `OpenRepository`
+instead of calling the root, reads its theme and zoom from the window, and is
+told the window's workspace through `GitCometView::set_workspace_id`, the one
+place the root now changes it. The root still composes the page (backdrop,
+open, clone and init actions, the folder-picker fallback) around the entity.
+Navigation keys are ignored while Home is hidden, as before; the root records
+that when it renders the centre area. Root fields went from 168 to 161, at the
+cost of 42 production lines of entity scaffolding.

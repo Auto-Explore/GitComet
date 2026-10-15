@@ -314,9 +314,10 @@ fn home_view_with(
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
         crate::app::bind_text_input_keys_for_test(app);
-        view.update(app, |view, _cx| {
-            view.home_recent_repos = recents;
-            view.home_pinned_repos.clear();
+        let home = view.read(app).home.clone();
+        home.update(app, |home, _cx| {
+            home.recent_repos = recents;
+            home.pinned_repos.clear();
         });
         let _ = window.draw(app);
     });

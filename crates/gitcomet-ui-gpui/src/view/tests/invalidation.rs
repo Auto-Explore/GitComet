@@ -351,29 +351,29 @@ fn pr530_home_rows_reuse_data_until_an_input_changes(cx: &mut gpui::TestAppConte
     let id = workspace.id;
     let (view, cx) = home_view_with(cx, vec![workspace], Vec::new());
     cx.update(|_, app| {
-        view.update(app, |view, cx| {
-            view.sync_home_rows(cx);
-            let rows = view.home_rows.workspaces.as_ptr();
-            view.sync_home_rows(cx);
+        let home = view.read(app).home.clone();
+        home.update(app, |view, cx| {
+            view.sync_rows(cx);
+            let rows = view.rows.workspaces.as_ptr();
+            view.sync_rows(cx);
             assert_eq!(
                 rows,
-                view.home_rows.workspaces.as_ptr(),
+                view.rows.workspaces.as_ptr(),
                 "a repaint rebuilt Home rows"
             );
         });
         crate::workspaces::set_workspace_name(app, id, "Renamed");
-        view.update(app, |view, cx| {
-            view.sync_home_rows(cx);
-            assert_eq!(view.home_rows.workspaces[0].display_name(), "Renamed");
-            view.home_search_query = "missing".to_string();
-            view.sync_home_rows(cx);
-            assert!(view.home_rows.workspaces.is_empty());
-            view.home_search_query.clear();
-            view.home_recent_repos
-                .push(PathBuf::from("/tmp/pr530-recent"));
-            view.sync_home_rows(cx);
+        home.update(app, |view, cx| {
+            view.sync_rows(cx);
+            assert_eq!(view.rows.workspaces[0].display_name(), "Renamed");
+            view.search_query = "missing".to_string();
+            view.sync_rows(cx);
+            assert!(view.rows.workspaces.is_empty());
+            view.search_query.clear();
+            view.recent_repos.push(PathBuf::from("/tmp/pr530-recent"));
+            view.sync_rows(cx);
             assert_eq!(
-                view.home_rows.repositories,
+                view.rows.repositories,
                 vec![PathBuf::from("/tmp/pr530-recent")]
             );
         });
