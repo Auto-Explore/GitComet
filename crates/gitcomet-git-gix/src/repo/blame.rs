@@ -5,7 +5,7 @@ use super::{
 };
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_timeout, path_buf_from_git_bytes,
-    run_git_capture_bytes, run_git_with_output, run_git_with_stdin_capture,
+    push_literal_paths, run_git_capture_bytes, run_git_with_output, run_git_with_stdin_capture,
 };
 use gitcomet_core::domain::{DiffArea, is_uncommitted_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -531,7 +531,8 @@ impl GixRepo {
 
         if !gix_index_stage_exists(&repo, path, desired_stage)? {
             let mut rm = self.git_workdir_cmd();
-            rm.arg("rm").arg("--").arg(path);
+            rm.arg("rm");
+            push_literal_paths(&mut rm, [path]);
             return run_git_with_output(rm, "git rm --");
         }
 
@@ -545,11 +546,12 @@ impl GixRepo {
                 checkout.arg("--theirs");
             }
         }
-        checkout.arg("--").arg(path);
+        push_literal_paths(&mut checkout, [path]);
         let checkout_out = run_git_with_output(checkout, "git checkout --ours/--theirs")?;
 
         let mut add = self.git_workdir_cmd();
-        add.arg("add").arg("--").arg(path);
+        add.arg("add");
+        push_literal_paths(&mut add, [path]);
         let add_out = run_git_with_output(add, "git add --")?;
 
         Ok(CommandOutput {
@@ -570,7 +572,8 @@ impl GixRepo {
 
     pub(super) fn accept_conflict_deletion_impl(&self, path: &Path) -> Result<CommandOutput> {
         let mut rm = self.git_workdir_cmd();
-        rm.arg("rm").arg("--").arg(path);
+        rm.arg("rm");
+        push_literal_paths(&mut rm, [path]);
         run_git_with_output(rm, "git rm --")
     }
 
@@ -589,7 +592,8 @@ impl GixRepo {
         fs::write(&abs_path, base_bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
         let mut add = self.git_workdir_cmd();
-        add.arg("add").arg("--").arg(path);
+        add.arg("add");
+        push_literal_paths(&mut add, [path]);
         let add_out = run_git_with_output(add, "git add --")?;
 
         Ok(CommandOutput {

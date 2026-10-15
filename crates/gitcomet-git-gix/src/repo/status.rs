@@ -3,7 +3,9 @@ use super::{
     conflict_stages::conflict_kind_from_stage_mask, git_ops::head_upstream_divergence,
     repo_file_stamp,
 };
-use crate::util::{git_workdir_cmd_for, path_buf_from_git_bytes, run_git_raw_output};
+use crate::util::{
+    git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_paths, run_git_raw_output,
+};
 use gitcomet_core::domain::{
     FileConflictKind, FileStatus, FileStatusKind, RepoStatus, UpstreamDivergence,
 };
@@ -1355,7 +1357,6 @@ fn supplement_gitlink_status_from_porcelain(
 ) -> Result<()> {
     let mut command = git_workdir_cmd_for(workdir);
     command
-        .arg("--literal-pathspecs")
         .arg("--no-optional-locks")
         .arg("status")
         .arg("--porcelain=v2")
@@ -1365,7 +1366,7 @@ fn supplement_gitlink_status_from_porcelain(
         if paths.is_empty() {
             return Ok(());
         }
-        command.arg("--").args(paths);
+        push_literal_paths(&mut command, paths);
     }
     let output = match run_git_raw_output(command, "git status --porcelain=v2") {
         Ok(output) => output,

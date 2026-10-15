@@ -93,7 +93,7 @@ pub(super) fn git_subcommand(
             "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
                 args.next()?;
             }
-            "--no-optional-locks" | "--no-pager" | "--literal-pathspecs" => {}
+            "--no-optional-locks" | "--no-pager" => {}
             value if value.starts_with('-') => {
                 if strict {
                     return None;

@@ -72,6 +72,26 @@ pub(super) fn apply_test_git_command_environment(cmd: &mut Command) {
     cmd.arg("-c").arg("protocol.file.allow=always");
 }
 
+/// Appends `--` and a user's file paths. Paths after `--` are still
+/// pathspecs, so without literal pathspecs `[a].txt` also matches `a.txt`
+/// and `*` matches everything: every git pathspec built from a user's file
+/// goes through here or [`push_literal_pathspec_file`].
+pub(crate) fn push_literal_paths<P: AsRef<std::ffi::OsStr>>(
+    cmd: &mut Command,
+    paths: impl IntoIterator<Item = P>,
+) {
+    cmd.env("GIT_LITERAL_PATHSPECS", "1").arg("--").args(paths);
+}
+
+/// [`push_literal_paths`] for a NUL-separated `--pathspec-from-file` list.
+pub(crate) fn push_literal_pathspec_file(cmd: &mut Command, pathspec_file: &Path) {
+    let mut arg = std::ffi::OsString::from("--pathspec-from-file=");
+    arg.push(pathspec_file);
+    cmd.env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("--pathspec-file-nul")
+        .arg(arg);
+}
+
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
     apply_test_git_command_environment(&mut cmd);
@@ -1126,10 +1146,7 @@ pub(crate) fn run_git_simple_with_paths(
         let mut cmd = git_workdir_cmd_for(workdir);
         cmd.args(args);
         if !batch.is_empty() {
-            cmd.arg("--");
-            for p in batch {
-                cmd.arg(p);
-            }
+            push_literal_paths(&mut cmd, batch);
         }
         run_git_simple(cmd, label)
     };

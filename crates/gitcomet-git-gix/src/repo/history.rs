@@ -1,9 +1,9 @@
 use super::GixRepo;
 use super::patch::write_pathspec_file;
 use crate::util::{
-    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error, run_git_capture,
-    run_git_capture_bytes, run_git_raw_output, run_git_with_output, validate_hex_commit_id,
-    validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error,
+    push_literal_pathspec_file, run_git_capture, run_git_capture_bytes, run_git_raw_output,
+    run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, short_commit_id};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -142,12 +142,6 @@ fn nul_separated_paths(listing: &[u8]) -> BTreeSet<Vec<u8>> {
         .filter(|path| !path.is_empty())
         .map(<[u8]>::to_vec)
         .collect()
-}
-
-pub(super) fn pathspec_from_file_arg(path: &Path) -> std::ffi::OsString {
-    let mut arg = std::ffi::OsString::from("--pathspec-from-file=");
-    arg.push(path);
-    arg
 }
 
 pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &crate::util::GitOutput) {
@@ -539,13 +533,11 @@ impl GixRepo {
             Some(write_pathspec_file(paths.iter().map(Vec::as_slice))?)
         };
         let mut cmd = self.git_workdir_cmd();
-        cmd.env("GIT_LITERAL_PATHSPECS", "1");
         cmd.env("GIT_REFLOG_ACTION", "cherry-pick");
         cmd.args(["commit", "--no-verify", "--only", "--allow-empty", "-C"])
             .arg(id.as_ref());
         if let Some(pathspec) = &pathspec {
-            cmd.arg("--pathspec-file-nul")
-                .arg(pathspec_from_file_arg(pathspec.path()));
+            push_literal_pathspec_file(&mut cmd, pathspec.path());
         }
         run_git_with_output(cmd, &format!("git commit --only -C {}", id.as_ref()))
     }
@@ -592,11 +584,10 @@ impl GixRepo {
     fn restore_paths_from_tree(&self, tree: &str, paths: &BTreeSet<Vec<u8>>) -> Result<()> {
         let pathspec = write_pathspec_file(paths.iter().map(Vec::as_slice))?;
         let mut cmd = self.git_workdir_cmd();
-        cmd.env("GIT_LITERAL_PATHSPECS", "1");
         cmd.arg("restore")
             .arg(format!("--source={tree}"))
-            .args(["--staged", "--worktree", "--pathspec-file-nul"])
-            .arg(pathspec_from_file_arg(pathspec.path()));
+            .args(["--staged", "--worktree"]);
+        push_literal_pathspec_file(&mut cmd, pathspec.path());
         run_git_with_output(cmd, "git restore --staged --worktree").map(|_| ())
     }
 
