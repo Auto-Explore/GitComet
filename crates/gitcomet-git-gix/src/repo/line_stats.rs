@@ -26,7 +26,8 @@ pub(super) struct LineStatsMemo {
 /// What an index blob stands in for, decided from its first bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IndexPointer {
-    None,
+    /// The blob is the content itself.
+    Content,
     Annex,
 }
 
@@ -405,7 +406,7 @@ fn unstaged_entry_line_stats(
             return None;
         }
         if header.size() > gitcomet_core::annex::POINTER_MAX_BYTES as u64 {
-            return Some(IndexPointer::None);
+            return Some(IndexPointer::Content);
         }
         // A larger blob cannot be a pointer; leave its decompression to
         // a diff miss, after the worktree's size and binary checks.
@@ -415,7 +416,7 @@ fn unstaged_entry_line_stats(
             if gitcomet_core::annex::key_from_pointer(index_blob).is_some() {
                 IndexPointer::Annex
             } else {
-                IndexPointer::None
+                IndexPointer::Content
             }
         })
     });
@@ -423,7 +424,7 @@ fn unstaged_entry_line_stats(
         // Unlocked content cannot be compared without annex's clean
         // filter. Its size and hash cannot make these counts known.
         Some(IndexPointer::Annex) | None => return LineStats::UNKNOWN,
-        Some(IndexPointer::None) => {}
+        Some(IndexPointer::Content) => {}
     }
 
     worktree.clear();
