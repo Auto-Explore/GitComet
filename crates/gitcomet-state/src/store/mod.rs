@@ -663,7 +663,7 @@ impl AppStore {
         backend: Arc<dyn GitBackend>,
         initial: AppState,
         preferences: Arc<repository_preferences::PreferenceHub>,
-        filesystem: FilesystemScope,
+        scope: FilesystemScope,
     ) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let discovery_backend = Arc::clone(&backend);
         let state = Arc::new(RwLock::new(Arc::new(initial)));
@@ -675,7 +675,7 @@ impl AppStore {
             Arc::clone(&store_alive),
             store_id,
             preferences,
-            filesystem.engine(),
+            scope.engine(),
         );
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
@@ -720,7 +720,7 @@ impl AppStore {
                     TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
                 });
             #[allow(unused_mut)]
-            let mut store_filesystem_executor = filesystem.own_queue();
+            let mut store_filesystem_executor = scope.own_queue();
             let filesystem_executor = match store_filesystem_executor.as_ref() {
                 Some(own) => own,
                 None => &executor::FILESYSTEM_QUEUE,
@@ -1059,6 +1059,16 @@ impl AppStore {
                     .and_then(std::sync::LazyLock::get_mut)
                 {
                     executor.join_workers();
+                }
+                match scope {
+                    // Production releases the shared engine at exit (cleanup_on_shutdown).
+                    FilesystemScope::Process => {}
+                    // Otherwise a test store's engine would leave its staging folders behind.
+                    FilesystemScope::Store => thread_msg_tx
+                        .filesystem
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .shutdown(),
                 }
             }
         });

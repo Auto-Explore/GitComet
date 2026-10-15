@@ -216,7 +216,8 @@ impl Filesystem {
         }
     }
 
-    fn shutdown(&mut self) {
+    /// Reject later work and release the journal's staging storage.
+    pub fn shutdown(&mut self) {
         self.shutting_down = true;
         self.undo.clear();
         self.redo.clear();
