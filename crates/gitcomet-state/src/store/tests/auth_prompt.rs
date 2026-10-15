@@ -241,6 +241,7 @@ fn safe_push_auth_retry_preserves_credentials_when_annex_takeover_is_queued() {
 
 #[test]
 fn repo_command_finished_auth_error_sets_username_password_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -273,6 +274,7 @@ fn repo_command_finished_auth_error_sets_username_password_prompt() {
 
 #[test]
 fn repo_command_finished_auth_error_sets_passphrase_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -309,6 +311,7 @@ fn repo_command_finished_auth_error_sets_passphrase_prompt() {
 
 #[test]
 fn repo_command_finished_host_key_error_sets_host_verification_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -401,6 +404,7 @@ fn repo_command_finished_auth_error_does_not_prompt_for_non_replayable_commands(
 
 #[test]
 fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -460,6 +464,7 @@ fn commit_finished_auth_error_without_pending_retry_does_not_prompt() {
 
 #[test]
 fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -498,6 +503,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
 
 #[test]
 fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
@@ -533,6 +539,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
 
 #[test]
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
@@ -1363,6 +1370,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
 
 #[test]
 fn revert_signing_passphrase_failure_sets_passphrase_prompt() {
+    let _lock = super::staged_auth_test_lock();
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);

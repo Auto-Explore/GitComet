@@ -139,6 +139,30 @@ fn may_install_auth_prompt(state: &AppState, prompt: &AuthPromptState) -> bool {
         .is_none_or(|pending| pending.operation == prompt.operation)
 }
 
+fn auth_operation_repo_id(operation: &AuthRetryOperation) -> Option<RepoId> {
+    match operation {
+        AuthRetryOperation::RepoCommand { repo_id, .. }
+        | AuthRetryOperation::SafePushAfterCommit { repo_id, .. }
+        | AuthRetryOperation::Commit { repo_id, .. } => Some(*repo_id),
+        AuthRetryOperation::Clone { .. } => None,
+    }
+}
+
+fn discard_auth_prompt_if(state: &mut AppState, stale: impl FnOnce(&AuthPromptState) -> bool) {
+    if state.auth_prompt.as_ref().is_some_and(stale) {
+        cancel_auth_validation(state);
+        state.auth_prompt = None;
+    }
+}
+
+/// A closed repository cannot replay its operation, and its pending prompt
+/// would otherwise refuse every other operation's request.
+pub(super) fn discard_auth_prompt_for_repo(state: &mut AppState, repo_id: RepoId) {
+    discard_auth_prompt_if(state, |prompt| {
+        auth_operation_repo_id(&prompt.operation) == Some(repo_id)
+    });
+}
+
 fn install_auth_prompt(state: &mut AppState, mut prompt: AuthPromptState) {
     cancel_auth_validation(state);
     state.auth_prompt_generation = state.auth_prompt_generation.wrapping_add(1);
@@ -661,20 +685,29 @@ pub(super) fn clone_repo_finished(
     dest: PathBuf,
     result: Result<CommandOutput, Error>,
 ) -> Vec<Effect> {
-    let auth_prompt = result
+    let requested_auth = result
         .as_ref()
         .err()
-        .and_then(|error| auth_prompt_for_clone(&url, &dest, error))
-        .filter(|prompt| may_install_auth_prompt(state, prompt));
+        .and_then(|error| auth_prompt_for_clone(&url, &dest, error));
     // An abort that races the clone exiting for credentials ends the clone
-    // quietly rather than asking for credentials the user no longer wants.
+    // quietly rather than asking for credentials the user no longer wants,
+    // even when another operation's prompt would have refused this one.
     let abort_requested = state.clone.as_ref().is_some_and(|operation| {
         operation.dest.as_ref() == &dest
             && matches!(operation.status, crate::model::CloneOpStatus::Cancelling)
     });
-    let effects =
-        repo_management::clone_repo_finished(state, url, dest, result, auth_prompt.is_some());
-    if let Some(prompt) = auth_prompt.filter(|_| !abort_requested) {
+    let quiet_abort = abort_requested && requested_auth.is_some();
+    let auth_prompt = requested_auth
+        .filter(|_| !abort_requested)
+        .filter(|prompt| may_install_auth_prompt(state, prompt));
+    let effects = repo_management::clone_repo_finished(
+        state,
+        url,
+        dest,
+        result,
+        quiet_abort || auth_prompt.is_some(),
+    );
+    if let Some(prompt) = auth_prompt {
         clear_staged_git_auth_env();
         install_auth_prompt(state, prompt);
     }
@@ -809,6 +842,19 @@ pub(super) fn repo_command_finished(
         .err()
         .and_then(|error| auth_prompt_for_repo_command(repo_id, &command, error))
         .filter(|prompt| may_install_auth_prompt(state, prompt));
+    // The same command succeeded another way, e.g. an agent unlocked the key,
+    // so its pending prompt no longer asks for anything.
+    if result.is_ok() {
+        discard_auth_prompt_if(state, |prompt| {
+            matches!(
+                &prompt.operation,
+                AuthRetryOperation::RepoCommand {
+                    repo_id: prompt_repo,
+                    command: prompt_command,
+                } if *prompt_repo == repo_id && *prompt_command == command
+            )
+        });
+    }
     let removed_worktree_path = match (&command, &result) {
         (RepoCommandKind::RemoveWorktree { path }, Ok(_)) => Some(path.clone()),
         (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),

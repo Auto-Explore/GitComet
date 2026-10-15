@@ -441,6 +441,130 @@ fn aborting_a_clone_that_exits_for_credentials_cancels_without_a_prompt() {
 }
 
 #[test]
+fn aborting_a_clone_that_exits_for_credentials_stays_quiet_behind_another_prompt() {
+    let _lock = super::super::staged_auth_test_lock();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let fetch = AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: crate::model::AuthPromptStatus::AwaitingInput,
+        kind: AuthPromptKind::Passphrase,
+        reason: "passphrase required".into(),
+        operation: AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::FetchAll,
+        },
+    };
+    state.auth_prompt = Some(fetch.clone());
+    let url = "git@github.com:private/repo.git".to_string();
+    let dest = PathBuf::from("/tmp/private-repo");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: url.clone(),
+            dest: dest.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::CloneRepoFinished {
+            url,
+            dest,
+            result: Err(windows_ssh_error("git clone")),
+        }),
+    );
+    assert_eq!(state.auth_prompt, Some(fetch));
+    assert_eq!(
+        state.clone.as_ref().unwrap().status,
+        CloneOpStatus::Cancelled
+    );
+}
+
+#[test]
+fn closing_a_repository_discards_its_pending_auth_prompt() {
+    let _lock = super::super::staged_auth_test_lock();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let pull = RepoCommandKind::Pull {
+        mode: PullMode::Default,
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: pull,
+            result: Err(windows_ssh_error("git pull")),
+        }),
+    );
+    assert!(state.auth_prompt.is_some());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id },
+    );
+    assert!(state.auth_prompt.is_none());
+}
+
+#[test]
+fn a_command_that_succeeds_another_way_discards_only_its_own_prompt() {
+    let _lock = super::super::staged_auth_test_lock();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let pull = RepoCommandKind::Pull {
+        mode: PullMode::Default,
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: pull.clone(),
+            result: Err(windows_ssh_error("git pull")),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchAll,
+            result: Ok(CommandOutput::default()),
+        }),
+    );
+    assert!(state.auth_prompt.is_some(), "another command's success");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: pull,
+            result: Ok(CommandOutput::default()),
+        }),
+    );
+    assert!(state.auth_prompt.is_none());
+}
+
+#[test]
 fn a_second_auth_failure_does_not_silently_discard_the_pending_prompt() {
     let _lock = super::super::staged_auth_test_lock();
     let repo_id = RepoId(1);
