@@ -27,6 +27,12 @@ impl AuthChallenge {
             key_fingerprint,
         }
     }
+
+    /// A FIDO security key asking for its PIN rather than a key passphrase.
+    pub fn is_pin(&self) -> bool {
+        self.kind == GitAuthKind::Passphrase
+            && self.prompt.to_ascii_lowercase().contains("enter pin")
+    }
 }
 
 /// Supplying credentials does not prove either key unlock or Git success.
@@ -72,11 +78,38 @@ fn key_path_from_prompt(prompt: &str) -> Option<PathBuf> {
     if raw.contains(['\n', '\r', '\0']) {
         return None;
     }
-    let path = PathBuf::from(raw);
+    let path = local_key_path(raw);
     path.is_absolute()
         .then(|| std::fs::canonicalize(path).ok())
         .flatten()
         .map(crate::path_utils::strip_windows_verbatim_prefix)
+}
+
+/// Git for Windows' bundled ssh names keys by their MSYS path (`/c/Users/...`
+/// or `/cygdrive/c/...`), which is not absolute to Windows itself.
+#[cfg(windows)]
+fn local_key_path(raw: &str) -> PathBuf {
+    let drive_path = raw
+        .strip_prefix("/cygdrive/")
+        .or_else(|| raw.strip_prefix('/'))
+        .and_then(|rest| {
+            let mut chars = rest.chars();
+            let drive = chars.next().filter(char::is_ascii_alphabetic)?;
+            let tail = chars.as_str();
+            (tail.is_empty() || tail.starts_with('/')).then(|| {
+                format!(
+                    "{}:/{}",
+                    drive.to_ascii_uppercase(),
+                    tail.trim_start_matches('/')
+                )
+            })
+        });
+    PathBuf::from(drive_path.as_deref().unwrap_or(raw))
+}
+
+#[cfg(not(windows))]
+fn local_key_path(raw: &str) -> PathBuf {
+    PathBuf::from(raw)
 }
 
 pub(super) fn key_fingerprint(path: &Path) -> Option<[u8; 32]> {
@@ -112,11 +145,10 @@ pub fn remember_verified_passphrase(challenge: &AuthChallenge, auth: &StagedGitA
     true
 }
 
+/// `challenge` was just observed, so its fingerprint is the key's current one.
 pub(super) fn challenge_is_verified(challenge: &AuthChallenge, secret: Option<&str>) -> bool {
-    let Some(path) = challenge.key_path.as_ref() else {
-        return false;
-    };
-    let Some(fingerprint) = key_fingerprint(path) else {
+    let (Some(path), Some(fingerprint)) = (challenge.key_path.as_ref(), challenge.key_fingerprint)
+    else {
         return false;
     };
     lock_or_recover(session_passphrase_slot())
@@ -169,5 +201,25 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git_for_windows_drive_paths_identify_the_local_key() {
+        // Git for Windows' bundled ssh names keys as /c/Users/... in prompts.
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("id_test");
+        std::fs::write(&key, b"key fixture").unwrap();
+        let windows = key.to_string_lossy().replace('\\', "/");
+        let (drive, rest) = windows.split_once(":/").unwrap();
+        let msys = format!("/{}/{rest}", drive.to_ascii_lowercase());
+        assert_eq!(
+            AuthChallenge::from_prompt(
+                GitAuthKind::Passphrase,
+                format!("Enter passphrase for key '{msys}': "),
+            )
+            .key_path,
+            Some(crate::path_utils::canonicalize_or_original(key)),
+        );
     }
 }

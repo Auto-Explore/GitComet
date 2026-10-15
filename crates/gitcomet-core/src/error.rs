@@ -40,6 +40,23 @@ pub enum GitFailureId {
     LfsUploadFailed,
 }
 
+/// Git refused for a local reason (working-tree changes, merge or branch
+/// reconciliation). Any credential exchange earlier in the same command, such
+/// as a pull's fetch, did its job and is not why the command failed.
+pub fn git_output_reports_local_refusal(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    [
+        "would be overwritten",
+        "automatic merge failed",
+        "cannot pull with rebase: you have unstaged changes",
+        "cannot pull with rebase: your index contains uncommitted changes",
+        "not possible to fast-forward",
+        "need to specify how to reconcile divergent branches",
+    ]
+    .iter()
+    .any(|refusal| lower.contains(refusal))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitFailure {
     command: String,

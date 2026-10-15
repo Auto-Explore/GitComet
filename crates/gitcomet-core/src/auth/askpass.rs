@@ -160,7 +160,7 @@ if [ "$kind" = "username_password" ]; then
   esac
 elif [ "$kind" = "passphrase" ]; then
   case "$lower_prompt" in
-    *passphrase*)
+    *passphrase*|*enter\ pin*)
       if [ -z "${GITCOMET_AUTH_TARGET_PROMPT:-}" ] || [ "$prompt" = "$GITCOMET_AUTH_TARGET_PROMPT" ]; then
         answer="${GITCOMET_AUTH_SECRET:-}"
       fi ;;
@@ -241,7 +241,7 @@ if /I "!GITCOMET_AUTH_KIND!"=="username_password" (
   goto cached
 )
 if /I "!GITCOMET_AUTH_KIND!"=="passphrase" (
-  "!findstr!" /I "passphrase" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
+  "!findstr!" /I /C:"passphrase" /C:"enter pin" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
   if not errorlevel 1 (
     if "!GITCOMET_AUTH_TARGET_PROMPT!"=="" set "answer=!GITCOMET_AUTH_SECRET!"
     if "!prompt!"=="!GITCOMET_AUTH_TARGET_PROMPT!" set "answer=!GITCOMET_AUTH_SECRET!"
@@ -267,13 +267,17 @@ if "!answer!"=="" (
   )
 )
 :respond
-if not "!GITCOMET_ASKPASS_RESPONSE_LOG!"=="" (
-  if "!answer!"=="" (
-    >>"!GITCOMET_ASKPASS_RESPONSE_LOG!" echo(M:!prompt!
-  ) else (
-    >>"!GITCOMET_ASKPASS_RESPONSE_LOG!" echo(S:!prompt!
-  )
-)
+if "!GITCOMET_ASKPASS_RESPONSE_LOG!"=="" goto answer
+set "GITCOMET_ASKPASS_RESPONSE=S:!prompt!"
+if "!answer!"=="" set "GITCOMET_ASKPASS_RESPONSE=M:!prompt!"
+rem Git runs without a console window, so this one has the system OEM code
+rem page and echo would mangle a non-ASCII key path. cmd /u writes the record
+rem as UTF-16 instead. With delayed expansion off here, the child receives
+rem the variable names and expands them itself, never re-parsing the prompt.
+setlocal DisableDelayedExpansion
+>nul "%SystemRoot%\System32\cmd.exe" /d /u /v:on /c ">>"!GITCOMET_ASKPASS_RESPONSE_LOG!" echo(!GITCOMET_ASKPASS_RESPONSE!"
+endlocal
+:answer
 echo(!answer!
 "#;
 
@@ -330,6 +334,17 @@ pub fn configure_git_auth_prompt(
     auth: Option<&PromptAuth>,
     askpass: &AskPassScript,
 ) {
+    configure_prompt_env(cmd, auth, askpass, true);
+}
+
+/// `session_cache` also hands the helper every verified session passphrase,
+/// so explicit credentials for one key still unlock the others.
+fn configure_prompt_env(
+    cmd: &mut Command,
+    auth: Option<&PromptAuth>,
+    askpass: &AskPassScript,
+    session_cache: bool,
+) {
     cmd.env("GIT_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS_REQUIRE", "force");
@@ -365,7 +380,9 @@ pub fn configure_git_auth_prompt(
                 if let Some(challenge) = explicit.challenge.as_ref() {
                     cmd.env(TARGET_PROMPT_ENV, normalized_prompt(&challenge.prompt));
                 }
-                configure_cached_passphrases(cmd, &load_session_passphrases());
+                if session_cache {
+                    configure_cached_passphrases(cmd, &load_session_passphrases());
+                }
             }
             PromptAuth::CachedPassphrases(entries) => {
                 cmd.env(GITCOMET_AUTH_KIND_ENV, auth.kind_env());
@@ -405,7 +422,9 @@ fn configure_cached_passphrases(cmd: &mut Command, entries: &[CachedPassphraseEn
 
 fn prompt_kind(prompt: &str) -> Option<GitAuthKind> {
     let lower = prompt.to_ascii_lowercase();
-    if lower.contains("passphrase") {
+    // A security key's PIN ("Enter PIN for ED25519-SK key ...") is entered and
+    // answered exactly like a key passphrase.
+    if lower.contains("passphrase") || lower.contains("enter pin") {
         Some(GitAuthKind::Passphrase)
     } else if lower.contains("continue connecting")
         || lower.contains("yes/no")
@@ -420,23 +439,57 @@ fn prompt_kind(prompt: &str) -> Option<GitAuthKind> {
     }
 }
 
+/// The Windows helper writes UTF-16 (`cmd /u`); the POSIX one writes the
+/// prompt's bytes. One undecodable byte must not hide every other record.
+fn read_response_log(askpass: &AskPassScript) -> String {
+    let bytes = fs::read(&askpass.response_log_path).unwrap_or_default();
+    if cfg!(windows) {
+        let units: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+/// Each helper call appends `S:` (answered) or `M:` (missing) and its prompt.
+/// OpenSSH's host-key prompt spans several lines (the fingerprint is on the
+/// second), so a line without a status continues the previous prompt.
 fn observed_responses(askpass: &AskPassScript) -> Vec<(bool, AuthChallenge)> {
-    fs::read_to_string(&askpass.response_log_path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| {
-            let (status, prompt) = line.split_once(':')?;
-            let supplied = match status {
-                "S" => true,
-                "M" => false,
-                _ => return None,
-            };
-            Some((
-                supplied,
-                AuthChallenge::from_prompt(prompt_kind(prompt)?, prompt),
-            ))
-        })
-        .collect()
+    let log = read_response_log(askpass);
+    let mut records: Vec<(bool, String)> = Vec::new();
+    for line in log.lines() {
+        if let Some(prompt) = line.strip_prefix("S:") {
+            records.push((true, prompt.to_string()));
+        } else if let Some(prompt) = line.strip_prefix("M:") {
+            records.push((false, prompt.to_string()));
+        } else if let Some((_, prompt)) = records.last_mut() {
+            prompt.push('\n');
+            prompt.push_str(line);
+        }
+    }
+    let mut responses: Vec<(bool, AuthChallenge)> = Vec::with_capacity(records.len());
+    for (supplied, prompt) in records {
+        // ssh repeats one key's prompt after each wrong answer. Resolving a
+        // challenge reads and hashes the key, so do that once per prompt.
+        let seen = responses
+            .iter()
+            .find(|(_, challenge)| challenge.prompt == prompt)
+            .map(|(_, challenge)| challenge.clone());
+        let challenge = match seen {
+            Some(challenge) => challenge,
+            None => match prompt_kind(&prompt) {
+                Some(kind) => AuthChallenge::from_prompt(kind, prompt),
+                None => continue,
+            },
+        };
+        responses.push((supplied, challenge));
+    }
+    responses
 }
 
 fn response_is_verified(auth: Option<&PromptAuth>, challenge: &AuthChallenge) -> bool {
@@ -480,12 +533,7 @@ pub fn resolve_auth_outcome(
     // A completed fetch may have tried an unused identity before Git reached
     // a local refusal. That earlier missing/rejected answer is not the cause
     // of this operation's final failure.
-    let local_failure = lower.contains("would be overwritten")
-        || lower.contains("automatic merge failed")
-        || lower.contains("cannot pull with rebase: you have unstaged changes")
-        || lower.contains("cannot pull with rebase: your index contains uncommitted changes")
-        || lower.contains("not possible to fast-forward")
-        || lower.contains("need to specify how to reconcile divergent branches");
+    let local_failure = crate::error::git_output_reports_local_refusal(&lower);
     if !local_failure && let Some((false, challenge)) = responses.last() {
         return AuthOutcome::NeedsInput(challenge.clone());
     }
@@ -543,20 +591,17 @@ pub fn validate_passphrase(
     let Ok(askpass) = create_askpass_script() else {
         return PassphraseValidation::Unknown;
     };
-    let mut bound = auth.clone();
-    bound.challenge = Some(AuthChallenge::from_prompt(
-        GitAuthKind::Passphrase,
-        format!("Enter passphrase for \"{}\":", path.display()),
-    ));
-    let auth = PromptAuth::Explicit(bound);
+    // This verifier reads exactly the key supplied with -f. Windows OpenSSH
+    // can ask only "Enter passphrase:" here, without including its path, so
+    // answer any passphrase prompt with the submitted secret (no target), and
+    // give the helper no other cached passphrase at all.
+    let unbound = PromptAuth::Explicit(StagedGitAuth {
+        challenge: None,
+        ..auth.clone()
+    });
     let mut cmd = crate::process::background_command("ssh-keygen");
     cmd.arg("-y").arg("-f").arg(path).env("LC_ALL", "C");
-    configure_git_auth_prompt(&mut cmd, Some(&auth), &askpass);
-    // This verifier reads exactly the key supplied with -f. Windows OpenSSH
-    // can ask only "Enter passphrase:" here, without including its path.
-    // Permit that local prompt while excluding all cached responses.
-    cmd.env_remove(TARGET_PROMPT_ENV);
-    cmd.env(GITCOMET_AUTH_CACHE_SIZE_ENV, "0");
+    configure_prompt_env(&mut cmd, Some(&unbound), &askpass, false);
     let Ok(output) = crate::process::probe_output(
         cmd,
         git_command_timeout().min(Duration::from_secs(30)),

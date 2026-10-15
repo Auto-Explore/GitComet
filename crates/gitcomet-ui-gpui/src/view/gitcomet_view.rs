@@ -2036,6 +2036,7 @@ impl GitCometView {
             auth_prompt_key: None,
             auth_prompt_submitted_generation: None,
             auth_prompt_input_error: None,
+            auth_prompt_focus_return: None,
             active_context_menu_invoker: None,
         };
 
@@ -2889,6 +2890,62 @@ impl GitCometView {
         self.auth_prompt_input_error = None;
         self.store.dispatch(Msg::CancelAuthPrompt);
         cx.notify();
+    }
+
+    fn auth_prompt_has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.auth_prompt_username_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window)
+            || self
+                .auth_prompt_secret_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+    }
+
+    /// Focuses a new prompt's first field so the user can type at once,
+    /// unless they are typing in another field or working in an overlay: the
+    /// prompt then waits for a click rather than swallowing their keystrokes.
+    pub(super) fn focus_new_auth_prompt(
+        &mut self,
+        input: &Entity<components::TextInput>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let prompt_has_focus = self.auth_prompt_has_focus(window, cx);
+        let typing_elsewhere = !prompt_has_focus
+            && window
+                .context_stack()
+                .iter()
+                .any(|context| context.contains("TextInput"));
+        if typing_elsewhere
+            || self.is_overlay_open(cx)
+            || self.command_palette_open
+            || self.reveal_commit_open
+        {
+            return;
+        }
+        // A retry keeps the place the first prompt of the exchange took.
+        if self.auth_prompt_focus_return.is_none() && !prompt_has_focus {
+            self.auth_prompt_focus_return = Some(window.focused(cx));
+        }
+        window.focus(&input.read(cx).focus_handle(), cx);
+    }
+
+    /// The prompt took the keyboard by itself, so give it back once the prompt
+    /// is gone, unless the user has since moved it elsewhere.
+    pub(super) fn restore_focus_after_auth_prompt(&mut self, window: &mut Window, cx: &mut App) {
+        let Some(previous) = self.auth_prompt_focus_return.take() else {
+            return;
+        };
+        if !self.auth_prompt_has_focus(window, cx) {
+            return;
+        }
+        match previous {
+            Some(focus) => window.focus(&focus, cx),
+            None => window.blur(cx),
+        }
     }
 
     pub(super) fn push_toast(

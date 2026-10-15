@@ -105,7 +105,8 @@ fn supplied_answer_is_not_rejected_by_a_later_merge_or_remote_access_failure() {
         AuthOutcome::Rejected(request),
     );
     assert!(load_session_passphrases().is_empty());
-    let log = fs::read_to_string(&askpass.response_log_path).expect("response log");
+    let log = read_response_log(&askpass);
+    assert!(log.contains("S:"), "the helper's records were decoded");
     assert!(!log.contains("test-only!&^secret"));
     clear_session_passphrase();
 }
@@ -432,4 +433,100 @@ fn independent_key_validation_proves_unlock_and_handles_rejection_cancel_and_unk
     );
     assert!(load_session_passphrases().is_empty());
     clear_session_passphrase();
+}
+
+/// Runs the helper with a prompt spanning several lines, as OpenSSH does for
+/// host keys. `Command` refuses such batch arguments, so Windows gets the
+/// helper on a raw `cmd.exe` command line, where OpenSSH's request also lands.
+fn multiline_prompt_command(askpass: &AskPassScript, prompt: &str) -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        let mut command = Command::new("cmd.exe");
+        command.raw_arg(format!(
+            "/d /c \"\"{}\" \"{prompt}\"\"",
+            askpass.path().display()
+        ));
+        command.stdin(Stdio::null());
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new(askpass.path());
+        command.arg(prompt).stdin(Stdio::null());
+        command
+    }
+}
+
+const REFUSED_PUBLIC_KEY: &[u8] = b"git@github.com: Permission denied (publickey).\r\n\
+fatal: Could not read from remote repository.\n";
+
+#[test]
+fn multiline_host_prompt_keeps_its_fingerprint() {
+    let _lock = auth_test_lock();
+    clear_session_passphrase();
+    // Verbatim from Windows OpenSSH 9.5 through the real helper.
+    let prompt = "The authenticity of host 'github.com (140.82.121.4)' can't be established.\n\
+ED25519 key fingerprint is SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU.\n\
+This key is not known by any other names.\n\
+Are you sure you want to continue connecting (yes/no/[fingerprint])?";
+    let askpass = create_askpass_script().expect("askpass helper");
+    let mut command = multiline_prompt_command(&askpass, prompt);
+    configure_git_auth_prompt(&mut command, None, &askpass);
+    let output = command.output().expect("run real askpass helper");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "");
+    let AuthOutcome::NeedsInput(request) =
+        resolve_auth_outcome(None, &askpass, b"Host key verification failed.", false)
+    else {
+        panic!("an unanswered host prompt requests input");
+    };
+    assert_eq!(request.kind, GitAuthKind::HostVerification);
+    assert_eq!(
+        request.prompt, prompt,
+        "the fingerprint must reach the user"
+    );
+}
+
+#[test]
+fn security_key_pin_requests_reopen_input_and_are_answered() {
+    let _lock = auth_test_lock();
+    clear_session_passphrase();
+    let prompt =
+        "Enter PIN for ED25519-SK key SHA256:0123456789abcdefghijklmnopqrstuvwxyzABCDEFG: ";
+    let askpass = create_askpass_script().expect("askpass helper");
+    assert_eq!(answer(&askpass, None, prompt), "");
+    let AuthOutcome::NeedsInput(request) =
+        resolve_auth_outcome(None, &askpass, REFUSED_PUBLIC_KEY, false)
+    else {
+        panic!("an unanswered PIN request needs input");
+    };
+    assert_eq!(request.kind, GitAuthKind::Passphrase);
+    assert!(request.is_pin());
+    let auth = explicit_auth(&request, "123456");
+    let askpass = create_askpass_script().expect("askpass helper");
+    assert_eq!(answer(&askpass, Some(&auth), prompt), "123456");
+}
+
+#[cfg(windows)]
+#[test]
+fn non_ascii_prompts_survive_a_fresh_console_code_page() {
+    use std::os::windows::process::CommandExt as _;
+    let _lock = auth_test_lock();
+    clear_session_passphrase();
+    // The app runs Git without a console window, so the helper gets a new
+    // console using the system OEM code page rather than this test's.
+    let prompt = "Enter passphrase for key 'C:\\Users\\J\u{e4}rvinen\\.ssh\\id_ed25519':";
+    let askpass = create_askpass_script().expect("askpass helper");
+    let mut command = Command::new(askpass.path());
+    command
+        .arg(prompt)
+        .stdin(Stdio::null())
+        .creation_flags(0x0800_0000);
+    configure_git_auth_prompt(&mut command, None, &askpass);
+    assert!(command.output().expect("run helper").status.success());
+    assert_eq!(
+        resolve_auth_outcome(None, &askpass, REFUSED_PUBLIC_KEY, false),
+        AuthOutcome::NeedsInput(challenge(prompt)),
+    );
 }

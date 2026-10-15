@@ -398,3 +398,63 @@ fn cancelling_auth_does_not_remove_an_unrelated_clone() {
     assert_eq!(clone.dest.as_ref(), &PathBuf::from("/tmp/second"));
     assert_eq!(clone.status, CloneOpStatus::Running);
 }
+
+#[test]
+fn a_second_auth_failure_does_not_silently_discard_the_pending_prompt() {
+    let _lock = super::super::staged_auth_test_lock();
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let pull = RepoCommandKind::Pull {
+        mode: PullMode::Default,
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Default,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: pull.clone(),
+            result: Err(windows_ssh_error("git pull --prune")),
+        }),
+    );
+    let pending = state.auth_prompt.clone().expect("pull prompt");
+
+    // Another operation needs credentials while the pull's prompt is open.
+    reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Push,
+            result: Err(windows_ssh_error("git push")),
+        }),
+    );
+
+    assert_eq!(
+        state.auth_prompt.as_ref(),
+        Some(&pending),
+        "the pull's prompt stays answerable"
+    );
+    // The push could not take over the prompt, so it is a visible failure.
+    assert_terminal_failure_keeps_prompt(&state);
+}
+
+fn assert_terminal_failure_keeps_prompt(state: &AppState) {
+    let feedback = &state.repos[0].feedback;
+    assert!(feedback.last_error.is_some());
+    let entry = feedback.command_log.last().expect("failed attempt logged");
+    assert!(!entry.ok);
+    assert!(!entry.handled_by_auth_prompt);
+}

@@ -621,6 +621,23 @@ fn first_auth_input(view: &GitCometView, kind: AuthPromptKind) -> Entity<compone
     }
 }
 
+/// Moves the keyboard to the diff panel, somewhere that is not a text field.
+fn focus_diff_panel(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+) -> gpui::FocusHandle {
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .clone();
+        window.focus(&focus, app);
+        focus
+    })
+}
+
 #[gpui::test]
 fn authentication_prompt_focuses_first_input_before_typing(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -673,16 +690,7 @@ fn authentication_prompt_preserves_user_focus_on_redraw_and_unrelated_snapshot(
         let input = cx.update(|_window, app| first_auth_input(view.read(app), kind));
         cx.simulate_input("partly-entered-credential");
 
-        let other_focus = cx.update(|window, app| {
-            let focus = view
-                .read(app)
-                .main_pane
-                .read(app)
-                .diff_panel_focus_handle
-                .clone();
-            window.focus(&focus, app);
-            focus
-        });
+        let other_focus = focus_diff_panel(cx, &view);
         test_support::redraw(cx);
         assert!(
             cx.update(|window, _app| other_focus.is_focused(window)),
@@ -725,16 +733,7 @@ fn validating_authentication_prompt_preserves_focus_and_rejection_refocuses_inpu
         apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
         let input = cx.update(|_window, app| first_auth_input(view.read(app), kind));
-        let other_focus = cx.update(|window, app| {
-            let focus = view
-                .read(app)
-                .main_pane
-                .read(app)
-                .diff_panel_focus_handle
-                .clone();
-            window.focus(&focus, app);
-            focus
-        });
+        let other_focus = focus_diff_panel(cx, &view);
 
         // The first delivered snapshot can already be checking a submitted secret.
         prompt.status = AuthPromptStatus::Validating;
@@ -774,6 +773,39 @@ fn validating_authentication_prompt_preserves_focus_and_rejection_refocuses_inpu
         cx.update(|_window, app| {
             assert_eq!(input.read(app).text(), "corrected-credential");
         });
+    }
+}
+
+#[gpui::test]
+fn dismissed_authentication_prompt_returns_focus_it_took(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, _app| window.activate());
+        cx.run_until_parked();
+        let mut state = auth_pull_state(kind);
+        let prompt = state.auth_prompt.take();
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        let diff_focus = focus_diff_panel(cx, &view);
+
+        state.auth_prompt = prompt;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        let input = cx.update(|_window, app| first_auth_input(view.read(app), kind));
+        assert!(cx.update(|window, app| input.read(app).focus_handle().is_focused(window)));
+
+        // Escape dismisses the prompt; the store then publishes it as gone.
+        cx.update(|_window, app| view.update(app, |view, cx| view.cancel_auth_prompt(cx)));
+        state.auth_prompt = None;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(
+            cx.update(|window, _app| diff_focus.is_focused(window)),
+            "dismissing the {kind:?} prompt must return focus to where it was"
+        );
     }
 }
 

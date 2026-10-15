@@ -391,20 +391,26 @@ impl Render for GitCometView {
                 input.set_read_only(is_validating, cx);
             });
             if is_new_prompt && !is_validating {
-                match prompt.kind {
+                let first_input = match prompt.kind {
                     AuthPromptKind::UsernamePassword => {
-                        window.focus(&self.auth_prompt_username_input.read(cx).focus_handle(), cx);
+                        Some(self.auth_prompt_username_input.clone())
                     }
-                    AuthPromptKind::Passphrase => {
-                        window.focus(&self.auth_prompt_secret_input.read(cx).focus_handle(), cx);
-                    }
-                    AuthPromptKind::HostVerification => {}
+                    AuthPromptKind::Passphrase => Some(self.auth_prompt_secret_input.clone()),
+                    AuthPromptKind::HostVerification => None,
+                };
+                if let Some(input) = first_input {
+                    self.focus_new_auth_prompt(&input, window, cx);
                 }
             }
 
             let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
+            let is_pin = prompt
+                .challenge
+                .as_ref()
+                .is_some_and(|challenge| challenge.is_pin());
             let title = match prompt.kind {
                 AuthPromptKind::UsernamePassword => "Repository authentication required",
+                AuthPromptKind::Passphrase if is_pin => "Security key PIN required",
                 AuthPromptKind::Passphrase => "Passphrase required",
                 AuthPromptKind::HostVerification => "Host authenticity confirmation required",
             };
@@ -414,6 +420,9 @@ impl Render for GitCometView {
                 match prompt.kind {
                     AuthPromptKind::UsernamePassword => {
                         "Enter username and password, then confirm to continue."
+                    }
+                    AuthPromptKind::Passphrase if is_pin => {
+                        "Enter your security key's PIN, then confirm to continue."
                     }
                     AuthPromptKind::Passphrase => {
                         "Enter your key passphrase, then confirm to continue."
@@ -535,6 +544,7 @@ impl Render for GitCometView {
             );
         } else {
             self.auth_prompt_key = None;
+            self.restore_focus_after_auth_prompt(window, cx);
         }
 
         let mut root = div()

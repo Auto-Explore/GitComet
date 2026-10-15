@@ -135,7 +135,10 @@ pub fn take_staged_git_auth() -> Option<StagedGitAuth> {
     }
 }
 
-pub fn remember_session_passphrase(prompt: &str, passphrase: &str) {
+/// Production caching goes through `remember_verified_passphrase`; tests use
+/// this to seed an unbound entry.
+#[cfg(test)]
+pub(crate) fn remember_session_passphrase(prompt: &str, passphrase: &str) {
     if prompt.is_empty() || passphrase.is_empty() {
         return;
     }
@@ -166,14 +169,6 @@ pub fn load_session_passphrases() -> Vec<CachedPassphraseEntry> {
         .collect()
 }
 
-pub fn remember_passphrase_prompt_from_staged_git_auth(auth: &StagedGitAuth, prompt: Option<&str>) {
-    if auth.kind == GitAuthKind::Passphrase
-        && let Some(prompt) = prompt
-    {
-        remember_session_passphrase(prompt, &auth.secret);
-    }
-}
-
 /// Stages thread-owned credentials and clears them again on drop.
 ///
 /// Effect executors hold this guard for the whole effect run so credentials
@@ -200,7 +195,7 @@ impl Drop for ScopedStagedGitAuth {
 mod tests {
     use super::{
         GitAuthKind, StagedGitAuth, clear_session_passphrase, load_session_passphrases,
-        remember_passphrase_prompt_from_staged_git_auth, remember_session_passphrase,
+        remember_session_passphrase,
     };
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -255,63 +250,6 @@ mod tests {
 
         clear_session_passphrase();
         assert!(load_session_passphrases().is_empty());
-    }
-
-    #[test]
-    fn remember_passphrase_prompt_from_staged_git_auth_caches_only_passphrases() {
-        let _lock = auth_test_lock();
-        clear_session_passphrase();
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::UsernamePassword,
-                username: Some("alice".to_string()),
-                secret: "token-123".to_string(),
-                challenge: None,
-            },
-            Some("Enter passphrase for key '/tmp/key-a':"),
-        );
-        assert!(load_session_passphrases().is_empty());
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::HostVerification,
-                username: None,
-                secret: "yes".to_string(),
-                challenge: None,
-            },
-            Some("Enter passphrase for key '/tmp/key-a':"),
-        );
-        assert!(load_session_passphrases().is_empty());
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::Passphrase,
-                username: None,
-                secret: "ssh-passphrase".to_string(),
-                challenge: None,
-            },
-            None,
-        );
-        assert!(load_session_passphrases().is_empty());
-
-        remember_passphrase_prompt_from_staged_git_auth(
-            &StagedGitAuth {
-                kind: GitAuthKind::Passphrase,
-                username: None,
-                secret: "ssh-passphrase".to_string(),
-                challenge: None,
-            },
-            Some("Enter passphrase for key '/tmp/key-a':"),
-        );
-        assert_eq!(load_session_passphrases().len(), 1);
-        assert_eq!(
-            load_session_passphrases()[0].prompt,
-            "Enter passphrase for key '/tmp/key-a':"
-        );
-        assert_eq!(load_session_passphrases()[0].secret, "ssh-passphrase");
-
-        clear_session_passphrase();
     }
 
     #[test]

@@ -11,8 +11,8 @@ use crate::msg::{Effect, Msg, RepoCommandKind};
 #[cfg(test)]
 use gitcomet_core::auth::stage_git_auth;
 use gitcomet_core::auth::{
-    AuthOutcome, GitAuthKind, PassphraseValidation, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth,
-    clear_staged_git_auth,
+    AuthChallenge, AuthOutcome, GitAuthKind, PassphraseValidation, SSH_PASSPHRASE_PROMPT_MARKER,
+    StagedGitAuth, clear_staged_git_auth,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::{
@@ -94,7 +94,7 @@ fn auth_prompt_for_error(error: &Error, operation: AuthRetryOperation) -> Option
         _ => (None, AuthPromptStatus::AwaitingInput),
     };
     let reason = if status == AuthPromptStatus::Rejected {
-        rejected_auth_reason(kind).to_string()
+        rejected_auth_reason(kind, challenge.as_ref()).to_string()
     } else {
         challenge.as_ref().map_or_else(
             || util::format_error_for_user(error),
@@ -111,8 +111,11 @@ fn auth_prompt_for_error(error: &Error, operation: AuthRetryOperation) -> Option
     })
 }
 
-fn rejected_auth_reason(kind: AuthPromptKind) -> &'static str {
+fn rejected_auth_reason(kind: AuthPromptKind, challenge: Option<&AuthChallenge>) -> &'static str {
     match kind {
+        AuthPromptKind::Passphrase if challenge.is_some_and(AuthChallenge::is_pin) => {
+            "The security key PIN was not accepted. Try again."
+        }
         AuthPromptKind::Passphrase => "The passphrase could not unlock this key. Try again.",
         AuthPromptKind::UsernamePassword => "The credentials were rejected. Enter them again.",
         AuthPromptKind::HostVerification => "The host confirmation was not accepted.",
@@ -123,6 +126,17 @@ fn cancel_auth_validation(state: &mut AppState) {
     if let Some(cancellation) = state.auth_validation_cancellation.take() {
         cancellation.cancel();
     }
+}
+
+/// Only one prompt is answerable at a time. A newer request for the same
+/// operation supersedes it, but another operation's request must not discard
+/// it: that failure is reported as an ordinary error instead, and its
+/// operation can be retried once the pending prompt is answered.
+fn may_install_auth_prompt(state: &AppState, prompt: &AuthPromptState) -> bool {
+    state
+        .auth_prompt
+        .as_ref()
+        .is_none_or(|pending| pending.operation == prompt.operation)
 }
 
 fn install_auth_prompt(state: &mut AppState, mut prompt: AuthPromptState) {
@@ -562,20 +576,16 @@ pub(super) fn auth_prompt_validated(
     }) {
         return Vec::new();
     }
-    let cancelled = state
-        .auth_validation_cancellation
-        .take()
-        .is_some_and(|token| token.is_cancelled());
-    if cancelled {
-        return cancel_auth_prompt(state);
-    }
+    // Cancelling or replacing the prompt also cancels its token, and both
+    // change the prompt the guard above checks, so this validation is current.
+    state.auth_validation_cancellation = None;
     let mut prompt = state
         .auth_prompt
         .take()
         .expect("validated authentication prompt");
     if result == PassphraseValidation::Rejected {
         prompt.status = AuthPromptStatus::Rejected;
-        prompt.reason = rejected_auth_reason(prompt.kind).to_string();
+        prompt.reason = rejected_auth_reason(prompt.kind, prompt.challenge.as_ref()).to_string();
         install_auth_prompt(state, prompt);
         return Vec::new();
     }
@@ -654,7 +664,8 @@ pub(super) fn clone_repo_finished(
     let auth_prompt = result
         .as_ref()
         .err()
-        .and_then(|error| auth_prompt_for_clone(&url, &dest, error));
+        .and_then(|error| auth_prompt_for_clone(&url, &dest, error))
+        .filter(|prompt| may_install_auth_prompt(state, prompt));
     let effects =
         repo_management::clone_repo_finished(state, url, dest, result, auth_prompt.is_some());
     if let Some(prompt) = auth_prompt {
@@ -718,7 +729,8 @@ pub(super) fn commit_finished(
     let auth_prompt = result
         .as_ref()
         .err()
-        .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
+        .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error))
+        .filter(|prompt| may_install_auth_prompt(state, prompt));
     let mut effects = actions_emit_effects::commit_finished(
         state,
         repo_id,
@@ -762,7 +774,8 @@ pub(super) fn safe_push_after_commit_finished(
     let auth_prompt = result
         .as_ref()
         .err()
-        .and_then(|error| auth_prompt_for_safe_push_after_commit(repo_id, context.clone(), error));
+        .and_then(|error| auth_prompt_for_safe_push_after_commit(repo_id, context.clone(), error))
+        .filter(|prompt| may_install_auth_prompt(state, prompt));
     let effects = actions_emit_effects::safe_push_after_commit_finished(
         repos,
         state,
@@ -788,7 +801,8 @@ pub(super) fn repo_command_finished(
     let auth_prompt = result
         .as_ref()
         .err()
-        .and_then(|error| auth_prompt_for_repo_command(repo_id, &command, error));
+        .and_then(|error| auth_prompt_for_repo_command(repo_id, &command, error))
+        .filter(|prompt| may_install_auth_prompt(state, prompt));
     let removed_worktree_path = match (&command, &result) {
         (RepoCommandKind::RemoveWorktree { path }, Ok(_)) => Some(path.clone()),
         (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),
@@ -871,8 +885,7 @@ pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<Auth
         .unwrap_or(message);
     let lower = message.to_ascii_lowercase();
 
-    if lower.contains("would be overwritten")
-        || lower.contains("automatic merge failed")
+    if gitcomet_core::error::git_output_reports_local_refusal(&lower)
         || lower.contains("connection timed out")
         || lower.contains("requested url returned error: 403")
     {

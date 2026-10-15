@@ -510,3 +510,56 @@ fn structured_rejected_credentials_and_new_key_challenges_preserve_their_identit
     assert_eq!(prompt.challenge.as_ref(), Some(&second));
     assert_eq!(prompt.status, AuthPromptStatus::AwaitingInput);
 }
+
+#[test]
+fn security_key_pin_is_replayed_directly_and_its_rejection_says_pin() {
+    let _lock = super::super::staged_auth_test_lock();
+    clear_session_passphrase();
+    let (mut repos, mut state) = setup_open_repo(RepoId(1), "/tmp/repo");
+    let pin = AuthChallenge::from_prompt(
+        GitAuthKind::Passphrase,
+        "Enter PIN for ED25519-SK key SHA256:0123456789abcdefghijklmnopqrstuvwxyzABCDEFG: ",
+    );
+    assert!(pin.is_pin() && pin.key_path.is_none());
+    finish_pull(
+        &mut repos,
+        &mut state,
+        outcome_error(
+            AuthOutcome::NeedsInput(pin.clone()),
+            GitFailureId::CommandFailed,
+            "git@github.com: Permission denied (publickey).",
+        ),
+    );
+    let prompt = state.auth_prompt.clone().expect("PIN prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
+    assert_eq!(prompt.status, AuthPromptStatus::AwaitingInput);
+
+    // No local key file to check a PIN against, so it goes straight to Git.
+    let effects = reduce(
+        &mut repos,
+        &AtomicU64::new(1),
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            generation: prompt.generation,
+            username: None,
+            secret: "123456".into(),
+        },
+    );
+    assert!(effects.iter().any(|effect| effect.git_auth().is_some()));
+
+    finish_pull(
+        &mut repos,
+        &mut state,
+        outcome_error(
+            AuthOutcome::Rejected(pin),
+            GitFailureId::CommandFailed,
+            "git@github.com: Permission denied (publickey).",
+        ),
+    );
+    let prompt = state.auth_prompt.as_ref().expect("PIN retry prompt");
+    assert_eq!(prompt.status, AuthPromptStatus::Rejected);
+    assert_eq!(
+        prompt.reason,
+        "The security key PIN was not accepted. Try again."
+    );
+}
