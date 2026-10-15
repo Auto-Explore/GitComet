@@ -728,7 +728,8 @@ The kit's real-text test backend loads its two faces from
 `gitcomet_fonts::{IBM_PLEX_SANS_REGULAR_BYTES, LILEX_REGULAR_BYTES}` instead of
 `include_bytes!` paths into a sibling crate, so it works for any downstream
 crate. `gitcomet-extension-api` gains a `test-support` feature with
-`FakeWindowHost`: workspace state in memory, recorded requests (notifications,
+`fake_host::FakeWindowHost` (a module name the host's glob imports cannot
+confuse with its own `test_support`): workspace state in memory, recorded requests (notifications,
 toasts, dialogs, menus, navigation, panels, URLs) and dispatched messages, and
 `HostError::Unsupported` for panes and lists that need a real window. The
 example extension uses it for two new tests of review counting and the reset

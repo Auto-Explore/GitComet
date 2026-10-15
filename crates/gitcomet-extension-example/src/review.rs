@@ -826,7 +826,7 @@ impl Extension for ReviewExtension {
 mod tests {
     use super::*;
     use gitcomet_extension_api::Registry;
-    use gitcomet_extension_api::test_support::{FakeWindowHost, HostRequest};
+    use gitcomet_extension_api::fake_host::{FakeWindowHost, HostRequest};
 
     #[test]
     fn every_contribution_registers_and_validates() {

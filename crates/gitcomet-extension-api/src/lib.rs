@@ -15,7 +15,7 @@
 //! revision-pinned integration APIs: extensions may read existing state and
 //! dispatch existing messages, but reducers stay the host's.
 //!
-//! Tests can run extension code against `test_support::FakeWindowHost`
+//! Tests can run extension code against `fake_host::FakeWindowHost`
 //! (`test-support` feature), which keeps workspace state in memory and records
 //! the dialogs, notifications and messages an extension asks for.
 
@@ -40,7 +40,7 @@ pub mod registry;
 pub mod services;
 pub mod storage;
 #[cfg(feature = "test-support")]
-pub mod test_support;
+pub mod fake_host;
 pub use services::{RepositoryReader, StoreView, SyntaxService};
 
 pub use contributions::{
