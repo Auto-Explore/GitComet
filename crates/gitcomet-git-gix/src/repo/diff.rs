@@ -437,9 +437,7 @@ impl GixRepo {
             )))
         })?;
         let converted;
-        let normalized = if attributes.working_tree_encoding().is_some() && !attributes.has_filter {
-            // gix only knows WHATWG labels (and reads `latin-1` as cp1252);
-            // git uses iconv's. Decode with ours, then normalize EOL and ident.
+        let normalized = if super::text_attributes::decodes_working_tree_encoding(&attributes) {
             converted = worktree_encoding_to_git(repo, &index, path, &full, &attributes)?;
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(&converted)
         } else {
@@ -1386,7 +1384,7 @@ fn conflict_file_stages_from_stage_data(
 
 /// `convert_to_git` for a `working-tree-encoding` file: decode to UTF-8, then
 /// apply the path's line-ending and ident normalization.
-fn worktree_encoding_to_git(
+pub(super) fn worktree_encoding_to_git(
     repo: &gix::Repository,
     index: &gix::index::State,
     path: &Path,

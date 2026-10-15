@@ -111,6 +111,13 @@ enum AttrValue {
     Value(String),
 }
 
+/// Whether a file's git form comes from our decoder, then EOL and ident
+/// normalization, instead of gix's pipeline: gix only knows WHATWG labels
+/// (and reads `latin-1` as cp1252), git uses iconv's.
+pub(super) fn decodes_working_tree_encoding(attributes: &TextAttributes) -> bool {
+    attributes.working_tree_encoding().is_some() && !attributes.has_filter
+}
+
 fn selected_attribute_values(
     repo: &gix::Repository,
     path: &Path,

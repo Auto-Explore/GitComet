@@ -453,27 +453,56 @@ fn unstaged_entry_line_stats(
     }
 }
 
-/// Reads worktree files as git would store them, through the worktree->git
-/// filters, keeping attribute caches and filter processes across files. A
-/// file the LFS clean filter takes is not read: cleaning would hash and store
-/// the payload on every refresh, only to count changed pointer lines.
+/// Reads worktree files as git would store them, keeping attribute caches
+/// and filter processes across files. A file the LFS clean filter takes is
+/// not read: cleaning would hash and store the payload on every refresh, only
+/// to count changed pointer lines.
 struct WorktreeReader<'repo> {
     repo: &'repo gix::Repository,
     workdir: &'repo std::path::Path,
-    pipeline: Option<(
-        gix::filter::Pipeline<'repo>,
-        gix::worktree::IndexPersistedOrInMemory,
-    )>,
-    lfs_clean: LfsCleanFilter<'repo>,
+    /// `None` when the filters or attributes cannot be loaded: nothing reads.
+    filters: Option<Filters<'repo>>,
+}
+
+/// The worktree->git filters and the attributes a read decides on.
+struct Filters<'repo> {
+    pipeline: gix::filter::Pipeline<'repo>,
+    index: gix::worktree::IndexPersistedOrInMemory,
+    attributes: gix::AttributeStack<'repo>,
+    /// `filter` and `working-tree-encoding`, in that order.
+    selected: gix::attrs::search::Outcome,
+    lfs_driver: bool,
 }
 
 impl<'repo> WorktreeReader<'repo> {
     fn new(repo: &'repo gix::Repository, workdir: &'repo std::path::Path) -> Self {
+        let filters = repo
+            .filter_pipeline(None)
+            .ok()
+            .and_then(|(pipeline, index)| {
+                let attributes = repo
+                    .attributes_only(
+                        &index,
+                        gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+                    )
+                    .ok()?;
+                let config = repo.config_snapshot();
+                let lfs_driver = ["filter.lfs.process", "filter.lfs.clean"]
+                    .into_iter()
+                    .any(|key| config.string(key).is_some());
+                Some(Filters {
+                    selected: attributes
+                        .selected_attribute_matches(["filter", "working-tree-encoding"]),
+                    pipeline,
+                    index,
+                    attributes,
+                    lfs_driver,
+                })
+            });
         Self {
             repo,
             workdir,
-            pipeline: repo.filter_pipeline(None).ok(),
-            lfs_clean: LfsCleanFilter::Unprobed,
+            filters,
         }
     }
 
@@ -493,6 +522,7 @@ impl<'repo> WorktreeReader<'repo> {
     /// the size cap, unreadable, or left to the LFS clean filter; binary is
     /// left to `line_stats_from_bytes`.
     fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
+        use gix::attrs::StateRef;
         use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
         use std::io::Read as _;
 
@@ -514,17 +544,45 @@ impl<'repo> WorktreeReader<'repo> {
         if !metadata.is_file() || metadata.len() > COMMIT_STATS_MAX_BLOB_BYTES as u64 {
             return false;
         }
-        let Some((pipeline, index)) = self.pipeline.as_mut() else {
+        let Some(Filters {
+            pipeline,
+            index,
+            attributes,
+            selected,
+            lfs_driver,
+        }) = self.filters.as_mut()
+        else {
             return false;
         };
         let Ok(path) = gix::path::into_bstr(relative) else {
             return false;
         };
-        if self.lfs_clean.runs_for(self.repo, index, path.as_ref()) {
+        let Ok(platform) = attributes.at_entry(path.as_ref(), None) else {
+            return false;
+        };
+        platform.matching_attributes(selected);
+        let mut states = selected
+            .iter_selected()
+            .map(|matched| matched.assignment.state);
+        let (filter, encoding) = (states.next(), states.next());
+        if *lfs_driver && matches!(filter, Some(StateRef::Value(value)) if value.as_bstr() == "lfs")
+        {
             return false;
         }
         #[cfg(test)]
         LINE_STATS_WORKTREE_READS.with(|reads| reads.set(reads.get() + 1));
+        if matches!(encoding, Some(StateRef::Value(_))) {
+            let text = super::text_attributes::resolve_text_attributes(self.repo, relative);
+            if super::text_attributes::decodes_working_tree_encoding(&text) {
+                let Ok(bytes) =
+                    super::diff::worktree_encoding_to_git(self.repo, index, relative, &full, &text)
+                else {
+                    return false;
+                };
+                out.extend_from_slice(&bytes);
+                return true;
+            }
+        }
         let Ok(file) = std::fs::File::open(&full) else {
             return false;
         };
@@ -539,62 +597,6 @@ impl<'repo> WorktreeReader<'repo> {
                 true
             }
         }
-    }
-}
-
-/// Whether reading a path runs the LFS clean filter: `filter=lfs` selects it
-/// and a driver is configured. Probed at the first read that needs it.
-enum LfsCleanFilter<'repo> {
-    Unprobed,
-    Off,
-    On(Box<LfsAttributes<'repo>>),
-}
-
-struct LfsAttributes<'repo> {
-    stack: gix::AttributeStack<'repo>,
-    outcome: gix::attrs::search::Outcome,
-}
-
-impl<'repo> LfsCleanFilter<'repo> {
-    fn runs_for(
-        &mut self,
-        repo: &'repo gix::Repository,
-        index: &gix::index::File,
-        path: &gix::bstr::BStr,
-    ) -> bool {
-        if let Self::Unprobed = self {
-            let config = repo.config_snapshot();
-            let configured = ["filter.lfs.process", "filter.lfs.clean"]
-                .into_iter()
-                .any(|key| config.string(key).is_some());
-            *self = configured
-                .then(|| {
-                    repo.attributes_only(
-                        index,
-                        gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-                    )
-                    .ok()
-                })
-                .flatten()
-                .map_or(Self::Off, |stack| {
-                    Self::On(Box::new(LfsAttributes {
-                        outcome: stack.selected_attribute_matches(["filter"]),
-                        stack,
-                    }))
-                });
-        }
-        let Self::On(attributes) = self else {
-            return false;
-        };
-        let LfsAttributes { stack, outcome } = attributes.as_mut();
-        let Ok(platform) = stack.at_entry(path, None) else {
-            // Unknown attributes: assume the filter runs, as before.
-            return true;
-        };
-        platform.matching_attributes(outcome);
-        outcome.iter_selected().any(|matched| {
-            matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == "lfs")
-        })
     }
 }
 
@@ -699,6 +701,40 @@ mod tests {
         }
         assert_eq!(LINE_STATS_WORKTREE_READS.with(|reads| reads.get()), 0);
         assert!(!ran.exists(), "the LFS clean filter must not run");
+    }
+
+    /// A `working-tree-encoding` file counts the lines git stores, decoded
+    /// with git's (iconv) labels as the diff panel decodes them; gix knows
+    /// only WHATWG labels.
+    #[test]
+    fn working_tree_encoded_files_count_their_decoded_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        let utf16 = |text: &str| -> Vec<u8> {
+            [0xFF, 0xFE]
+                .into_iter()
+                .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+                .collect()
+        };
+        write_file(
+            dir,
+            ".gitattributes",
+            "*.txt working-tree-encoding=UTF-16LE-BOM\n",
+        );
+        std::fs::write(dir.join("tracked.txt"), utf16("a\n")).unwrap();
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        std::fs::write(dir.join("tracked.txt"), utf16("a\nb\n")).unwrap();
+        std::fs::write(dir.join("new.txt"), utf16("a\nb\nc\n")).unwrap();
+
+        let stats = open_repo(dir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap();
+
+        let unstaged = |path: &str| counts(stats.unstaged.get(std::path::Path::new(path)));
+        assert_eq!(unstaged("tracked.txt"), Some((Some(1), Some(0))));
+        assert_eq!(unstaged("new.txt"), Some((Some(3), Some(0))));
     }
 
     /// `git lfs track` leaves `.gitattributes` uncommitted at first; the
