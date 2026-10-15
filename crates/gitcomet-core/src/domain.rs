@@ -593,8 +593,8 @@ pub struct FileStatus {
     pub conflict: Option<FileConflictKind>,
 }
 
-/// `None` means unknown: binary, over the size cap, or content left unread
-/// (an LFS or annex payload).
+/// `None` means unknown: binary, over the size cap, unreadable or gone when
+/// read, or content left unread (an LFS or annex payload).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LineStats {
     pub additions: Option<u32>,
