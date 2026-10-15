@@ -542,3 +542,23 @@ an unmatched `--exact` filter would otherwise pass without running anything.
 | Test build, 4 jobs (CI runner size) | 26.1 s | 23.1 s |
 | Test build, 32 jobs | 17.3 s | 14.7 s |
 | Integration test binaries on disk (test profile) | 3.5 GB | 158 MB |
+
+### 0.5 Monitor quiet checks on Linux
+
+A monitor test's `quiet()` waited a fixed three seconds for no refresh. On
+Linux, inotify queues events in order as they happen, so `quiet()` now repeats
+native checkpoints (cookie round trip plus drain) until a round observes no
+other native event, then requires that no refresh was sent. macOS and Windows
+keep the timed window, as do monitors without native coverage: there a cookie
+cannot order cache-delayed or coalesced events. A new test shows the faster
+check still reports a refresh caused by an earlier edit.
+
+| Measurement (Linux, `-E 'test(repo_monitor)'`, nextest `ci` profile) | Before | After |
+|---|---|---|
+| Cumulative test time | 274.0 s | 99.5 s |
+| Wall time at 4 test threads | ~70 s | 26 s |
+| Slowest test | 19.3 s | 10.1 s |
+
+The monitor stays inside `gitcomet-state` for now. The remaining time is in
+tests that wait for throttled recovery or churn for fixed periods by design, and
+moving the module into its own crate would not change test time.

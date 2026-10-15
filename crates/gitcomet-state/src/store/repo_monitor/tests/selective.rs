@@ -887,11 +887,42 @@ impl RunningMonitor {
     #[track_caller]
     fn quiet(&self) {
         let _timing = super::super::test_sync::WaitTiming::new("quiet");
+        #[cfg(target_os = "linux")]
+        if !self.callbacks_redirected && self.native_quiet(Instant::now() + SYNC_TIMEOUT) {
+            let result = self.rx.try_recv();
+            assert!(
+                matches!(result, Err(mpsc::TryRecvError::Empty)),
+                "unexpected refresh while quiet: {result:?}"
+            );
+            return;
+        }
         let result = self.rx.recv_timeout(QUIET_WINDOW);
         assert!(
             matches!(result, Err(mpsc::RecvTimeoutError::Timeout)),
             "unexpected refresh while quiet: {result:?}"
         );
+    }
+
+    /// inotify queues events in order as they happen, so a checkpoint round
+    /// that observes no other native event proves every earlier event was
+    /// delivered and drained. Repeats until such a round; false when native
+    /// coverage is unavailable and the caller must observe a quiet window.
+    #[cfg(target_os = "linux")]
+    fn native_quiet(&self, deadline: Instant) -> bool {
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "native events did not quiet down: {:?}",
+                self.observations
+            );
+            let before = self.observations.sequence();
+            match self.checkpoint_native(deadline) {
+                Ok(_) if self.observations.sequence() == before => return true,
+                Ok(_) => {}
+                Err(SyncError::Unavailable(_)) => return false,
+                Err(error) => panic!("native synchronization failed: {error:?}"),
+            }
+        }
     }
 }
 impl Drop for RunningMonitor {
