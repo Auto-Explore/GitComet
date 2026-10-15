@@ -1295,3 +1295,53 @@ fn repository_windows_keep_their_panes_around_documents_until_the_repository_nav
         "opening a file in the repository takes the main slot back"
     );
 }
+
+/// Caret blinks and moves notify the editor's input as often as typing does;
+/// only a change to the text may fingerprint the whole document again.
+#[gpui::test]
+fn standalone_caret_notifies_do_not_refingerprint_the_document(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("caret.txt");
+    std::fs::write(&path, "original").unwrap();
+    cx.update(|_, app| {
+        let docs = root.read(app).documents.clone();
+        docs.update(app, |docs, cx| docs.open(path.clone(), true, cx));
+    });
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = root.read(app).documents.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| {
+            b.editing = true;
+            b.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("first edit", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+
+    let _ = super::text::take_text_fingerprints_for_tests();
+    for _ in 0..5 {
+        cx.update(|_, app| buffer.update(app, |b, cx| b.input.update(cx, |_, cx| cx.notify())));
+        cx.run_until_parked();
+    }
+    assert_eq!(super::text::take_text_fingerprints_for_tests(), 0);
+
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| {
+            b.input
+                .update(cx, |input, cx| input.set_text("original", cx));
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        !buffer.read_with(cx, |b, _| b.dirty()),
+        "typing back the saved text is still reported"
+    );
+}

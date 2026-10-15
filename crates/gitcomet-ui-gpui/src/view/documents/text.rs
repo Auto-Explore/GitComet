@@ -62,6 +62,9 @@ pub(in crate::view) fn encode_for_save(
 pub(in crate::view) fn file_editor_text_fingerprint(snapshot: &TextModelSnapshot) -> u64 {
     use std::hash::Hasher;
 
+    #[cfg(test)]
+    TEXT_FINGERPRINTS.with(|count| count.set(count.get() + 1));
+
     let mut hasher = FxHasher::default();
     hasher.write_usize(snapshot.len());
     // Chunk-wise, so a large file is never flattened into one string just to be
@@ -70,6 +73,17 @@ pub(in crate::view) fn file_editor_text_fingerprint(snapshot: &TextModelSnapshot
         hasher.write(chunk.as_bytes());
     }
     hasher.finish()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEXT_FINGERPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Buffers fingerprinted on this thread since the last call.
+#[cfg(test)]
+pub(in crate::view) fn take_text_fingerprints_for_tests() -> usize {
+    TEXT_FINGERPRINTS.with(|count| count.replace(0))
 }
 
 #[cfg(test)]

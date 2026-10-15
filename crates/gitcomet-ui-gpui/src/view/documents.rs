@@ -364,6 +364,7 @@ struct StandaloneBuffer {
     wrap_row_starts: Vec<usize>,
     wrap: bool,
     syntax_key: Option<(u64, u64)>,
+    edit_key: Option<(u64, u64)>,
     syntax_serial: u64,
     syntax_task: Option<gpui::Task<()>>,
     diagram_key: Option<(PathBuf, u64, u64)>,
@@ -453,12 +454,13 @@ impl StandaloneBuffer {
         });
         let subscriptions = vec![cx.observe(&input, |this, _, cx| {
             if !this.loading() {
-                if this.editing {
-                    this.document.edit(
-                        file_editor_text_fingerprint(&this.input.read(cx).text_snapshot()),
-                        None,
-                        cx,
-                    );
+                let snapshot = this.input.read(cx).text_snapshot();
+                let key = (snapshot.model_id(), snapshot.revision());
+                // Caret blinks and moves notify too; only new text is an edit.
+                if this.editing && this.edit_key != Some(key) {
+                    this.edit_key = Some(key);
+                    this.document
+                        .edit(file_editor_text_fingerprint(&snapshot), None, cx);
                 }
                 this.refresh_syntax(cx);
             }
@@ -502,6 +504,7 @@ impl StandaloneBuffer {
             wrap_row_starts: Vec::new(),
             wrap,
             syntax_key: None,
+            edit_key: None,
             syntax_serial: 0,
             syntax_task: None,
             diagram_key: None,
