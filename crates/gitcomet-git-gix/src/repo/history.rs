@@ -977,20 +977,30 @@ impl GixRepo {
                 // The persisted editor only services steps the plan knew
                 // about; a message-editing step added to the todo outside
                 // GitComet would silently keep its old message.
+                let comment_char = planned_messages_comment_char(&repo, &messages)?;
                 if rebase_unplanned_message_edit(repo.path(), &plan) {
                     return Err(Error::new(ErrorKind::Backend(
-                        unplanned_rebase_edit_message(),
+                        unplanned_rebase_edit_message(comment_char),
                     )));
                 }
                 cmd.env("GIT_EDITOR", shell_quote_path(&editor));
+                if let Some(comment_char) = comment_char {
+                    cmd.arg("-c").arg(comment_char_config(comment_char));
+                }
                 cmd.env("GITCOMET_MSGS_DIR", messages);
                 cmd.env("GITCOMET_GIT_DIR", repo.path());
             }
-            PersistedReword::Damaged => {
+            PersistedReword::Damaged { messages } => {
+                // The hint is all that is left to give; unreadable messages
+                // leave it without the override rather than hide it.
+                let comment_char = planned_messages_comment_char(&repo, &messages)
+                    .ok()
+                    .flatten();
                 return Err(Error::new(ErrorKind::Backend(format!(
                     "{}'s reword data for this rebase is incomplete; continue it in a \
-                     terminal with `git rebase --continue`, or abort the rebase",
-                    gitcomet_core::identity::current().display_name()
+                     terminal with `{}`, or abort the rebase",
+                    gitcomet_core::identity::current().display_name(),
+                    continue_command(comment_char)
                 ))));
             }
             PersistedReword::Absent => {
@@ -1003,7 +1013,7 @@ impl GixRepo {
                 // in a terminal, continued here after a conflict).
                 if rebase_pending_message_edit(repo.path()) {
                     return Err(Error::new(ErrorKind::Backend(
-                        unplanned_rebase_edit_message(),
+                        unplanned_rebase_edit_message(None),
                     )));
                 }
                 cmd.env("GIT_EDITOR", "true");
@@ -1492,6 +1502,9 @@ impl GixRepo {
             cmd.env("GITCOMET_MSGS_DIR", &scripts.msgs_dir);
             let repo = self.repo();
             cmd.env("GITCOMET_GIT_DIR", repo.path());
+            if let Some(comment_char) = planned_messages_comment_char(&repo, &scripts.msgs_dir)? {
+                cmd.arg("-c").arg(comment_char_config(comment_char));
+            }
         }
         cmd.env("GITCOMET_TODO_FILE", &scripts.todo_path);
         let empty_policy = if entries.iter().any(|entry| {
@@ -1840,6 +1853,73 @@ impl GixRepo {
     }
 }
 
+/// `core.commentChar` values, in the order git's own `auto` setting tries them.
+const COMMENT_CHAR_CANDIDATES: [u8; 10] = *b"#;@!$%^&|:";
+
+/// The comment character a rebase installing `planned` messages must run
+/// with, or `None` when no configured prefix starts any of their lines. The
+/// message editor hands git each planned message as an edit, and git strips
+/// every edited line starting with the prefix (`#123 Fix crash`). Both
+/// `core.commentChar` and `core.commentString` count, since the one read last
+/// wins; `auto` picks from git's own message, not the planned one, so it
+/// always needs an override.
+fn comment_char_override(configured: &[Vec<u8>], planned: &[Vec<u8>]) -> Result<Option<u8>> {
+    let lines = || {
+        planned
+            .iter()
+            .flat_map(|message| message.split(|byte| *byte == b'\n'))
+    };
+    let collides = configured.iter().any(|prefix| {
+        prefix.eq_ignore_ascii_case(b"auto") || lines().any(|line| line.starts_with(prefix))
+    });
+    if !collides {
+        return Ok(None);
+    }
+    COMMENT_CHAR_CANDIDATES
+        .into_iter()
+        .find(|candidate| !lines().any(|line| line.first() == Some(candidate)))
+        .map(Some)
+        .ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "every comment character {} can choose starts a line of a planned \
+                 commit message, so git would delete those lines; reword in a terminal \
+                 instead",
+                gitcomet_core::identity::current().display_name()
+            )))
+        })
+}
+
+/// Every planned message installed for a rebase (none when `msgs_dir` is absent).
+fn read_planned_messages(msgs_dir: &Path) -> Result<Vec<Vec<u8>>> {
+    let io_error = |error: std::io::Error| Error::new(ErrorKind::Io(error.kind()));
+    let entries = match fs::read_dir(msgs_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(io_error(error)),
+    };
+    entries
+        .map(|entry| fs::read(entry?.path()))
+        .collect::<std::io::Result<_>>()
+        .map_err(io_error)
+}
+
+/// [`comment_char_override`] for the planned messages in `msgs_dir`.
+fn planned_messages_comment_char(repo: &gix::Repository, msgs_dir: &Path) -> Result<Option<u8>> {
+    let config = repo.config_snapshot();
+    let mut configured: Vec<Vec<u8>> = ["core.commentChar", "core.commentString"]
+        .into_iter()
+        .filter_map(|key| config.string(key).map(|value| value.to_vec()))
+        .collect();
+    if configured.is_empty() {
+        configured.push(b"#".to_vec());
+    }
+    comment_char_override(&configured, &read_planned_messages(msgs_dir)?)
+}
+
+fn comment_char_config(comment_char: u8) -> String {
+    format!("core.commentChar={}", char::from(comment_char))
+}
+
 struct RebaseScripts {
     _dir: tempfile::TempDir,
     seq_editor_path: PathBuf,
@@ -1980,7 +2060,7 @@ enum PersistedReword {
     /// A plan was persisted but is missing pieces (external deletion; the
     /// persist itself is atomic): continuing with it would silently drop
     /// rewords.
-    Damaged,
+    Damaged { messages: PathBuf },
 }
 
 fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
@@ -1998,7 +2078,7 @@ fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
             plan,
         }
     } else {
-        PersistedReword::Damaged
+        PersistedReword::Damaged { messages }
     }
 }
 
@@ -2227,20 +2307,68 @@ exit 0
     .to_string()
 }
 
-fn unplanned_rebase_edit_message() -> String {
+/// The terminal command that continues this rebase. A rebase started with a
+/// comment-character override wrote git's own instruction lines with it, so
+/// continuing without it would commit them.
+fn continue_command(comment_char: Option<u8>) -> String {
+    match comment_char {
+        Some(comment_char) => format!(
+            "git -c {} rebase --continue",
+            gitcomet_core::text_utils::shell_single_quote(&comment_char_config(comment_char))
+        ),
+        None => "git rebase --continue".to_string(),
+    }
+}
+
+fn unplanned_rebase_edit_message(comment_char: Option<u8>) -> String {
     format!(
         "this rebase has pending reword/squash steps that {} did not \
-         plan; continue it in a terminal with `git rebase --continue`, or \
-         abort the rebase",
-        gitcomet_core::identity::current().display_name()
+         plan; continue it in a terminal with `{}`, or abort the rebase",
+        gitcomet_core::identity::current().display_name(),
+        continue_command(comment_char)
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_todo_content, parse_interactive_rebase_log, shell_quote_path};
+    use super::{
+        build_todo_content, comment_char_override, continue_command, parse_interactive_rebase_log,
+        shell_quote_path,
+    };
     use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
     use std::path::Path;
+
+    #[test]
+    fn comment_char_override_keeps_the_configured_prefix_unless_a_planned_line_starts_with_it() {
+        let bytes = |values: &[&str]| -> Vec<Vec<u8>> {
+            values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect()
+        };
+        let decide = |configured: &[&str], planned: &[&str]| {
+            comment_char_override(&bytes(configured), &bytes(planned))
+        };
+        assert_eq!(decide(&["#"], &["Subject\n\nbody"]).unwrap(), None);
+        assert_eq!(decide(&[";"], &["#1 Subject"]).unwrap(), None);
+        assert_eq!(
+            decide(&["#"], &["#1 Subject\n\n; note"]).unwrap(),
+            Some(b'@')
+        );
+        assert_eq!(decide(&["//"], &["/ one slash"]).unwrap(), None);
+        assert_eq!(decide(&[";", "#"], &["#1 Subject"]).unwrap(), Some(b';'));
+        assert_eq!(decide(&["Auto"], &["Subject"]).unwrap(), Some(b'#'));
+        assert!(decide(&["#"], &["#\n;\n@\n!\n$\n%\n^\n&\n|\n:"]).is_err());
+    }
+
+    #[test]
+    fn continue_hint_quotes_the_comment_char_override() {
+        assert_eq!(continue_command(None), "git rebase --continue");
+        assert_eq!(
+            continue_command(Some(b';')),
+            "git -c 'core.commentChar=;' rebase --continue"
+        );
+    }
 
     #[test]
     fn conflicts_are_read_from_a_fresh_index_when_its_mtime_does_not_move() {
