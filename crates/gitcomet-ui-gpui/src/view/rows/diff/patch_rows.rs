@@ -1014,6 +1014,13 @@ pub(super) fn patch_split_column_row(
             line_kind,
         )
     });
+    let raw_text = match column {
+        PatchSplitColumn::Left => row.old.as_ref(),
+        PatchSplitColumn::Right => row.new.as_ref(),
+    }
+    .and_then(|text| {
+        diff_canvas::diff_text_paint_raw_text(text, streamed_spec.as_ref(), reveal_whitespace_chars)
+    });
 
     diff_canvas::patch_split_column_row_canvas(
         tab_width,
@@ -1030,11 +1037,7 @@ pub(super) fn patch_split_column_row(
         line_no,
         styled,
         streamed_spec,
-        match column {
-            PatchSplitColumn::Left => row.old.as_ref(),
-            PatchSplitColumn::Right => row.new.as_ref(),
-        }
-        .map(|text| text.as_ref()),
+        raw_text,
         reveal_whitespace_chars,
         show_line_numbers,
         wrap,

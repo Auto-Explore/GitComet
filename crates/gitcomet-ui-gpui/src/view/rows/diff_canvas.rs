@@ -619,6 +619,16 @@ pub(in crate::view) fn is_streamable_diff_text(
     text.len() >= STREAMED_DIFF_TEXT_MIN_BYTES && !text.has_tabs_without_loading()
 }
 
+/// The row text the paint payload reads: only a whitespace-revealing row that
+/// is not streamed needs it, so long lines are not loaded on every frame.
+pub(super) fn diff_text_paint_raw_text<'a>(
+    text: &'a gitcomet_core::file_diff::FileDiffLineText,
+    streamed_spec: Option<&StreamedDiffTextPaintSpec>,
+    reveal_whitespace_chars: bool,
+) -> Option<&'a str> {
+    (reveal_whitespace_chars && !should_stream_diff_text(streamed_spec)).then(|| text.as_ref())
+}
+
 pub(in crate::view) fn whitespace_visible_diff_offset_map(
     tab_width: usize,
     text: &str,
