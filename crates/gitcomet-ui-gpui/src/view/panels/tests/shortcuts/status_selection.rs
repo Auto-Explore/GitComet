@@ -109,7 +109,6 @@ fn preview(cx: &mut gpui::VisualTestContext, view: &View) -> Option<DiffTarget> 
 
 #[gpui::test]
 fn status_select_all_is_scoped_to_each_focused_section(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let before = preview(cx, &view);
     for (section, header, expected) in [
@@ -183,7 +182,6 @@ fn status_select_all_is_scoped_to_each_focused_section(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn status_select_all_can_be_reduced_to_a_range_and_then_nothing(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     // Start with the preview in a different section from the selection being edited.
     let before = preview(cx, &view);
@@ -245,7 +243,6 @@ fn status_select_all_can_be_reduced_to_a_range_and_then_nothing(cx: &mut gpui::T
 
 #[gpui::test]
 fn status_select_all_includes_collapsed_and_offscreen_files(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let mut repo = status_repo();
     let paths: Vec<_> = (0..100)
@@ -293,7 +290,6 @@ fn status_select_all_includes_collapsed_and_offscreen_files(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn status_select_all_leaves_text_inputs_and_other_shortcuts_intact(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let text = "a commit message";
     cx.update(|window, app| {
@@ -336,7 +332,6 @@ fn status_select_all_leaves_text_inputs_and_other_shortcuts_intact(cx: &mut gpui
 fn status_select_all_range_tracks_line_stats_and_refresh_prunes_only_missing_files(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     click_row(
         cx,
@@ -420,7 +415,6 @@ fn status_select_all_range_tracks_line_stats_and_refresh_prunes_only_missing_fil
 fn status_selection_staging_uses_remaining_paths_even_when_the_preview_is_excluded(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -526,7 +520,6 @@ fn status_selection_staging_uses_remaining_paths_even_when_the_preview_is_exclud
 fn diff_stage_and_advance_clears_only_the_consumed_singleton_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     for (section, shortcut, first, next) in [
         (StatusSection::CombinedUnstaged, "space", "a.rs", "b.rs"),
@@ -616,7 +609,6 @@ fn diff_stage_and_advance_clears_only_the_consumed_singleton_selection(
 fn status_select_all_on_empty_or_loading_sections_never_selects_diff_text(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     for status in [Loadable::Ready(Arc::new(vec![])), Loadable::Loading] {
         let mut repo = status_repo();
@@ -639,7 +631,6 @@ fn status_select_all_on_empty_or_loading_sections_never_selects_diff_text(
 
 #[gpui::test]
 fn status_section_space_rechecks_selection_before_deferred_staging(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = fixture(cx);
     let section = StatusSection::CombinedUnstaged;
     click_row(cx, section, 1, gpui::Modifiers::default());

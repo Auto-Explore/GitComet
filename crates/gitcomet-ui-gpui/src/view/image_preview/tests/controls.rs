@@ -85,7 +85,6 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 
 #[gpui::test]
 fn linked_toolbar_controls_fit_narrow_panes(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, group, cx) = comparison(cx, 2);
     cx.update(|_, app| {
         // Include the extra animation control and a longer sampling label.
@@ -141,7 +140,6 @@ fn linked_toolbar_controls_fit_narrow_panes(cx: &mut gpui::TestAppContext) {
 fn unlinked_controls_zoom_only_their_image_and_relink_to_the_last_adjustment(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_, group, cx) = comparison(cx, 2);
     assert!(cx.debug_bounds("image_zoom").is_some());
     assert!(cx.debug_bounds("image_pane_controls_0").is_none());
@@ -197,7 +195,6 @@ fn unlinked_controls_zoom_only_their_image_and_relink_to_the_last_adjustment(
 fn unlinked_zoom_menu_keeps_its_pane_and_does_not_apply_to_another_file(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_, group, cx) = comparison(cx, 2);
     click(cx, "image_native");
     click(cx, "image_link");
@@ -224,7 +221,6 @@ fn unlinked_zoom_menu_keeps_its_pane_and_does_not_apply_to_another_file(
 
 #[gpui::test]
 fn three_way_controls_stay_in_their_panes_at_narrow_widths(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, group, cx) = comparison(cx, 3);
     click(cx, "image_native");
     click(cx, "image_link");

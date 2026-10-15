@@ -4,7 +4,6 @@ use super::*;
 
 #[gpui::test]
 fn startup_crash_report_is_visible_after_relaunch(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(backend);
     let config = GitCometViewConfig::normal(Some(StartupCrashReport {
@@ -32,7 +31,6 @@ fn startup_crash_report_is_visible_after_relaunch(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let recovery_dir = tempfile::tempdir().expect("create recovery state directory");
     let crash_log_path = recovery_dir.path().join("pending-startup-report.log");
     std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
@@ -69,7 +67,6 @@ fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui
 
 #[gpui::test]
 fn reporting_startup_crash_keeps_report_and_notification(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let report_dir = tempfile::tempdir().expect("create report directory");
     let crash_log_path = report_dir.path().join("pending-startup-report.log");
     std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
@@ -170,7 +167,6 @@ fn worktree_tooltip_includes_branch_name() {
 
 #[gpui::test]
 fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -214,7 +210,6 @@ fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui
 
 #[gpui::test]
 fn home_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -280,7 +275,6 @@ fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) 
 fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -361,7 +355,6 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
 fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappears(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -463,7 +456,6 @@ fn auth_prompt_banner_colors_use_accent_palette() {
 
 #[gpui::test]
 fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -515,7 +507,6 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
 
 #[gpui::test]
 fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -563,7 +554,6 @@ fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
 fn apply_state_snapshot_routes_clone_progress_errors_into_global_error_toasts(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -605,7 +595,6 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_error_toasts(
 
 #[gpui::test]
 fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -639,7 +628,6 @@ fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::T
 
 #[gpui::test]
 fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -676,7 +664,6 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
 fn try_auth_prompt_submit_username_password_empty_username_shows_error(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -711,7 +698,6 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
 
 #[gpui::test]
 fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -748,7 +734,6 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn outdated_git_shows_one_sticky_update_notice(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     crate::view::git_version_notice::reset_outdated_git_notice_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =

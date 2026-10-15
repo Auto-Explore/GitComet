@@ -70,7 +70,6 @@ fn focused(
 
 #[gpui::test]
 fn focused_diff_uses_the_common_pane_and_gate_at_each_width(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = focused(cx, false);
     cx.run_until_parked();
     test_support::redraw(cx);
@@ -124,7 +123,6 @@ fn focused_diff_uses_the_common_pane_and_gate_at_each_width(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn focused_diff_escape_and_q_close_the_window(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for key in ["escape", "q"] {
         let (view, cx) = focused(cx, true);
         cx.run_until_parked();
@@ -149,7 +147,6 @@ fn focused_diff_escape_and_q_close_the_window(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn focused_diff_close_runs_extension_guards(cx: &mut gpui::TestAppContext) {
     use gitcomet_extension_api::*;
-    let _guard = crate::test_support::lock_visual_test();
     struct Guard;
     impl Extension for Guard {
         fn id(&self) -> ExtensionId {
@@ -226,7 +223,6 @@ fn focused_diff_close_runs_extension_guards(cx: &mut gpui::TestAppContext) {
 /// windows Git itself opens are gated like the main one.
 #[gpui::test]
 fn extension_gates_cover_focused_diff_and_mergetool_roots(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     install_example_registry(cx);
     cx.update(|cx| gitcomet_extension_example::review::set_gated(true, cx));
     {
@@ -264,7 +260,6 @@ fn extension_gates_cover_focused_diff_and_mergetool_roots(cx: &mut gpui::TestApp
 #[gpui::test]
 fn cancelling_the_focused_mergetool_runs_the_close_guards(cx: &mut gpui::TestAppContext) {
     use gitcomet_extension_api::*;
-    let _guard = crate::test_support::lock_visual_test();
     struct Guard;
     impl Extension for Guard {
         fn id(&self) -> ExtensionId {

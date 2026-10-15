@@ -5,7 +5,7 @@ pub(super) use super::main::{
     show_external_mergetool_actions,
 };
 pub(super) use super::*;
-pub(super) use crate::test_support::{lock_clipboard_test, lock_visual_test};
+pub(super) use crate::test_support::lock_clipboard_test;
 pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
 pub(super) use crate::view::show_diff_file_navigation;
 pub(super) use crate::view::test_support::TestBackend;
@@ -1024,7 +1024,6 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
     new_text: Option<&str>,
     create_worktree_file: bool,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

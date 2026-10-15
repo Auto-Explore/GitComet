@@ -88,7 +88,6 @@ fn assert_ref_node_paint(
 /// there. Pane animations follow the same runtime policy.
 #[gpui::test]
 fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -155,7 +154,6 @@ fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::
 fn history_repeated_author_dot_animates_with_cached_selection_frames(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
@@ -311,7 +309,6 @@ fn history_repeated_author_dot_animates_with_cached_selection_frames(
 fn history_branch_names_repositions_headers_and_separates_hover_regions(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =

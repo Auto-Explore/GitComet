@@ -20,7 +20,6 @@ impl gitcomet_core::services::GitBackend for StandaloneBackend {
 fn background_document_opens_defer_loading_and_clean_navigation_releases_buffers(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
@@ -87,7 +86,6 @@ fn background_document_opens_defer_loading_and_clean_navigation_releases_buffers
 fn document_eviction_preserves_dirty_and_saving_buffers_until_acknowledged_clean(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
@@ -185,7 +183,6 @@ fn adopted_documents_keep_their_line_endings_when_enter_is_pressed(cx: &mut gpui
 }
 
 fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
@@ -284,7 +281,6 @@ fn pending_document_reads_wait_for_all_filesystem_pauses_before_restarting(
 }
 
 fn rename_during_document_load(cx: &mut gpui::TestAppContext, parent: bool, overlapping: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
@@ -405,7 +401,6 @@ enum TransferOutcome {
 
 fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOutcome) {
     use gitcomet_core::filesystem::TransferIntent;
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (other, _) =
@@ -606,7 +601,6 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
 #[gpui::test]
 fn replace_asks_about_unsaved_edits_in_a_themed_dialog(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::filesystem::TransferIntent;
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -720,7 +714,6 @@ fn replace_asks_about_unsaved_edits_in_a_themed_dialog(cx: &mut gpui::TestAppCon
 fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -770,7 +763,6 @@ fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
 fn reopening_a_clean_document_during_save_as_preserves_the_pending_buffer(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -799,7 +791,6 @@ fn reopening_a_clean_document_during_save_as_preserves_the_pending_buffer(
 
 #[gpui::test]
 fn clean_save_as_offers_replacement_and_preserves_source(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -862,7 +853,6 @@ fn clean_save_as_offers_replacement_and_preserves_source(cx: &mut gpui::TestAppC
 fn repository_document_routes_record_absolute_paths_for_foreground_and_background_opens(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -913,7 +903,6 @@ fn repository_document_routes_record_absolute_paths_for_foreground_and_backgroun
 fn oversized_documents_show_the_size_error_without_loading_a_baseline(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -966,7 +955,6 @@ fn drain(root: &Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
 fn standalone_edits_detect_other_writes_and_save_as_preserves_both_files(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1019,7 +1007,6 @@ fn standalone_edits_detect_other_writes_and_save_as_preserves_both_files(
 fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1068,7 +1055,6 @@ fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
 fn document_history_is_shared_and_opening_another_view_retains_edits(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1119,7 +1105,6 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
 
 #[gpui::test]
 fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1182,7 +1167,6 @@ fn document_picker_open(root: &Entity<GitCometView>, cx: &mut gpui::VisualTestCo
 fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(StandaloneBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
@@ -1243,7 +1227,6 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
 fn repository_windows_keep_their_panes_around_documents_until_the_repository_navigates(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) = cx.add_window_view({
         let store = store.clone();

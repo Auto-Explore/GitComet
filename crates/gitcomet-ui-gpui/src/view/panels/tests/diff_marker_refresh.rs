@@ -100,7 +100,6 @@ fn markers_follow_an_in_place_external_edit(
     view_mode: DiffViewMode,
     content_mode: DiffContentMode,
 ) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -216,7 +215,6 @@ fn inline_collapsed_markers_follow_an_in_place_external_edit(cx: &mut gpui::Test
 fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);

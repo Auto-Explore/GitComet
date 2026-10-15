@@ -182,7 +182,6 @@ mod tests {
 
     #[gpui::test]
     fn settings_close_and_quit_include_extension_guards(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         struct Guard(Rc<Cell<usize>>);
         impl Extension for Guard {
             fn id(&self) -> ExtensionId {

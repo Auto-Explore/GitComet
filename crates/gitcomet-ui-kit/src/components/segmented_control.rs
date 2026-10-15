@@ -212,7 +212,6 @@ mod tests {
     /// is raised.
     #[gpui::test]
     fn a_click_selects_its_segment_and_only_that_one_is_raised(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (view, cx) = cx.add_window_view(|_, _| Picker {
             theme,
@@ -238,7 +237,6 @@ mod tests {
 
     #[gpui::test]
     fn disabled_segments_ignore_clicks_until_enabled(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (view, cx) = cx.add_window_view(|_, _| Picker {
             theme: AppTheme::gitcomet_dark(),
             selected: 0,

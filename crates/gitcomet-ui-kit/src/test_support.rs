@@ -1,6 +1,5 @@
 //! Test helpers for the kit and for crates that test against it
-//! (`test-support` feature). The locks are process-wide, so a host that
-//! re-exports them serializes its tests with the kit's.
+//! (`test-support` feature).
 
 /// Replace the default single-line test shaper before creating windows. Bundled
 /// fonts keep wrapping and cluster tests independent of the machine font catalog.
@@ -57,15 +56,6 @@ pub fn lock_clipboard_test() -> std::sync::MutexGuard<'static, ()> {
     static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     match CLIPBOARD_TEST_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-pub fn lock_visual_test() -> std::sync::MutexGuard<'static, ()> {
-    static VISUAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    match VISUAL_TEST_LOCK.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

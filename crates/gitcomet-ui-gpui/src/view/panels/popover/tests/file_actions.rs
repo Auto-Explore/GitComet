@@ -2554,7 +2554,6 @@ fn annex_section_and_repository_menus_follow_repo_state(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn annex_text_prompts_submit_on_enter(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for (prompt, text) in [
         (
             AnnexPrompt::AddSpecialRemote,

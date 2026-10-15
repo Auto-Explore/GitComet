@@ -2106,7 +2106,6 @@ mod coalescing_regressions {
     #[gpui::test]
     fn straight_connectors_and_node_exits_do_not_tessellate(cx: &mut gpui::TestAppContext) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         for scale in [1.0, 1.25, 1.5, 2.0] {
             let _capture = history_perf::capture();
@@ -2174,7 +2173,6 @@ mod coalescing_regressions {
     #[gpui::test]
     fn connectors_off_the_pixel_grid_or_at_a_mask_edge_stay_paths(cx: &mut gpui::TestAppContext) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         let canvas = Bounds::new(point(px(0.0), px(0.0)), size(px(60.0), px(40.0)));
         let unmasked = gpui::ContentMask {
@@ -2233,7 +2231,6 @@ mod coalescing_regressions {
     #[gpui::test]
     fn nearly_collinear_connectors_keep_their_endpoints(cx: &mut gpui::TestAppContext) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         let _capture = history_perf::capture();
         cx.draw(
@@ -2272,7 +2269,6 @@ mod coalescing_regressions {
         cx: &mut gpui::TestAppContext,
     ) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         for pixels in [32.0, 80.0, 240.0] {
             for band in [false, true] {
@@ -2678,7 +2674,6 @@ mod author_node_geometry_tests {
     fn history_nodes_paint_as_round_quads_centred_on_their_lane(cx: &mut gpui::TestAppContext) {
         use crate::appearance::{Appearance, UiDensity};
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let (view, cx) = cx.add_window_view(|_, _| GraphPaintView(Rc::new(|_, _| {})));
         for (device_scale, ring) in [(1.0, 2.0), (1.25, 2.0), (1.5, 2.0), (2.0, 3.0)] {
             for (ui_font_size_px, density) in [14, 15]

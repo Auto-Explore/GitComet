@@ -75,13 +75,11 @@ mod tests {
 
     #[gpui::test]
     fn deterministic_spinner_does_not_redraw_as_the_clock_advances(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         assert_eq!(spinner_renders_during_one_second(cx), 0);
     }
 
     #[gpui::test]
     fn live_spinner_redraws_as_the_clock_advances(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let renders = with_override(UiRuntime::live(), || spinner_renders_during_one_second(cx));
         assert!(
             renders >= 10,

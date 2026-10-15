@@ -1786,7 +1786,6 @@ fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppC
 fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

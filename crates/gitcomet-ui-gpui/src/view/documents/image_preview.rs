@@ -183,7 +183,6 @@ mod tests {
     fn image_preview_lifecycle_document_keeps_legacy_decoders_for_mislabeled_files(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -319,7 +318,6 @@ mod tests {
 
     #[gpui::test]
     fn failed_image_preview_reload_releases_window_zoom(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -403,7 +401,6 @@ mod tests {
     fn standalone_image_preview_has_sampling_zoom_and_pause_controls(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -472,7 +469,6 @@ mod tests {
     /// viewport still treated the image as playing and never drew detail.
     #[gpui::test]
     fn frozen_animation_gets_detail_tiles(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -504,7 +500,6 @@ mod tests {
     /// scrim kept the wheel from the image too, so Ctrl+scroll did nothing.
     #[gpui::test]
     fn window_zoom_reaches_an_image_covered_by_a_menu(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

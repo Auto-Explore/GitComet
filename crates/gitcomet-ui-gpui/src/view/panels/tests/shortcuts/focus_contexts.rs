@@ -250,7 +250,6 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
 /// `px()` holds them at 100% while the buttons around them grow.
 #[gpui::test]
 fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

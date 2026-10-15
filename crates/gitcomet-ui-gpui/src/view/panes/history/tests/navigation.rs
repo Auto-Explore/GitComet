@@ -148,7 +148,6 @@ impl NavigationFixture {
 }
 
 fn paging_tracks_viewport_and_repeated_keys(cx: &mut gpui::TestAppContext, indexed: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     let (fixture, cx) = mount_navigation(cx, indexed, 300);
     fixture.resize_to_rows(cx, 10.5);
     cx.simulate_keystrokes("pagedown");
@@ -209,7 +208,6 @@ fn indexed_history_paging_tracks_viewport_and_repeated_keys(cx: &mut gpui::TestA
 }
 
 fn paging_clamps_and_respects_focus(cx: &mut gpui::TestAppContext, indexed: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     let (fixture, cx) = mount_navigation(cx, indexed, 3);
     assert!(fixture.page_rows(cx) > 3);
     cx.simulate_keystrokes("pagedown pagedown");
@@ -267,7 +265,6 @@ fn indexed_history_paging_clamps_and_respects_focus(cx: &mut gpui::TestAppContex
 fn paging_includes_worktree_rows(cx: &mut gpui::TestAppContext, indexed: bool) {
     use gitcomet_core::domain::{FileStatus, FileStatusKind, WorktreeDirtySummary};
 
-    let _guard = crate::test_support::lock_visual_test();
     let (fixture, cx) = mount_navigation(cx, indexed, 100);
     let path = PathBuf::from("/tmp/history-page-linked-worktree");
     let mut state = (*fixture.store.snapshot()).clone();
@@ -335,7 +332,6 @@ fn indexed_history_paging_includes_worktree_rows(cx: &mut gpui::TestAppContext) 
 
 #[gpui::test]
 fn cached_history_paging_uses_retained_rows_while_loading(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (fixture, cx) = mount_navigation(cx, false, 100);
     fixture.resize_to_rows(cx, 10.5);
     let mut state = (*fixture.store.snapshot()).clone();
@@ -359,7 +355,6 @@ fn cached_history_paging_uses_retained_rows_while_loading(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn history_paging_without_rows_or_layout_is_safe(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -378,7 +373,6 @@ fn history_paging_without_rows_or_layout_is_safe(cx: &mut gpui::TestAppContext) 
 /// both modes. Cached history jumped to its last loaded row on PageUp, and
 /// indexed history skipped the whole first page on PageDown.
 fn paging_without_selection_enters_at_the_first_row(cx: &mut gpui::TestAppContext, indexed: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     let (fixture, cx) = mount_navigation(cx, indexed, 100);
     fixture.resize_to_rows(cx, 10.5);
     for key in ["pageup", "pagedown"] {
@@ -408,7 +402,6 @@ fn indexed_history_paging_without_selection_enters_at_the_first_row(cx: &mut gpu
 /// Holding a page key at either end must not re-select the same row on every
 /// repeat; each re-selection dispatches to the store and re-scrolls.
 fn paging_at_a_boundary_keeps_the_selection(cx: &mut gpui::TestAppContext, indexed: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     let (fixture, cx) = mount_navigation(cx, indexed, 3);
     for (key, last) in [("pageup", 0), ("pagedown", 2)] {
         cx.simulate_keystrokes(key);

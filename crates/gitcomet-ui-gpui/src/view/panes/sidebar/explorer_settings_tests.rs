@@ -60,7 +60,6 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 fn files_settings_cog_sits_between_search_and_locate_on_the_files_tab_only(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = sidebar_window(cx, files_state(SidebarMode::Files));
 
     let search = cx.debug_bounds("sidebar_search_toggle").unwrap();
@@ -88,7 +87,6 @@ fn files_settings_cog_sits_between_search_and_locate_on_the_files_tab_only(
 
 #[gpui::test]
 fn files_settings_menu_toggles_ignored_files_and_stays_open(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = sidebar_window(cx, files_state(SidebarMode::Files));
 
     click(cx, "sidebar_explorer_settings");
@@ -154,7 +152,6 @@ fn visibility_state(show_hidden: bool) -> Arc<AppState> {
 fn tinted_rows_lay_out_like_plain_rows_and_hidden_ones_go_with_the_setting(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = sidebar_window(cx, visibility_state(true));
     for scale in [100, 150] {
         cx.update(|window, app| {

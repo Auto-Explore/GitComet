@@ -36,7 +36,6 @@ mod tests {
         use crate::view::{GitCometView, test_support::TestBackend};
         use gitcomet_core::domain::DiffLineKind;
         use gitcomet_state::store::AppStore;
-        let _visual_guard = crate::test_support::lock_visual_test();
         let panes = [2, 8].map(|width| {
             let (store, events) = AppStore::new_test(Arc::new(TestBackend));
             let (view, window_cx) =

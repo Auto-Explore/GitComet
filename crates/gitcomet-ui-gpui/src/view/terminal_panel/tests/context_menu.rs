@@ -207,7 +207,6 @@ impl TerminalMenuFixture {
 
 #[gpui::test]
 fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     let (fixture, cx) = fixture(cx);
     cx.update(|window, _| window.activate());
@@ -303,7 +302,6 @@ fn window_blur_stops_terminal_input_and_live_caret(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn idle_terminal_caret_stops_blinking_until_the_next_keystroke(cx: &mut gpui::TestAppContext) {
-    let _visual = crate::test_support::lock_visual_test();
     let (fixture, cx) = fixture(cx);
     cx.update(|window, _| window.activate());
     stop_spinner_animations(cx);
@@ -340,7 +338,6 @@ fn idle_terminal_caret_stops_blinking_until_the_next_keystroke(cx: &mut gpui::Te
 
 #[gpui::test]
 fn main_window_focus_shortcut_works_after_blur(cx: &mut gpui::TestAppContext) {
-    let _visual = crate::test_support::lock_visual_test();
     let (root, _, cx) = test_root_view_with_active_repo(cx);
     cx.update(|window, _| window.activate());
     cx.run_until_parked();
@@ -368,7 +365,6 @@ fn main_window_focus_shortcut_works_after_blur(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn terminal_menu_actions_restore_focus_and_share_clipboard_commands(cx: &mut gpui::TestAppContext) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     for keyboard in [false, true] {
         for (index, (selector, command)) in [
@@ -438,7 +434,6 @@ fn terminal_menu_actions_restore_focus_and_share_clipboard_commands(cx: &mut gpu
 fn terminal_padding_menu_returns_focus_from_another_input_on_actions_and_escape(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     for action in [
         None,
@@ -475,7 +470,6 @@ fn terminal_padding_menu_returns_focus_from_another_input_on_actions_and_escape(
 fn terminal_header_and_menu_clear_identically_without_a_connected_process(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     for header in [false, true] {
         let (fixture, cx) = fixture(cx);
@@ -530,7 +524,6 @@ fn terminal_header_and_menu_clear_identically_without_a_connected_process(
 
 #[gpui::test]
 fn terminal_menu_mismatched_pointer_targets_do_not_activate(cx: &mut gpui::TestAppContext) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     let (fixture, cx) = fixture(cx);
     fixture.open_menu(false, cx);
@@ -570,7 +563,6 @@ fn terminal_menu_mismatched_pointer_targets_do_not_activate(cx: &mut gpui::TestA
 fn terminal_clear_header_restores_focus_and_ctrl_l_stays_process_input(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     let (fixture, cx) = fixture(cx);
     let before = cx.update(|_, app| fixture.viewport.read(app).copy_entire_buffer());
@@ -585,7 +577,6 @@ fn terminal_clear_header_restores_focus_and_ctrl_l_stays_process_input(
 
 #[gpui::test]
 fn terminal_menu_keeps_its_origin_when_the_active_session_changes(cx: &mut gpui::TestAppContext) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     for switch_repository in [false, true] {
         for (index, selector) in [
@@ -675,7 +666,6 @@ fn terminal_session_disappearance_dismisses_menu_and_rejects_late_actions(
     cx: &mut gpui::TestAppContext,
 ) {
     use crate::view::panels::ContextMenuAction;
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     for remove_repo in [false, true] {
         let (fixture, cx) = fixture(cx);
@@ -766,7 +756,6 @@ fn terminal_session_disappearance_dismisses_menu_and_rejects_late_actions(
 fn terminal_clipboard_shortcuts_keep_full_buffer_copy_and_bracketed_paste(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     let (fixture, cx) = fixture(cx);
     let (select_all, copy, paste) = if cfg!(target_os = "macos") {
@@ -798,7 +787,6 @@ fn terminal_clipboard_shortcuts_keep_full_buffer_copy_and_bracketed_paste(
 
 #[gpui::test]
 fn terminal_clearing_is_disabled_without_a_buffer(cx: &mut gpui::TestAppContext) {
-    let _visual = crate::test_support::lock_visual_test();
     let _clipboard = crate::test_support::lock_clipboard_test();
     let (fixture, cx) = fixture(cx);
     cx.update(|_, app| {

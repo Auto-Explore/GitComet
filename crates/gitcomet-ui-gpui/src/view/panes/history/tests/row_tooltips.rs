@@ -17,7 +17,6 @@ fn tooltip_is_retracted_after_row_removal(
     area: HistoryRowHoverArea,
     removal: Removal,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

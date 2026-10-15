@@ -71,7 +71,6 @@ fn click(cx: &mut gpui::VisualTestContext, name: impl Into<String>) {
 
 #[gpui::test]
 fn an_error_stays_merges_repeats_and_shows_its_details(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     report(cx, &view, PUSH_FAILED);
     report(cx, &view, PUSH_FAILED);
@@ -121,7 +120,6 @@ fn an_error_stays_merges_repeats_and_shows_its_details(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn errors_pushed_out_of_the_stack_stay_reachable(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     for ix in 0..5 {
         report(cx, &view, &format!("Fetch {ix} failed"));
@@ -172,7 +170,6 @@ fn errors_pushed_out_of_the_stack_stay_reachable(cx: &mut gpui::TestAppContext) 
 
 #[gpui::test]
 fn closing_a_repo_drops_its_errors_only(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     let (first_id, second_id) = (RepoId(9601), RepoId(9602));
     let mut first = opening_repo_state(first_id, Path::new("/tmp/error-repo-a"));
@@ -216,7 +213,6 @@ fn closing_a_repo_drops_its_errors_only(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::{DiagnosticEntry, DiagnosticKind};
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     let id = RepoId(9694);
     let mut repo = opening_repo_state(id, Path::new("/tmp/review-diagnostics"));
@@ -251,7 +247,6 @@ fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn review_error_toasts_hide_during_authentication(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation};
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     report(cx, &view, "authentication failed");
     let id = errors(cx, &view)[0].0;

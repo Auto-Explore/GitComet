@@ -117,7 +117,6 @@ fn searchable_scroll_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
 fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         window.activate();

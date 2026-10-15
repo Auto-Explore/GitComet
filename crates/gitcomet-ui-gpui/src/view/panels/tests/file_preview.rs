@@ -45,7 +45,6 @@ fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestA
 fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2639,7 +2638,6 @@ fn xml_file_preview_renders_syntax_highlights_from_real_document(cx: &mut gpui::
 fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::TestAppContext) {
     // The read-only content view drew the annotation column but mounted no drag
     // handle, so only the diff view could resize it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
