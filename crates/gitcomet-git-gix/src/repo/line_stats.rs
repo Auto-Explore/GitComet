@@ -1,6 +1,7 @@
 use super::log::{
-    COMMIT_STATS_MAX_BLOB_BYTES, CommitStatsScratch, commit_file_line_stats,
-    commit_stats_looks_binary, line_stats_from_bytes, read_commit_stats_blob,
+    COMMIT_STATS_BINARY_SNIFF_BYTES, COMMIT_STATS_MAX_BLOB_BYTES, CommitStatsScratch,
+    commit_file_line_stats, commit_stats_looks_binary, line_stats_from_bytes,
+    read_commit_stats_blob,
 };
 use crate::util::path_buf_from_git_bytes;
 use gitcomet_core::domain::{
@@ -428,12 +429,9 @@ fn unstaged_entry_line_stats(
     }
 
     worktree.clear();
+    // Binary or unread on this side means no counts, whatever the index
+    // holds: skip the hash, the index read and the memo.
     if entry.kind != FileStatusKind::Deleted && !reader.read(&entry.path, worktree) {
-        return LineStats::UNKNOWN;
-    }
-    // Binary on this side means no counts, whatever the index holds: skip
-    // the hash, the index read and the memo.
-    if commit_stats_looks_binary(worktree) {
         return LineStats::UNKNOWN;
     }
 
@@ -519,8 +517,7 @@ impl<'repo> WorktreeReader<'repo> {
     }
 
     /// Replaces `out` with the file at `relative`. `false` means gone, over
-    /// the size cap, unreadable, or left to the LFS clean filter; binary is
-    /// left to `line_stats_from_bytes`.
+    /// the size cap, unreadable, binary, or left to the LFS clean filter.
     fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
         use gix::attrs::StateRef;
         use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
@@ -580,7 +577,7 @@ impl<'repo> WorktreeReader<'repo> {
                     return false;
                 };
                 out.extend_from_slice(&bytes);
-                return true;
+                return !commit_stats_looks_binary(out);
             }
         }
         let Ok(file) = std::fs::File::open(&full) else {
@@ -589,14 +586,23 @@ impl<'repo> WorktreeReader<'repo> {
         let Ok(converted) = pipeline.convert_to_git(file, relative, index) else {
             return false;
         };
-        match converted {
-            ToGitOutcome::Unchanged(mut file) => file.read_to_end(out).is_ok(),
+        let read = match converted {
+            // A binary file is not read past the sniff window.
+            ToGitOutcome::Unchanged(mut file) => {
+                (&mut file)
+                    .take(COMMIT_STATS_BINARY_SNIFF_BYTES as u64)
+                    .read_to_end(out)
+                    .is_ok()
+                    && !commit_stats_looks_binary(out)
+                    && file.read_to_end(out).is_ok()
+            }
             ToGitOutcome::Process(mut stream) => stream.read_to_end(out).is_ok(),
             ToGitOutcome::Buffer(bytes) => {
                 out.extend_from_slice(bytes);
                 true
             }
-        }
+        };
+        read && !commit_stats_looks_binary(out)
     }
 }
 
@@ -888,6 +894,46 @@ mod tests {
                 walk_ms[0], walk_ms[2], stats_ms[0], stats_ms[2]
             );
         }
+    }
+
+    /// Refresh cost of untracked binaries: 200 of 2 MiB, read only to be
+    /// reported unknown.
+    #[test]
+    #[ignore = "timing probe"]
+    fn perf_untracked_binary_line_stats_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "seed.txt", "seed\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-q", "-m", "seed"]);
+        for ix in 0..200u32 {
+            let payload: Vec<u8> = (0..2 * 1024 * 1024u32)
+                .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8 ^ ix as u8)
+                .collect();
+            std::fs::write(dir.join(format!("blob{ix:03}.bin")), payload).unwrap();
+        }
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+        assert_eq!(entries.len(), 200);
+        let mut samples = Vec::new();
+        for _ in 0..6 {
+            let started = std::time::Instant::now();
+            let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert!(
+                stats
+                    .unstaged
+                    .values()
+                    .all(|stats| *stats == LineStats::UNKNOWN)
+            );
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "untracked binaries: min {:.1} ms, median {:.1} ms, max {:.1} ms",
+            samples[0], samples[3], samples[5]
+        );
     }
 
     /// Refresh cost with real `git-lfs`: 20 modified 1 MiB payloads.
