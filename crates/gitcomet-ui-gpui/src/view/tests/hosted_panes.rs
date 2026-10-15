@@ -2564,7 +2564,6 @@ fn linked_worktree_file_selection_repaints_without_mouse_movement(cx: &mut gpui:
 fn linked_worktree_file_context_menu_opens_diff_and_uses_checkout_paths(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _clipboard = crate::test_support::lock_clipboard_test();
     let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
     click_linked_file(cx, 0, gpui::MouseButton::Right);
     assert!(cx.debug_bounds("app_popover").is_some());

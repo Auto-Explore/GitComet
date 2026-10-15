@@ -163,7 +163,6 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
 
 #[gpui::test]
 fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2135,7 +2134,6 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
 fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::TestAppContext) {
     const PAYLOAD_BYTES: usize = 256 * 1024;
 
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2228,7 +2226,6 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
 ) {
     const PAYLOAD_BYTES: usize = 96 * 1024;
 
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

@@ -52,15 +52,6 @@ pub fn take_wrapped_lines_shaped() -> usize {
     crate::text_input::take_wrapped_lines_shaped_for_tests()
 }
 
-pub fn lock_clipboard_test() -> std::sync::MutexGuard<'static, ()> {
-    static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    match CLIPBOARD_TEST_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
 /// Compare the real fill and border quad, rather than inspecting which style
 /// methods the renderer called. Text and independently painted inset rings are
 /// intentionally outside the background assertion.

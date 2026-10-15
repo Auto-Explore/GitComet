@@ -952,7 +952,6 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1056,7 +1055,6 @@ fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::Te
 
 #[gpui::test]
 fn status_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

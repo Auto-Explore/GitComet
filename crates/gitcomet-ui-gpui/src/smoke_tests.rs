@@ -1,4 +1,3 @@
-use crate::test_support::lock_clipboard_test;
 use crate::view::components;
 use crate::view::test_support::TestBackend;
 use crate::{theme::AppTheme, ui_scale, view};
@@ -483,7 +482,6 @@ fn text_input_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -868,7 +866,6 @@ fn multiline_text_input_mousewheel_does_not_trigger_cursor_autoscroll(
 
 #[gpui::test]
 fn text_input_right_click_context_menu_supports_copy(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -1071,7 +1068,6 @@ fn text_input_context_menu_grows_wider_with_ui_zoom(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn text_input_supports_ctrl_z_undo(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -1152,7 +1148,6 @@ fn text_input_double_click_selects_word(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -1190,7 +1185,6 @@ fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn text_input_supports_shift_pageup_pagedown_selection(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -5165,7 +5159,6 @@ fn a_button_less_pointer_move_clears_a_stranded_claim(cx: &mut gpui::TestAppCont
 /// blurs the input it was meant to protect.
 #[gpui::test]
 fn text_input_context_menu_copy_keeps_focus_and_selection(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {

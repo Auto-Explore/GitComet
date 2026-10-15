@@ -281,7 +281,6 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
     // Nothing on screen changes when a link's address goes to the clipboard —
     // the document shows the link's text, never its destination — so the copy
     // has to say so or the reader cannot tell it happened.
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

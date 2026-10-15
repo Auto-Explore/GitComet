@@ -65,7 +65,6 @@ fn another_surface_taking_the_selection_clears_the_diff_text_selection(
 fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

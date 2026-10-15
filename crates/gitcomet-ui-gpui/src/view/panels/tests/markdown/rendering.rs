@@ -2781,7 +2781,6 @@ fn inline_markdown_diff_shows_the_removed_version_before_the_added_one(
 #[gpui::test]
 fn split_markdown_eof_ignores_trailing_alignment_padding(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -3810,7 +3809,6 @@ fn settle_preview_frames(
 #[ignore = "production GPUI benchmark for markdown selection and anchor links"]
 fn markdown_preview_interaction_benchmark(cx: &mut gpui::TestAppContext) {
     use std::time::{Duration, Instant};
-    let _clipboard_guard = lock_clipboard_test();
     let releases: usize = std::env::var("GITCOMET_BENCH_MD_RELEASES")
         .ok()
         .and_then(|value| value.parse().ok())

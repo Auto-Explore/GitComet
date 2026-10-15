@@ -488,7 +488,6 @@ fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
 
 #[gpui::test]
 fn copying_file_history_sha_keeps_picker_open(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     file_history_picker!(cx, host);
     right_click_history_row(cx);
     cx.update(|window, app| host.update(app, |host, cx| {

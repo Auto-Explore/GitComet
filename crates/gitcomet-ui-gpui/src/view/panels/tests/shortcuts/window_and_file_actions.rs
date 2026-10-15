@@ -698,8 +698,6 @@ fn ctrl_s_stages_last_file_and_clears_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_shift_c_copies_current_file_path(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
-
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -865,8 +863,6 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
-
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

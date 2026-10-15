@@ -1,6 +1,4 @@
-pub(crate) use gitcomet_ui_kit::test_support::{
-    lock_clipboard_test, painted_control_quads, refresh_and_draw,
-};
+pub(crate) use gitcomet_ui_kit::test_support::{painted_control_quads, refresh_and_draw};
 
 /// Runs `git -C dir args…`, asserting it succeeds; returns its stdout.
 pub(crate) fn git(dir: &std::path::Path, args: &[&str]) -> Vec<u8> {

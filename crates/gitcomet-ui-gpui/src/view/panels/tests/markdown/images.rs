@@ -175,7 +175,6 @@ fn copying_across_a_picture_writes_its_description_once(cx: &mut gpui::TestAppCo
     // A picture's row carries its alt text, which is what copying a selection
     // across it writes: once. (It was cut into eight bands for a fixed-row
     // renderer, and copy repeated the description per band.)
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -452,7 +451,6 @@ fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui
 #[gpui::test]
 fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -508,7 +506,6 @@ fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestApp
 #[gpui::test]
 fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1374,7 +1371,6 @@ fn table_images_render_inside_their_cells_and_fit_a_narrow_pane(cx: &mut gpui::T
 
 #[gpui::test]
 fn table_picture_selection_copies_descriptions_once(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

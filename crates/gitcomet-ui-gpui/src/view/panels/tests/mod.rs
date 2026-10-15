@@ -5,7 +5,6 @@ pub(super) use super::main::{
     show_external_mergetool_actions,
 };
 pub(super) use super::*;
-pub(super) use crate::test_support::lock_clipboard_test;
 pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
 pub(super) use crate::view::show_diff_file_navigation;
 pub(super) use crate::view::test_support::TestBackend;
@@ -910,7 +909,6 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     status_kind: gitcomet_core::domain::FileStatusKind,
     lines: Arc<Vec<String>>,
 ) {
-    let _clipboard_guard = lock_clipboard_test();
     let expected = lines.join("\n");
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

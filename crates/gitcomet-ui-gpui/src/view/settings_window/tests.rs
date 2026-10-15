@@ -162,7 +162,6 @@ fn clipboard_text(cx: &mut gpui::VisualTestContext) -> Option<String> {
 
 #[gpui::test]
 fn environment_values_select_with_the_mouse_and_copy(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     let (_view, cx) = open_environment_page(cx);
     cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
 
@@ -194,7 +193,6 @@ fn environment_values_select_with_the_mouse_and_copy(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn environment_copy_button_sits_compact_in_the_card_header(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     let (view, cx) = open_environment_page(cx);
     cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
 

@@ -108,7 +108,6 @@ fn koi8() -> TextEncoding {
 #[gpui::test]
 fn whole_file_diagram_previews_use_decoded_utf16_and_legacy_text(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::{TextFormat, encode};
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = open_window(cx);
     let directory = tempfile::tempdir().unwrap();
     for (case, encoding) in [TextEncoding::UTF_16LE, TextEncoding::WINDOWS_1252]
