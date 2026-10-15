@@ -548,10 +548,7 @@ mod tests {
                 Some(expected)
             );
         }
-        assert!(std::ptr::eq(
-            cause.source().unwrap(),
-            &cause.original as &dyn std::error::Error
-        ));
+        assert!(std::ptr::addr_eq(cause.source().unwrap(), &cause.original));
         let no_recovery = WorktreeRecoveryError::combine(
             Error::new(ErrorKind::Backend("synchronization failed".into())),
             Vec::new(),
