@@ -983,16 +983,9 @@ impl GixRepo {
         from: &CommitId,
         to: Option<&CommitId>,
     ) -> Result<Vec<CommitFileChange>> {
-        match to {
-            Some(to) => {
-                let repo = self.repo();
-                diff_range_files(self, &repo, from, to)
-            }
-            // Working-tree tip: the newer side is the live worktree, which has no
-            // tree object, so shell out to `git diff <from>` for the file list
-            // (consistent with the unified diff shown in the main pane).
-            None => self.commit_to_worktree_files(from, false, &CancellationToken::new()),
-        }
+        let direct = gitcomet_core::services::ComparisonOptions::direct();
+        self.compare_files_impl(from, to, &direct, &CancellationToken::new())
+            .map(|comparison| comparison.files)
     }
 
     pub(in super::super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {
