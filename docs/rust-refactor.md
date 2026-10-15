@@ -16,7 +16,7 @@ regression tests and separate commits where separation needs no compatibility sh
 Independent review precedes each completed
 subsystem's acceptance. No release, merge, or push is part of this implementation.
 
-## Implementation checklist
+## Initial architecture checklist
 
 - [x] Establish baseline tests and representative performance evidence.
 - [x] Fix ConfiguredBackend object-store release delegation with a regression test.
@@ -77,7 +77,7 @@ services, preferences, document ownership and weak command routing, never the ro
 GitCometView. Keep live linked-worktree mutation checks, annotations, event ordering,
 independent cancellation, SharedFileDiffCache and retained view boundaries.
 
-## Validation
+## Initial validation scope
 
 - Existing CI contexts: core, diagrams, state, backend, app, UI, example and workspace.
 - Formatting, Clippy, source layout, dependency boundaries, rustdoc and native platform suites.
@@ -89,7 +89,7 @@ independent cancellation, SharedFileDiffCache and retained view boundaries.
 - Diff surfaces: stale retargets, linked worktrees, repository-free settings snapshots, pop-outs and one row/search preparation per update.
 - Performance: existing deterministic budgets plus matched release history/scroll/select/warm-tab/idle/memory workloads.
 
-## Implementation status
+## Initial architecture results
 
 The approved architecture changes are implemented on `refactor`, starting from
 `3b31ffb8`. Source changes through `cd65ca70` have passed independent review. The
@@ -178,6 +178,74 @@ Final release and measurement records are under `target/refactor-production-002/
 `target/refactor-native-state-fix/run-003/`, with prior failed attempts retained
 alongside them.
 The original failures remain alongside their diagnoses and subsequent checks.
+
+## Correctness and module follow-up
+
+The approved follow-up from `cb52f7ab` is implemented through `6d2f7e60`.
+The [architecture guide](architecture.md) describes the resulting boundaries;
+the migration notes below cover the coordinated request and menu API changes.
+
+- File history and conflict loads have distinct opaque request identities. Each
+  feature rejects obsolete completions before changing pagination, restoration
+  or conflict state.
+- TextInput shares edit bookkeeping and separates platform input, selection,
+  clipboard, configuration, highlighting and layout concerns. Platform edits
+  invalidate obsolete redo history, and IME selection uses replacement-local
+  UTF-16 offsets.
+- Registry construction validates key contexts with GPUI's parser. Menu rows
+  accept explicit assets and tones; Git and English-label inference belongs to
+  the host. Settings and TextInput reuse the kit's interaction primitives.
+- Closing an inactive repository reconciles retained dirty buffers even when
+  the rendered input fingerprint is unchanged. Store-backed tests recover and
+  save the same buffers after active and inactive repository closure.
+- State load owners, diff row rendering and canvas concerns have private child
+  modules. Large state, editor, cache/blame, settings, smoke and TextInput test
+  suites have cohesive child files in their original harnesses. Test attributes,
+  isolation and runner classification are preserved; the obsolete ignored close
+  prompt case is replaced with actual recovery coverage.
+
+Fresh workspace validation passed 9,222 tests with 49 existing ignores, plus two
+doctests. The downstream example passed 11 tests and the headless app passed 422.
+All three Linux display profiles passed their declared integration smoke checks.
+These test executions identify source `af455b01`; the only subsequent Rust
+changes remove seven leading newline bytes from extracted test modules. An
+independent byte-for-byte bridge preserves all other source and test contents.
+Formatting, source-size limits, identity literals, dependency boundaries, all
+three declared Clippy configurations and strict workspace rustdoc pass against
+`6d2f7e60`. Scoped all-target/all-feature state and UI Clippy checks also pass.
+The CI runner's Python suite ran 123 tests with one existing skip.
+
+The normal release app was built separately from the benchmark and reporter
+binaries, with benchmark, test-support and allocation instrumentation features
+absent from its production dependency graph. The fresh Linux dependency check
+still fails: this Arch-built binary requires glibc 2.44, above the intended
+Ubuntu 22.04 baseline of 2.35.
+
+The six-case Criterion subset passed all 16 registered structural checks for
+the selected cases.
+It leaves 226 timing and 781 structural budgets unmeasured. The TextInput case
+has fresh timing and work sidecars but no registered reporter budget. Two timing
+alerts remain: `repo_switch/two_hot_repos` measured 134.543 microseconds against
+100 microseconds, and `status_select_diff_open/staged` measured 1.071 milliseconds
+against 10 microseconds. A separate staged-selection control reproduced the
+alert on the preserved baseline and candidate, with identical reported work and
+allocation metrics. Host load was uncontrolled; these measurements establish
+neither timing equivalence nor a speedup, regression or cause. No threshold changed.
+
+All eight normal-build native captures passed their validators and completed
+their requested work: `diff-search`, `settings`, `history-reopen` and
+`repo-tabs-edit` on both builds. They establish the tested functional witnesses
+and Linux draw submission, without comparative timing or GPU/display-completion
+claims. The settings capture opens the settings view; hosted-menu interactions,
+IME/edit history and unsaved-buffer recovery use the focused deterministic tests.
+Native macOS and Windows suites were not run. Lifecycle growth was not
+remeasured; the earlier limits above remain.
+
+Each implementation slice and the complete source received independent review.
+Regression failures and deliberate mutations, exact move and inventory proofs,
+integration logs, the formatting bridge and runtime records are retained under
+`target/next-refactor/`. The earlier architecture results above identify their
+own source and are separate from this follow-up's validation.
 
 ## Migration notes
 
