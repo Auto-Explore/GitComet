@@ -339,6 +339,7 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::LoadFileHistory {
+            request,
             repo_id,
             path,
             limit,
@@ -346,7 +347,16 @@ pub(super) fn schedule_effect(
         } => {
             if let Some((msg_tx, _)) = repo_load_context(thread_state, repos, msg_tx, repo_id) {
                 repo_load::schedule_load_file_history(
-                    executor, repos, msg_tx, repo_id, path, limit, cursor,
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    repo_load::FileHistoryPageRequest {
+                        request,
+                        path,
+                        limit,
+                        cursor,
+                    },
                 );
             }
         }

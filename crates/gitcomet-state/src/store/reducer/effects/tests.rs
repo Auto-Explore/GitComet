@@ -188,6 +188,7 @@ fn unknown_repo_handlers_are_noops() {
             &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
+            crate::model::FileHistoryRequestId::default(),
             path.clone(),
             None,
             Ok(Arc::new(empty_log_page()))
@@ -383,26 +384,26 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
     let mut state = new_state_with_repo(repo_id);
     let tracked = PathBuf::from("tracked.txt");
 
-    repo_mut(&mut state, repo_id)
-        .history_state
-        .file_history_path = Some(tracked.clone());
+    let request = file_history_request(&load_file_history(&mut state, repo_id, tracked.clone(), 2));
     file_history_loaded(
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         PathBuf::from("other.txt"),
         None,
         Ok(Arc::new(empty_log_page())),
     );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
-        Loadable::NotLoaded
+        Loadable::Loading
     ));
 
     file_history_loaded(
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked.clone(),
         None,
         Ok(Arc::new(empty_log_page())),
@@ -412,10 +413,12 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         Loadable::Ready(_)
     ));
 
+    let request = file_history_request(&load_file_history(&mut state, repo_id, tracked.clone(), 2));
     file_history_loaded(
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked,
         None,
         Err(backend_error("file history failed")),
@@ -450,6 +453,181 @@ fn file_history_ids(state: &mut AppState, repo_id: RepoId) -> Vec<String> {
     page.commits.iter().map(|c| c.id.to_string()).collect()
 }
 
+fn file_history_request(effects: &[Effect]) -> crate::model::FileHistoryRequestId {
+    let [Effect::LoadFileHistory { request, .. }] = effects else {
+        panic!("expected one file history request");
+    };
+    *request
+}
+
+#[test]
+fn file_history_duplicate_first_page_cannot_replace_completed_continuation() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let request = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let cursor = file_history_cursor("first");
+    let inputs = crate::store::reducer::test_inputs::clock();
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        request,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(
+            &["first"],
+            Some(cursor.clone()),
+        ))),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        request,
+        path.clone(),
+        Some(cursor),
+        Ok(Arc::new(file_history_page(&["rest"], None))),
+    );
+    let effects = file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        request,
+        path,
+        None,
+        Ok(Arc::new(file_history_page(&["first"], None))),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(file_history_ids(&mut state, repo_id), ["first", "rest"]);
+}
+
+#[test]
+fn file_history_reopened_path_rejects_older_first_page_error() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let old = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let fresh = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let inputs = crate::store::reducer::test_inputs::clock();
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(&["fresh"], None))),
+    );
+    let effects = file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path,
+        None,
+        Err(backend_error("obsolete first page")),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(file_history_ids(&mut state, repo_id), ["fresh"]);
+    assert!(
+        repo_mut(&mut state, repo_id)
+            .feedback
+            .diagnostics
+            .is_empty()
+    );
+}
+
+#[test]
+fn file_history_return_to_path_rejects_older_first_page() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let old = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    load_file_history(&mut state, repo_id, PathBuf::from("other.txt"), 2);
+    let fresh = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    let inputs = crate::store::reducer::test_inputs::clock();
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(&["fresh"], None))),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path,
+        None,
+        Ok(Arc::new(file_history_page(&["obsolete"], None))),
+    );
+    assert_eq!(file_history_ids(&mut state, repo_id), ["fresh"]);
+}
+
+#[test]
+fn file_history_reopened_path_rejects_older_equal_cursor_error() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let path = PathBuf::from("tracked.txt");
+    let cursor = file_history_cursor("same");
+    let inputs = crate::store::reducer::test_inputs::clock();
+    let old = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(
+            &["first"],
+            Some(cursor.clone()),
+        ))),
+    );
+    let fresh = file_history_request(&load_file_history(&mut state, repo_id, path.clone(), 2));
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path.clone(),
+        None,
+        Ok(Arc::new(file_history_page(
+            &["first"],
+            Some(cursor.clone()),
+        ))),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        old,
+        path.clone(),
+        Some(cursor.clone()),
+        Err(backend_error("obsolete continuation")),
+    );
+    file_history_loaded(
+        &inputs,
+        &mut state,
+        repo_id,
+        fresh,
+        path,
+        Some(cursor),
+        Ok(Arc::new(file_history_page(&["rest"], None))),
+    );
+    assert_eq!(file_history_ids(&mut state, repo_id), ["first", "rest"]);
+    assert!(
+        repo_mut(&mut state, repo_id)
+            .feedback
+            .diagnostics
+            .is_empty()
+    );
+}
+
 /// The first page is bounded so the picker opens at once. When it reports
 /// more, the reducer asks for the rest right away — unbounded, since the
 /// backend serves it from one cached follow walk — rather than leaving the
@@ -461,12 +639,14 @@ fn file_history_first_page_with_more_requests_the_rest() {
     let tracked = PathBuf::from("tracked.txt");
     let effects = load_file_history(&mut state, repo_id, tracked.clone(), 2);
     assert_eq!(effects.len(), 1);
+    let request = file_history_request(&effects);
 
     let cursor = file_history_cursor("b");
     let effects = file_history_loaded(
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked.clone(),
         None,
         Ok(Arc::new(file_history_page(
@@ -477,19 +657,21 @@ fn file_history_first_page_with_more_requests_the_rest() {
     assert!(matches!(
         &effects[..],
         [Effect::LoadFileHistory {
+            request: continuation_request,
             repo_id: rid,
             path,
             limit: usize::MAX,
             cursor: Some(c),
-        }] if *rid == repo_id && path == &tracked && *c == cursor
+        }] if *rid == repo_id && path == &tracked && *c == cursor && *continuation_request == request
     ));
     assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b"]);
 
-    // A complete first page has nothing to chain.
+    let request = file_history_request(&load_file_history(&mut state, repo_id, tracked.clone(), 2));
     let effects = file_history_loaded(
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        request,
         tracked,
         None,
         Ok(Arc::new(file_history_page(&["a", "b"], None))),
@@ -516,6 +698,7 @@ fn file_history_remainder_extends_the_page_that_requested_it() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked,
         Some(cursor),
         Ok(Arc::new(file_history_page(&["c", "d"], None))),
@@ -547,6 +730,7 @@ fn file_history_remainder_for_another_page_is_dropped() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked.clone(),
         Some(stale.clone()),
         Ok(Arc::new(file_history_page(&["x"], None))),
@@ -567,6 +751,7 @@ fn file_history_remainder_for_another_page_is_dropped() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked,
         Some(stale),
         Ok(Arc::new(file_history_page(&["x"], None))),
@@ -600,6 +785,7 @@ fn file_history_remainder_error_keeps_the_first_page() {
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
+        crate::model::FileHistoryRequestId::default(),
         tracked,
         Some(cursor),
         Err(backend_error("follow failed")),
@@ -885,6 +1071,7 @@ fn load_requests_set_loading_and_emit_effects() {
     assert!(matches!(
         effects[0],
         Effect::LoadFileHistory {
+            request: _,
             repo_id: rid,
             ref path,
             limit,

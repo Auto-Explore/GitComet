@@ -100,8 +100,7 @@ pub(super) fn reload_repo(
     repo_state.set_rebase_in_progress(Loadable::Loading);
     repo_state.set_sequencer_state(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);
-    repo_state.history_state.file_history_path = None;
-    repo_state.history_state.file_history = Loadable::NotLoaded;
+    repo_state.history_state.clear_file_history();
     repo_state.diff_state.blame_path = None;
     repo_state.diff_state.blame_source = None;
     repo_state.diff_state.blame = Loadable::NotLoaded;

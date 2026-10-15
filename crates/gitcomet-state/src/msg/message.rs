@@ -1469,6 +1469,7 @@ pub enum InternalMsg {
         result: Result<String, Error>,
     },
     FileHistoryLoaded {
+        request: crate::model::FileHistoryRequestId,
         repo_id: RepoId,
         path: PathBuf,
         /// The cursor the page was requested with: `None` for the first page,

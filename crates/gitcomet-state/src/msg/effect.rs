@@ -78,6 +78,7 @@ pub enum Effect {
     /// page; a cursor page resumes after it and is served from the backend's
     /// cached full follow walk, so one such request can ask for everything.
     LoadFileHistory {
+        request: crate::model::FileHistoryRequestId,
         repo_id: RepoId,
         path: PathBuf,
         limit: usize,

@@ -353,8 +353,9 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
     for reload in reloads {
         match reload {
             SelectedHistoryReload::FileHistory(path) => {
-                repo_state.history_state.file_history = Loadable::Loading;
+                let request = repo_state.history_state.begin_file_history(path.clone());
                 effects.push_effect(Effect::LoadFileHistory {
+                    request,
                     repo_id,
                     path,
                     limit: REACTIVATED_FILE_HISTORY_LIMIT,
@@ -1374,8 +1375,7 @@ pub(super) fn repo_opened_ok(
             repo_state.set_rebase_in_progress(Loadable::Loading);
             repo_state.set_sequencer_state(Loadable::Loading);
             repo_state.set_merge_commit_message(Loadable::Loading);
-            repo_state.history_state.file_history_path = None;
-            repo_state.history_state.file_history = Loadable::NotLoaded;
+            repo_state.history_state.clear_file_history();
             repo_state.diff_state.blame_path = None;
             repo_state.diff_state.blame_source = None;
             repo_state.diff_state.blame = Loadable::NotLoaded;

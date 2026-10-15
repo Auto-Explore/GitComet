@@ -5,6 +5,167 @@ use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
 use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
+fn file_history_blocked_older_effect_cannot_replace_reopened_result() {
+    let repo_id = RepoId(72);
+    let spec = RepoSpec {
+        workdir: PathBuf::from("/unused/mock-repository"),
+    };
+    let mut state = AppState::test_default();
+    let mut repo = RepoState::new_opening(repo_id, spec.clone());
+    repo.open = Loadable::Ready(());
+    state.repos.push(repo);
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(
+        repo_id,
+        Arc::new(UnsupportedRepo {
+            spec,
+            delete_branch_calls: None,
+            cancel_delete_branch: None,
+        }),
+    );
+    let id_alloc = AtomicU64::new(1);
+    let path = PathBuf::from("tracked.txt");
+    let old_executor = super::super::executor::TaskExecutor::new(1);
+    let fresh_executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    old_executor.spawn(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    entered_rx.recv().unwrap();
+    let old = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadFileHistory {
+            repo_id,
+            path: path.clone(),
+            limit: 2,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (old_tx, old_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &old_executor,
+        &old_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        old_tx,
+        old,
+    );
+    let fresh = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadFileHistory {
+            repo_id,
+            path,
+            limit: 2,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (fresh_tx, fresh_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &fresh_executor,
+        &fresh_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        fresh_tx,
+        fresh,
+    );
+    fresh_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        fresh_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+    release_tx.send(()).unwrap();
+    old_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        old_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+}
+
+#[test]
+fn file_history_effect_preserves_request_identity_with_available_or_unavailable_git() {
+    for available in [true, false] {
+        let repo_id = RepoId(71);
+        let spec = RepoSpec {
+            workdir: PathBuf::from("/unused/mock-repository"),
+        };
+        let mut state = AppState::test_default();
+        let mut repo = RepoState::new_opening(repo_id, spec.clone());
+        repo.open = Loadable::Ready(());
+        let path = PathBuf::from("tracked.txt");
+        repo.history_state.begin_file_history(path.clone());
+        let request = repo.history_state.begin_file_history(path.clone());
+        state.repos.push(repo);
+        if !available {
+            state.git_runtime.availability =
+                gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                    detail: "git missing".into(),
+                };
+        }
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(
+            repo_id,
+            Arc::new(UnsupportedRepo {
+                spec,
+                delete_branch_calls: None,
+                cancel_delete_branch: None,
+            }),
+        );
+        let executor = super::super::executor::TaskExecutor::new(1);
+        let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+        let (tx, rx) = std::sync::mpsc::channel();
+        schedule_effect_with_state_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &mut repos,
+            state,
+            tx,
+            Effect::LoadFileHistory {
+                request,
+                repo_id,
+                path: path.clone(),
+                limit: 2,
+                cursor: None,
+            },
+        );
+        executor.join();
+        let Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
+            request: completed_request,
+            repo_id: completed_repo,
+            path: completed_path,
+            cursor,
+            result,
+        }) = rx.try_recv().expect("file history completion")
+        else {
+            panic!("file history completion")
+        };
+        assert_eq!(completed_request, request);
+        assert_eq!(completed_repo, repo_id);
+        assert_eq!(completed_path, path);
+        assert!(cursor.is_none());
+        assert!(result.is_err());
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
 fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
     struct Backend;
     impl GitBackend for Backend {
@@ -1980,6 +2141,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (Effect::LoadReflog { repo_id, limit: 5 }, 1),
         (
             Effect::LoadFileHistory {
+                request: crate::model::FileHistoryRequestId::default(),
                 repo_id,
                 path: PathBuf::from("tracked.txt"),
                 limit: 10,

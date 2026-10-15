@@ -1675,6 +1675,7 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
     assert!(reactivate_effects.iter().any(|effect| matches!(
         effect,
         Effect::LoadFileHistory {
+            request: _,
             repo_id,
             path,
             limit: 200,

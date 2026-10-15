@@ -137,11 +137,13 @@ pub(super) fn send_unavailable_git_effect_result(
             }))
         }
         Effect::LoadFileHistory {
+            request,
             repo_id,
             path,
             cursor,
             ..
         } => send(Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
+            request,
             repo_id,
             path,
             cursor,

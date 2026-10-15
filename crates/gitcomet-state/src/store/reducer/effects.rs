@@ -36,6 +36,7 @@ pub(super) fn file_history_loaded(
     inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
+    request: crate::model::FileHistoryRequestId,
     path: PathBuf,
     cursor: Option<LogCursor>,
     result: std::result::Result<Arc<LogPage>, Error>,
@@ -43,7 +44,10 @@ pub(super) fn file_history_loaded(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if repo_state.history_state.file_history_path.as_ref() != Some(&path) {
+    if !repo_state
+        .history_state
+        .accepts_file_history(request, &path, cursor.as_ref())
+    {
         return Vec::new();
     }
 
@@ -56,16 +60,10 @@ pub(super) fn file_history_loaded(
                 return Vec::new();
             }
         },
-        Some(cursor) => {
-            // A continuation only extends the page that asked for it. The
-            // popover reloads the first page on every open, so a late answer
-            // to an earlier open must not be appended to a fresh page.
+        Some(_) => {
             let Loadable::Ready(current) = &repo_state.history_state.file_history else {
                 return Vec::new();
             };
-            if current.next_cursor.as_ref() != Some(&cursor) {
-                return Vec::new();
-            }
             let mut commits = current.commits.clone();
             let next_cursor = match result {
                 Ok(rest) => {
@@ -91,6 +89,7 @@ pub(super) fn file_history_loaded(
         .next_cursor
         .clone()
         .map(|cursor| Effect::LoadFileHistory {
+            request,
             repo_id,
             path,
             limit: FILE_HISTORY_REMAINDER_LIMIT,
@@ -1666,9 +1665,9 @@ pub(super) fn load_file_history(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    repo_state.history_state.file_history_path = Some(path.clone());
-    repo_state.history_state.file_history = Loadable::Loading;
+    let request = repo_state.history_state.begin_file_history(path.clone());
     vec![Effect::LoadFileHistory {
+        request,
         repo_id,
         path,
         limit,

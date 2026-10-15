@@ -2169,11 +2169,12 @@ fn reduce_inner(
             result,
         }) => effects::hover_commit_message_loaded(state, repo_id, commit_id, result),
         Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
+            request,
             repo_id,
             path,
             cursor,
             result,
-        }) => effects::file_history_loaded(inputs, state, repo_id, path, cursor, result),
+        }) => effects::file_history_loaded(inputs, state, repo_id, request, path, cursor, result),
         Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,
