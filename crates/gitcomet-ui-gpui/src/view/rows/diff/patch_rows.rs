@@ -1,7 +1,6 @@
 use super::super::diff_canvas;
 use super::super::diff_text::*;
 use super::super::*;
-use super::PatchSplitColumn;
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction as controls;
 use crate::kit::interaction::ControlInteractionExt as _;
@@ -9,6 +8,16 @@ use crate::view::panes::diff::helpers::state::CollapsedDiffExpansionKind;
 use crate::view::panes::diff::helpers::state::CollapsedDiffHunk;
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
+
+use super::DiffRowsRenderPass;
+use super::PatchSplitColumn;
+use super::SplitDiffRowsRenderPass;
+use super::blame_presentation::BlamePrev;
+use super::blame_presentation::build_row_blame_paint_tracked;
+use super::file_rows::build_file_diff_cached_styled_text;
+use super::file_rows::file_diff_split_side_text;
+use super::file_rows::file_diff_split_side_text_owned;
+use super::file_rows::heuristic_streamed_diff_text_spec;
 
 const COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_shell";
 
@@ -1581,3 +1590,451 @@ fn patch_split_meta_row(
 
 #[cfg(test)]
 mod tests;
+
+pub(super) fn render_patch_diff_rows(
+    this: &mut DiffRenderer,
+    range: Range<usize>,
+    pass: DiffRowsRenderPass,
+    cx: &mut gpui::Context<DiffRenderer>,
+) -> Vec<AnyElement> {
+    let DiffRowsRenderPass {
+        tab_width,
+        annot_hover,
+        stage_area,
+        stage_hover,
+        min_width,
+        query,
+        query_options,
+        query_matcher,
+        reveal_whitespace_chars,
+        ui_scale_percent,
+        annotation_width,
+        blame_ctx,
+    } = pass;
+
+    let theme = this.theme;
+    let cache_epoch = 0u64;
+    let repo_id_for_context_menu = this.active_repo_id();
+    let active_context_menu_invoker = this.active_context_menu_invoker.clone();
+    let syntax_mode = this.patch_diff_syntax_mode();
+    let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
+    range
+        .map(|visible_ix| {
+            let selected = this
+                .diff_selection_range
+                .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+            let show_line_numbers = this.diff_show_line_numbers;
+            let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+
+            let Some(src_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                return diff_placeholder_row(("diff_missing", visible_ix), theme, ui_scale_percent);
+            };
+            let click_kind = this
+                .diff_click_kinds
+                .get(src_ix)
+                .copied()
+                .unwrap_or(DiffClickKind::Line);
+
+            this.ensure_patch_diff_word_highlight_for_src_ix(src_ix);
+            let word_ranges: &[Range<usize>] = this
+                .diff_word_highlights
+                .get(src_ix)
+                .and_then(|r| r.as_ref().map(Vec::as_slice))
+                .unwrap_or(&[]);
+
+            let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
+
+            let language = this.diff_language_for_src_ix.get(src_ix).copied().flatten();
+            let Some(line) = this.patch_diff_row(src_ix) else {
+                return diff_placeholder_row(("diff_oob", visible_ix), theme, ui_scale_percent);
+            };
+            let visual_kind = this.patch_visual_line_kind(src_ix);
+            let streamed_spec = matches!(click_kind, DiffClickKind::Line)
+                .then(|| {
+                    heuristic_streamed_diff_text_spec(
+                        crate::view::diff_utils::diff_content_line_text(&line),
+                        &query,
+                        query_options,
+                        query_matcher.clone(),
+                        Arc::from(word_ranges.to_vec()),
+                        diff_line_word_kind(visual_kind),
+                        language,
+                        syntax_mode,
+                    )
+                })
+                .flatten();
+
+            let should_style = matches!(click_kind, DiffClickKind::Line) || !query.is_empty();
+            if should_style
+                && streamed_spec.is_none()
+                && this
+                    .diff_text_segments_cache_get(src_ix, cache_epoch)
+                    .is_none()
+            {
+                let computed = if matches!(click_kind, DiffClickKind::Line) {
+                    let word_kind = diff_line_word_kind(visual_kind);
+                    let content_text = diff_content_text(&line);
+
+                    build_cached_diff_styled_text_with_source_identity(
+                        tab_width,
+                        theme,
+                        content_text,
+                        Some(DiffTextSourceIdentity::from_str(content_text)),
+                        word_ranges,
+                        "",
+                        language,
+                        syntax_mode,
+                        word_kind,
+                    )
+                } else {
+                    let display =
+                        this.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                    build_cached_diff_styled_text(
+                        tab_width,
+                        theme,
+                        display.as_ref(),
+                        &[] as &[Range<usize>],
+                        "",
+                        None,
+                        syntax_mode,
+                        None,
+                    )
+                };
+                this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
+            }
+
+            let header_display = matches!(
+                click_kind,
+                DiffClickKind::FileHeader | DiffClickKind::HunkHeader
+            )
+            .then(|| this.diff_header_display_cache.get(&src_ix).cloned())
+            .flatten();
+            let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                && repo_id_for_context_menu.is_some_and(|repo_id| {
+                    let invoker: SharedString =
+                        format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                    active_context_menu_invoker.as_ref() == Some(&invoker)
+                });
+            let row_tint = this.hosted_row_tint(visible_ix, None);
+            let styled = if should_style && streamed_spec.is_none() {
+                this.diff_text_segments_cache_get_for_query(
+                    src_ix,
+                    query.as_ref(),
+                    query_options,
+                    cache_epoch,
+                )
+            } else {
+                None
+            };
+            diff_row(
+                DiffRowStyle {
+                    tab_width,
+                    theme,
+                    ui_scale_percent,
+                    mode: DiffViewMode::Inline,
+                    min_width,
+                    reveal_whitespace_chars,
+                    show_line_numbers,
+                    annotation_width,
+                },
+                visible_ix,
+                click_kind,
+                &line,
+                DiffRowDecor {
+                    tint: row_tint,
+                    selected,
+                    visual_kind,
+                    file_stat,
+                    header_display,
+                    styled,
+                    streamed_spec,
+                    raw_text: Some(if matches!(click_kind, DiffClickKind::Line) {
+                        diff_content_text(&line)
+                    } else {
+                        line.text.as_ref()
+                    }),
+                    context_menu_active,
+                    wrap,
+                    row_blame: blame_ctx.as_ref().and_then(|ctx| {
+                        build_row_blame_paint_tracked(
+                            ctx,
+                            matches!(visual_kind, DiffLineKind::Context),
+                            line.old_line,
+                            line.new_line,
+                            &blame_prev_nl,
+                            wrap,
+                            theme,
+                        )
+                    }),
+                    annot_hover,
+                    stage_area,
+                    stage_hover,
+                },
+                cx,
+            )
+        })
+        .collect()
+}
+
+pub(super) fn render_patch_diff_split_rows(
+    this: &mut DiffRenderer,
+    range: Range<usize>,
+    pass: SplitDiffRowsRenderPass,
+    cx: &mut gpui::Context<DiffRenderer>,
+) -> Vec<AnyElement> {
+    let SplitDiffRowsRenderPass {
+        common,
+        column,
+        is_left,
+        region,
+        id_missing,
+        id_oob,
+        id_src_oob,
+        id_hidden,
+    } = pass;
+    let DiffRowsRenderPass {
+        tab_width,
+        annot_hover,
+        stage_area,
+        stage_hover,
+        min_width,
+        query,
+        query_options,
+        query_matcher,
+        reveal_whitespace_chars,
+        ui_scale_percent,
+        annotation_width,
+        blame_ctx,
+    } = common;
+
+    let theme = this.theme;
+    let cache_epoch = 0u64;
+    let syntax_mode = this.patch_diff_syntax_mode();
+    let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
+    range
+        .map(|visible_ix| {
+            let selected = this
+                .diff_selection_range
+                .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+            let show_line_numbers = this.diff_show_line_numbers;
+            let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+
+            let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
+            };
+            let Some(row) = this.patch_diff_split_row(row_ix) else {
+                return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
+            };
+
+            match row {
+                PatchSplitRow::Aligned {
+                    row,
+                    old_src_ix,
+                    new_src_ix,
+                } => {
+                    let src_ix = if is_left { old_src_ix } else { new_src_ix };
+                    let old_changed = old_src_ix.is_some_and(|src_ix| {
+                        matches!(this.patch_visual_line_kind(src_ix), DiffLineKind::Remove)
+                    });
+                    let new_changed = new_src_ix.is_some_and(|src_ix| {
+                        matches!(this.patch_visual_line_kind(src_ix), DiffLineKind::Add)
+                    });
+                    let visual_kind = match (old_changed, new_changed) {
+                        (true, true) => FileDiffRowKind::Modify,
+                        (true, false) => FileDiffRowKind::Remove,
+                        (false, true) => FileDiffRowKind::Add,
+                        (false, false) => FileDiffRowKind::Context,
+                    };
+                    let row_tint = this.hosted_row_tint(
+                        visible_ix,
+                        Some(if is_left {
+                            gitcomet_extension_api::DiffLineSide::Old
+                        } else {
+                            gitcomet_extension_api::DiffLineSide::New
+                        }),
+                    );
+                    let (streamed_spec, styled) = if let Some(src_ix) = src_ix {
+                        let language = this.diff_language_for_src_ix.get(src_ix).copied().flatten();
+                        this.ensure_patch_diff_word_highlight_for_src_ix(src_ix);
+                        let word_ranges = this
+                            .diff_word_highlights
+                            .get(src_ix)
+                            .and_then(|r| r.as_ref().cloned())
+                            .unwrap_or_default();
+                        let word_kind = diff_line_word_kind(this.patch_visual_line_kind(src_ix));
+                        let streamed_spec = file_diff_split_side_text_owned(&row, is_left)
+                            .and_then(|raw_text| {
+                                heuristic_streamed_diff_text_spec(
+                                    raw_text,
+                                    &query,
+                                    query_options,
+                                    query_matcher.clone(),
+                                    Arc::from(word_ranges.clone()),
+                                    word_kind,
+                                    language,
+                                    syntax_mode,
+                                )
+                            });
+                        if streamed_spec.is_none()
+                            && this
+                                .diff_text_segments_cache_get(src_ix, cache_epoch)
+                                .is_none()
+                        {
+                            let computed =
+                                if let Some(raw_text) = file_diff_split_side_text(&row, is_left) {
+                                    build_file_diff_cached_styled_text(
+                                        tab_width,
+                                        theme,
+                                        raw_text,
+                                        word_ranges.as_slice(),
+                                        "",
+                                        language,
+                                        syntax_mode,
+                                        word_kind,
+                                    )
+                                } else {
+                                    build_cached_diff_styled_text(
+                                        tab_width,
+                                        theme,
+                                        "",
+                                        word_ranges.as_slice(),
+                                        "",
+                                        language,
+                                        syntax_mode,
+                                        word_kind,
+                                    )
+                                };
+                            this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
+                        }
+
+                        let styled = if streamed_spec.is_none() {
+                            this.diff_text_segments_cache_get_for_query(
+                                src_ix,
+                                query.as_ref(),
+                                query_options,
+                                cache_epoch,
+                            )
+                        } else {
+                            None
+                        };
+                        (streamed_spec, styled)
+                    } else {
+                        (None, None)
+                    };
+
+                    patch_split_column_row(
+                        tab_width,
+                        theme,
+                        ui_scale_percent,
+                        column,
+                        visible_ix,
+                        selected,
+                        min_width,
+                        &row,
+                        visual_kind,
+                        styled,
+                        streamed_spec,
+                        reveal_whitespace_chars,
+                        show_line_numbers,
+                        wrap,
+                        annotation_width,
+                        if is_left {
+                            blame_ctx.as_ref().and_then(|ctx| {
+                                build_row_blame_paint_tracked(
+                                    ctx,
+                                    matches!(visual_kind, FileDiffRowKind::Context),
+                                    row.old_line,
+                                    row.new_line,
+                                    &blame_prev_nl,
+                                    wrap,
+                                    theme,
+                                )
+                            })
+                        } else {
+                            None
+                        },
+                        annot_hover,
+                        stage_area,
+                        stage_hover,
+                        row_tint,
+                        cx,
+                    )
+                }
+                PatchSplitRow::Raw { src_ix, click_kind } => {
+                    if this.patch_diff_row(src_ix).is_none() {
+                        return diff_placeholder_row(
+                            (id_src_oob, visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
+                    };
+                    let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
+                    let should_style = !query.is_empty();
+                    if should_style
+                        && this
+                            .diff_text_segments_cache_get(src_ix, cache_epoch)
+                            .is_none()
+                    {
+                        let display = this.diff_text_line_for_region(visible_ix, region);
+                        let computed = build_cached_diff_styled_text(
+                            tab_width,
+                            theme,
+                            display.as_ref(),
+                            &[],
+                            "",
+                            None,
+                            syntax_mode,
+                            None,
+                        );
+                        this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
+                    }
+                    let Some(line) = this.patch_diff_row(src_ix) else {
+                        return diff_placeholder_row(
+                            (id_src_oob, visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
+                    };
+                    if should_hide_unified_diff_header_line(&line) {
+                        return div()
+                            .id((id_hidden, visible_ix))
+                            .h(px(0.0))
+                            .into_any_element();
+                    }
+                    let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                        && this.active_repo_id().is_some_and(|repo_id| {
+                            let invoker: SharedString =
+                                format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                            this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                        });
+                    let header_display = this.diff_header_display_cache.get(&src_ix).cloned();
+                    let styled = if should_style {
+                        this.diff_text_segments_cache_get_for_query(
+                            src_ix,
+                            query.as_ref(),
+                            query_options,
+                            cache_epoch,
+                        )
+                    } else {
+                        None
+                    };
+                    patch_split_header_row(
+                        theme,
+                        ui_scale_percent,
+                        column,
+                        visible_ix,
+                        click_kind,
+                        selected,
+                        min_width,
+                        &line,
+                        file_stat,
+                        header_display,
+                        styled,
+                        context_menu_active,
+                        cx,
+                    )
+                }
+            }
+        })
+        .collect()
+}
