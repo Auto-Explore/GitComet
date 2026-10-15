@@ -117,6 +117,8 @@ These shortcuts apply while the commit history list is showing.
 
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
+| Previous / next row | `Up`, `Down` | `Up`, `Down` | While the history list has focus. |
+| Previous / next page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | While the history list has focus. Moves selection by one visible page, updates the selected row's details, and stops at the first / last available row. With nothing selected, selects the first row. |
 | Find a commit | `Cmd-F` | `Ctrl-F` | Opens the find bar over the history. Matches the commit summary or the author (each on its own), or the start of the SHA (4+ hex characters), across the whole history, not only the loaded rows. Typing selects the first match. With the bar already open, refocuses it with the query selected. |
 | Find options | `Aa`, `W`, `.*` buttons | `Aa`, `W`, `.*` buttons | Match Case, Whole Word and Regex toggles, as in diff search; toggling one searches again and selects the first match. Without Match Case, plain text ignores ASCII letter case only (`É` and `é` differ), while a regex ignores Unicode case. The SHA prefix always ignores case and Whole Word, and applies only while Regex is off. An invalid regex reads "Invalid regex" and searches nothing. |
 | Next match | `Enter`, `F3` | `Enter`, `F3` | Selects the next match below the selected commit, wrapping to the top. `Enter` only from the find bar; `F3` also from the list. Also the ↓ button. |

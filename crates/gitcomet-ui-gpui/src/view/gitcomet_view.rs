@@ -2141,8 +2141,7 @@ impl GitCometView {
             .update(cx, |pane, _| pane.appearance_metrics = metrics);
         self.main_pane.update(cx, |pane, cx| {
             pane.history_view.update(cx, |history, cx| {
-                history.appearance_metrics = metrics;
-                cx.notify();
+                history.set_appearance_metrics(metrics, cx);
             });
         });
         for session in self.terminal_sessions.values() {

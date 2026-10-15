@@ -61,16 +61,19 @@ fn graph_branch_heads<'a>(
 
 fn history_column_static_bounds(
     handle: HistoryColResizeHandle,
-    ui_scale_percent: u32,
+    scale: ui_scale::UiScale,
 ) -> (Pixels, Pixels) {
+    let ui_scale_percent = scale.percent();
     match handle {
         HistoryColResizeHandle::Branch => (
             history_scaled_px(HISTORY_COL_BRANCH_MIN_PX, ui_scale_percent),
             history_scaled_px(HISTORY_COL_BRANCH_MAX_PX, ui_scale_percent),
         ),
         HistoryColResizeHandle::Graph => (
-            history_scaled_px(HISTORY_COL_GRAPH_MIN_PX, ui_scale_percent),
-            history_scaled_px(HISTORY_COL_GRAPH_MAX_PX, ui_scale_percent),
+            crate::view::rows::history_node::graph_min_width(scale),
+            scale.px(HISTORY_COL_GRAPH_MAX_PX)
+                + crate::view::rows::history_node::graph_font_growth(scale)
+                    * HISTORY_GRAPH_FULL_WIDTH_LANES as f32,
         ),
         HistoryColResizeHandle::Author => (
             history_scaled_px(HISTORY_COL_AUTHOR_MIN_PX, ui_scale_percent),
@@ -201,14 +204,15 @@ fn history_column_drag_next_width(
     show_graph: bool,
     preferred: (bool, bool, bool),
     widths: HistoryColumnWidths,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> Pixels {
+    let scale = scale.into();
     let (show_author, show_date, show_sha) = history_visible_columns_for_width(
         available_width,
         show_graph,
         preferred,
         widths,
-        ui_scale_percent,
+        scale.percent(),
     );
     history_column_drag_clamped_width(
         handle,
@@ -225,7 +229,7 @@ fn history_column_drag_next_width(
             date_w: widths.date,
             sha_w: widths.sha,
         },
-        ui_scale_percent,
+        scale,
     )
 }
 
@@ -234,9 +238,10 @@ fn history_reset_widths_for_available_width(
     branch_names: HistoryBranchNamesMode,
     show_graph: bool,
     preferred: (bool, bool, bool),
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> HistoryColumnWidths {
-    let mut widths = default_history_column_widths(ui_scale_percent);
+    let scale = scale.into();
+    let mut widths = default_history_column_widths(scale.percent());
     // The hidden ref column must not constrain the graph's reset width.
     let branch_width = widths.branch;
     if branch_names == HistoryBranchNamesMode::Inline {
@@ -249,7 +254,7 @@ fn history_reset_widths_for_available_width(
         show_graph,
         preferred,
         widths,
-        ui_scale_percent,
+        scale,
     );
     if branch_names == HistoryBranchNamesMode::Inline {
         widths.branch = branch_width;
@@ -262,7 +267,7 @@ fn history_reset_widths_for_available_width(
         show_graph,
         preferred,
         widths,
-        ui_scale_percent,
+        scale,
     );
     widths
 }
@@ -279,7 +284,7 @@ pub(in crate::view) struct HistoryColumnResizeDragParams {
 pub(in crate::view) fn history_column_resize_drag_params(
     handle: HistoryColResizeHandle,
     layout: HistoryColumnDragLayout,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> HistoryColumnResizeDragParams {
     let (start_width, drag_delta_sign) = match handle {
         HistoryColResizeHandle::Branch => (layout.branch_w, 1.0),
@@ -288,7 +293,7 @@ pub(in crate::view) fn history_column_resize_drag_params(
         HistoryColResizeHandle::Date => (layout.date_w, -1.0),
         HistoryColResizeHandle::Sha => (layout.sha_w, -1.0),
     };
-    let (min_width, static_max_width) = history_column_static_bounds(handle, ui_scale_percent);
+    let (min_width, static_max_width) = history_column_static_bounds(handle, scale.into());
     let other_fixed_width = match handle {
         HistoryColResizeHandle::Branch => {
             (if layout.show_graph {
@@ -411,8 +416,10 @@ pub(in crate::view) fn history_column_resize_state(
     start_x: Pixels,
     available_width: Pixels,
     layout: HistoryColumnDragLayout,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> HistoryColResizeState {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
     let visible_columns =
         history_visible_columns_for_layout(available_width, layout, ui_scale_percent);
     let params = history_column_resize_drag_params(
@@ -423,7 +430,7 @@ pub(in crate::view) fn history_column_resize_state(
             show_sha: visible_columns.2,
             ..layout
         },
-        ui_scale_percent,
+        scale,
     );
     HistoryColResizeState {
         handle,
@@ -504,15 +511,16 @@ fn history_column_drag_clamped_width(
     candidate: Pixels,
     available_width: Pixels,
     layout: HistoryColumnDragLayout,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> Pixels {
-    let params = history_column_resize_drag_params(handle, layout, ui_scale_percent);
+    let scale = scale.into();
+    let params = history_column_resize_drag_params(handle, layout, scale);
     candidate
         .max(params.min_width)
         .min(history_column_resize_max_width(
             params,
             available_width,
-            ui_scale_percent,
+            scale.percent(),
         ))
 }
 
@@ -1183,12 +1191,12 @@ pub(in super::super) struct HistoryView {
     pending_history_selections: std::collections::VecDeque<PendingHistorySelection>,
 }
 
-/// A hoverable sub-area of a history row. Both are painted on the canvas, so
-/// neither can use `.tooltip()`; they drive the shared [`TooltipHost`] by hand.
+/// Canvas sub-areas drive the shared [`TooltipHost`] without retained tooltips.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum HistoryRowHoverArea {
     Signature,
     Date,
+    Author,
 }
 
 impl HistoryView {
@@ -1710,7 +1718,9 @@ impl HistoryView {
     fn sync_history_column_widths_from_design(&mut self) {
         let scale = self.ui_scale();
         self.history_col_branch = scale.px(self.history_col_branch_design);
-        self.history_col_graph = scale.px(self.history_col_graph_design);
+        self.history_col_graph = scale
+            .px(self.history_col_graph_design)
+            .max(crate::view::rows::history_node::graph_min_width(scale));
         self.history_col_author = scale.px(self.history_col_author_design);
         self.history_col_date = scale.px(self.history_col_date_design);
         self.history_col_sha = scale.px(self.history_col_sha_design);
@@ -1933,7 +1943,7 @@ impl HistoryView {
                 self.history_show_date,
                 self.history_show_sha,
             ),
-            self.ui_scale_percent,
+            self.ui_scale(),
         );
         self.history_col_branch = widths.branch;
         self.history_col_graph = widths.graph;
@@ -1963,6 +1973,17 @@ impl HistoryView {
             find.input
                 .update(cx, |input, cx| input.set_theme(theme, cx));
         }
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_appearance_metrics(
+        &mut self,
+        metrics: crate::appearance::Appearance,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.appearance_metrics = metrics;
+        self.history_col_resize = None;
+        self.sync_history_column_widths_from_design();
         cx.notify();
     }
 
@@ -2102,6 +2123,7 @@ impl HistoryView {
         self.history_show_date = show_date;
         self.history_show_sha = show_sha;
         self.history_col_resize = None;
+        self.update_history_row_hover(None, None, cx);
         cx.notify();
     }
 
@@ -2991,6 +3013,7 @@ fn build_history_base_cache(
 
             row_vms.push(HistoryBaseRowVm {
                 author,
+                author_run_interior: false,
                 summary: HistoryTextVm::new(summary),
                 when: HistoryWhenVm::deferred(commit.time),
                 short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
@@ -3009,6 +3032,7 @@ fn build_history_base_cache(
                 .clone();
             row_vms.push(HistoryBaseRowVm {
                 author,
+                author_run_interior: false,
                 summary: HistoryTextVm::new(commit.summary.clone().into()),
                 when: HistoryWhenVm::deferred(commit.time),
                 short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
@@ -3030,13 +3054,15 @@ fn build_history_base_cache(
         }
     }
 
-    HistoryBaseCache {
+    let mut base = HistoryBaseCache {
         request,
         visible_indices,
         visible_ix_by_commit: Arc::new(visible_ix_by_commit),
         graph_rows,
         row_vms,
-    }
+    };
+    crate::view::caches::mark_history_author_runs(&mut base, page);
+    base
 }
 
 fn build_history_decoration_cache(

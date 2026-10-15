@@ -1,6 +1,9 @@
 use super::indexed_graph::IndexedGraph;
 use super::*;
-use crate::view::caches::HistoryListRow;
+use crate::view::caches::{
+    HISTORY_AUTHOR_RUN_MAX_LINK_ROWS, HistoryAuthorRunRow, HistoryListRow,
+    history_author_run_interiors,
+};
 use gitcomet_core::domain::WorktreeDirtySummary;
 use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HistoryIndexHandle};
 use gitcomet_core::services::CancellationToken;
@@ -802,6 +805,9 @@ impl HistoryView {
         let start = first / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
         let end = (last.div_ceil(HISTORY_BLOCK_SIZE) * HISTORY_BLOCK_SIZE)
             .min(shown.graph.projection.len());
+        // Author runs of the edge rows depend on commits just outside the window.
+        let context = start.saturating_sub(HISTORY_AUTHOR_RUN_MAX_LINK_ROWS)
+            ..(end + HISTORY_AUTHOR_RUN_MAX_LINK_ROWS).min(shown.graph.projection.len());
         let selection = if self.history_highlight_commit_chain
             && !repo.history_state.multi_selection.is_multi()
         {
@@ -838,7 +844,11 @@ impl HistoryView {
             blocks: {
                 let indexed = &repo.history_state.indexed;
                 let mut raw_blocks = Vec::new();
-                push_blocks_for_visible_range(&shown.graph.projection, start..end, &mut raw_blocks);
+                push_blocks_for_visible_range(
+                    &shown.graph.projection,
+                    context.clone(),
+                    &mut raw_blocks,
+                );
                 let current =
                     indexed.range_index.as_ref().map(|index| &index.snapshot) == Some(&snapshot);
                 raw_blocks
@@ -951,7 +961,8 @@ impl HistoryView {
                         .chain(bootstrap.iter().flat_map(|page| &page.commits))
                         .map(|commit| (commit.id.clone(), commit.clone()))
                         .collect();
-                    let graph = shown.graph.window(start..end, &cancellation)?;
+                    let graph = shown.graph.window(context.clone(), &cancellation)?;
+                    let window_rows = start - context.start..end - context.start;
                     let selected_lane = match selection {
                         Some((row, branch)) => {
                             shown
@@ -963,9 +974,9 @@ impl HistoryView {
                     gitcomet_core::history_perf::record(
                         gitcomet_core::history_perf::Work::TextWindowBuild,
                     );
-                    let mut loaded = Vec::with_capacity(end - start);
-                    let mut commits = Vec::with_capacity(end - start);
-                    for row in start..end {
+                    let mut loaded = Vec::with_capacity(context.len());
+                    let mut commits = Vec::with_capacity(context.len());
+                    for row in context.clone() {
                         cancellation.check_cancelled()?;
                         let raw = shown.graph.projection.raw_position(row).unwrap();
                         let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
@@ -992,6 +1003,9 @@ impl HistoryView {
                             time: std::time::UNIX_EPOCH,
                         }));
                     }
+                    let after = commits.split_off(window_rows.end);
+                    let before = commits.drain(..window_rows.start).collect::<Vec<_>>();
+                    let loaded = loaded[window_rows.clone()].to_vec();
                     let page = Arc::new(LogPage {
                         commits,
                         next_cursor: None,
@@ -1002,7 +1016,13 @@ impl HistoryView {
                         .head
                         .as_ref()
                         .map(|head| CommitId(head.clone().into()));
-                    let row_vms = page
+                    let is_stash_row = |row: usize| {
+                        shown.stash_rows.contains_key(&row)
+                            || shown.graph.projection.index.is_probable_stash(
+                                shown.graph.projection.raw_position(row).unwrap(),
+                            )
+                    };
+                    let mut row_vms: Vec<_> = page
                         .commits
                         .iter()
                         .enumerate()
@@ -1021,13 +1041,11 @@ impl HistoryView {
                             {
                                 return old.cache.base.row_vms[old_ix].clone();
                             }
-                            let raw = shown.graph.projection.raw_position(start + ix).unwrap();
                             let stash = shown
                                 .stash_rows
                                 .get(&(start + ix))
                                 .map(|&ix| &shown.stashes[ix]);
-                            let is_stash = stash.is_some()
-                                || shown.graph.projection.index.is_probable_stash(raw);
+                            let is_stash = stash.is_some() || is_stash_row(start + ix);
                             let summary = if is_stash {
                                 gitcomet_core::history_find::stash_row_summary(
                                     stash.map(|stash| stash.message.as_ref()),
@@ -1038,6 +1056,7 @@ impl HistoryView {
                             };
                             HistoryBaseRowVm {
                                 author: HistoryAuthorVm::new(commit.author.clone().into()),
+                                author_run_interior: false,
                                 summary: HistoryTextVm::new(
                                     if summary == commit.summary.as_ref() {
                                         commit.summary.clone().into()
@@ -1052,6 +1071,30 @@ impl HistoryView {
                             }
                         })
                         .collect();
+                    let context_commits = before.iter().chain(&page.commits).chain(&after);
+                    let row_of: FxHashMap<_, _> = context_commits
+                        .clone()
+                        .enumerate()
+                        .map(|(ix, commit)| (&commit.id, ix))
+                        .collect();
+                    let run_rows = context_commits
+                        .zip(graph.rows.iter())
+                        .enumerate()
+                        .map(|(ix, (commit, graph))| HistoryAuthorRunRow {
+                            commit,
+                            graph,
+                            is_stash: if window_rows.contains(&ix) {
+                                row_vms[ix - window_rows.start].is_stash
+                            } else {
+                                is_stash_row(context.start + ix)
+                            },
+                        })
+                        .collect::<Vec<_>>();
+                    let interiors =
+                        history_author_run_interiors(&run_rows, |id| row_of.get(id).copied());
+                    for (row, interior) in row_vms.iter_mut().zip(&interiors[window_rows.clone()]) {
+                        row.author_run_interior = *interior;
+                    }
                     let base = HistoryBaseCache {
                         request: request.clone(),
                         visible_indices: HistoryVisibleIndices::all(page.commits.len()),
@@ -1062,7 +1105,7 @@ impl HistoryView {
                                 .map(|(ix, commit)| (commit.id.clone(), ix))
                                 .collect(),
                         ),
-                        graph_rows: graph.rows,
+                        graph_rows: graph.rows[window_rows.clone()].into(),
                         row_vms,
                     };
                     let sparse =
@@ -1093,7 +1136,7 @@ impl HistoryView {
                             decorations,
                         },
                         loaded,
-                        labels: graph.labels,
+                        labels: graph.labels[window_rows].into(),
                         selected_lane,
                         _presentation: shown,
                         _blocks: task_key
@@ -1326,9 +1369,11 @@ impl HistoryView {
             })
     }
 
-    pub(super) fn select_adjacent_indexed(
+    pub(super) fn select_indexed_by_rows(
         &mut self,
         direction: i8,
+        rows: usize,
+        paging: bool,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let Some(shown) = self.indexed.presentation.clone() else {
@@ -1359,15 +1404,28 @@ impl HistoryView {
                     Some(row)
                 }
                 None => None,
-            }
-            .unwrap_or(0);
+            };
         let total = plan.list_len(shown.graph.projection.len());
         if total == 0 {
             return false;
         }
-        let row = current
-            .saturating_add_signed(direction as isize)
-            .min(total - 1);
+        let row = match current {
+            // A page key enters the list at its first row.
+            None if paging => 0,
+            _ => {
+                let current = current.unwrap_or(0);
+                if direction.is_negative() {
+                    current.saturating_sub(rows)
+                } else {
+                    current.saturating_add(rows)
+                }
+            }
+        }
+        .min(total - 1);
+        // Holding a key at either end must not re-select the same row.
+        if current == Some(row) {
+            return true;
+        }
         match plan.row_at(row) {
             Some(HistoryListRow::Commit { visible_ix }) => {
                 let repo_id = repo.id;

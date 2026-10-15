@@ -415,8 +415,11 @@ pub(crate) use icons::svg_icon;
 use icons::svg_spinner;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
-const HISTORY_COL_GRAPH_PX: f32 = 80.0;
-const HISTORY_COL_GRAPH_MAX_PX: f32 = 240.0;
+const HISTORY_COL_GRAPH_PX: f32 = 104.0;
+const HISTORY_GRAPH_FULL_WIDTH_LANES: usize = 14;
+const HISTORY_COL_GRAPH_MAX_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX
+    + HISTORY_GRAPH_COL_GAP_PX * (HISTORY_GRAPH_FULL_WIDTH_LANES - 1) as f32
+    + HISTORY_GRAPH_MARGIN_RIGHT_PX;
 const HISTORY_COL_AUTHOR_PX: f32 = 140.0;
 const HISTORY_COL_DATE_PX: f32 = 160.0;
 const HISTORY_COL_SHA_PX: f32 = 88.0;
@@ -435,17 +438,12 @@ const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
 const HISTORY_COL_SHA_MAX_PX: f32 = 160.0;
 const HISTORY_COL_MESSAGE_MIN_PX: f32 = 220.0;
 
-const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
-/// Inset from the graph cell's left edge to column 0: 10px for a lane plus 2px
-/// padding.
-const HISTORY_GRAPH_MARGIN_X_PX: f32 = 12.0;
-/// Inset from the graph cell's right edge to the right-most lane, wider than the
-/// left one so a 16px node keeps 8px clear of the message border.
-const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 16.0;
-/// Corner radius where a graph line turns between columns. Against a 16px column
-/// pitch and a 14px half-row this leaves roughly a 10px straight horizontal run
-/// per column crossed and 8px of straight vertical below the corner, so the turn
-/// reads as a corner rather than as a diagonal.
+const HISTORY_GRAPH_COL_GAP_PX: f32 = 28.0;
+/// The 26px Spacious author node fits inside either inset, with room for its glow.
+const HISTORY_GRAPH_MARGIN_X_PX: f32 = 16.0;
+/// Keep author nodes clear of the message border, even on the pinned edge lane.
+const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 18.0;
+/// Rounded turns retain a straight run between the wider author-node columns.
 const HISTORY_GRAPH_ELBOW_RADIUS_PX: f32 = 6.0;
 
 /// Width of the lane-coloured wash at the right edge of the graph column. It
