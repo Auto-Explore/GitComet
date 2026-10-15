@@ -1,4 +1,3 @@
-
 use super::*;
 use gitcomet_core::text_format::{TextAttributes, TextEncoding, TextOverride};
 

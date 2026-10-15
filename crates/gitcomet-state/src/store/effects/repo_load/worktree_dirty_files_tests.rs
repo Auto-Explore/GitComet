@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::store::repository_runtime::RepositoryRuntime;
 use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};

@@ -1,4 +1,3 @@
-
 use super::super::auth::{
     clear_staged_git_auth_env, detect_auth_prompt_kind, detect_auth_prompt_kind_from_message,
     stage_git_auth_env,

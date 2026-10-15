@@ -1,4 +1,3 @@
-
 use super::file_browser_query_filters;
 
 /// The same table the view asserts in

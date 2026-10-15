@@ -1,4 +1,3 @@
-
 use super::*;
 use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
 
