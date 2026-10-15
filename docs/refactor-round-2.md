@@ -768,3 +768,13 @@ open, clone and init actions, the folder-picker fallback) around the entity.
 Navigation keys are ignored while Home is hidden, as before; the root records
 that when it renders the centre area. Root fields went from 168 to 161, at the
 cost of 42 production lines of entity scaffolding.
+
+### 3.7 Inline tests out of large files (first cut)
+
+Eleven inline test modules (about 5,800 lines) moved to sibling files with
+unchanged module paths, so test names did not change. That took eight files
+under 3,000 lines (`diff_search.rs`, `history_canvas.rs`, `details.rs`,
+`branch_sidebar.rs`, core `services.rs`, `conflict_resolver_ui_state.rs`,
+`merge/plan.rs`, gix `repo/diff.rs`) and shrank `panes/sidebar.rs` by 530 lines.
+Production files over 3,000 lines: 17 to 9. The remaining nine need real
+splits; small cohesive inline tests stay where they are.
