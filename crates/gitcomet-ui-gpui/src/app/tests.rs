@@ -1521,6 +1521,7 @@ fn review_regression_confirmed_existing_window_open_waits_for_git_recovery(
         );
     });
     cx.run_until_parked();
+    crate::view::test_support::drain_store_worker(&view, cx);
     assert!(
         store.snapshot().repos.is_empty(),
         "the unavailable reducer must not start the repository open yet"

@@ -1745,6 +1745,7 @@ fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext
 
     install_repo_tab_test_state(&store, &view, cx, RepoId(1));
     open_repo_tab_context_menu(cx, "repo_tab_2");
+    test_support::drain_store_worker(&view, cx);
 
     assert_eq!(store.snapshot().active_repo, Some(RepoId(1)));
     cx.debug_bounds("context_menu_activate")
@@ -1863,6 +1864,7 @@ fn repo_tab_context_menu_activate_is_disabled_for_active_repo(cx: &mut gpui::Tes
     install_repo_tab_test_state(&store, &view, cx, RepoId(2));
     open_repo_tab_context_menu(cx, "repo_tab_2");
     click_debug_selector(cx, "context_menu_activate");
+    test_support::drain_store_worker(&view, cx);
 
     assert_eq!(store.snapshot().active_repo, Some(RepoId(2)));
     cx.debug_bounds("context_menu_activate")
@@ -1879,6 +1881,7 @@ fn repo_tab_context_menu_close_right_is_disabled_for_last_repo(cx: &mut gpui::Te
     install_repo_tab_test_state(&store, &view, cx, RepoId(2));
     open_repo_tab_context_menu(cx, "repo_tab_3");
     click_debug_selector(cx, "context_menu_close_repositories_to_the_right");
+    test_support::drain_store_worker(&view, cx);
 
     let snapshot = store.snapshot();
     assert_eq!(
@@ -1904,6 +1907,7 @@ fn repo_tab_context_menu_close_others_is_disabled_for_single_repo(cx: &mut gpui:
     install_repo_tab_test_state_with_count(&store, &view, cx, RepoId(1), 1);
     open_repo_tab_context_menu(cx, "repo_tab_1");
     click_debug_selector(cx, "context_menu_close_other_repositories");
+    test_support::drain_store_worker(&view, cx);
 
     let snapshot = store.snapshot();
     assert_eq!(
