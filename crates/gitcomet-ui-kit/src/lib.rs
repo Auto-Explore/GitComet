@@ -13,8 +13,9 @@
 /// dependency so versions cannot drift.
 pub use gpui;
 
-/// The exact GPUI revision used by this kit and its host.
-pub const GPUI_REVISION: &str = env!("GITCOMET_GPUI_REVISION");
+/// The exact GPUI revision used by this kit and its host. It lives in its own
+/// file so editing the workspace manifest does not rebuild the kit.
+pub const GPUI_REVISION: &str = include_str!("../gpui-revision").trim_ascii();
 
 pub mod appearance;
 pub mod assets;
@@ -105,7 +106,11 @@ mod version_contract {
         };
 
         let gpui_revision = revision("gpui");
-        assert_eq!(gpui_revision, super::GPUI_REVISION);
+        assert_eq!(
+            gpui_revision,
+            super::GPUI_REVISION,
+            "update crates/gitcomet-ui-kit/gpui-revision with the workspace gpui pin"
+        );
         for dependency in ["gpui_platform", "gpui_wgpu", "gpui_parley"] {
             assert_eq!(
                 revision(dependency),

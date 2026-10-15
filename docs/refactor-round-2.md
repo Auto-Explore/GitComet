@@ -501,3 +501,16 @@ The 48 remaining units are workspace crates, the gpui family (built with its
 `test-support` feature) and test-only crates such as criterion and proptest.
 The dev application now runs its dependencies at opt-level 1, so
 dev-build timings are not comparable with captures taken before this change.
+
+### 0.4 Build scripts
+
+The kit reads its public `GPUI_REVISION` from `crates/gitcomet-ui-kit/gpui-revision`
+instead of scanning the workspace manifest from its build script, which reran on
+every manifest edit (50 in the 60 days before this change) and rebuilt the kit
+and the UI host each time. After touching `Cargo.toml` the kit now stays fresh.
+The existing contract test fails when the file and the manifest pin differ.
+
+The splash backdrops stay rasterized at build time. The dark backdrop draws 148
+circles over 10 radial gradients at 960 px; rasterizing it while the first
+window opens would cost every launch, while the build-time `resvg` copy costs
+only a clean build.
