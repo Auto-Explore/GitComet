@@ -18,7 +18,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 
 ## Implementation checklist
 
-- [ ] Establish baseline tests and representative performance evidence.
+- [x] Establish baseline tests and representative performance evidence.
 - [x] Fix ConfiguredBackend object-store release delegation with a regression test.
 - [x] Fix worktree-cache ownership collisions between stores using process-unique repository lifetimes.
 - [x] Reject late cache insertions after repository close and release cache leases on shutdown.
@@ -37,7 +37,7 @@ subsystem's acceptance. No release, merge, or push is part of this implementatio
 - [x] Remove deprecated launch wrappers replaced by UiLaunch.
 - [x] Gate backend test overrides behind test-support and enable only test/probe configurations.
 - [x] Narrow internal visibility/imports in refactored modules and update architecture/build/migration documentation.
-- [ ] Complete targeted and workspace validation and independent review.
+- [x] Complete targeted and workspace validation and independent review.
 
 ## Target interfaces and ownership
 
@@ -91,114 +91,93 @@ independent cancellation, SharedFileDiffCache and retained view boundaries.
 
 ## Implementation status
 
-The starting revision is `3b31ffb8`. Planning-stage formatting, source layout and
-dependency-boundary checks passed. The immutable baseline passed 3,290 core, state
-and backend tests, with 28 existing skipped tests. Both new lifecycle regressions
-failed against the original behavior before their fixes. The UI baseline passed
-4,708 tests with 22 existing ignored tests, the UI kit passed 502 tests, and all
-422 app tests passed. The CI/profiling Python suites passed with their existing
-platform skips. The baseline release app and backend probe are built, and the
-native history-selection driver passed. Matched performance comparisons follow
-the implementation. The work is on the existing `refactor` branch.
+The approved architecture changes are implemented on `refactor`, starting from
+`3b31ffb8`. Source changes through `cd65ca70` have passed independent review. The
+[architecture guide](architecture.md) describes the resulting owners and contracts;
+[CONTRIBUTING](../CONTRIBUTING.md) records the workspace and build contexts. The
+migration notes below cover the coordinated public Rust API changes.
 
-The backend now groups history cache construction and object-store invalidation
-in a private `HistoryCache` owner. Its six independent locks, cache keys and
-bounds, range-reader recycling and shared history-store behavior remain unchanged.
-Backend test environment and mergetool-consent overrides require the `test-support`
-feature; default tests enable it through dev dependencies, while normal app
-dependencies exclude it. The unchanged integration inventory passed 1,968
-core/backend tests, and the strict LFS/annex supplement passed 98 tests without
-runtime prerequisite skips. Normal and opt-in Clippy checks passed, including
-the operation probe.
+All eight declared CI contexts completed their compile, test and doctest commands
+against the architecture implementation. The full workspace run passed 9,189 tests
+with 50 existing ignores, plus two doctests; the example context passed 11 tests.
+All three declared Clippy contexts, strict UI all-target/all-feature Clippy and
+strict workspace rustdoc passed. The original rustdoc failure and its two reviewed
+documentation corrections remain recorded separately.
 
-The state worker's private `RepositoryRuntimes` is the sole index of backend
-connections, ordinary load scopes and linked-worktree cache leases. Each entry
-uses its model's checked lifetime and distinguishes opening from opened connections.
-Refreshes replace the load scope when needed while retaining the backend and cache
-lease. Accepted closes retire the whole entry; disposal runs outside the state
-write lock before replacement effects. Shutdown uses the same cleanup. This also
-stops ordinary loads when successful worktree removal closes a tab indirectly.
-Signature verification and history find retain their independent cancellation
-protocols.
+Later corrections have scoped validation against their final source: 1,362 state
+tests with six existing measurement skips; 247 UI benchmark and source-accounting
+checks; 111 reporter tests; and 257 affected conflict and merge-output tests with
+required fixtures and no ignores. Strict Clippy and the final formatting, source
+layout, identity and dependency-boundary checks pass. The full workspace suite was
+not repeated after those corrections.
 
-Cache hits and backend-open completions check lease liveness under the cache mutex,
-so a delayed open cannot restore closed ownership. Close and worktree-removal
-regressions observe cleanup before store shutdown. Independent review accepted the
-runtime consolidation and lifecycle fixes; all 1,336 state tests passed, including
-the integration suites, with six existing skips, and strict Clippy passed. All six
-UI tests covering the five fixture ordering changes passed with the renderer build.
+The broader benchmark-feature run exposed twelve failures that also reproduced
+on the immutable starting revision. The corrections preserve the measured
+workloads while fixing inconsistent fixture expectations, process-wide allocation
+test isolation, scan/byte accounting and syntax readiness. Sparse line-index
+metadata now allocates its large payload separately, keeping small fragments
+compact; output, clone, capacity-accounting and growth regressions pass. Deliberate
+mutations failed their intended assertions, and exact sources were restored.
 
-The worker now captures owned input requests under brief read guards, releases
-those guards, and resolves canonical paths, saved preferences and gitlink
-classification before acquiring the state write lock. Preparation retains no
-application snapshot. The reducer applies facts at its existing planning points
-within the same serialized worker turn. Facts carry the repository lifetime and
-path; unavailable HEAD answers preserve the cache, while successful negative
-answers remove it. Failed-open persistence keeps its synchronous ordering.
+The final normal release app was built separately from the benchmark and reporter
+binaries. Source snapshots remained unchanged, and the application excludes
+benchmark, test-support and allocation-tracing features. The fresh 73-case
+Criterion subset completed with all 167 measured structural checks passing.
+Timing results were 44 passing checks and one alert: `repo_switch/two_hot_repos`
+measured 121.231 microseconds against the unchanged 100-microsecond budget.
+That subset leaves 186 timing and 630 structural budgets unmeasured; 28 measured
+cases have no registered timing budget.
 
-Cancellation preparation follows the nested completion's log admission and
-maintenance transition, including another running worktree's maintenance.
-Shared predicates keep preparation aligned with the actual log coalescer and
-selection-clearing commands. The final state suite passed 1,358 tests across all
-four binaries, with six existing ignores, and strict Clippy passed. Ten
-preservation cases also passed against the accepted runtime implementation.
-The blocked-query regression demonstrates that both snapshots and the state
-write lock remain available while Git classification waits.
+The paired repository-switch comparison completed all 18 captures with equal work
+and unchanged source and binaries. Each of the nine candidate/baseline ratios was
+below one. Median ratios for warm switching, selected-file switching and merge
+draft restoration were 0.753, 0.750 and 0.755. The repeated-status-scan regression
+is resolved in those measured cases. Both baseline and candidate exceed the
+absolute warm-switch budget on this host: baseline means were 160–165 microseconds
+and candidate means were 121–124 microseconds. The alert remains recorded.
 
-The canonical repository API migration passed 1,971 core/backend tests with
-22 existing skips and strict Clippy. Its cancellation regressions failed when the
-before-work and after-success checks were deliberately removed. The same profiling
-driver source builds against both the original and current APIs, with identical
-dependency versions and explicit adapter hashes recorded in the build output.
+Four metadata captures completed without timing alerts; one pair per case is
+exploratory and does not establish statistical equivalence or a speedup. A separate
+candidate-only search-refinement capture confirmed the corrected prepared-input
+accounting and structural constraints, with no comparative timing claim.
 
-Native I/O adapters and backend wrappers retain the original typed causes and
-native operation/path context. Cleanup, recovery and fallback errors keep both
-the original failure and subsequent failures in their attempt order. Error kinds
-and raw Git output remain available for recovery decisions; formatted details
-include the retained causes. The full core/backend run and corrected source-path
-guard passed 1,976 tests, with 22 existing ignores, and strict Clippy passed.
-Repository discovery also preserves its I/O cause and original native path;
-its failure and nested/linked/standalone discovery tests pass.
+The final normal-build follow-up passed all four native captures: repository
+switching and diff-open on both the earlier and final refactored builds. All 90
+inputs and 88 requested witnesses completed, with no superseded inputs. Both
+repository-switch captures passed eight status assertions and proved that the
+close update was applied and drawn before the final pointer input. Backend work
+matched within both pairs. Source, binaries and fixtures remained unchanged.
+These captures establish the tested behavior and work, with no comparative timing
+or leak claim; the normal probe does not expose the exact selected diff target.
+Two earlier control attempts remain recorded as failed harness setup, followed by
+independently reviewed readiness and draw-order corrections.
 
-The document owner now routes close and filesystem operations to weakly registered
-presenters, including hosted panes. This also fixes hosted saves and receipts that
-the previous message filter and diff-revision update path dropped. The owner
-delivers an immutable completion snapshot to all presenters before acknowledging
-its receipts. Attached saves require current policy, repository lifetime, session
-and worktree permission before becoming pending; detached documents keep their
-save path, and already queued writes still complete after permission changes.
-Dirty changes notify the sidebar directly. Independent review accepted this slice;
-the full UI run passed 4,721 tests with 22 existing ignores, and the final admission
-fix passed all 233 focused tests and strict Clippy.
+The earlier normal-release native comparison completed 232 captures at
+`3ad0814d`, including calibrated paired interactions, shared reads and lifecycle
+workloads. Input witnesses and backend-work checks passed. No guarded primary
+interaction regression was established; diff-open median and tiny idle-CPU
+differences remained inconclusive. Both lifecycle runs retained positive memory
+growth, so these measurements establish neither a plateau nor leak absence.
+The reviewed source mapping identifies the subsequent state-classification and
+sparse-metadata changes covered by the focused tests, fresh benchmarks and final
+native follow-up above.
 
-`MainPaneView` now composes retained history and diff children. `DiffRenderer`
-receives explicit input, services, preferences and document ownership without a
-root-view or `AppUiModel` dependency. Repository inputs retain the original
-`Arc<AppState>` and check repository lifetime and session; standalone inputs carry
-only the supplied diff state and path. Settings and hosted panes use the same
-renderer. Projected application states, fabricated repository identities and the
-duplicate hosted row/search implementation are removed.
+Linux X11 GNOME, Wayland GNOME and Wayland KDE display-profile smoke checks passed.
+Native measurements cover this headless Linux host; macOS and Windows native
+suites were not run. The Linux portability checker fails on this Arch host because
+the baseline and candidate require glibc 2.44, above the intended Ubuntu 22.04
+baseline of 2.35. A successful supported-distribution release package is not part
+of these results.
 
-The shared search engine preserves source-line counts for the public hosted API
-and visual-row navigation for the UI. Hosted presentation and live repository
-authority are separate: snapshot menus offer Copy, pane settings target their
-invoker, and saves retain their bound repository. Original-byte indexing follows
-its shared content cache across metadata updates. Relative snapshot paths retain
-one base/path composition, and stale summary caches are released on input changes
-even when the retained renderer is hidden. Independent source review accepted
-these corrections; all 70 focused renderer and summary cases pass. The four
-remaining staging fixtures now seed their models before backend insertion, and
-all 16 existing staging cases pass.
-
-The final UI CI context passed 4,733 library tests and 111 performance-report
-tests, with 22 existing ignores. Its compile, doctest command and strict
-all-target/all-feature Clippy checks pass against the same source. The doctest
-command contains no examples. The independent integration source review found
-no remaining issues across the completed subsystems.
-
-The [architecture guide](architecture.md) describes the owners and their contracts;
-[CONTRIBUTING](../CONTRIBUTING.md) records the current workspace and build contexts.
-Final workspace, native and performance validation remains in progress.
+Local evidence is retained under `target/refactor-final-integration/`,
+`target/refactor-repo-switch-fix/`, `target/refactor-benchmark-followup/`,
+`target/refactor-streamed-output-layout/` and `target/refactor-whole-review/`.
+Final release and measurement records are under `target/refactor-production-002/`,
+`target/refactor-pr-perf-002/`, `target/refactor-repo-switch-final-001/` and
+`target/refactor-refinement-sidecar/run-001/`. The final native records are under
+`target/refactor-native-state-fix/run-003/`, with prior failed attempts retained
+alongside them.
+The original failures remain alongside their diagnoses and subsequent checks.
 
 ## Migration notes
 
