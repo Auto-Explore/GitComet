@@ -26,6 +26,7 @@ GitComet Dark.
 | Monokai | | Visual Studio Code's built-in Monokai |
 | Catppuccin Frappé, Catppuccin Mocha | Catppuccin Latte | [Catppuccin](https://github.com/catppuccin/vscode) |
 | Night Owl | Night Owl Light | [Night Owl](https://github.com/sdras/night-owl-vscode-theme) |
+| Eldritch Cthulhu, Eldritch Abyss | Eldritch Dusk | [Eldritch](https://github.com/eldritch-theme/eldritch) |
 
 Ported themes keep their upstream backgrounds and hues. Every bundled theme
 meets WCAG AA: 4.5:1 for all text (including placeholders, line numbers and
