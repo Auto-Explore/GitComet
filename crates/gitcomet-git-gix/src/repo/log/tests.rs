@@ -329,27 +329,20 @@ fn diff_range_files_lists_changes_against_the_working_tree() {
     );
 }
 
-/// A gitlink has to be flagged as a submodule on both comparison paths. The
-/// tree-diff path reads the entry mode; the working-tree path only gets modes
-/// out of `git diff --raw`, so a plain `--name-status` listing would render
-/// the same submodule as an ordinary file.
-#[test]
-fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
+/// What `diff_range_files` lists against the working tree after a gitlink
+/// `vendor/sub` is staged straight into the index: no submodule clone needed
+/// for the 160000 entry mode. The directory has to exist or `git diff
+/// <commit>` skips the entry when comparing against the working tree.
+fn worktree_files_with_a_staged_gitlink() -> Vec<CommitFileChange> {
     use gitcomet_core::services::GitRepository;
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
     init_test_repo(repo);
-
     write_file(repo, "keep.txt", "one\n");
     git_success(repo, &["add", "."]);
     git_success(repo, &["commit", "-m", "base"]);
     let from = git_stdout(repo, &["rev-parse", "HEAD"]);
-
-    // A gitlink staged straight into the index — no submodule clone needed
-    // to produce the 160000 entry mode the flag is derived from. The
-    // directory has to exist or `git diff <commit>` skips the entry when
-    // comparing against the working tree.
     fs::create_dir_all(repo.join("vendor/sub")).expect("create gitlink dir");
     git_success(
         repo,
@@ -363,17 +356,27 @@ fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
             ),
         ],
     );
-
-    let opened = open_repo(repo);
-    let files = opened
+    open_repo(repo)
         .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed");
-    let gitlink = files
+        .expect("diff_range_files should succeed")
+}
+
+fn staged_gitlink(files: &[CommitFileChange]) -> &CommitFileChange {
+    files
         .iter()
         .find(|f| f.path.to_string_lossy() == "vendor/sub")
-        .expect("the gitlink should be listed");
+        .expect("the gitlink should be listed")
+}
+
+/// A gitlink has to be flagged as a submodule on both comparison paths. The
+/// tree-diff path reads the entry mode; the working-tree path only gets modes
+/// out of `git diff --raw`, so a plain `--name-status` listing would render
+/// the same submodule as an ordinary file.
+#[test]
+fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
+    let files = worktree_files_with_a_staged_gitlink();
     assert!(
-        gitlink.is_submodule,
+        staged_gitlink(&files).is_submodule,
         "a gitlink must be reported as a submodule, not as a plain file"
     );
     assert!(
@@ -388,37 +391,8 @@ fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
 /// has no line counts here, as in a commit's file list.
 #[test]
 fn a_submodule_pointer_has_no_line_counts_against_the_working_tree() {
-    use gitcomet_core::services::GitRepository;
-
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let repo = tmp.path();
-    init_test_repo(repo);
-    write_file(repo, "keep.txt", "one\n");
-    git_success(repo, &["add", "."]);
-    git_success(repo, &["commit", "-m", "base"]);
-    let from = git_stdout(repo, &["rev-parse", "HEAD"]);
-    fs::create_dir_all(repo.join("vendor/sub")).expect("create gitlink dir");
-    git_success(
-        repo,
-        &[
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            &format!(
-                "160000,{},vendor/sub",
-                "1".repeat(gix::open(repo).unwrap().object_hash().len_in_hex())
-            ),
-        ],
-    );
-
-    let files = open_repo(repo)
-        .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed");
-    let gitlink = files
-        .iter()
-        .find(|f| f.path.to_string_lossy() == "vendor/sub")
-        .expect("the gitlink should be listed");
-
+    let files = worktree_files_with_a_staged_gitlink();
+    let gitlink = staged_gitlink(&files);
     assert_eq!((gitlink.additions, gitlink.deletions), (None, None));
 }
 
