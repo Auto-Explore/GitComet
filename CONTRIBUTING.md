@@ -126,11 +126,12 @@ run. The `app` context disables GUI features. Run the same commands with
 `--context example` to check the downstream extension product in its separate
 feature context. Recompile a context after changing its code.
 
-Large unit-test suites use private child modules and stay in their original crate
-harness. For test moves, use [inventory.py](scripts/ci/inventory.py) to snapshot
-the compiled harnesses before and after the change, then compare names and ignore
-flags. Record intentional additions or replacements separately from mechanical
-moves; retain the existing GPUI process isolation and visual/clipboard locks.
+Large unit-test suites use private child modules. Tests move with the code they
+test, including into a new crate: use [inventory.py](scripts/ci/inventory.py) to
+snapshot the compiled harnesses before and after the change, then compare names
+and ignore flags modulo the documented module-prefix mapping. Record intentional
+additions or replacements separately from mechanical moves; retain the existing
+GPUI process isolation and visual/clipboard locks.
 
 The backend's `test-support` feature exposes test Git environments and mergetool
 consent overrides. In-tree tests enable it through dev dependencies; external test
@@ -145,7 +146,12 @@ cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p
 cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
 cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
 python3 scripts/ci/boundaries.py
+python3 scripts/ci/ratchets.py
 ```
+
+The ratchet script keeps the [refactor round 2](docs/refactor-round-2.md)
+structure counts from regressing; after a change that improves one, run it with
+`--write` to record the new value.
 
 Coverage (local + CI-compatible):
 

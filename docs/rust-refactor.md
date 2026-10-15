@@ -350,3 +350,13 @@ entry points are replaced by `UiLaunch::new(backend)`. Configure the builder wit
 `on_shutdown`, then call `run`. The return value is `Result<UiRunOutcome,
 UiLaunchError>`; callers of the former unit-returning `run` can map the outcome
 to `()` at their own boundary. These wrappers had no remaining in-tree callers.
+
+## Round 2
+
+The second round, planned on 2026-10-15, is recorded in
+[refactor-round-2.md](refactor-round-2.md). It amends two lines of the contract
+above: the layering direction is preserved while crates may be added and
+`gitcomet-state` may be split into an API crate and a runtime crate, and tests
+move with the code they test, proven by `inventory.py` parity modulo the
+documented module-prefix mapping. `scripts/ci/ratchets.py` records the structure
+counts the round drives and fails when one regresses.
