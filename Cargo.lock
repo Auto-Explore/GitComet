@@ -2405,6 +2405,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-conflict-resolver"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-core",
+ "gitcomet-text",
+ "gpui_ce_shared_string",
+ "gpui_ce_sum_tree",
+ "memchr",
+ "rustc-hash 2.1.3",
+ "smallvec",
+]
+
+[[package]]
 name = "gitcomet-core"
 version = "0.3.0"
 dependencies = [
@@ -2688,6 +2701,7 @@ dependencies = [
  "fast_image_resize",
  "fontdb 0.24.0",
  "futures",
+ "gitcomet-conflict-resolver",
  "gitcomet-core",
  "gitcomet-diagrams",
  "gitcomet-extension-api",

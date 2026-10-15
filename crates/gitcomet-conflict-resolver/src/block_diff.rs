@@ -1,6 +1,6 @@
 use super::*;
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn build_inline_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> Vec<ConflictInlineRow> {
     use gitcomet_core::domain::DiffLineKind as K;
     use gitcomet_core::file_diff::FileDiffRowKind as RK;
@@ -51,15 +51,15 @@ pub fn build_inline_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> Vec<
     out
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn block_max_line_count(block: &ConflictBlock) -> usize {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn block_max_line_count(block: &ConflictBlock) -> usize {
     text_line_count_usize(block.base.as_deref().unwrap_or_default())
         .max(text_line_count_usize(&block.ours))
         .max(text_line_count_usize(&block.theirs))
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
     block_max_line_count(block) > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
 }
 
@@ -104,8 +104,8 @@ pub fn select_conflict_rendering_mode(
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn preview_line_starts(text: &str) -> Vec<usize> {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn preview_line_starts(text: &str) -> Vec<usize> {
     // Empty text previews no lines.
     if text.is_empty() {
         return Vec::new();
@@ -113,8 +113,8 @@ pub(in crate::view) fn preview_line_starts(text: &str) -> Vec<usize> {
     gitcomet_core::text_utils::line_starts(text)
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn line_slice_text<'a>(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn line_slice_text<'a>(
     text: &'a str,
     line_starts: &[usize],
     line_count: usize,
@@ -152,8 +152,8 @@ pub(in crate::view) fn line_slice_text<'a>(
     text.get(start_byte..end_byte).unwrap_or("")
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_renumbered_block_diff_rows(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_renumbered_block_diff_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     old_text: &str,
     new_text: &str,
@@ -181,8 +181,8 @@ pub(in crate::view) fn push_renumbered_block_diff_rows(
     whole_block_diff_ran
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn collect_tiny_block_lines(text: &str) -> Option<([&str; 2], usize)> {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn collect_tiny_block_lines(text: &str) -> Option<([&str; 2], usize)> {
     let mut lines = ["", ""];
     let mut count = 0usize;
     for line in text.lines() {
@@ -195,13 +195,13 @@ pub(in crate::view) fn collect_tiny_block_lines(text: &str) -> Option<([&str; 2]
     Some((lines, count))
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn tiny_block_line_number(start: u32, offset: usize) -> u32 {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn tiny_block_line_number(start: u32, offset: usize) -> u32 {
     start.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX))
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_tiny_block_context_row(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_tiny_block_context_row(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     old_line: u32,
     new_line: u32,
@@ -219,8 +219,8 @@ pub(in crate::view) fn push_tiny_block_context_row(
     });
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_tiny_block_modify_row(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_tiny_block_modify_row(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     old_line: u32,
     new_line: u32,
@@ -239,8 +239,8 @@ pub(in crate::view) fn push_tiny_block_modify_row(
     });
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_tiny_block_remove_row(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_tiny_block_remove_row(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     old_line: u32,
     text: &str,
@@ -257,8 +257,8 @@ pub(in crate::view) fn push_tiny_block_remove_row(
     });
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_tiny_block_add_row(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_tiny_block_add_row(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     new_line: u32,
     text: &str,
@@ -275,8 +275,8 @@ pub(in crate::view) fn push_tiny_block_add_row(
     });
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_tiny_block_diff_rows(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_tiny_block_diff_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     old_text: &str,
     new_text: &str,
@@ -371,8 +371,8 @@ pub(in crate::view) fn push_tiny_block_diff_rows(
     true
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_large_conflict_block_preview_rows(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_large_conflict_block_preview_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     block: &ConflictBlock,
     ours_offset: u32,
@@ -458,20 +458,20 @@ pub(in crate::view) fn push_large_conflict_block_preview_rows(
 /// The output is proportional to total conflict-block size plus a fixed amount
 /// of context per block, making it suitable for very large files where running
 /// Myers on the entire ours/theirs content would be prohibitively expensive.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn block_local_two_way_diff_rows(
     segments: &[ConflictSegment],
 ) -> Vec<gitcomet_core::file_diff::FileDiffRow> {
     block_local_two_way_diff_rows_with_stats(segments).0
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct BlockLocalTwoWayDiffStats {
+pub struct BlockLocalTwoWayDiffStats {
     pub(crate) whole_block_diff_ran: bool,
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub(crate) fn block_local_two_way_diff_rows_with_stats(
     segments: &[ConflictSegment],
 ) -> (
@@ -481,16 +481,16 @@ pub(crate) fn block_local_two_way_diff_rows_with_stats(
     block_local_two_way_diff_rows_with_context_and_stats(segments, BLOCK_LOCAL_DIFF_CONTEXT_LINES)
 }
 
-#[cfg(test)]
-pub(in crate::view) fn block_local_two_way_diff_rows_with_context(
+#[cfg(any(test, feature = "test-support"))]
+pub fn block_local_two_way_diff_rows_with_context(
     segments: &[ConflictSegment],
     context_lines: usize,
 ) -> Vec<gitcomet_core::file_diff::FileDiffRow> {
     block_local_two_way_diff_rows_with_context_and_stats(segments, context_lines).0
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn block_local_two_way_diff_rows_with_context_and_stats(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn block_local_two_way_diff_rows_with_context_and_stats(
     segments: &[ConflictSegment],
     context_lines: usize,
 ) -> (
@@ -549,8 +549,8 @@ pub(in crate::view) fn block_local_two_way_diff_rows_with_context_and_stats(
     (rows, stats)
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn estimate_block_local_two_way_row_capacity(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn estimate_block_local_two_way_row_capacity(
     segments: &[ConflictSegment],
     context_lines: usize,
 ) -> usize {
@@ -560,8 +560,8 @@ pub(in crate::view) fn estimate_block_local_two_way_row_capacity(
         .max(1)
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_block_local_boundary_context_rows(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_block_local_boundary_context_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     segments: &[ConflictSegment],
     segment_ix: usize,
@@ -635,11 +635,11 @@ pub(in crate::view) fn push_block_local_boundary_context_rows(
     line_count
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 /// Find the byte offset of the `n`-th line from the end of the text.
 /// Returns the byte offset where the `n`-th-from-end line starts.
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn byte_offset_of_nth_line_from_end(bytes: &[u8], n: usize) -> usize {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn byte_offset_of_nth_line_from_end(bytes: &[u8], n: usize) -> usize {
     if n == 0 {
         return bytes.len();
     }
@@ -671,8 +671,8 @@ pub(in crate::view) fn byte_offset_of_nth_line_from_end(bytes: &[u8], n: usize) 
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn push_block_local_context_lines<'a>(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn push_block_local_context_lines<'a>(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     lines: impl Iterator<Item = (usize, &'a str)>,
     old_line_start: u32,
@@ -694,13 +694,13 @@ pub(in crate::view) fn push_block_local_context_lines<'a>(
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn text_line_count(text: &str) -> u32 {
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn text_line_count(text: &str) -> u32 {
     u32::try_from(text_line_count_usize(text)).unwrap_or(u32::MAX)
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn build_two_way_conflict_line_ranges(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn build_two_way_conflict_line_ranges(
     segments: &[ConflictSegment],
 ) -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
     let mut ranges = Vec::new();
@@ -729,8 +729,8 @@ pub(in crate::view) fn build_two_way_conflict_line_ranges(
     ranges
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn row_conflict_index_for_lines(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn row_conflict_index_for_lines(
     old_line: Option<u32>,
     new_line: Option<u32>,
     ranges: &[(std::ops::Range<u32>, std::ops::Range<u32>)],
@@ -741,7 +741,7 @@ pub(in crate::view) fn row_conflict_index_for_lines(
     })
 }
 
-pub(in crate::view) fn text_line_count_usize(text: &str) -> usize {
+pub fn text_line_count_usize(text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
@@ -754,7 +754,7 @@ pub(in crate::view) fn text_line_count_usize(text: &str) -> usize {
     }
 }
 
-pub(in crate::view) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
+pub fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
     if text.is_empty() {
         0
     } else {
@@ -762,7 +762,7 @@ pub(in crate::view) fn indexed_line_count(text: &str, line_starts: &[usize]) -> 
     }
 }
 
-pub(in crate::view) fn indexed_line_text<'a>(
+pub fn indexed_line_text<'a>(
     text: &'a str,
     line_starts: &[usize],
     line_ix: usize,
@@ -777,19 +777,19 @@ pub(in crate::view) fn indexed_line_text<'a>(
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct TextLineStats {
+pub struct TextLineStats {
     pub(super) line_count: usize,
     pub(super) widest_line_ix: usize,
     pub(super) widest_line_len: usize,
 }
 
 impl TextLineStats {
-    pub(in crate::view) fn widest_line(self) -> Option<(usize, usize)> {
+    pub fn widest_line(self) -> Option<(usize, usize)> {
         (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
     }
 }
 
-pub(in crate::view) fn scan_text_line_stats(text: &str) -> TextLineStats {
+pub fn scan_text_line_stats(text: &str) -> TextLineStats {
     if text.is_empty() {
         return TextLineStats::default();
     }

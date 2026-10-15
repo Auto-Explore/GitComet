@@ -4,7 +4,7 @@ pub fn format_autosolve_trace_summary(
     mode: AutosolveTraceMode,
     unresolved_before: usize,
     unresolved_after: usize,
-    stats: &gitcomet_state::msg::ConflictAutosolveStats,
+    stats: &gitcomet_core::conflict_session::ConflictAutosolveStats,
 ) -> String {
     let resolved = unresolved_before.saturating_sub(unresolved_after);
     let blocks_word = if resolved == 1 { "block" } else { "blocks" };
@@ -13,7 +13,7 @@ pub fn format_autosolve_trace_summary(
             "Auto-solved on open: resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, regex {}).",
             unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.regex
         ),
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         AutosolveTraceMode::History => format!(
             "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",
             unresolved_before, unresolved_after, stats.history
@@ -131,7 +131,7 @@ pub fn on_open_autosolve_summary(
 ) -> Option<String> {
     use gitcomet_core::conflict_session::{AutosolveRule, ConflictRegionResolution};
 
-    let mut stats = gitcomet_state::msg::ConflictAutosolveStats::default();
+    let mut stats = gitcomet_core::conflict_session::ConflictAutosolveStats::default();
     for region in &session.regions {
         let ConflictRegionResolution::AutoResolved { rule, .. } = &region.resolution else {
             continue;
@@ -226,7 +226,7 @@ pub fn effective_conflict_counts(
 }
 
 /// Return conflict indices for currently unresolved blocks in queue order.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut conflict_ix = 0usize;
@@ -248,7 +248,7 @@ pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
 /// 2-way blocks that don't have an ancestor section.
 ///
 /// Returns the number of blocks updated.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn apply_choice_to_unresolved_segments(
     segments: &mut [ConflictSegment],
     choice: ConflictChoice,
@@ -273,7 +273,7 @@ pub fn apply_choice_to_unresolved_segments(
 
 /// Find the next unresolved conflict index after `current`.
 /// Wraps around to the first unresolved conflict.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn next_unresolved_conflict_index(
     segments: &[ConflictSegment],
     current: usize,
@@ -288,7 +288,7 @@ pub fn next_unresolved_conflict_index(
 
 /// Find the previous unresolved conflict index before `current`.
 /// Wraps around to the last unresolved conflict.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn prev_unresolved_conflict_index(
     segments: &[ConflictSegment],
     current: usize,
@@ -311,7 +311,7 @@ pub fn prev_unresolved_conflict_index(
 /// 4. (if `whitespace_normalize`) whitespace-only difference → pick ours.
 ///
 /// Returns the number of blocks auto-resolved.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
     auto_resolve_segments_with_options(segments, false)
 }
@@ -321,7 +321,7 @@ pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
 /// Segment-based autosolve is now test-only: the live on-open path uses the
 /// session-based `apply_autosolve_to_session` in gitcomet-state, and the
 /// manual re-trigger button was removed.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn auto_resolve_segments_with_options(
     segments: &mut [ConflictSegment],
     whitespace_normalize: bool,
@@ -360,7 +360,7 @@ pub fn auto_resolve_segments_with_options(
 ///
 /// This mode uses regex normalization rules from core and only performs
 /// side-picks (`Ours` / `Theirs`), never synthetic text rewrites.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn auto_resolve_segments_regex(
     segments: &mut [ConflictSegment],
     options: &gitcomet_core::conflict_session::RegexAutosolveOptions,
@@ -402,7 +402,7 @@ pub fn auto_resolve_segments_regex(
 /// segment containing the merged content.
 ///
 /// Returns the number of blocks resolved.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn auto_resolve_segments_history(
     segments: &mut Vec<ConflictSegment>,
     options: &gitcomet_core::conflict_session::HistoryAutosolveOptions,
@@ -412,7 +412,7 @@ pub fn auto_resolve_segments_history(
 }
 
 /// Like [`auto_resolve_segments_history`] but keeps block->region mappings in sync.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn auto_resolve_segments_history_with_region_indices(
     segments: &mut Vec<ConflictSegment>,
     options: &gitcomet_core::conflict_session::HistoryAutosolveOptions,
@@ -469,14 +469,14 @@ pub fn auto_resolve_segments_history_with_region_indices(
 /// become `Text` segments; remaining conflicts become smaller `Block` segments.
 ///
 /// Returns the number of original blocks that were split.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize {
     let mut block_region_indices = sequential_conflict_region_indices(segments);
     auto_resolve_segments_pass2_with_region_indices(segments, &mut block_region_indices)
 }
 
 /// Like [`auto_resolve_segments_pass2`] but keeps block->region mappings in sync.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn auto_resolve_segments_pass2_with_region_indices(
     segments: &mut Vec<ConflictSegment>,
     block_region_indices: &mut Vec<usize>,

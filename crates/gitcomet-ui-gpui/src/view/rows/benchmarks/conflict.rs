@@ -1,8 +1,9 @@
 use super::*;
 use crate::view::conflict_resolver::{
-    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment,
-    ConflictSplitStyledTextCache, ThreeWayVisibleItem, TwoWayWordHighlights, WordHighlights,
+    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment, ThreeWayVisibleItem,
+    TwoWayWordHighlights, WordHighlights,
 };
+use crate::view::conflict_style_cache::ConflictSplitStyledTextCache;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceRenderingMode, MergetoolTraceSideStats,

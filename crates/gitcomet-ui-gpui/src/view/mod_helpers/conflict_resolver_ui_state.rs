@@ -2143,7 +2143,7 @@ mod conflict_resolver_ui_state_tests {
 
         state.rebuild_three_way_visible_state();
 
-        assert!(state.streamed().three_way_visible_projection.len() > 0);
+        assert!(!state.streamed().three_way_visible_projection.is_empty());
         assert_eq!(
             state.three_way_visible_len(),
             state.streamed().three_way_visible_projection.len()

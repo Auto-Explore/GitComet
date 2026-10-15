@@ -2,7 +2,7 @@ use super::TwoWayWordHighlightPair;
 
 #[cfg(feature = "benchmarks")]
 use std::num::NonZeroU32;
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 use {
     super::{
         ConflictSegment, LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES, WordHighlights,
@@ -11,12 +11,12 @@ use {
     std::ops::Range,
 };
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 fn should_skip_large_block_word_highlights(block: &super::ConflictBlock) -> bool {
     block_max_line_count(block) > LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn compute_three_way_word_highlights(
     base_text: &str,
     base_line_starts: &[usize],
@@ -88,7 +88,7 @@ pub fn compute_three_way_word_highlights(
                     new_text: new,
                 } => {
                     let (old_ranges, new_ranges) =
-                        crate::view::word_diff::capped_word_diff_ranges(old, new);
+                        gitcomet_core::word_diff::capped_word_diff_ranges(old, new);
 
                     if let Some(ix) = line_index(old_side.global_start, Some(old_line)) {
                         merge_line_ranges(old_highlights, ix, old_ranges);
@@ -205,7 +205,7 @@ pub fn compute_three_way_word_highlights(
     (wh_base, wh_ours, wh_theirs)
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 fn merge_ranges(a: &[Range<usize>], b: &[Range<usize>]) -> Vec<Range<usize>> {
     if a.is_empty() {
         return b.to_vec();
@@ -240,6 +240,10 @@ pub struct TwoWayWordHighlights {
 impl TwoWayWordHighlights {
     pub fn len(&self) -> usize {
         self.row_to_entry.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.row_to_entry.is_empty()
     }
 
     pub fn get(&self, row_ix: usize) -> Option<&TwoWayWordHighlightPair> {
@@ -281,7 +285,7 @@ pub fn compute_two_way_word_highlights(
         let old = row.old.as_deref().unwrap_or("");
         let new = row.new.as_deref().unwrap_or("");
         let (old_ranges, new_ranges) =
-            crate::view::word_diff::compact_capped_word_diff_ranges(old, new);
+            gitcomet_core::word_diff::compact_capped_word_diff_ranges(old, new);
         if old_ranges.is_empty() && new_ranges.is_empty() {
             continue;
         }
@@ -321,7 +325,7 @@ pub fn compute_word_highlights_for_row(
 /// (section 30 aligned two-way rows, where no `FileDiffRow` is materialized).
 pub fn compute_word_highlights_for_texts(old: &str, new: &str) -> Option<TwoWayWordHighlightPair> {
     let (old_ranges, new_ranges) =
-        crate::view::word_diff::compact_capped_word_diff_ranges(old, new);
+        gitcomet_core::word_diff::compact_capped_word_diff_ranges(old, new);
     if old_ranges.is_empty() && new_ranges.is_empty() {
         None
     } else {

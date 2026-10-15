@@ -43,7 +43,7 @@ pub(in crate::view) fn conflict_line_no_width(scale: impl Into<ui_scale::UiScale
 #[cfg(test)]
 pub(in crate::view) use gitcomet_text::cache::LruCacheMetrics;
 pub(in crate::view) use gitcomet_text::cache::{
-    FxLruCache, LruCache, LruTouchQueue, new_fx_lru_cache, new_lru_cache,
+    FxLruCache, LruCache, new_fx_lru_cache, new_lru_cache,
 };
 
 #[derive(Clone, Debug)]

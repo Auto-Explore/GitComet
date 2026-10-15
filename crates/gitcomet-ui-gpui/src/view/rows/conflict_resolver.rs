@@ -101,8 +101,8 @@ struct ConflictRowStyledText {
 impl ConflictRowStyledText {
     fn resolve<'a>(
         &'a self,
-        stable_cache: &'a conflict_resolver::ConflictSplitStyledTextCache,
-        query_cache: &'a conflict_resolver::ConflictSplitStyledTextCache,
+        stable_cache: &'a crate::view::conflict_style_cache::ConflictSplitStyledTextCache,
+        query_cache: &'a crate::view::conflict_style_cache::ConflictSplitStyledTextCache,
         key: (usize, ConflictPickSide),
     ) -> Option<&'a CachedDiffStyledText> {
         match self.styled.as_ref()? {
@@ -2536,8 +2536,8 @@ impl DiffRenderer {
     fn conflict_split_row_styled(
         tab_width: usize,
         theme: AppTheme,
-        stable_cache: &mut conflict_resolver::ConflictSplitStyledTextCache,
-        query_cache: &mut conflict_resolver::ConflictSplitStyledTextCache,
+        stable_cache: &mut crate::view::conflict_style_cache::ConflictSplitStyledTextCache,
+        query_cache: &mut crate::view::conflict_style_cache::ConflictSplitStyledTextCache,
         row_ix: usize,
         side: ConflictPickSide,
         text: Option<&str>,

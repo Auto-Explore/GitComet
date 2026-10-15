@@ -2,7 +2,7 @@ use super::*;
 
 /// Find the visible index for the first line of a conflict range, or the
 /// collapsed block entry. Returns `None` if the range is not visible.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn visible_index_for_conflict(
     visible_map: &[ThreeWayVisibleItem],
     conflict_ranges: &[std::ops::Range<usize>],
@@ -20,7 +20,7 @@ pub fn visible_index_for_conflict(
 /// will be `None` even though the git ancestor content (index stage :1:) is available.
 /// This function populates `block.base` by using the Text segments as anchors to
 /// locate the corresponding base content in the ancestor file.
-pub(in crate::view) fn populate_block_bases_from_ancestor_impl(
+pub fn populate_block_bases_from_ancestor_impl(
     segments: &mut [ConflictSegment],
     ancestor_text: &str,
     shared_ancestor_text: Option<&Arc<str>>,
@@ -84,7 +84,7 @@ pub(in crate::view) fn populate_block_bases_from_ancestor_impl(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ancestor_text: &str) {
     populate_block_bases_from_ancestor_impl(segments, ancestor_text, None);
 }
@@ -179,8 +179,11 @@ pub fn conflict_stage_safety_check(
 /// fixture) and the editable buffer, which must not be flattened just to be
 /// scanned. Implementing it on `str` rather than `&str` is what keeps every
 /// existing caller compiling unchanged.
-pub(in crate::view) trait ResolvedOutputSource {
+pub trait ResolvedOutputSource {
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn is_char_boundary(&self, offset: usize) -> bool;
     /// Whether the text at `offset` begins with `needle`.
     fn starts_with_at(&self, offset: usize, needle: &str) -> bool;
@@ -250,13 +253,13 @@ impl ResolvedOutputSource for str {
     }
 }
 
-impl ResolvedOutputSource for crate::kit::rope::Rope {
+impl ResolvedOutputSource for gitcomet_text::rope::Rope {
     fn len(&self) -> usize {
-        crate::kit::rope::Rope::len(self)
+        gitcomet_text::rope::Rope::len(self)
     }
 
     fn is_char_boundary(&self, offset: usize) -> bool {
-        crate::kit::rope::Rope::is_char_boundary(self, offset)
+        gitcomet_text::rope::Rope::is_char_boundary(self, offset)
     }
 
     fn starts_with_at(&self, offset: usize, needle: &str) -> bool {
@@ -270,7 +273,7 @@ impl ResolvedOutputSource for crate::kit::rope::Rope {
         // the user typed. A `&str` comparison would panic there instead of
         // reporting the mismatch this exists to find.
         let mut rest = needle.as_bytes();
-        let mut skip = offset - self.clip_offset(offset, gpui::sum_tree::Bias::Left);
+        let mut skip = offset - self.clip_offset(offset, gpui_sum_tree::Bias::Left);
         for chunk in self.chunks_in_range(offset..end) {
             let bytes = chunk.as_bytes();
             let bytes = if skip >= bytes.len() {
@@ -302,9 +305,9 @@ impl ResolvedOutputSource for crate::kit::rope::Rope {
         // whenever the row's last character is not ASCII. Widen to the
         // enclosing character and index the bytes, rather than slicing a `&str`
         // at `offset`, which would panic.
-        let start = self.clip_offset(offset, gpui::sum_tree::Bias::Left);
+        let start = self.clip_offset(offset, gpui_sum_tree::Bias::Left);
         self.chunks_in_range(
-            start..self.clip_offset(offset.saturating_add(1), gpui::sum_tree::Bias::Right),
+            start..self.clip_offset(offset.saturating_add(1), gpui_sum_tree::Bias::Right),
         )
         .next()
         .and_then(|chunk| chunk.as_bytes().get(offset - start).copied())
@@ -318,7 +321,7 @@ impl ResolvedOutputSource for crate::kit::rope::Rope {
     }
 
     fn row_count(&self) -> usize {
-        crate::kit::rope::Rope::line_count(self) as usize
+        gitcomet_text::rope::Rope::line_count(self) as usize
     }
 
     fn for_each_row_with_terminator(&self, visit: &mut dyn FnMut(Range<usize>, &str)) {
@@ -355,7 +358,7 @@ impl ResolvedOutputSource for crate::kit::rope::Rope {
 /// Row count for a materialized output. Production reads this off
 /// [`ResolvedOutputSource::row_count`] instead, which the rope answers from its
 /// summary; this remains for tests and benchmarks that hold a `String`.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn resolved_output_outline_line_count(output: &str) -> usize {
     memchr::memchr_iter(b'\n', output.as_bytes())
         .count()
@@ -365,14 +368,14 @@ pub fn resolved_output_outline_line_count(output: &str) -> usize {
 /// Split resolved output into one logical row per newline for outline rendering.
 ///
 /// Uses `split('\n')` so trailing newlines are preserved as a final empty row.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn split_output_lines_for_outline(output: &str) -> Vec<String> {
     let mut lines = Vec::with_capacity(resolved_output_outline_line_count(output));
     lines.extend(output.split('\n').map(str::to_string));
     lines
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return output.to_string();
@@ -404,15 +407,15 @@ pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
 ///
 /// In three-way mode: A = Base, B = Ours, C = Theirs.
 /// In two-way mode: A = Ours (old), B = Theirs (new), C is empty.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub struct SourceLines<'a> {
-    pub a: &'a [gpui::SharedString],
-    pub b: &'a [gpui::SharedString],
-    pub c: &'a [gpui::SharedString],
+    pub a: &'a [gpui_shared_string::SharedString],
+    pub b: &'a [gpui_shared_string::SharedString],
+    pub c: &'a [gpui_shared_string::SharedString],
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn build_source_line_lookup<'a>(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn build_source_line_lookup<'a>(
     sources: &'a SourceLines<'a>,
 ) -> FxHashMap<&'a str, (ResolvedLineSource, u32)> {
     let mut lookup = FxHashMap::default();
@@ -450,7 +453,7 @@ pub(in crate::view) fn build_source_line_lookup<'a>(
     lookup
 }
 
-pub(in crate::view) fn compute_resolved_line_provenance_from_iter<'a>(
+pub fn compute_resolved_line_provenance_from_iter<'a>(
     output_lines: impl Iterator<Item = &'a str>,
     lookup: &FxHashMap<&str, (ResolvedLineSource, u32)>,
 ) -> Vec<ResolvedLineMeta> {
@@ -474,7 +477,7 @@ pub(in crate::view) fn compute_resolved_line_provenance_from_iter<'a>(
 /// Each output line is compared (exact text equality) against every source line
 /// in A, B, C. The first match found (priority: A, B, C) wins; if none match
 /// the line is labeled `Manual`.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn compute_resolved_line_provenance(
     output_lines: &[String],
     sources: &SourceLines<'_>,
@@ -483,7 +486,7 @@ pub fn compute_resolved_line_provenance(
     compute_resolved_line_provenance_from_iter(output_lines.iter().map(String::as_str), &lookup)
 }
 
-pub(in crate::view) fn insert_indexed_source_lines<'a>(
+pub fn insert_indexed_source_lines<'a>(
     lookup: &mut FxHashMap<&'a str, (ResolvedLineSource, u32)>,
     source: ResolvedLineSource,
     text: &'a str,
@@ -550,7 +553,7 @@ pub fn compute_resolved_line_provenance_from_text_two_way_indexed_sources(
 ///
 /// Used to gate the plus-icon: a source row's plus-icon is hidden when its key
 /// is already in this set (preventing duplicate insertion).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn build_resolved_output_line_sources_index(
     meta: &[ResolvedLineMeta],
     output_lines: &[String],
@@ -598,7 +601,7 @@ pub fn build_resolved_output_line_sources_index_from_text(
 ///
 /// Returns `true` if the source line's key is in the dedupe index — meaning
 /// the plus-icon for that row should be hidden.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn is_source_line_in_output(
     index: &FxHashSet<SourceLineKey>,
     view_mode: ConflictResolverViewMode,
@@ -611,11 +614,7 @@ pub fn is_source_line_in_output(
 }
 
 /// Extract a single line from text using pre-computed line starts.
-pub(in crate::view) fn line_text_from_starts<'a>(
-    text: &'a str,
-    line_starts: &[usize],
-    line_ix: usize,
-) -> &'a str {
+pub fn line_text_from_starts<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
     let text_len = text.len();
     let start = line_starts
         .get(line_ix)

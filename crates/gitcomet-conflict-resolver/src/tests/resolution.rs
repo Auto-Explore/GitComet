@@ -813,7 +813,7 @@ fn stage_safety_recognizes_manual_replacement_before_session_sync() {
 
 #[test]
 fn autosolve_trace_summary_history_mode_uses_history_stat() {
-    let stats = gitcomet_state::msg::ConflictAutosolveStats {
+    let stats = gitcomet_core::conflict_session::ConflictAutosolveStats {
         pass1: 0,
         pass2_split: 0,
         pass1_after_split: 0,
@@ -829,7 +829,7 @@ fn autosolve_trace_summary_history_mode_uses_history_stat() {
 
 #[test]
 fn autosolve_trace_summary_on_open_mode() {
-    let stats = gitcomet_state::msg::ConflictAutosolveStats {
+    let stats = gitcomet_core::conflict_session::ConflictAutosolveStats {
         pass1: 2,
         pass2_split: 1,
         pass1_after_split: 0,

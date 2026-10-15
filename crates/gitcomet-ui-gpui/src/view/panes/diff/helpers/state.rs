@@ -881,9 +881,9 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) conflict_diff_split_col_widths: [Pixels; 2],
     pub(in crate::view) conflict_canvas_rows_enabled: bool,
     pub(in crate::view) conflict_diff_segments_cache_split:
-        crate::view::conflict_resolver::ConflictSplitStyledTextCache,
+        crate::view::conflict_style_cache::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_segments_cache_split:
-        crate::view::conflict_resolver::ConflictSplitStyledTextCache,
+        crate::view::conflict_style_cache::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
     pub(in crate::view) conflict_diff_query_cache_options:
         super::super::diff_search::DiffSearchOptions,

@@ -1,6 +1,6 @@
 use super::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictNavDirection {
     Prev,
@@ -8,26 +8,26 @@ pub enum ConflictNavDirection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::view) enum ConflictNavTargetId {
+pub enum ConflictNavTargetId {
     PlanBlock(gitcomet_core::merge::MergeBlockId),
     Region(usize),
     DisplayBlock(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) struct ConflictNavTarget {
-    pub(in crate::view) id: ConflictNavTargetId,
-    pub(in crate::view) order: usize,
-    pub(in crate::view) aligned_rows: Option<Range<usize>>,
-    pub(in crate::view) region_index: Option<usize>,
-    pub(in crate::view) display_conflict_index: Option<usize>,
-    pub(in crate::view) is_delta: bool,
-    pub(in crate::view) original_conflict: bool,
-    pub(in crate::view) unresolved: bool,
+pub struct ConflictNavTarget {
+    pub id: ConflictNavTargetId,
+    pub order: usize,
+    pub aligned_rows: Option<Range<usize>>,
+    pub region_index: Option<usize>,
+    pub display_conflict_index: Option<usize>,
+    pub is_delta: bool,
+    pub original_conflict: bool,
+    pub unresolved: bool,
 }
 
 impl ConflictNavTarget {
-    pub(in crate::view) fn anchor(&self) -> ConflictNavAnchor {
+    pub fn anchor(&self) -> ConflictNavAnchor {
         ConflictNavAnchor {
             id: self.id,
             order_hint: self.order,
@@ -43,21 +43,21 @@ impl ConflictNavTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) struct ConflictNavAnchor {
-    pub(in crate::view) id: ConflictNavTargetId,
-    pub(in crate::view) order_hint: usize,
-    pub(in crate::view) aligned_row_hint: Option<usize>,
+pub struct ConflictNavAnchor {
+    pub id: ConflictNavTargetId,
+    pub order_hint: usize,
+    pub aligned_row_hint: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) enum ConflictNavTargetFilter {
+pub enum ConflictNavTargetFilter {
     Delta,
     Conflict,
     Unresolved,
 }
 
 impl ConflictNavTargetFilter {
-    pub(in crate::view) fn matches(self, target: &ConflictNavTarget) -> bool {
+    pub fn matches(self, target: &ConflictNavTarget) -> bool {
         match self {
             Self::Delta => target.is_delta,
             Self::Conflict => conflict_nav_target_is_conflict(target),
@@ -81,13 +81,11 @@ impl ConflictNavTargetFilter {
 /// unresolved. The last clause is what makes this a superset of
 /// [`ConflictNavTargetFilter::Unresolved`] — conflict navigation can never skip
 /// a row that "next unresolved" would land on.
-pub(in crate::view) fn conflict_nav_target_is_conflict(target: &ConflictNavTarget) -> bool {
+pub fn conflict_nav_target_is_conflict(target: &ConflictNavTarget) -> bool {
     target.original_conflict || target.display_conflict_index.is_some() || target.unresolved
 }
 
-pub(in crate::view) fn fresh_conflict_nav_target_index(
-    targets: &[ConflictNavTarget],
-) -> Option<usize> {
+pub fn fresh_conflict_nav_target_index(targets: &[ConflictNavTarget]) -> Option<usize> {
     targets
         .iter()
         .position(|target| target.unresolved)
@@ -95,7 +93,7 @@ pub(in crate::view) fn fresh_conflict_nav_target_index(
         .or_else(|| targets.iter().position(|target| target.is_delta))
 }
 
-pub(in crate::view) fn reconcile_conflict_nav_target_index(
+pub fn reconcile_conflict_nav_target_index(
     anchor: Option<ConflictNavAnchor>,
     previous_targets: &[ConflictNavTarget],
     targets: &[ConflictNavTarget],
@@ -152,7 +150,7 @@ pub(in crate::view) fn reconcile_conflict_nav_target_index(
         .or_else(|| fresh_conflict_nav_target_index(targets))
 }
 
-pub(in crate::view) fn conflict_nav_anchor_order(
+pub fn conflict_nav_anchor_order(
     targets: &[ConflictNavTarget],
     anchor: ConflictNavAnchor,
 ) -> usize {
@@ -163,7 +161,7 @@ pub(in crate::view) fn conflict_nav_anchor_order(
         .unwrap_or(anchor.order_hint)
 }
 
-pub(in crate::view) fn previous_conflict_nav_target_index(
+pub fn previous_conflict_nav_target_index(
     targets: &[ConflictNavTarget],
     anchor: Option<ConflictNavAnchor>,
     filter: ConflictNavTargetFilter,
@@ -178,7 +176,7 @@ pub(in crate::view) fn previous_conflict_nav_target_index(
         .map(|(index, _)| index)
 }
 
-pub(in crate::view) fn next_conflict_nav_target_index(
+pub fn next_conflict_nav_target_index(
     targets: &[ConflictNavTarget],
     anchor: Option<ConflictNavAnchor>,
     filter: ConflictNavTargetFilter,
@@ -202,7 +200,7 @@ pub(in crate::view) fn next_conflict_nav_target_index(
 /// Deliberately narrower than wrapping: with several matches, standing on the
 /// last one still reports "nothing further this way", which is what tells the
 /// user they have reached the end.
-pub(in crate::view) fn sole_matching_anchor_index(
+pub fn sole_matching_anchor_index(
     targets: &[ConflictNavTarget],
     anchor: ConflictNavAnchor,
     filter: ConflictNavTargetFilter,
@@ -216,7 +214,7 @@ pub(in crate::view) fn sole_matching_anchor_index(
         .then_some(index)
 }
 
-pub(in crate::view) fn previous_conflict_nav_target_index_or_sole_anchor(
+pub fn previous_conflict_nav_target_index_or_sole_anchor(
     targets: &[ConflictNavTarget],
     anchor: Option<ConflictNavAnchor>,
     filter: ConflictNavTargetFilter,
@@ -226,7 +224,7 @@ pub(in crate::view) fn previous_conflict_nav_target_index_or_sole_anchor(
         .or_else(|| sole_matching_anchor_index(targets, anchor, filter))
 }
 
-pub(in crate::view) fn next_conflict_nav_target_index_or_sole_anchor(
+pub fn next_conflict_nav_target_index_or_sole_anchor(
     targets: &[ConflictNavTarget],
     anchor: Option<ConflictNavAnchor>,
     filter: ConflictNavTargetFilter,
@@ -236,9 +234,7 @@ pub(in crate::view) fn next_conflict_nav_target_index_or_sole_anchor(
         .or_else(|| sole_matching_anchor_index(targets, anchor, filter))
 }
 
-pub(in crate::view) fn conflict_pick_choices(
-    view_mode: ConflictResolverViewMode,
-) -> &'static [ConflictChoice] {
+pub fn conflict_pick_choices(view_mode: ConflictResolverViewMode) -> &'static [ConflictChoice] {
     match view_mode {
         ConflictResolverViewMode::ThreeWay => &[
             ConflictChoice::Base,
@@ -287,7 +283,7 @@ pub fn conflict_ctrl_pick_choice_for_key(
 }
 
 /// Resolve conflict navigation shortcuts (`F2`, `F3`, `F7`) to a direction.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn conflict_nav_direction_for_key(key: &str, shift: bool) -> Option<ConflictNavDirection> {
     match key {
         "f2" => Some(ConflictNavDirection::Prev),
@@ -302,7 +298,7 @@ pub fn conflict_nav_direction_for_key(key: &str, shift: bool) -> Option<Conflict
 ///
 /// The summary is shown in the resolver UI so autosolve behavior remains
 /// auditable without opening command logs.
-pub(in crate::view) fn conflict_nav_region_aligned_ranges(
+pub fn conflict_nav_region_aligned_ranges(
     session: &gitcomet_core::conflict_session::ConflictSession,
     fallback_ranges: &[Range<usize>],
 ) -> Vec<Option<Range<usize>>> {
@@ -320,7 +316,7 @@ pub(in crate::view) fn conflict_nav_region_aligned_ranges(
         .collect()
 }
 
-pub(in crate::view) fn build_conflict_nav_targets(
+pub fn build_conflict_nav_targets(
     session: Option<&gitcomet_core::conflict_session::ConflictSession>,
     region_aligned_ranges: &[Option<Range<usize>>],
     display_region_indices: &[usize],

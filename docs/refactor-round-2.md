@@ -632,3 +632,14 @@ runs against the commit before the move, on a machine shared with other builds:
 
 Every pair favoured the move. CPU time fell 2.4%, in line with the code removed;
 wall times varied by up to 40% between runs because of the other load.
+
+### 2.2 `gitcomet-conflict-resolver`
+
+`view/conflict_resolver/` (8.3k production and 7.6k test lines) is now
+`crates/gitcomet-conflict-resolver`, depending on core and `gitcomet-text` only.
+Two prerequisites moved to core first: the word-diff algorithm (`word_diff`) and
+the autosolve pass counters (`ConflictAutosolveStats`, which state re-exports at
+its message path). The split-row styled-text cache is presentation state and
+moved to the host's `view/conflict_style_cache.rs` with its test. Test- and
+benchmark-only items the UI's tests use compile under `test-support`, as for the
+syntax engine. All 248 model tests pass (245 without the benchmark feature).

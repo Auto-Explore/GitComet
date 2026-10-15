@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use super::{ConflictSegment, ConflictText, ConflictTextStorage};
-use crate::view::rows::LruTouchQueue;
+use gitcomet_text::cache::LruTouchQueue;
 
 pub(super) const CONFLICT_SPLIT_PAGE_SIZE: usize = 256;
 pub(super) const CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES: usize = 8;
@@ -154,7 +154,7 @@ impl SparseLineIndex {
         out
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
     fn lines_containing(
         &self,
         text: &str,
@@ -312,7 +312,7 @@ impl SparseLineIndex {
         text.get(range)
     }
 
-    #[cfg(all(test, feature = "benchmarks"))]
+    #[cfg(all(any(test, feature = "test-support"), feature = "benchmarks"))]
     pub(super) fn heap_byte_size(&self) -> usize {
         self.checkpoints.capacity() * std::mem::size_of::<u32>()
     }
@@ -790,8 +790,8 @@ impl ConflictSplitRowIndex {
         page.get(row_offset).cloned()
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
-    pub(in crate::view) fn for_each_row_range(
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+    pub fn for_each_row_range(
         &self,
         segments: &[ConflictSegment],
         row_range: Range<usize>,
@@ -830,8 +830,8 @@ impl ConflictSplitRowIndex {
         }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
-    pub(in crate::view) fn clear_cached_pages(&self) {
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+    pub fn clear_cached_pages(&self) {
         if let Some(pages) = self.pages.get()
             && let Ok(mut pages) = pages.write()
         {
@@ -840,16 +840,16 @@ impl ConflictSplitRowIndex {
         }
     }
 
-    #[cfg(test)]
-    pub(in crate::view) fn cached_page_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn cached_page_count(&self) -> usize {
         self.pages
             .get()
             .and_then(|pages| pages.read().ok().map(|pages| pages.pages.len()))
             .unwrap_or(0)
     }
 
-    #[cfg(test)]
-    pub(in crate::view) fn cached_page_indices(&self) -> Vec<usize> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn cached_page_indices(&self) -> Vec<usize> {
         let mut pages = self
             .pages
             .get()
@@ -866,7 +866,7 @@ impl ConflictSplitRowIndex {
 
     /// Approximate heap bytes used by the index metadata,
     /// excluding the bounded page cache.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn metadata_byte_size(&self) -> usize {
         let entry_overhead = if self.entries.spilled() {
             self.entries.len() * std::mem::size_of::<SplitLayoutEntry>()
@@ -897,14 +897,14 @@ impl ConflictSplitRowIndex {
     }
 
     /// Look up the conflict index for a given source row.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn conflict_ix_for_row(&self, row_ix: usize) -> Option<usize> {
         let (_, entry) = self.entry_for_row(row_ix)?;
         entry.conflict_ix
     }
 
     /// Find the first source row index belonging to a conflict block.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn first_row_for_conflict(&self, conflict_ix: usize) -> Option<usize> {
         self.entries
             .iter()
@@ -917,7 +917,7 @@ impl ConflictSplitRowIndex {
     /// Searches old (ours) and new (theirs) text for each row without
     /// allocating `FileDiffRow` objects, making this much cheaper than
     /// iterating `row_at()` for every row in a giant file.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn search_matching_rows(
         &self,
         segments: &[ConflictSegment],
@@ -1051,7 +1051,7 @@ impl ConflictSplitRowIndex {
     /// via the sparse checkpoint structure.  This is dramatically faster than
     /// `search_matching_rows` with a per-line predicate for large segments
     /// because it avoids per-line byte-by-byte checkpoint walks.
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
     pub fn search_text_matching_rows(
         &self,
         segments: &[ConflictSegment],
@@ -1371,7 +1371,7 @@ impl TwoWaySplitProjection {
     }
 
     #[cfg_attr(not(feature = "benchmarks"), allow(dead_code))]
-    pub(in crate::view) fn for_each_chunk_in_visible_range(
+    pub fn for_each_chunk_in_visible_range(
         &self,
         visible_range: Range<usize>,
         mut f: impl FnMut(usize, Range<usize>, Option<usize>),
@@ -1451,7 +1451,7 @@ impl TwoWaySplitProjection {
     }
 
     /// Approximate heap bytes used by the projection metadata (spans vec).
-    #[cfg(all(test, feature = "benchmarks"))]
+    #[cfg(all(any(test, feature = "test-support"), feature = "benchmarks"))]
     pub fn metadata_byte_size(&self) -> usize {
         if self.spans.spilled() {
             self.spans.len() * std::mem::size_of::<TwoWaySplitSpan>()

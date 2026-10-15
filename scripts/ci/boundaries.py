@@ -24,6 +24,8 @@ RULES = (
     ("gitcomet-text", (), ("gitcomet-base", "gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     # Syntax highlighting: tree-sitter and its grammars, never GPUI or the kit.
     ("gitcomet-syntax", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # The conflict resolver's model: no state, GPUI or UI kit.
+    ("gitcomet-conflict-resolver", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     # Measurement records and their report: serde only.
     ("gitcomet-perf", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     ("gitcomet-core", (), ("gitcomet-state", *GPUI, *UI_HOST, *APPLICATION)),

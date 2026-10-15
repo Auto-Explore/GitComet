@@ -1,20 +1,19 @@
 use super::*;
 
-pub(in crate::view) const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER: &str = "<Merge Conflict>";
+pub const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER: &str = "<Merge Conflict>";
 
 /// Same, for a block whose sides differ only in whitespace.
-pub(in crate::view) const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER: &str =
-    "<Merge Conflict (Whitespace only)>";
+pub const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER: &str = "<Merge Conflict (Whitespace only)>";
 
-pub(in crate::view) const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_LF: &str = "<Merge Conflict>\n";
-pub(in crate::view) const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CRLF: &str = "<Merge Conflict>\r\n";
-pub(in crate::view) const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CR: &str = "<Merge Conflict>\r";
+pub const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_LF: &str = "<Merge Conflict>\n";
+pub const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CRLF: &str = "<Merge Conflict>\r\n";
+pub const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CR: &str = "<Merge Conflict>\r";
 
-pub(in crate::view) const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_LF: &str =
+pub const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_LF: &str =
     "<Merge Conflict (Whitespace only)>\n";
-pub(in crate::view) const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CRLF: &str =
+pub const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CRLF: &str =
     "<Merge Conflict (Whitespace only)>\r\n";
-pub(in crate::view) const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CR: &str =
+pub const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CR: &str =
     "<Merge Conflict (Whitespace only)>\r";
 
 /// Whether one output line is an unresolved-conflict placeholder row.
@@ -23,7 +22,7 @@ pub(in crate::view) const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CR: &str =
 /// by its own content — the same fact the reader sees. This keeps the gutter
 /// marker in step with the text however the marker array was built, mirroring
 /// how kdiff3 derives both from a single `srcSelect`.
-pub(in crate::view) fn line_is_unresolved_conflict_placeholder(line: &str) -> bool {
+pub fn line_is_unresolved_conflict_placeholder(line: &str) -> bool {
     let line = line.trim_end_matches(['\r', '\n']);
     line == UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER
         || line == UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER
@@ -33,7 +32,7 @@ pub(in crate::view) fn line_is_unresolved_conflict_placeholder(line: &str) -> bo
 ///
 /// An unresolved block with no side picked has nothing to show, so the output
 /// carries one `<Merge Conflict>` row in its place.
-pub(in crate::view) fn uses_unresolved_merge_conflict_placeholder(block: &ConflictBlock) -> bool {
+pub fn uses_unresolved_merge_conflict_placeholder(block: &ConflictBlock) -> bool {
     !block.resolved && block.choice.is_empty()
 }
 
@@ -43,9 +42,7 @@ pub(in crate::view) fn uses_unresolved_merge_conflict_placeholder(block: &Confli
 /// A block that spans several aligned source rows still collapses to this one
 /// row, so the output's line numbers count the output's own lines rather than
 /// the source columns'.
-pub(in crate::view) fn unresolved_merge_conflict_placeholder_text(
-    block: &ConflictBlock,
-) -> &'static str {
+pub fn unresolved_merge_conflict_placeholder_text(block: &ConflictBlock) -> &'static str {
     use gitcomet_core::conflict_output::{
         ConflictOutputBlockRef, detect_conflict_block_line_ending,
     };
@@ -74,7 +71,7 @@ pub(in crate::view) fn unresolved_merge_conflict_placeholder_text(
     }
 }
 
-pub(in crate::view) fn editable_conflict_block_len(block: &ConflictBlock) -> usize {
+pub fn editable_conflict_block_len(block: &ConflictBlock) -> usize {
     use gitcomet_core::conflict_output::ConflictOutputSource;
 
     if uses_unresolved_merge_conflict_placeholder(block) {
@@ -142,7 +139,7 @@ impl ResolvedOutputText {
         text_line_count_usize(self.as_str())
     }
 
-    pub fn into_shared_string(self) -> gpui::SharedString {
+    pub fn into_shared_string(self) -> gpui_shared_string::SharedString {
         match self {
             Self::Shared(text) => text.into(),
             Self::Owned(text) => text.into(),
@@ -197,7 +194,7 @@ pub fn generate_resolved_text_with_options(
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::view) enum ResolvedOutputFragmentSource {
+pub enum ResolvedOutputFragmentSource {
     TextSegment { segment_ix: usize },
     BlockBase { segment_ix: usize },
     BlockOurs { segment_ix: usize },
@@ -205,7 +202,7 @@ pub(in crate::view) enum ResolvedOutputFragmentSource {
     UnresolvedPlaceholder { text: &'static str },
 }
 
-pub(in crate::view) fn resolved_output_block_source_fragment(
+pub fn resolved_output_block_source_fragment(
     segment_ix: usize,
     block: &ConflictBlock,
     source: gitcomet_core::conflict_output::ConflictOutputSource,

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(in crate::view) fn content_matches_block_choice(block: &ConflictBlock, content: &str) -> bool {
+pub fn content_matches_block_choice(block: &ConflictBlock, content: &str) -> bool {
     use gitcomet_core::conflict_output::ConflictOutputSource;
 
     let mut selected = String::new();
@@ -19,7 +19,7 @@ pub(in crate::view) fn content_matches_block_choice(block: &ConflictBlock, conte
     selected == content
 }
 
-pub(in crate::view) fn resolution_for_choice(
+pub fn resolution_for_choice(
     choice: ConflictChoice,
     has_base: bool,
 ) -> gitcomet_core::conflict_session::ConflictRegionResolution {
@@ -44,7 +44,7 @@ pub(in crate::view) fn resolution_for_choice(
     }
 }
 
-pub(in crate::view) fn choice_for_selection(
+pub fn choice_for_selection(
     selection: &gitcomet_core::merge::OrderedSelection,
     has_base: bool,
 ) -> Option<ConflictChoice> {
@@ -71,13 +71,13 @@ pub(in crate::view) fn choice_for_selection(
 /// The editor text is authoritative; these ranges only decide which bytes
 /// belong to which conflict when deriving session resolutions.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ResolvedOutputBlockMap {
+pub struct ResolvedOutputBlockMap {
     pub(super) ranges: Vec<Range<usize>>,
     pub(super) text_len: usize,
 }
 
 impl ResolvedOutputBlockMap {
-    pub(in crate::view) fn from_segments(segments: &[ConflictSegment]) -> Self {
+    pub fn from_segments(segments: &[ConflictSegment]) -> Self {
         let mut ranges = Vec::with_capacity(conflict_count(segments));
         let mut cursor = 0usize;
         for segment in segments {
@@ -98,11 +98,11 @@ impl ResolvedOutputBlockMap {
         }
     }
 
-    pub(in crate::view) fn ranges(&self) -> &[Range<usize>] {
+    pub fn ranges(&self) -> &[Range<usize>] {
         &self.ranges
     }
 
-    pub(in crate::view) fn is_valid_for(
+    pub fn is_valid_for(
         &self,
         segments: &[ConflictSegment],
         output_text: &(impl ResolvedOutputSource + ?Sized),
@@ -121,7 +121,7 @@ impl ResolvedOutputBlockMap {
                 .all(|ranges| ranges[0].end <= ranges[1].start)
     }
 
-    pub(in crate::view) fn block_slice<'a>(
+    pub fn block_slice<'a>(
         &self,
         segments: &[ConflictSegment],
         output_text: &'a str,
@@ -142,11 +142,7 @@ impl ResolvedOutputBlockMap {
             })
     }
 
-    pub(in crate::view) fn apply_edit_delta(
-        &mut self,
-        old_range: Range<usize>,
-        new_range: Range<usize>,
-    ) -> bool {
+    pub fn apply_edit_delta(&mut self, old_range: Range<usize>, new_range: Range<usize>) -> bool {
         if old_range.start > old_range.end
             || old_range.end > self.text_len
             || new_range.start != old_range.start
@@ -212,7 +208,7 @@ impl ResolvedOutputBlockMap {
                 .all(|range| range.start <= range.end && range.end <= self.text_len)
     }
 
-    pub(in crate::view) fn apply_edit_deltas(
+    pub fn apply_edit_deltas(
         &mut self,
         deltas: impl IntoIterator<Item = (Range<usize>, Range<usize>)>,
     ) -> bool {
@@ -407,7 +403,7 @@ pub fn sequential_conflict_region_indices(segments: &[ConflictSegment]) -> Vec<u
     out
 }
 
-pub(in crate::view) fn apply_region_resolution_to_block(
+pub fn apply_region_resolution_to_block(
     block: &mut ConflictBlock,
     resolution: &gitcomet_core::conflict_session::ConflictRegionResolution,
 ) -> Option<String> {
@@ -478,7 +474,7 @@ pub(in crate::view) fn apply_region_resolution_to_block(
 /// This is used by save/export paths that derive resolutions from the current
 /// resolved-output buffer and need to keep manual edits as plain text while
 /// preserving untouched unresolved blocks.
-pub(in crate::view) fn apply_ordered_region_resolutions(
+pub fn apply_ordered_region_resolutions(
     segments: &mut Vec<ConflictSegment>,
     resolutions: &[gitcomet_core::conflict_session::ConflictRegionResolution],
 ) -> usize {
@@ -522,7 +518,7 @@ pub(in crate::view) fn apply_ordered_region_resolutions(
 /// non-side-pick text into plain `Text` segments when needed.
 ///
 /// Returns how many conflict regions were applied.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn apply_session_region_resolutions(
     segments: &mut Vec<ConflictSegment>,
     regions: &[gitcomet_core::conflict_session::ConflictRegion],

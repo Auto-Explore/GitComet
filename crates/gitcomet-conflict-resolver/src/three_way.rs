@@ -15,7 +15,7 @@ pub struct ThreeWayConflictMaps {
 /// This is the legacy/current-only fallback used when a merge plan is not
 /// available. Callers may retain the result before resolved regions are
 /// materialized into plain text so every original region remains navigable.
-pub(in crate::view) fn project_conflict_ranges_to_aligned_rows(
+pub fn project_conflict_ranges_to_aligned_rows(
     segments: &[ConflictSegment],
     aligned: &ThreeWayAlignedMap,
     side_line_counts: [usize; 3],
@@ -59,7 +59,7 @@ pub(in crate::view) fn project_conflict_ranges_to_aligned_rows(
 /// line count can merge adjacent conflict highlights or move later highlights
 /// past their real rows. Full text sessions retain the authoritative mapping
 /// from marker regions to merge-plan blocks; use it whenever it is available.
-pub(in crate::view) fn merge_plan_aligned_conflict_ranges(
+pub fn merge_plan_aligned_conflict_ranges(
     session: &gitcomet_core::conflict_session::ConflictSession,
     visible_region_indices: &[usize],
     visible_plan_block_indices: &[usize],
@@ -107,7 +107,7 @@ pub fn conflict_index_for_line(ranges: &[std::ops::Range<usize>], line: usize) -
 /// The returned `conflict_ranges` follow the legacy behavior and are expressed
 /// in the ours-column line space. The line maps provide O(1) conflict lookup
 /// for each column at render/navigation time.
-pub(in crate::view) fn build_three_way_conflict_maps_impl(
+pub fn build_three_way_conflict_maps_impl(
     segments: &[ConflictSegment],
     base_line_count: usize,
     ours_line_count: usize,
@@ -222,7 +222,7 @@ pub(in crate::view) fn build_three_way_conflict_maps_impl(
     maps
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn build_three_way_conflict_maps(
     segments: &[ConflictSegment],
     base_line_count: usize,
@@ -258,7 +258,7 @@ pub fn build_three_way_conflict_maps_without_line_maps(
 ///
 /// Each output entry is `Some(conflict_index)` when the row belongs to a marker
 /// conflict block, or `None` for non-conflict context rows.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn map_two_way_rows_to_conflicts(
     segments: &[ConflictSegment],
     diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
@@ -280,7 +280,7 @@ pub fn map_two_way_rows_to_conflicts(
 ///
 /// When `hide_resolved` is true, rows belonging to resolved conflict blocks are
 /// removed from the visible list. Non-conflict rows are always kept visible.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn build_two_way_visible_indices(
     row_conflict_map: &[Option<usize>],
     segments: &[ConflictSegment],
@@ -313,7 +313,7 @@ pub fn build_two_way_visible_indices(
 /// `visible_row_indices` maps visible list rows to source row indices. This helper
 /// resolves conflict index -> visible row index so callers can scroll/focus a
 /// specific conflict in two-way resolver modes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn visible_index_for_two_way_conflict(
     row_conflict_map: &[Option<usize>],
     visible_row_indices: &[usize],
@@ -332,7 +332,7 @@ pub fn visible_index_for_two_way_conflict(
 ///
 /// Returns visible list indices (not source row indices) in unresolved queue
 /// order so callers can feed them directly into shared diff navigation helpers.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn unresolved_visible_nav_entries_for_two_way(
     segments: &[ConflictSegment],
     row_conflict_map: &[Option<usize>],
@@ -347,7 +347,7 @@ pub fn unresolved_visible_nav_entries_for_two_way(
 }
 
 /// Map a two-way visible index back to its conflict index.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn two_way_conflict_index_for_visible_row(
     row_conflict_map: &[Option<usize>],
     visible_row_indices: &[usize],
@@ -388,7 +388,7 @@ pub struct ThreeWayAlignedMap {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(in crate::view) struct AlignedMapRun {
+pub struct AlignedMapRun {
     aligned_start: usize,
     rows: usize,
     starts: [usize; 3],
@@ -509,7 +509,7 @@ impl ThreeWayAlignedMap {
 /// the per-row word-diff work on files with huge change counts.
 pub const ALIGNED_WORD_HIGHLIGHT_MAX_ROWS: usize = 4_000;
 
-pub(in crate::view) fn merge_word_highlight_ranges(
+pub fn merge_word_highlight_ranges(
     highlights: &mut WordHighlights,
     line_ix: usize,
     ranges: Vec<Range<usize>>,
@@ -580,7 +580,7 @@ pub fn compute_aligned_three_way_word_highlights(
                 continue;
             }
             let (base_ranges, side_ranges) =
-                crate::view::word_diff::capped_word_diff_ranges(base_line, side_line);
+                gitcomet_core::word_diff::capped_word_diff_ranges(base_line, side_line);
             merge_word_highlight_ranges(&mut wh_base, base_ix, base_ranges);
             merge_word_highlight_ranges(side_highlights, side_ix, side_ranges);
             row_diffed = true;
@@ -695,12 +695,12 @@ pub struct ThreeWayVisibleProjection {
     visible_len: usize,
 }
 
-pub(in crate::view) enum ThreeWayVisibleRun {
+pub enum ThreeWayVisibleRun {
     Lines { start: usize, end: usize },
     Collapsed { conflict_ix: usize },
 }
 
-pub(in crate::view) fn for_each_three_way_visible_run(
+pub fn for_each_three_way_visible_run(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
     conflict_resolved: &[bool],
@@ -767,6 +767,10 @@ impl ThreeWayVisibleProjection {
     /// Total number of visible rows.
     pub fn len(&self) -> usize {
         self.visible_len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.visible_len == 0
     }
 
     /// Look up the visible item at the given visible index. O(log spans).
@@ -922,7 +926,7 @@ pub fn build_minimap_bands(
 ) -> Vec<gitcomet_core::merge::MinimapRowKind> {
     use gitcomet_core::merge::MinimapRowKind;
 
-    if aligned.is_identity() || projection.len() == 0 {
+    if aligned.is_identity() || projection.is_empty() {
         return Vec::new();
     }
     let visible_len = projection.len() + trailing_rows;
@@ -1051,9 +1055,7 @@ pub fn build_minimap_bands(
 
 /// One `resolved` flag per marker block, in display order — the state the
 /// minimap and the visible projection classify conflicts with.
-pub(in crate::view) fn resolved_conflict_flags_from_segments(
-    segments: &[ConflictSegment],
-) -> Vec<bool> {
+pub fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Vec<bool> {
     segments
         .iter()
         .filter_map(|segment| match segment {
@@ -1073,15 +1075,15 @@ pub(crate) const CONFLICT_COLLAPSED_CONTEXT_LINES: usize = 3;
 
 /// Runs shorter than this stay expanded — a fold row would not be
 /// meaningfully shorter than the lines it hides.
-pub(in crate::view) const MIN_CONTEXT_FOLD_LINES: usize = 2;
+pub const MIN_CONTEXT_FOLD_LINES: usize = 2;
 
 /// Lines revealed per click of a fold's reveal arrows (matches the diff
 /// view's collapsed-hunk reveal step).
-pub(crate) const CONFLICT_FOLD_REVEAL_STEP: usize = 20;
+pub const CONFLICT_FOLD_REVEAL_STEP: usize = 20;
 
 /// Per-fold partial-reveal state, keyed by the fold's stable identity.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct ConflictFoldReveal {
+pub struct ConflictFoldReveal {
     /// Lines revealed from the top edge of the fold.
     pub top: usize,
     /// Lines revealed from the bottom edge of the fold.
@@ -1092,7 +1094,7 @@ pub(in crate::view) struct ConflictFoldReveal {
 
 /// Visibility options for the three-way projection.
 #[derive(Clone, Copy, Default)]
-pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
+pub struct ThreeWayVisibleOptions<'a> {
     pub hide_resolved: bool,
     /// section 30 collapsed context mode: fold unchanged runs beyond
     /// [`CONFLICT_COLLAPSED_CONTEXT_LINES`] around each conflict.
@@ -1103,7 +1105,7 @@ pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
 
 /// Build the three-way visible projection with hide-resolved and collapsed
 /// context folding applied.
-pub(in crate::view) fn build_three_way_visible_projection_with_options(
+pub fn build_three_way_visible_projection_with_options(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
     conflict_resolved: &[bool],
@@ -1234,7 +1236,7 @@ pub(in crate::view) fn build_three_way_visible_projection_with_options(
     }
 }
 
-pub(in crate::view) fn build_three_way_visible_projection_with_resolved_flags(
+pub fn build_three_way_visible_projection_with_resolved_flags(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
     conflict_resolved: &[bool],
@@ -1292,7 +1294,7 @@ pub(in crate::view) fn build_three_way_visible_projection_with_resolved_flags(
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn build_three_way_visible_projection(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
@@ -1312,8 +1314,8 @@ pub fn build_three_way_visible_projection(
 ///
 /// When `hide_resolved` is false, every line maps directly.
 /// When true, resolved conflict ranges are collapsed to a single summary row.
-#[cfg(any(test, feature = "benchmarks"))]
-pub(in crate::view) fn build_three_way_visible_map_with_resolved_flags(
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+pub fn build_three_way_visible_map_with_resolved_flags(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
     conflict_resolved: &[bool],
@@ -1363,7 +1365,7 @@ pub(in crate::view) fn build_three_way_visible_map_with_resolved_flags(
     visible
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn build_three_way_visible_map(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],

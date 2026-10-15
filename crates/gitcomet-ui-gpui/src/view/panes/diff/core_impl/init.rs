@@ -559,9 +559,9 @@ impl DiffRenderer {
             conflict_diff_split_col_widths: [px(0.0); 2],
             conflict_canvas_rows_enabled: conflict_canvas_rows_enabled_from_env(),
             conflict_diff_segments_cache_split:
-                conflict_resolver::ConflictSplitStyledTextCache::default(),
+                crate::view::conflict_style_cache::ConflictSplitStyledTextCache::default(),
             conflict_diff_query_segments_cache_split:
-                conflict_resolver::ConflictSplitStyledTextCache::default(),
+                crate::view::conflict_style_cache::ConflictSplitStyledTextCache::default(),
             conflict_diff_query_cache_query: SharedString::default(),
             conflict_diff_query_cache_options: Default::default(),
             conflict_three_way_segments_cache: FxHashMap::default(),

@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::view) enum ConflictTextStorage {
+pub enum ConflictTextStorage {
     Owned(String),
     SharedSlice { text: Arc<str>, range: Range<usize> },
 }
@@ -74,8 +74,8 @@ impl ConflictText {
         }
     }
 
-    #[cfg(test)]
-    pub(in crate::view) fn shares_backing_with(&self, other: &Arc<str>) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shares_backing_with(&self, other: &Arc<str>) -> bool {
         match &self.storage {
             ConflictTextStorage::Owned(_) => false,
             ConflictTextStorage::SharedSlice { text, .. } => Arc::ptr_eq(text, other),
@@ -177,7 +177,7 @@ pub enum ConflictSegment {
     Block(ConflictBlock),
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictInlineRow {
     pub side: ConflictPickSide,
@@ -201,7 +201,7 @@ pub enum ResolvedLineSource {
 }
 
 impl ResolvedLineSource {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     /// Compact single-character label for UI badges.
     pub fn badge_char(self) -> char {
         match self {
@@ -215,7 +215,7 @@ impl ResolvedLineSource {
 
 /// Packed per-line gutter state for resolved-output preview rows.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::view) struct ResolvedOutputGutterRow(u32);
+pub struct ResolvedOutputGutterRow(u32);
 
 impl ResolvedOutputGutterRow {
     const SOURCE_MASK: u32 = 0b11;
@@ -237,7 +237,7 @@ impl ResolvedOutputGutterRow {
     const CONFLICT_SHIFT: u32 = 6;
     const CONFLICT_VALUE_MASK: u32 = u32::MAX >> Self::CONFLICT_SHIFT;
 
-    pub(in crate::view) fn new(
+    pub fn new(
         source: ResolvedLineSource,
         marker_conflict_ix: Option<usize>,
         is_start: bool,
@@ -280,7 +280,7 @@ impl ResolvedOutputGutterRow {
     /// where the marker array *does* cover the row it owns the bracket ends —
     /// otherwise a multi-row block would close its bracket on the named row.
     #[inline(always)]
-    pub(in crate::view) fn with_unresolved_placeholder(self) -> Self {
+    pub fn with_unresolved_placeholder(self) -> Self {
         Self(self.0 | Self::PLACEHOLDER_FLAG)
     }
 
@@ -297,7 +297,7 @@ impl ResolvedOutputGutterRow {
     }
 
     #[inline(always)]
-    pub(in crate::view) fn source(self) -> ResolvedLineSource {
+    pub fn source(self) -> ResolvedLineSource {
         match self.0 & Self::SOURCE_MASK {
             Self::SOURCE_A => ResolvedLineSource::A,
             Self::SOURCE_B => ResolvedLineSource::B,
@@ -307,7 +307,7 @@ impl ResolvedOutputGutterRow {
     }
 
     #[inline(always)]
-    pub(in crate::view) fn badge_char(self) -> char {
+    pub fn badge_char(self) -> char {
         if self.has_marker() && self.unresolved() {
             return '?';
         }
@@ -320,33 +320,33 @@ impl ResolvedOutputGutterRow {
     }
 
     #[inline(always)]
-    pub(in crate::view) fn has_marker(self) -> bool {
+    pub fn has_marker(self) -> bool {
         self.is_placeholder() || (self.0 >> Self::CONFLICT_SHIFT) != 0
     }
 
     #[inline(always)]
-    pub(in crate::view) fn marker_conflict_ix(self) -> Option<usize> {
+    pub fn marker_conflict_ix(self) -> Option<usize> {
         let encoded_conflict = self.0 >> Self::CONFLICT_SHIFT;
         (encoded_conflict != 0).then(|| (encoded_conflict - 1) as usize)
     }
 
     #[inline(always)]
-    pub(in crate::view) fn is_start(self) -> bool {
+    pub fn is_start(self) -> bool {
         self.is_unmarked_placeholder() || (self.0 & Self::IS_START_FLAG) != 0
     }
 
     #[inline(always)]
-    pub(in crate::view) fn is_end(self) -> bool {
+    pub fn is_end(self) -> bool {
         self.is_unmarked_placeholder() || (self.0 & Self::IS_END_FLAG) != 0
     }
 
     #[inline(always)]
-    pub(in crate::view) fn unresolved(self) -> bool {
+    pub fn unresolved(self) -> bool {
         self.is_placeholder() || (self.0 & Self::UNRESOLVED_FLAG) != 0
     }
 
     #[inline(always)]
-    pub(in crate::view) fn manual_without_marker(self) -> bool {
+    pub fn manual_without_marker(self) -> bool {
         !self.has_marker() && (self.0 & Self::SOURCE_MASK) == Self::SOURCE_MANUAL
     }
 }
@@ -406,27 +406,27 @@ pub type WordHighlights = FxHashMap<usize, Vec<Range<usize>>>;
 
 /// Per-line pair of `(old, new)` word-highlight ranges for a two-way diff row.
 pub type TwoWayWordHighlightPair = (
-    crate::view::word_diff::WordDiffRanges,
-    crate::view::word_diff::WordDiffRanges,
+    gitcomet_core::word_diff::WordDiffRanges,
+    gitcomet_core::word_diff::WordDiffRanges,
 );
 
-pub(in crate::view) const CONFLICT_SPLIT_WORD_HIGHLIGHT_CACHE_ROWS: usize = 4_096;
+pub const CONFLICT_SPLIT_WORD_HIGHLIGHT_CACHE_ROWS: usize = 4_096;
 
 /// Bounded render cache for giant two-way conflicts. The same row is rendered
 /// independently by the left and right lists, so sharing the computed pair here
 /// avoids running the word diff twice per frame without retaining the whole file.
 #[derive(Clone, Debug, Default)]
-pub(in crate::view) struct ConflictSplitWordHighlightCache {
+pub struct ConflictSplitWordHighlightCache {
     rows: FxHashMap<usize, Arc<TwoWayWordHighlightPair>>,
     insertion_order: VecDeque<usize>,
 }
 
 impl ConflictSplitWordHighlightCache {
-    pub(in crate::view) fn get(&self, row_ix: usize) -> Option<Arc<TwoWayWordHighlightPair>> {
+    pub fn get(&self, row_ix: usize) -> Option<Arc<TwoWayWordHighlightPair>> {
         self.rows.get(&row_ix).cloned()
     }
 
-    pub(in crate::view) fn insert(
+    pub fn insert(
         &mut self,
         row_ix: usize,
         highlights: TwoWayWordHighlightPair,
@@ -446,7 +446,7 @@ impl ConflictSplitWordHighlightCache {
         highlights
     }
 
-    pub(in crate::view) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.rows.clear();
         self.insertion_order.clear();
     }
@@ -456,16 +456,16 @@ impl ConflictSplitWordHighlightCache {
 ///
 /// This preserves a small amount of unchanged surrounding code in the large-file
 /// sparse path without regressing back to whole-file row materialization.
-pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
+pub const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
 /// Above this size, one conflict block is effectively the whole document.
 ///
 /// Bootstrap should stay bounded instead of diffing the entire block eagerly.
-pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
+pub const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
 /// Head/tail preview rows kept for very large conflict blocks during bootstrap.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
 /// Word-diff highlighting is optional chrome, so skip giant blocks entirely.
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES: usize = 4_000;
 
 /// Ordered pick choices for a view mode. Both the letter (`a/b/c/d`) and the
@@ -514,10 +514,7 @@ pub fn parse_conflict_markers_shared_nonempty(text: Arc<str>) -> Vec<ConflictSeg
     }
 }
 
-pub(in crate::view) fn append_text_segment(
-    segments: &mut Vec<ConflictSegment>,
-    text: impl Into<ConflictText>,
-) {
+pub fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: impl Into<ConflictText>) {
     let text = text.into();
     if text.is_empty() {
         return;
@@ -529,10 +526,7 @@ pub(in crate::view) fn append_text_segment(
     segments.push(ConflictSegment::Text(text));
 }
 
-pub(in crate::view) fn choice_for_resolved_content(
-    block: &ConflictBlock,
-    content: &str,
-) -> Option<ConflictChoice> {
+pub fn choice_for_resolved_content(block: &ConflictBlock, content: &str) -> Option<ConflictChoice> {
     if !block.choice.is_empty() && content_matches_block_choice(block, content) {
         return Some(block.choice);
     }

@@ -658,7 +658,7 @@ fn split_output_lines_for_outline_keeps_single_empty_row_for_empty_text() {
 // Provenance mapping tests
 // -----------------------------------------------------------------------
 
-fn shared(s: &str) -> gpui::SharedString {
+fn shared(s: &str) -> gpui_shared_string::SharedString {
     s.to_string().into()
 }
 
@@ -701,7 +701,7 @@ fn provenance_priority_a_over_b() {
     // When the same text exists in A and B, A wins.
     let a = vec![shared("same")];
     let b = vec![shared("same")];
-    let c: Vec<gpui::SharedString> = vec![];
+    let c: Vec<gpui_shared_string::SharedString> = vec![];
     let sources = SourceLines {
         a: &a,
         b: &b,
@@ -715,9 +715,9 @@ fn provenance_priority_a_over_b() {
 
 #[test]
 fn provenance_empty_output_returns_empty() {
-    let a: Vec<gpui::SharedString> = vec![];
-    let b: Vec<gpui::SharedString> = vec![];
-    let c: Vec<gpui::SharedString> = vec![];
+    let a: Vec<gpui_shared_string::SharedString> = vec![];
+    let b: Vec<gpui_shared_string::SharedString> = vec![];
+    let c: Vec<gpui_shared_string::SharedString> = vec![];
     let sources = SourceLines {
         a: &a,
         b: &b,
@@ -731,8 +731,8 @@ fn provenance_empty_output_returns_empty() {
 #[test]
 fn provenance_empty_line_matches_empty_source() {
     let a = vec![shared("")];
-    let b: Vec<gpui::SharedString> = vec![];
-    let c: Vec<gpui::SharedString> = vec![];
+    let b: Vec<gpui_shared_string::SharedString> = vec![];
+    let c: Vec<gpui_shared_string::SharedString> = vec![];
     let sources = SourceLines {
         a: &a,
         b: &b,
@@ -773,7 +773,7 @@ fn two_way_indexed_provenance_uses_source_line_numbers() {
 fn dedupe_index_contains_matched_lines() {
     let a = vec![shared("fn main()"), shared("  println!()")];
     let b = vec![shared("fn main()"), shared("  eprintln!()")];
-    let c: Vec<gpui::SharedString> = vec![];
+    let c: Vec<gpui_shared_string::SharedString> = vec![];
     let sources = SourceLines {
         a: &a,
         b: &b,
@@ -816,9 +816,9 @@ fn dedupe_index_contains_matched_lines() {
 
 #[test]
 fn dedupe_index_excludes_manual_lines() {
-    let a: Vec<gpui::SharedString> = vec![];
-    let b: Vec<gpui::SharedString> = vec![];
-    let c: Vec<gpui::SharedString> = vec![];
+    let a: Vec<gpui_shared_string::SharedString> = vec![];
+    let b: Vec<gpui_shared_string::SharedString> = vec![];
+    let c: Vec<gpui_shared_string::SharedString> = vec![];
     let sources = SourceLines {
         a: &a,
         b: &b,

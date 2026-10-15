@@ -1,8 +1,7 @@
 use super::*;
 
-pub(in crate::view) const RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES: usize =
-    LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
-pub(in crate::view) const RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE: usize = 256;
+pub const RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES: usize = LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
+pub const RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE: usize = 256;
 
 #[derive(Clone, Debug)]
 pub(super) enum ResolvedOutputFragmentLineIndex {
@@ -54,7 +53,7 @@ impl ResolvedOutputFragmentLineIndex {
         }
     }
 
-    #[cfg(all(test, feature = "benchmarks"))]
+    #[cfg(all(any(test, feature = "test-support"), feature = "benchmarks"))]
     fn metadata_byte_size(&self) -> usize {
         match self {
             Self::SingleLine => 0,
@@ -67,7 +66,7 @@ impl ResolvedOutputFragmentLineIndex {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::view) struct ResolvedOutputFragment {
+pub struct ResolvedOutputFragment {
     source: ResolvedOutputFragmentSource,
     line_index: ResolvedOutputFragmentLineIndex,
     newline_count: usize,
@@ -140,14 +139,14 @@ impl ResolvedOutputFragment {
         (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
     }
 
-    #[cfg(all(test, feature = "benchmarks"))]
+    #[cfg(all(any(test, feature = "test-support"), feature = "benchmarks"))]
     fn metadata_byte_size(&self) -> usize {
         self.line_index.metadata_byte_size()
     }
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::view) enum ResolvedOutputSpan {
+pub enum ResolvedOutputSpan {
     SourceLines {
         visible_start: usize,
         len: usize,
@@ -854,6 +853,10 @@ impl ResolvedOutputProjection {
         self.line_count
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.line_count == 0
+    }
+
     pub fn widest_line_ix(&self) -> usize {
         self.widest_line_ix
     }
@@ -862,7 +865,7 @@ impl ResolvedOutputProjection {
     /// underlying segment texts which are shared with the resolver state.
     /// Sparse payloads include reserved checkpoint storage; the enclosing vectors
     /// count initialized entries.
-    #[cfg(all(test, feature = "benchmarks"))]
+    #[cfg(all(any(test, feature = "test-support"), feature = "benchmarks"))]
     pub fn metadata_byte_size(&self) -> usize {
         let fragments = self.fragments.len() * std::mem::size_of::<ResolvedOutputFragment>()
             + self
