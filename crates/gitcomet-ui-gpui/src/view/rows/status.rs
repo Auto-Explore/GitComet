@@ -11,17 +11,17 @@ const STATUS_ROW_LINE_HEIGHT_PX: f32 = 18.0;
 
 #[cfg(test)]
 fn status_selection_scan_steps() -> u64 {
-    STATUS_SELECTION_POSITION_SCAN_STEPS.with(Cell::get)
+    STATUS_SELECTION_SCAN_STEPS.with(Cell::get)
 }
 
 #[cfg(test)]
 fn reset_status_selection_scan_steps() {
-    STATUS_SELECTION_POSITION_SCAN_STEPS.with(|steps| steps.set(0));
+    STATUS_SELECTION_SCAN_STEPS.with(|steps| steps.set(0));
 }
 
 #[cfg(test)]
 thread_local! {
-    static STATUS_SELECTION_POSITION_SCAN_STEPS: Cell<u64> = const { Cell::new(0) };
+    static STATUS_SELECTION_SCAN_STEPS: Cell<u64> = const { Cell::new(0) };
 }
 
 struct StatusMultiSelectionSlice<'a> {
@@ -167,7 +167,7 @@ fn status_selection_entry_index(
             .iter()
             .inspect(|_| {
                 #[cfg(test)]
-                STATUS_SELECTION_POSITION_SCAN_STEPS.with(|steps| steps.set(steps.get() + 1));
+                STATUS_SELECTION_SCAN_STEPS.with(|steps| steps.set(steps.get() + 1));
             })
             .position(|path| path.as_path() == target)
     })
