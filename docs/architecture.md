@@ -4,7 +4,7 @@ GitComet separates Git contracts, application state, and GPUI presentation, with
 
 ## Crate boundaries
 
-The [workspace layout](../CONTRIBUTING.md#workspace-layout) lists each crate's role. `gitcomet-core` defines domain types and service contracts; `gitcomet-git-gix` implements those contracts using gix and Git subprocesses. `gitcomet-state` depends on core and receives its backend through the service traits. The GPUI host composes state, reusable UI components, and compiled-in extensions.
+The [workspace layout](../CONTRIBUTING.md#workspace-layout) lists each crate's role. `gitcomet-base` holds product identity, per-user directories and instrumentation without Git domain types, so the UI kit builds on it rather than on core. `gitcomet-core` re-exports those modules and defines domain types and service contracts; `gitcomet-git-gix` implements those contracts using gix and Git subprocesses. `gitcomet-state` depends on core and receives its backend through the service traits. The GPUI host composes state, reusable UI components, and compiled-in extensions.
 
 Products launch through [`AppLaunch`](../crates/gitcomet-app/src/lib.rs) or [`UiLaunch`](../crates/gitcomet-ui-gpui/src/app/launch.rs). Extensions use [`gitcomet-extension-api`](../crates/gitcomet-extension-api/src/lib.rs), including weak window and repository handles; its contract does not depend on the UI host. The [example product](../crates/gitcomet-extension-example-app) exercises these public interfaces in its own build context.
 

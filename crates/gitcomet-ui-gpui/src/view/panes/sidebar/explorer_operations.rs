@@ -347,9 +347,9 @@ impl SidebarPaneView {
                         cx,
                         sources,
                         if action == ExplorerAction::Cut {
-                            TransferIntent::Move
+                            gpui::FileTransferOperation::Move
                         } else {
-                            TransferIntent::Copy
+                            gpui::FileTransferOperation::Copy
                         },
                     );
                 }
@@ -361,13 +361,13 @@ impl SidebarPaneView {
                     return;
                 };
                 if cfg!(target_os = "macos") && window.modifiers().alt {
-                    payload.intent = TransferIntent::Move;
+                    payload.intent = gpui::FileTransferOperation::Move;
                 }
                 ownership = Some(payload.ownership);
                 Operation::Transfer {
                     sources: payload.paths,
                     destination,
-                    intent: payload.intent,
+                    intent: crate::view::file_operations::transfer_intent(payload.intent),
                 }
             }
             ExplorerAction::NewFile | ExplorerAction::NewFolder | ExplorerAction::Rename => {
@@ -986,7 +986,7 @@ impl SidebarPaneView {
             return paths.clone();
         }
         let paths = crate::clipboard::read_files(cx)
-            .filter(|payload| payload.intent == TransferIntent::Move)
+            .filter(|payload| payload.intent == gpui::FileTransferOperation::Move)
             .map(|payload| Rc::from(payload.paths));
         *self.explorer_cut_cache.borrow_mut() = Some((revision, paths.clone()));
         paths

@@ -562,3 +562,23 @@ check still reports a refresh caused by an earlier edit.
 The monitor stays inside `gitcomet-state` for now. The remaining time is in
 tests that wait for throttled recovery or churn for fixed periods by design, and
 moving the module into its own crate would not change test time.
+
+### 1.1 UI kit without core
+
+The kit depends on the new `gitcomet-base` instead of `gitcomet-core`, and a
+boundary rule now forbids core in the kit's graph. Product identity, per-user
+directories, platform detection, file utilities, operation traces, work
+counters and the environment snapshot moved from core to base unchanged; core
+re-exports them, so `gitcomet_core::identity` and the other paths keep working.
+This replaces the plan's runtime hooks (`set_display_name`, `set_recorder`): no
+installation step can be forgotten, and counters, traces and the operation id
+sequence stay single process-wide instances.
+
+Three domain types left the kit's API. The file clipboard takes gpui's
+`FileTransferOperation` and a caller-supplied identity function, and draws
+ownership ids from the shared operation id sequence. `MinimapColumn` paints any
+band type with a caller-supplied color; the merge colors moved to the host's
+resolver view. The quick search bar's toggles are the kit's `SearchToggles`,
+which the host converts to the search engine's options. All 31 moved base tests
+pass (three are Windows-only); kit-facing UI tests and the downstream example
+pass. The UI crate gained 118 production lines that moved out of the kit.

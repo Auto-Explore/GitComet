@@ -2486,10 +2486,7 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
     cx.update(|_, app| {
         view.update(app, |_, cx| {
             let files = crate::clipboard::read_files(cx).unwrap();
-            assert_eq!(
-                files.intent,
-                gitcomet_core::filesystem::TransferIntent::Move
-            );
+            assert_eq!(files.intent, gpui::FileTransferOperation::Move);
             assert_eq!(files.paths.len(), 3);
         })
     });
@@ -2498,7 +2495,7 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
         view.update(app, |_, cx| {
             assert_eq!(
                 crate::clipboard::read_files(cx).unwrap().intent,
-                gitcomet_core::filesystem::TransferIntent::Copy
+                gpui::FileTransferOperation::Copy
             )
         })
     });
@@ -2600,10 +2597,7 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
             view.update(app, |_, cx| {
                 let files =
                     crate::clipboard::read_files(cx).expect("the cut reached the clipboard");
-                assert_eq!(
-                    files.intent,
-                    gitcomet_core::filesystem::TransferIntent::Move
-                );
+                assert_eq!(files.intent, gpui::FileTransferOperation::Move);
                 assert_eq!(files.paths, vec![workdir.join("a.txt")]);
             })
         });

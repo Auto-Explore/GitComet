@@ -2395,6 +2395,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-base"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+]
+
+[[package]]
 name = "gitcomet-core"
 version = "0.3.0"
 dependencies = [
@@ -2403,6 +2413,7 @@ dependencies = [
  "faster-hex 1.0.0",
  "filetime",
  "fnv",
+ "gitcomet-base",
  "gitcomet-core",
  "gitcomet-filesystem-native",
  "gix-quote",
@@ -2699,7 +2710,7 @@ name = "gitcomet-ui-kit"
 version = "0.3.0"
 dependencies = [
  "fontdb 0.24.0",
- "gitcomet-core",
+ "gitcomet-base",
  "gitcomet-fonts",
  "gitcomet-win32-window-utils",
  "gpui-ce",

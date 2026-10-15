@@ -76,7 +76,7 @@ pub use picker_prompt::{
     picker_prompt_layout_ordered, picker_row, remove_row_button, row_height as picker_row_height,
     selected_hint_pill,
 };
-pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus};
+pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus, SearchToggles};
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
 };

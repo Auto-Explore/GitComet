@@ -286,22 +286,26 @@ impl SidebarPaneView {
         )
         .sidebar()
         .input(input)
-        .options(options, move |this: &mut Self, options, _, cx| {
-            if files {
-                this.file_search_options = options;
-                this.file_browser_scroll
-                    .scroll_to_item(0, gpui::ScrollStrategy::Top);
-            } else {
-                this.branch_search_options = options;
-                this.sticky_context = None;
-                this.pending_sidebar_navigation = None;
-                this.sidebar_scroll_animation = None;
-                this.branches_scroll
-                    .scroll_to_item(0, gpui::ScrollStrategy::Top);
-                this.sync_popover_branch_filter(cx);
-            }
-            cx.notify();
-        })
+        .options(
+            components::search_toggles(options),
+            move |this: &mut Self, toggles, _, cx| {
+                let options = components::search_options(toggles);
+                if files {
+                    this.file_search_options = options;
+                    this.file_browser_scroll
+                        .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                } else {
+                    this.branch_search_options = options;
+                    this.sticky_context = None;
+                    this.pending_sidebar_navigation = None;
+                    this.sidebar_scroll_animation = None;
+                    this.branches_scroll
+                        .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                    this.sync_popover_branch_filter(cx);
+                }
+                cx.notify();
+            },
+        )
         .on_clear(move |this, _, cx| this.clear_sidebar_search(files, cx))
         .render(theme, scale, cx);
         div()

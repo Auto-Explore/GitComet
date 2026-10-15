@@ -18,11 +18,13 @@ APPLICATION = ("gitcomet", "gitcomet-app")
 
 RULES = (
     ("gitcomet-diagrams", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Shared foundations: no workspace crate below or beside them.
+    ("gitcomet-base", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     # Measurement records and their report: serde only.
     ("gitcomet-perf", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     ("gitcomet-core", (), ("gitcomet-state", *GPUI, *UI_HOST, *APPLICATION)),
     ("gitcomet-state", (), (*GPUI, "gitcomet-ui-kit", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
-    ("gitcomet-ui-kit", (), ("gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    ("gitcomet-ui-kit", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-extension-api", (), (*UI_HOST, *APPLICATION)),
     # A downstream product library reaches the host only through the API.
     ("gitcomet-extension-example", (), (*UI_HOST, *APPLICATION)),

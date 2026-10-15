@@ -1646,9 +1646,12 @@ impl DiffRenderer {
                     .render(theme),
                 )
                 .newline(|this, window, cx| this.insert_diff_search_line_break(window, cx))
-                .options(self.diff_search_options, |this, next, window, cx| {
-                    this.set_diff_search_options(next, window, cx);
-                })
+                .options(
+                    components::search_toggles(self.diff_search_options),
+                    |this, next, window, cx| {
+                        this.set_diff_search_options(components::search_options(next), window, cx);
+                    },
+                )
                 .navigation(
                     !self.diff_search_matches.is_empty(),
                     |this, window, cx| {

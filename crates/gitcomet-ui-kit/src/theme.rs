@@ -1526,7 +1526,7 @@ fn house_theme_label(key: &str, label: String) -> String {
     };
     format!(
         "{} {appearance}",
-        gitcomet_core::identity::current().display_name()
+        gitcomet_base::identity::current().display_name()
     )
 }
 

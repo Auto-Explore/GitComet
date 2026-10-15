@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/gitcomet",
   "crates/gitcomet-app",
+  "crates/gitcomet-base",
   "crates/gitcomet-core",
   "crates/gitcomet-diagrams",
   "crates/gitcomet-fonts",
@@ -65,6 +66,7 @@ exclude = [
 default-members = [
   "crates/gitcomet",
   "crates/gitcomet-app",
+  "crates/gitcomet-base",
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-perf",
@@ -88,6 +90,7 @@ block = { path = "vendor/block" }
 [workspace.dependencies]
 # Internal crates
 gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
+gitcomet-base = { path = "crates/gitcomet-base" }
 gitcomet-core = { path = "crates/gitcomet-core" }
 gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
 gitcomet-fonts = { path = "crates/gitcomet-fonts" }

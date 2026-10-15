@@ -26,7 +26,7 @@ benchmarks = []
 gitcomet-fonts.workspace = true
 gpui_parley = { workspace = true, optional = true }
 fontdb = { workspace = true }
-gitcomet-core = { workspace = true }
+gitcomet-base = { workspace = true }
 # `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
 gpui = { workspace = true, features = ["profiler"] }
 lru = { workspace = true }

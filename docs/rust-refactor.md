@@ -360,3 +360,15 @@ above: the layering direction is preserved while crates may be added and
 move with the code they test, proven by `inventory.py` parity modulo the
 documented module-prefix mapping. `scripts/ci/ratchets.py` records the structure
 counts the round drives and fails when one regresses.
+
+### Round 2 migration notes
+
+| Previous use | Replacement |
+|---|---|
+| `gitcomet-ui-kit` re-exporting core types through its API | The kit depends on `gitcomet-base`; core paths such as `gitcomet_core::identity` still resolve through re-exports. |
+| `clipboard::FilePayload::intent: TransferIntent` | `gpui::FileTransferOperation`; convert at the filesystem boundary. |
+| `clipboard::write_files(cx, paths, intent)` | Same call with a `gpui::FileTransferOperation`; ownership ids come from `gitcomet_base::next_operation_id()`. |
+| `PasteReceipt::from_drop(paths, transfer, intent)`, `capture_paste(cx, paths, intent)` | Add an `identity: fn(&Path) -> PathBuf` spelling sources as completions report them. |
+| `MinimapColumn::new(id, bands)` with core's `MinimapRowKind` | `MinimapColumn::new(id, bands, color)` for any `Copy + PartialEq` band type and a `MinimapBandColor`. |
+| `QuickSearchBar::options(TextSearchOptions, ..)` | `QuickSearchBar::options(SearchToggles, ..)`. |
+| `gitcomet_core::filesystem::OperationId::allocate()` sequence | Unchanged values, now drawn from `gitcomet_base::next_operation_id()`. |

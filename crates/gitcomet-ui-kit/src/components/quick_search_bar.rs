@@ -11,23 +11,30 @@ use crate::icons::svg_icon;
 use crate::theme::{AppTheme, with_alpha};
 use crate::tooltip::GitCometTooltipExt as _;
 use crate::ui_scale::UiScale;
-use gitcomet_core::text_search::TextSearchOptions;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, Div, SharedString, Window, div, px};
 use std::rc::Rc;
+
+/// The bar's match case, whole word and regex toggles.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct SearchToggles {
+    pub match_case: bool,
+    pub whole_word: bool,
+    pub regex: bool,
+}
 
 pub const QUICK_SEARCH_PREV_MATCH_TOOLTIP: &str = "Previous match (F2)";
 pub const QUICK_SEARCH_NEXT_MATCH_TOOLTIP: &str = "Next match (F3)";
 
 type BarCallback<V> = Rc<dyn Fn(&mut V, &mut Window, &mut Context<V>)>;
-type OptionsCallback<V> = Rc<dyn Fn(&mut V, TextSearchOptions, &mut Window, &mut Context<V>)>;
+type OptionsCallback<V> = Rc<dyn Fn(&mut V, SearchToggles, &mut Window, &mut Context<V>)>;
 /// Id suffix, label, tooltip, whether it is on, and how a click flips it.
 type OptionToggle = (
     &'static str,
     &'static str,
     &'static str,
     bool,
-    fn(&mut TextSearchOptions),
+    fn(&mut SearchToggles),
 );
 
 /// What the bar's match label reports.
@@ -95,7 +102,7 @@ pub struct QuickSearchBar<V: 'static> {
     id_prefix: SharedString,
     input: Vec<AnyElement>,
     status: QuickSearchStatus,
-    options: Option<(TextSearchOptions, OptionsCallback<V>)>,
+    options: Option<(SearchToggles, OptionsCallback<V>)>,
     on_newline: Option<BarCallback<V>>,
     navigation: Option<Navigation<V>>,
     on_close: Option<BarCallback<V>>,
@@ -145,8 +152,8 @@ impl<V: 'static> QuickSearchBar<V> {
     /// options with that toggle flipped to `on_toggle`.
     pub fn options(
         mut self,
-        options: TextSearchOptions,
-        on_toggle: impl Fn(&mut V, TextSearchOptions, &mut Window, &mut Context<V>) + 'static,
+        options: SearchToggles,
+        on_toggle: impl Fn(&mut V, SearchToggles, &mut Window, &mut Context<V>) + 'static,
     ) -> Self {
         self.options = Some((options, Rc::new(on_toggle)));
         self

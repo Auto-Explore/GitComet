@@ -55,7 +55,7 @@ pub mod window_focus;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapColumn};
+pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapBandColor, MinimapColumn};
 pub use scrollbar::{
     SCROLLBAR_GUTTER_PX, Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker,
     ScrollbarMarkerKind,

@@ -904,9 +904,12 @@ impl HistoryView {
 
         let panel = components::QuickSearchBar::<Self>::new("history_find", status)
             .input(input)
-            .options(options, |this, next, window, cx| {
-                this.set_history_find_options(next, window, cx);
-            })
+            .options(
+                components::search_toggles(options),
+                |this, next, window, cx| {
+                    this.set_history_find_options(components::search_options(next), window, cx);
+                },
+            )
             .navigation(can_step, step(false), step(true))
             .on_close(|this, window, cx| this.close_history_find(window, cx))
             .render(theme, ui_scale, cx)

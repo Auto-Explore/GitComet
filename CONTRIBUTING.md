@@ -38,7 +38,8 @@ Questions about contribution permissions or signing records: info@gitcomet.dev. 
 See [Architecture](docs/architecture.md) for dependency boundaries, state flow,
 repository lifetimes, and document ownership.
 
-- `crates/gitcomet-core`: domain types, Git service contracts, product identity (`identity`), per-user directories (`platform::dirs`), merge algorithm, conflict session, text utils.
+- `crates/gitcomet-base`: product identity (`identity`), per-user directories (`platform::dirs`), platform detection, file utilities, operation traces and work counters. No Git domain types; core re-exports these modules at their `gitcomet_core::` paths.
+- `crates/gitcomet-core`: domain types, Git service contracts, merge algorithm, conflict session, text utils.
 - `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
 - `crates/gitcomet-fs-watch`: native macOS filesystem watcher support used by the state store, plus Windows test support.
@@ -46,7 +47,7 @@ repository lifetimes, and document ownership.
 - `crates/gitcomet-fonts`: bundled font assets shared by diagram rendering and the UI kit.
 - `crates/gitcomet-tree-sitter-alloc`: installs the allocator hooks used by tree-sitter.
 - `crates/gitcomet-perf`: performance measurement records (sidecars) written by benchmarks and probes, and the `perf_budget_report` binary that checks them against budgets.
-- `crates/gitcomet-ui-kit`: GPUI foundations reusable without the app: runtime policy (`ui_runtime`, installed live by the app at launch, deterministic otherwise), appearance, UI scale, themes, fonts, interaction primitives, text inputs, tooltips, icons, and components (buttons, pickers, menus, settings rows, navigation tabs, interstitials). No dependency on state, the application, or the UI host.
+- `crates/gitcomet-ui-kit`: GPUI foundations reusable without the app: runtime policy (`ui_runtime`, installed live by the app at launch, deterministic otherwise), appearance, UI scale, themes, fonts, interaction primitives, text inputs, tooltips, icons, and components (buttons, pickers, menus, settings rows, navigation tabs, interstitials). Builds on `gitcomet-base`, with no dependency on core, state, the application, or the UI host.
 - `crates/gitcomet-extension-api`: the contract for compiled-in extensions: contributions (repository views, status items, settings pages, commands, key bindings, menu entries, assets, entry gates, close guards), weak window and repository handles, and per-extension session/workspace storage. Depends on core, state, and the UI kit, never on the UI host.
 - `crates/gitcomet-ui-gpui`: the GitComet window: views, panes, panels (focused diff/merge windows, conflict resolver, word diff); `UiLaunch` opens the browser window and hosts extensions (`view/extension_host.rs`). With none registered it installs nothing.
 - `crates/gitcomet-app`: process launch (`AppLaunch`): identity install, crash reporting, CLI (clap), browser-instance broker, difftool/mergetool/setup/uninstall modes. GUI dependencies are optional (`ui-gpui` feature).
