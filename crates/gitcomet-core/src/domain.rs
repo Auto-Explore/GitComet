@@ -320,8 +320,10 @@ pub struct CommitFileChange {
     pub old_mode: Option<FileMode>,
     pub new_mode: Option<FileMode>,
     /// The edit as text, for ordering files changed the same way together;
-    /// `None` under the same conditions as `additions`, or when nothing in
-    /// the file's text changed.
+    /// `None` under the same conditions as `additions`, when nothing in the
+    /// file's text changed, or against the working tree when the counts come
+    /// from git but the file was not read (past the file cap, or left unread
+    /// for the reasons [`LineStats`] lists).
     pub edit: Option<crate::edit_signature::EditSignature>,
 }
 
