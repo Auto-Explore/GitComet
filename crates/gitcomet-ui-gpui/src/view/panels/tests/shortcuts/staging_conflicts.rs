@@ -983,3 +983,59 @@ fn edit_mode_hides_stage_and_unstage(cx: &mut gpui::TestAppContext) {
         }
     }
 }
+
+/// A file opened read-only, as from the file browser, is not a diff: no Stage
+/// on the bar, and neither Space nor Ctrl+S stages it.
+#[gpui::test]
+fn a_read_only_file_view_offers_no_staging(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(70570);
+    let commit_id = CommitId("abcdef001122338e".into());
+    let directory = tempfile::tempdir().unwrap();
+    let first = std::path::PathBuf::from("first.rs");
+    let second = std::path::PathBuf::from("second.rs");
+    for path in [&first, &second] {
+        std::fs::write(directory.path().join(path), "contents\n").unwrap();
+    }
+    let repo = |content_preview| {
+        let mut repo = simple_worktree_repo(
+            repo_id,
+            directory.path(),
+            &commit_id,
+            &[first.clone(), second.clone()],
+            &first,
+        );
+        repo.diff_state.content_preview = content_preview;
+        repo
+    };
+
+    // The same file shown as a diff offers Stage.
+    apply_state(cx, &view, app_state_with_active_repo(repo(false)));
+    draw_and_drain_test_window(cx);
+    assert_eq!(diff_bar_stage_label(cx, &view).as_deref(), Some("Stage"));
+
+    apply_state(cx, &view, app_state_with_active_repo(repo(true)));
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_bar_stage").is_none(),
+        "the read-only view has nothing to stage"
+    );
+
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    for keys in ["space", "ctrl-s"] {
+        cx.simulate_keystrokes(keys);
+        draw_and_drain_test_window(cx);
+        crate::view::test_support::drain_store_worker(&view, cx);
+        sync_store_snapshot(cx, &view);
+        // Staging would have advanced to the next file.
+        assert_eq!(
+            active_worktree_diff_target_path(cx, &view),
+            Some(first.clone()),
+            "{keys} must not stage the read-only file"
+        );
+    }
+}

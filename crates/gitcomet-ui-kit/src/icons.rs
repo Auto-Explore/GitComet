@@ -3,11 +3,11 @@ use gpui::{Animation, AnimationExt, ElementId, IntoElement, Pixels, Styled, Tran
 pub const STASH_ICON_PATH: &str = "icons/stash.svg";
 pub const GIT_MERGE_ICON_PATH: &str = "icons/git_merge.svg";
 /// Graph-node variant of [`STASH_ICON_PATH`]: same artwork with a heavier stroke
-/// so it survives being knocked out of a 16px node. The retained-mode icon keeps
+/// so it stays legible inside a 16px node. The retained-mode icon keeps
 /// its own weight for the sidebar and action bar.
 pub const GIT_STASH_NODE_ICON_PATH: &str = "icons/git_stash.svg";
 /// Marks the "Uncommitted changes" nodes. Lucide `code` — two chevrons, which
-/// is about the most detail that survives being knocked out of a 16px node.
+/// stay legible inside a 16px node.
 /// Node-only, hence the heavier stroke than the retained-mode icons.
 pub const UNCOMMITTED_NODE_ICON_PATH: &str = "icons/code.svg";
 

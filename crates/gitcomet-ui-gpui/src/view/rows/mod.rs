@@ -1299,6 +1299,8 @@ mod history;
 pub(in crate::view) use history::history_row_height;
 mod history_canvas;
 pub(in crate::view) mod history_graph_paint;
+pub(in crate::view) mod history_node;
+mod history_shapes;
 mod markdown_document;
 mod markdown_flow_text;
 pub(in crate::view) mod sidebar;

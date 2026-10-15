@@ -296,6 +296,7 @@ mod columns;
 mod find;
 mod interaction;
 mod lane_attribution;
+mod navigation;
 mod refresh;
 mod reveal;
 mod row_tooltips;

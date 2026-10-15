@@ -632,11 +632,81 @@ impl HistoryShortShaVm {
 #[derive(Clone, Debug)]
 pub(super) struct HistoryBaseRowVm {
     pub(super) author: HistoryAuthorVm,
+    /// Only the interior of a known, uninterrupted same-author lane run collapses.
+    pub(super) author_run_interior: bool,
     pub(super) summary: HistoryTextVm,
     pub(super) when: HistoryWhenVm,
     pub(super) short_sha: HistoryShortShaVm,
     pub(super) is_head: bool,
     pub(super) is_stash: bool,
+}
+
+/// Same-lane links farther apart than this never join a run. An indexed window
+/// carries this many rows of context on each side, so its block-aligned bounds
+/// cannot decide a row differently from the full history.
+pub(in crate::view) const HISTORY_AUTHOR_RUN_MAX_LINK_ROWS: usize =
+    gitcomet_core::history_index::HISTORY_BLOCK_SIZE;
+
+pub(in crate::view) struct HistoryAuthorRunRow<'a> {
+    pub(in crate::view) commit: &'a Commit,
+    pub(in crate::view) graph: &'a history_graph::GraphRow,
+    pub(in crate::view) is_stash: bool,
+}
+
+/// Follow commit edges rather than adjacent list rows: other lanes can interleave.
+/// Missing/filtered/unloaded neighbours conservatively keep their initials.
+pub(in crate::view) fn history_author_run_interiors(
+    rows: &[HistoryAuthorRunRow<'_>],
+    row_of: impl Fn(&CommitId) -> Option<usize>,
+) -> Vec<bool> {
+    let ordinary = |row: &HistoryAuthorRunRow<'_>| {
+        !row.is_stash
+            && !row.graph.is_merge
+            && row.graph.joins_in.is_empty()
+            && row.graph.edges_out.is_empty()
+    };
+    let mut neighbours = vec![0u8; rows.len()];
+    for (ix, row) in rows.iter().enumerate() {
+        let commit = row.commit;
+        if !ordinary(row) || commit.author.trim().is_empty() || commit.parent_ids.len() != 1 {
+            continue;
+        }
+        let Some(parent_ix) = row_of(&commit.parent_ids[0]) else {
+            continue;
+        };
+        if parent_ix <= ix || parent_ix - ix > HISTORY_AUTHOR_RUN_MAX_LINK_ROWS {
+            continue;
+        }
+        let parent = &rows[parent_ix];
+        if ordinary(parent)
+            && row.graph.node_col == parent.graph.node_col
+            && row.graph.node_color_ix == parent.graph.node_color_ix
+            && commit.author == parent.commit.author
+        {
+            neighbours[ix] |= 1;
+            neighbours[parent_ix] |= 2;
+        }
+    }
+    neighbours.into_iter().map(|links| links == 3).collect()
+}
+
+/// Resolve run boundaries once with the cached page, never during paint.
+pub(in crate::view) fn mark_history_author_runs(base: &mut HistoryBaseCache, page: &LogPage) {
+    let rows = base
+        .visible_indices
+        .iter()
+        .enumerate()
+        .map(|(ix, commit_ix)| HistoryAuthorRunRow {
+            commit: &page.commits[commit_ix],
+            graph: &base.graph_rows[ix],
+            is_stash: base.row_vms[ix].is_stash,
+        })
+        .collect::<Vec<_>>();
+    let interiors =
+        history_author_run_interiors(&rows, |id| base.visible_ix_by_commit.get(id).copied());
+    for (row, interior) in base.row_vms.iter_mut().zip(interiors) {
+        row.author_run_interior = interior;
+    }
 }
 
 #[derive(Clone, Debug)]

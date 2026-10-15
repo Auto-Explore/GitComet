@@ -110,7 +110,6 @@ impl DiffRenderer {
         let annot_hover = this.blame_annot_hover;
         let stage_area = this.diff_stage_gutter_area();
         let stage_hover = this.diff_stage_gutter_hover;
-        let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
         let query_matcher = this.diff_search_query_matcher_shared();
@@ -121,6 +120,10 @@ impl DiffRenderer {
         } else {
             px(0.0)
         };
+        // The annotation column is painted before the text, so the scroll
+        // range has to include it.
+        let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary)
+            + annotation_width;
         let blame_ctx = this.blame_render_ctx();
 
         let pass = DiffRowsRenderPass {
@@ -180,12 +183,6 @@ impl DiffRenderer {
 
         let stage_area = this.diff_stage_gutter_area();
         let stage_hover = this.diff_stage_gutter_hover;
-        let min_width =
-            this.diff_horizontal_layout_min_width(if matches!(column, PatchSplitColumn::Right) {
-                DiffHorizontalScrollColumn::SplitRight
-            } else {
-                DiffHorizontalScrollColumn::Primary
-            });
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
         let query_matcher = this.diff_search_query_matcher_shared();
@@ -209,6 +206,12 @@ impl DiffRenderer {
         } else {
             px(0.0)
         };
+        // As in inline: the scroll range includes the annotation column.
+        let min_width = this.diff_horizontal_layout_min_width(if is_left {
+            DiffHorizontalScrollColumn::Primary
+        } else {
+            DiffHorizontalScrollColumn::SplitRight
+        }) + annotation_width;
         let region = if is_left {
             DiffTextRegion::SplitLeft
         } else {
