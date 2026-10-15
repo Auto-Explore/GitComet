@@ -104,15 +104,14 @@ def dependency_entries(target, metadata, units):
         names.add(package["name"])
         names.update(item["name"].replace("-", "_") for item in package["targets"])
     lib_names = names | {"lib" + name.replace("-", "_") for name in names}
-    for profile in ("ci-test", "ci-bench"):
-        for kind in ("build", ".fingerprint", "deps"):
-            directory = target / profile / kind
-            if not directory.is_dir():
-                continue
-            for path in sorted(directory.iterdir()):
-                match = UNIT_HASH.search(path.name)
-                if match and match[1] in units and path.name[:match.start()] in (lib_names if kind == "deps" else names):
-                    yield path, "target/" + str(path.relative_to(target)).replace(os.sep, "/")
+    for kind in ("build", ".fingerprint", "deps"):
+        directory = target / "ci-test" / kind
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            match = UNIT_HASH.search(path.name)
+            if match and match[1] in units and path.name[:match.start()] in (lib_names if kind == "deps" else names):
+                yield path, "target/" + str(path.relative_to(target)).replace(os.sep, "/")
 
 
 def cargo_metadata():
