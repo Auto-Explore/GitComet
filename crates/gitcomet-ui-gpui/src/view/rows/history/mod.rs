@@ -284,6 +284,7 @@ impl HistoryView {
                         selected_lane,
                         lane_branch_name,
                         base_row_vm.author.clone(),
+                        base_row_vm.author_run_interior,
                         base_row_vm.summary.clone(),
                         when,
                         short_sha,
@@ -513,6 +514,7 @@ fn history_table_row(
     // hovered. Inherited down the lane, so unlabelled commits have one too.
     lane_branch_name: Option<SharedString>,
     author: HistoryAuthorVm,
+    author_run_interior: bool,
     summary: HistoryTextVm,
     when: HistoryTextVm,
     short_sha: HistoryTextVm,
@@ -563,6 +565,7 @@ fn history_table_row(
         show_sha,
         show_graph_color_marker,
         is_stash_node,
+        selected,
         connect_from_top_col,
         graph_rows,
         graph_row_ix,
@@ -573,6 +576,7 @@ fn history_table_row(
         selected_lane,
         lane_branch_name,
         author,
+        author_run_interior,
         summary,
         when,
         commit.time,
@@ -586,7 +590,10 @@ fn history_table_row(
     let commit_id = commit.id.clone();
     let row_height = history_row_height(ui_scale);
     let mut row = div()
-        .id(ix)
+        .id((
+            gpui::ElementId::from(("history_commit", repo_id.0)),
+            SharedString::from(commit.id.0.clone()),
+        ))
         .debug_selector(move || format!("history_row_{ix}"))
         .relative()
         .h(row_height)
@@ -704,10 +711,17 @@ fn worktree_uncommitted_history_row(
     let row_style = controls::InteractionStyle::new(theme);
     let row_paint = InteractionPaint::new(row_style, row_state);
     let paint = row_paint.clone();
-    let graph = gpui::canvas(
+    let row_identity = (
+        gpui::ElementId::from(("history_worktree_uncommitted", repo_id.0)),
+        worktree_row_key(&summary.path),
+    );
+    let graph = super::canvas::keyed_canvas_with_id(
+        "history_worktree_node",
         |_, _, _| (),
-        move |bounds, _, window, cx| {
+        move |bounds, _, element_id, window, cx| {
             let row_background = paint.background(theme.colors.surface.canvas, window);
+            let selection =
+                super::history_node::selection_progress(element_id, selected, window, cx);
             super::history_graph_paint::paint_history_graph_band(
                 theme,
                 &band_lanes,
@@ -721,6 +735,7 @@ fn worktree_uncommitted_history_row(
                 },
                 show_graph_color_marker,
                 row_background,
+                selection,
                 bounds,
                 window,
                 cx,
@@ -812,7 +827,7 @@ fn worktree_uncommitted_history_row(
     // column non-shrinking so a long worktree label can only clip its summary,
     // never move this row's graph lane away from the commit rows below it.
     let row = div()
-        .id(("history_worktree_uncommitted", list_ix))
+        .id(row_identity)
         .when(find_dimmed, |row| row.opacity(HISTORY_FIND_DIMMED_OPACITY))
         .h(history_row_height(ui_scale))
         .flex()
@@ -990,9 +1005,10 @@ fn working_tree_summary_history_row(
     let row_style = controls::InteractionStyle::new(theme);
     let row_paint = InteractionPaint::new(row_style, row_state);
     let paint = row_paint.clone();
-    let circle = gpui::canvas(
+    let circle = super::canvas::keyed_canvas_with_id(
+        "history_uncommitted_node",
         |_, _, _| (),
-        move |bounds, _, window, cx| {
+        move |bounds, _, element_id, window, cx| {
             let node_background = paint.background(theme.colors.surface.canvas, window);
             let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
             if show_graph_color_marker {
@@ -1005,9 +1021,14 @@ fn working_tree_summary_history_row(
             }
 
             // Column 0 on the same grid as the commit rows below.
-            let grid = super::history_graph_paint::GraphGrid::new(window);
+            let grid = super::history_graph_paint::GraphGrid::new(
+                window,
+                ui_scale::UiScale::from_window(window).with_appearance(theme.metrics),
+            );
             let (_, center_y, bottom) = grid.row_ys(bounds);
             let center = gpui::point(grid.snap(bounds.left()) + grid.margin_x, center_y);
+            let selection =
+                super::history_node::selection_progress(element_id, selected, window, cx);
 
             // Connect the working tree node into the history graph below.
             super::history_graph_paint::paint_straight_connector(
@@ -1018,12 +1039,14 @@ fn working_tree_summary_history_row(
                 window,
             );
 
-            super::history_graph_paint::paint_ring_icon_node(
-                center.x,
-                center.y,
-                icons::UNCOMMITTED_NODE_ICON_PATH,
+            super::history_graph_paint::paint_uncommitted_node(
+                theme,
+                grid,
+                center,
                 node_color,
                 node_background,
+                bounds,
+                selection,
                 window,
                 cx,
             );
@@ -1142,3 +1165,16 @@ use worktree_preview::*;
 mod markdown_preview_search_tests;
 #[cfg(test)]
 mod tests;
+
+/// Exact path identity: lossy UTF-8 would merge distinct non-UTF-8 paths.
+fn worktree_row_key(path: &std::path::Path) -> SharedString {
+    match path.to_str() {
+        Some(path) => SharedString::from(path.to_owned()),
+        // A path never contains NUL, so these keys cannot meet a UTF-8 one.
+        None => format!(
+            "\0{}",
+            gitcomet_core::hex::encode(path.as_os_str().as_encoded_bytes())
+        )
+        .into(),
+    }
+}

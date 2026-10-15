@@ -157,6 +157,30 @@ fn continuing_winners(
     )
 }
 
+/// Shared with ref leaders and author hover regions, including the pinned edge
+/// position used when the graph column cannot display every lane separately.
+pub(super) fn graph_node_bounds(
+    row: &history_graph::GraphRow,
+    is_stash: bool,
+    initials_reveal: f32,
+    bounds: Bounds<Pixels>,
+    grid: GraphGrid,
+    scale: ui_scale::UiScale,
+) -> Bounds<Pixels> {
+    let diameter = grid.even(if is_stash || row.is_merge {
+        super::history_node::icon_diameter(scale)
+    } else {
+        super::history_node::author_diameter(scale, initials_reveal)
+    });
+    let x = grid.snap(bounds.left())
+        + grid.col_x(usize::from(row.node_col), grid.edge_x(bounds.size.width));
+    let (_, y, _) = grid.row_ys(bounds);
+    Bounds::new(
+        point(x - diameter * 0.5, y - diameter * 0.5),
+        size(diameter, diameter),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_history_graph(
     theme: AppTheme,
@@ -171,11 +195,15 @@ pub(super) fn paint_history_graph(
     // every other lane recedes along its whole run -- a property of the lane, not
     // of which rows happen to connect to the selection.
     selected_lane: Option<SelectedLane>,
-    // What the row is actually painted over, tints included. The icon nodes knock
-    // their glyphs out in it, and the list's untinted surface is the wrong answer
-    // on any row carrying a hover, selection or browse tint.
-    row_background: gpui::Rgba,
+    // What the row is actually painted over, tints included. Node fills composite
+    // their lane tint over it so they match hovered, selected and browsed rows.
+    row_visual: history_canvas::HistoryRowVisual,
+    author: &HistoryAuthorVm,
+    initials_reveal: f32,
+    selection: f32,
     bounds: Bounds<Pixels>,
+    grid: GraphGrid,
+    node_bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -186,12 +214,9 @@ pub(super) fn paint_history_graph(
     let lane = |color_ix| lane_wash_color(theme, color_ix, row_ix, selected_lane);
 
     let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
-    let grid = GraphGrid::new(window);
     let stroke_width = grid.stroke_width;
     let col_gap = grid.col_gap;
     let margin_x = grid.margin_x;
-    let node_radius = scaled_px(3.4);
-    let node_corner_radius = scaled_px(2.0);
 
     let elbow_radius = grid.elbow_radius;
 
@@ -203,7 +228,8 @@ pub(super) fn paint_history_graph(
     let left = grid.snap(bounds.left());
 
     let node_x = x_for_col(usize::from(row.node_col));
-    let node_color = lane(row.node_color_ix);
+    let node_color = row_visual.lane;
+    let row_background = row_visual.background;
     // Beside a node on the edge line, the line matches the node's dot and
     // gradient; elsewhere on it the selected lane is painted on top.
     let segment_color = |x: Pixels, color_ix| {
@@ -263,14 +289,18 @@ pub(super) fn paint_history_graph(
         );
     }
 
-    // Incoming join edges into the node (used both for merge commits and fork points).
+    // Draw joins only when a lane actually reaches the node from above,
+    // including linked-worktree connectors. Ref leaders already mark branch
+    // tips, so the old horizontal fork stubs no longer need to be painted.
     for edge in coalesced(
-        row.joins_in.iter().copied(),
+        row.joins_in
+            .iter()
+            .copied()
+            .filter(|edge| has_incoming_vertical(usize::from(edge.from_col))),
         |edge| {
             (
                 x_key(x_for_col(usize::from(edge.from_col))),
                 x_key(x_for_col(usize::from(edge.to_col))),
-                has_incoming_vertical(usize::from(edge.from_col)),
             )
         },
         |_| false,
@@ -280,28 +310,17 @@ pub(super) fn paint_history_graph(
             continue;
         }
         let color = lane(edge.color_ix);
-        if has_incoming_vertical(from) {
-            paint_lane_to_node(
-                left,
-                x_for_col(from),
-                x_for_col(usize::from(edge.to_col)),
-                y_top,
-                y_center,
-                elbow_radius,
-                stroke_width,
-                color,
-                window,
-            );
-        } else {
-            // A fork whisker has nothing above it, so it stays a bare stub.
-            paint_straight_connector(
-                point(left + x_for_col(from), y_center),
-                point(left + x_for_col(usize::from(edge.to_col)), y_center),
-                stroke_width,
-                color,
-                window,
-            );
-        }
+        paint_lane_to_node(
+            left,
+            x_for_col(from),
+            x_for_col(usize::from(edge.to_col)),
+            y_top,
+            y_center,
+            elbow_radius,
+            stroke_width,
+            color,
+            window,
+        );
     }
 
     // Continuations from current row to next row.
@@ -366,17 +385,25 @@ pub(super) fn paint_history_graph(
     // Within one paint layer gpui draws all quads before any path, so the
     // node (a quad) would sit under the lane lines no matter the call
     // order. A nested layer gives the node a strictly higher draw order;
-    // its bounds are generous enough for the 16px icon nodes.
-    let node_layer_half = scaled_px(10.0);
+    // its bounds include the author disc and its soft selection glow.
+    let node_layer_half = node_bounds.size.width * 0.5 + scaled_px(8.0);
     let node_layer_bounds = Bounds::new(
         point(left + node_x - node_layer_half, y_center - node_layer_half),
         size(node_layer_half * 2.0, node_layer_half * 2.0),
     );
     window.paint_layer(node_layer_bounds, |window| {
+        super::history_node::paint_selection_glow(
+            theme,
+            node_bounds,
+            bounds,
+            node_color,
+            selection,
+            window,
+        );
         if is_stash_node {
             paint_icon_node(
-                left + node_x,
-                y_center,
+                ui_scale::UiScale::from_window(window).with_appearance(theme.metrics),
+                node_bounds,
                 icons::GIT_STASH_NODE_ICON_PATH,
                 row_background,
                 node_color,
@@ -385,8 +412,8 @@ pub(super) fn paint_history_graph(
             );
         } else if row.is_merge {
             paint_icon_node(
-                left + node_x,
-                y_center,
+                ui_scale::UiScale::from_window(window).with_appearance(theme.metrics),
+                node_bounds,
                 icons::GIT_MERGE_ICON_PATH,
                 row_background,
                 node_color,
@@ -394,12 +421,12 @@ pub(super) fn paint_history_graph(
                 cx,
             );
         } else {
-            paint_commit_node(
-                left + node_x,
-                y_center,
-                node_radius,
-                node_corner_radius,
-                node_color,
+            history_canvas::paint_history_author_node(
+                theme,
+                node_bounds,
+                row_visual,
+                author,
+                initials_reveal,
                 window,
             );
         }
@@ -793,6 +820,7 @@ pub(super) fn paint_history_graph_band(
     // opaque, or the lane through its column shows inside it -- matches. The
     // caller resolves the row state and hover with the common interaction policy.
     row_background: gpui::Rgba,
+    selection: f32,
     bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -802,7 +830,10 @@ pub(super) fn paint_history_graph_band(
     }
 
     let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
-    let grid = GraphGrid::new(window);
+    let grid = GraphGrid::new(
+        window,
+        ui_scale::UiScale::from_window(window).with_appearance(theme.metrics),
+    );
     let stroke_width = grid.stroke_width;
     let col_gap = grid.col_gap;
     let margin_x = grid.margin_x;
@@ -889,25 +920,17 @@ pub(super) fn paint_history_graph_band(
         );
     }
 
-    // Same nested-layer trick the commit nodes use: quads otherwise draw under
-    // every path in the layer regardless of call order.
-    let node_x = left + node_x_offset;
-    let node_layer_half = scaled_px(10.0);
-    let node_layer_bounds = Bounds::new(
-        point(node_x - node_layer_half, y_center - node_layer_half),
-        size(node_layer_half * 2.0, node_layer_half * 2.0),
+    paint_uncommitted_node(
+        theme,
+        grid,
+        point(left + node_x_offset, y_center),
+        node.color,
+        row_background,
+        bounds,
+        selection,
+        window,
+        cx,
     );
-    window.paint_layer(node_layer_bounds, |window| {
-        paint_ring_icon_node(
-            node_x,
-            y_center,
-            icons::UNCOMMITTED_NODE_ICON_PATH,
-            node.color,
-            row_background,
-            window,
-            cx,
-        );
-    });
 }
 
 /// Where column `col` is drawn, in pixels from the graph cell's left edge.
@@ -942,32 +965,29 @@ pub(super) struct GraphGrid {
 }
 
 impl GraphGrid {
-    pub(super) fn new(window: &Window) -> Self {
-        Self::for_scale(
-            window.scale_factor(),
-            ui_scale::UiScale::from_window(window),
-        )
+    pub(super) fn new(window: &Window, scale: ui_scale::UiScale) -> Self {
+        Self::for_scale(window.scale_factor(), scale)
     }
 
     fn for_scale(scale_factor: f32, scale: ui_scale::UiScale) -> Self {
-        let snap = |design_px: f32| snap_to_device(scale.px(design_px), scale_factor);
-        // An even device width keeps both edges on pixels around a whole-pixel x.
-        let stroke = (scale.scale_f32(LANE_STROKE_PX) * scale_factor / 2.0)
-            .round()
-            .max(1.0)
-            * 2.0;
+        let growth = super::history_node::graph_font_growth(scale);
+        let snap = |value: Pixels| snap_to_device(value, scale_factor);
         Self {
             scale_factor,
-            stroke_width: px(stroke / scale_factor),
-            margin_x: snap(HISTORY_GRAPH_MARGIN_X_PX),
-            col_gap: snap(HISTORY_GRAPH_COL_GAP_PX),
-            margin_right: snap(HISTORY_GRAPH_MARGIN_RIGHT_PX),
+            stroke_width: even_device_px(scale.px(LANE_STROKE_PX), scale_factor),
+            margin_x: snap(scale.px(HISTORY_GRAPH_MARGIN_X_PX) + growth * 0.5),
+            col_gap: snap(scale.px(HISTORY_GRAPH_COL_GAP_PX) + growth),
+            margin_right: snap(scale.px(HISTORY_GRAPH_MARGIN_RIGHT_PX) + growth * 0.5),
             elbow_radius: scale.px(HISTORY_GRAPH_ELBOW_RADIUS_PX),
         }
     }
 
     pub(super) fn snap(self, value: Pixels) -> Pixels {
         snap_to_device(value, self.scale_factor)
+    }
+
+    fn even(self, value: Pixels) -> Pixels {
+        even_device_px(value, self.scale_factor)
     }
 
     pub(super) fn edge_x(self, width: Pixels) -> Pixels {
@@ -984,6 +1004,12 @@ impl GraphGrid {
         let bottom = self.snap(bounds.bottom());
         (top, self.snap(top + (bottom - top) / 2.0), bottom)
     }
+}
+
+/// An even device width keeps both edges on pixels around a whole-pixel centre,
+/// as lane centre lines are.
+fn even_device_px(value: Pixels, scale_factor: f32) -> Pixels {
+    super::history_shapes::device_px(value * 0.5, scale_factor) * 2.0
 }
 
 /// Rounds to a device pixel the way gpui snaps quads (halves toward zero).
@@ -1186,92 +1212,78 @@ fn paint_lane_to_node(
     }
 }
 
-fn paint_commit_node(
-    x_center: Pixels,
-    y_center: Pixels,
-    node_radius: Pixels,
-    corner_radius: Pixels,
-    node_color: gpui::Rgba,
-    window: &mut Window,
-) {
-    window.paint_quad(
-        fill(
-            gpui::Bounds::new(
-                point(x_center - node_radius, y_center - node_radius),
-                size(node_radius * 2.0, node_radius * 2.0),
-            ),
-            node_color,
-        )
-        .corner_radii(node_radius.min(corner_radius)),
-    );
-}
-
-/// Nodes that carry a glyph — merges and stashes — read as a solid disc in the
-/// lane colour with the icon knocked out of it in the background colour. Sized
-/// to the full lane pitch, so in dense multi-lane regions the disc touches its
-/// neighbours.
+/// Merge, stash and uncommitted nodes share the author nodes' lane-coloured
+/// outline and faint fill, with the glyph also in the lane colour. Composite
+/// over the actual row background so the opaque middle hides lane strokes.
 pub(super) fn paint_icon_node(
-    x_center: Pixels,
-    y_center: Pixels,
+    scale: ui_scale::UiScale,
+    disc: Bounds<Pixels>,
     icon_path: &'static str,
-    glyph_color: gpui::Rgba,
-    disc_color: gpui::Rgba,
+    row_background: gpui::Rgba,
+    lane_color: gpui::Rgba,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
-    let diameter = scaled_px(16.0);
-    let glyph = scaled_px(10.5);
+    let glyph = scale.ui_text(10.5);
 
-    let disc = Bounds::new(
-        point(x_center - diameter * 0.5, y_center - diameter * 0.5),
-        size(diameter, diameter),
+    let background = crate::theme::composite_over(row_background, with_alpha(lane_color, 0.12));
+    super::history_shapes::paint_rounded_rect(
+        disc,
+        disc.size.width * 0.5,
+        background,
+        super::history_node::ring_width(scale, window.scale_factor()),
+        lane_color,
+        window,
     );
-
-    window.paint_quad(fill(disc, disc_color).corner_radii(diameter * 0.5));
 
     // gpui orders primitives within a layer by kind, and the sprite `paint_svg`
     // emits sorts after quads, so the glyph lands on top of the disc without
     // needing a layer of its own.
-    super::diff_canvas::paint_centered_svg_icon(icon_path, disc, glyph, glyph_color, window, cx);
+    super::diff_canvas::paint_centered_svg_icon(icon_path, disc, glyph, lane_color, window, cx);
 }
 
-/// The inverse of [`paint_icon_node`]: an outlined circle with the glyph drawn
-/// solid, over an opaque middle.
-///
-/// The middle is filled rather than left transparent so the lane running through
-/// the node's column does not show through the hole. `background` must therefore
-/// be what the row is actually painted over, tints included -- the list's own
-/// surface is only right on an untinted row.
-pub(super) fn paint_ring_icon_node(
-    x_center: Pixels,
-    y_center: Pixels,
-    icon_path: &'static str,
+/// The uncommitted-changes node uses the shared outlined icon and its selection
+/// halo. `background` must be what the row is painted over, tints included.
+/// A nested layer keeps both above the lane strokes; quads otherwise draw under
+/// every path in the layer regardless of call order.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn paint_uncommitted_node(
+    theme: AppTheme,
+    grid: GraphGrid,
+    center: Point<Pixels>,
     ring_color: gpui::Rgba,
     background: gpui::Rgba,
+    cell_bounds: Bounds<Pixels>,
+    selection: f32,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
-    let diameter = scaled_px(16.0);
-    let ring_width = scaled_px(1.5);
-    let glyph = scaled_px(10.5);
-
+    let scale = ui_scale::UiScale::from_window(window).with_appearance(theme.metrics);
+    let scaled_px = ui_scale::scaler(scale);
+    let diameter = grid.even(super::history_node::icon_diameter(scale));
     let disc = Bounds::new(
-        point(x_center - diameter * 0.5, y_center - diameter * 0.5),
+        point(center.x - diameter * 0.5, center.y - diameter * 0.5),
         size(diameter, diameter),
     );
-
-    window.paint_quad(gpui::quad(
-        disc,
-        diameter * 0.5,
-        background,
-        gpui::Edges::all(ring_width),
-        ring_color,
-        gpui::BorderStyle::Solid,
-    ));
-
-    super::diff_canvas::paint_centered_svg_icon(icon_path, disc, glyph, ring_color, window, cx);
+    window.paint_layer(disc.dilate(scaled_px(8.0)), |window| {
+        super::history_node::paint_selection_glow(
+            theme,
+            disc,
+            cell_bounds,
+            ring_color,
+            selection,
+            window,
+        );
+        paint_icon_node(
+            scale,
+            disc,
+            icons::UNCOMMITTED_NODE_ICON_PATH,
+            background,
+            ring_color,
+            window,
+            cx,
+        );
+    });
 }
 
 #[cfg(test)]
@@ -1812,7 +1824,7 @@ mod band_tests {
 mod tests {
     use super::*;
 
-    /// Design geometry the radius has to sit inside: 16px column pitch, 14px
+    /// Design geometry the radius has to sit inside: the column pitch and a 14px
     /// half-row.
     const COL_GAP: f32 = HISTORY_GRAPH_COL_GAP_PX;
     const HALF_ROW: f32 = 14.0;
@@ -1837,6 +1849,21 @@ mod tests {
         )
     }
 
+    /// Widening the lane pitch for author discs must not cut how many lanes the
+    /// widest column can separate; 14 was the capacity at the 16px pitch.
+    #[test]
+    fn the_widest_graph_column_separates_fourteen_lanes() {
+        let width = px(crate::view::HISTORY_COL_GRAPH_MAX_PX);
+        // Lanes past the edge pin to it, so only these keep the full pitch.
+        let full_pitch = (0..64)
+            .take_while(|&col| {
+                px(HISTORY_GRAPH_MARGIN_X_PX + HISTORY_GRAPH_COL_GAP_PX * col as f32)
+                    <= edge_x(width)
+            })
+            .count();
+        assert_eq!(full_pitch, 14);
+    }
+
     /// In a column narrower than the graph, the node's natural column is outside
     /// a cell that clips rather than overflows, so it would not be drawn at all.
     /// It has to come back inside.
@@ -1844,7 +1871,7 @@ mod tests {
     fn a_pushed_out_node_stays_inside_a_column_too_narrow_for_it() {
         let clamped_width = px(crate::view::HISTORY_COL_GRAPH_MAX_PX);
 
-        // 20 lanes want x = 332 in a column the clamp holds at 240.
+        // 20 lanes want an x past the widest column the clamp allows.
         let offset = col_x(20, clamped_width);
         assert!(
             offset < clamped_width,
@@ -2302,14 +2329,43 @@ mod coalescing_regressions {
                                             },
                                             false,
                                             background,
+                                            0.0,
                                             bounds,
                                             window,
                                             app,
                                         );
                                     } else {
                                         paint_history_graph(
-                                            theme, &row, 10, None, false, selected, background,
-                                            bounds, window, app,
+                                            theme,
+                                            &row,
+                                            10,
+                                            None,
+                                            false,
+                                            selected,
+                                            history_canvas::HistoryRowVisual::new(
+                                                theme, &row, 10, selected, false, background,
+                                            ),
+                                            &HistoryAuthorVm::new("Ada Lovelace".into()),
+                                            1.0,
+                                            0.0,
+                                            bounds,
+                                            GraphGrid::new(
+                                                window,
+                                                ui_scale::UiScale::from_window(window),
+                                            ),
+                                            graph_node_bounds(
+                                                &row,
+                                                false,
+                                                1.0,
+                                                bounds,
+                                                GraphGrid::new(
+                                                    window,
+                                                    ui_scale::UiScale::from_window(window),
+                                                ),
+                                                ui_scale::UiScale::from_window(window),
+                                            ),
+                                            window,
+                                            app,
                                         );
                                     }
                                 },
@@ -2318,7 +2374,7 @@ mod coalescing_regressions {
                             .h(px(28.0))
                         },
                     );
-                    // Straight lanes are quads now; only elbows tessellate.
+                    // Straight lanes and the node are quads.
                     assert_eq!(
                         history_perf::count(Work::PaintPath),
                         0,
@@ -2585,6 +2641,229 @@ mod lane_coalescing_regressions {
                     col >= pin_col && selection == Some(lane.color_ix)
                 });
             assert_eq!(continuing.len(), pin_col + 1, "{selection:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod author_node_geometry_tests {
+    use super::*;
+    use std::rc::Rc;
+
+    /// Within a device pixel of the design size and even, so the node's edges
+    /// land on pixels around its lane's centre line.
+    fn assert_even_device_diameter(node: Bounds<Pixels>, design: Pixels, device_scale: f32) {
+        assert_eq!(node.size.width, node.size.height);
+        let half = f32::from(node.size.width) * device_scale / 2.0;
+        assert!((half - half.round()).abs() < 1e-3, "{half} half device px");
+        assert!(
+            (half * 2.0 - f32::from(design) * device_scale).abs() <= 1.0,
+            "{node:?} for {design:?} at {device_scale}x"
+        );
+    }
+
+    type GraphPaint = Rc<dyn Fn(&mut Window, &mut App)>;
+
+    struct GraphPaintView(GraphPaint);
+
+    impl gpui::Render for GraphPaintView {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let paint = self.0.clone();
+            gpui::canvas(|_, _, _| (), move |_, (), window, cx| paint(window, cx)).size_full()
+        }
+    }
+
+    /// Each node is one round quad of even device size, centred on its lane.
+    #[gpui::test]
+    fn history_nodes_paint_as_round_quads_centred_on_their_lane(cx: &mut gpui::TestAppContext) {
+        use crate::appearance::{Appearance, UiDensity};
+        use gitcomet_core::history_perf::{self, Work};
+        let _guard = crate::test_support::lock_visual_test();
+        let (view, cx) = cx.add_window_view(|_, _| GraphPaintView(Rc::new(|_, _| {})));
+        for (device_scale, ring) in [(1.0, 2.0), (1.25, 2.0), (1.5, 2.0), (2.0, 3.0)] {
+            for (ui_font_size_px, density) in [14, 15]
+                .into_iter()
+                .flat_map(|font| UiDensity::ALL.map(|density| (font, density)))
+            {
+                for (is_merge, reveal) in [(false, 1.0), (false, 0.0), (true, 1.0)] {
+                    let case = format!(
+                        "{device_scale}x font={ui_font_size_px} {density:?} merge={is_merge} reveal={reveal}"
+                    );
+                    let _capture = history_perf::capture();
+                    let quads = cx.update(|window, app| {
+                        window.set_scale_factor(device_scale);
+                        view.update(app, |view, cx| {
+                            view.0 = Rc::new(move |window, app| {
+                                let mut theme = AppTheme::gitcomet_dark();
+                                theme.metrics = Appearance {
+                                    density,
+                                    ui_font_size_px,
+                                    ..Appearance::default()
+                                };
+                                let scale = ui_scale::UiScale::from_window(window)
+                                    .with_appearance(theme.metrics);
+                                let lanes_now = [history_graph::LanePaint::lane(0, true, false)];
+                                let lanes_next = [history_graph::LanePaint::lane(0, false, false)];
+                                let row = history_graph::GraphRow {
+                                    lanes_now: lanes_now.into_iter().collect(),
+                                    lanes_next: lanes_next.into_iter().collect(),
+                                    joins_in: Default::default(),
+                                    edges_out: Default::default(),
+                                    node_col: 0,
+                                    node_color_ix: 0,
+                                    is_merge,
+                                    from_node_cols: history_graph::from_node_cols_of(&lanes_next),
+                                };
+                                let cell = Bounds::new(
+                                    point(px(40.25), px(10.5)),
+                                    size(
+                                        scale.px(HISTORY_COL_GRAPH_PX),
+                                        super::super::history::history_row_height(scale),
+                                    ),
+                                );
+                                let grid = GraphGrid::new(window, scale);
+                                paint_history_graph(
+                                    theme,
+                                    &row,
+                                    0,
+                                    None,
+                                    false,
+                                    None,
+                                    history_canvas::HistoryRowVisual::new(
+                                        theme,
+                                        &row,
+                                        0,
+                                        None,
+                                        false,
+                                        theme.colors.surface.canvas,
+                                    ),
+                                    &HistoryAuthorVm::new("Ada Lovelace".into()),
+                                    reveal,
+                                    0.0,
+                                    cell,
+                                    grid,
+                                    graph_node_bounds(&row, false, reveal, cell, grid, scale),
+                                    window,
+                                    app,
+                                );
+                            });
+                            cx.notify();
+                        });
+                        let _ = window.draw(app);
+                        window.painted_quads()
+                    });
+                    assert_eq!(history_perf::count(Work::PaintPath), 0, "{case}");
+                    let (nodes, lanes): (Vec<&gpui::Quad>, Vec<&gpui::Quad>) = quads
+                        .iter()
+                        .partition(|quad| quad.corner_radii.top_left.0 > 0.0);
+                    assert_eq!(nodes.len(), 1, "{case}");
+                    let node = nodes[0].bounds;
+                    let diameter = node.size.width.0;
+                    assert_eq!(node.size.width, node.size.height, "{case}");
+                    let half = diameter / 2.0;
+                    assert!(
+                        (half - half.round()).abs() < 1e-3,
+                        "{case}: {diameter} device px"
+                    );
+                    assert!(
+                        (nodes[0].corner_radii.top_left.0 * 2.0 - diameter).abs() < 1e-3,
+                        "{case}: radius {:?} for {diameter}",
+                        nodes[0].corner_radii,
+                    );
+                    let expected_ring = if reveal > 0.0 { ring } else { 0.0 };
+                    assert_eq!(nodes[0].border_widths.top.0, expected_ring, "{case}");
+                    assert_eq!(lanes.len(), 2, "{case}: incoming and continuing runs");
+                    for lane in lanes {
+                        assert!(
+                            (lane.bounds.center().x.0 - node.center().x.0).abs() < 1e-3,
+                            "{case}: lane {:?} off node {node:?}",
+                            lane.bounds
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn author_nodes_fit_resized_graphs_at_fractional_scales() {
+        use crate::appearance::{Appearance, UiDensity};
+
+        let mut row = history_graph::GraphRow {
+            lanes_now: Default::default(),
+            lanes_next: Default::default(),
+            joins_in: Default::default(),
+            edges_out: Default::default(),
+            node_col: 0,
+            node_color_ix: 0,
+            is_merge: false,
+            from_node_cols: Default::default(),
+        };
+        for (density, author_size, icon_size) in [
+            (UiDensity::Compact, 22.0, 18.0),
+            (UiDensity::Comfortable, 24.0, 20.0),
+            (UiDensity::Spacious, 26.0, 22.0),
+        ] {
+            for (percent, ui_font_size_px) in [80, 100, 125, 150, 200]
+                .into_iter()
+                .flat_map(|percent| [10, 14, 18, 24].map(|font| (percent, font)))
+            {
+                let scale = ui_scale::UiScale::from_percent(percent).with_appearance(Appearance {
+                    density,
+                    ui_font_size_px,
+                    ..Appearance::default()
+                });
+                for device_scale in [1.0, 1.25, 1.5, 2.0] {
+                    let grid = GraphGrid::for_scale(device_scale, scale);
+                    for width in [
+                        HISTORY_COL_GRAPH_MIN_PX + (scale.appearance.ui_text(20.0) - 20.0).max(0.0),
+                        HISTORY_COL_GRAPH_PX,
+                        HISTORY_COL_GRAPH_MAX_PX,
+                    ] {
+                        let cell = Bounds::new(
+                            point(px(40.0), px(10.0)),
+                            size(
+                                scale.px(width),
+                                super::super::history::history_row_height(scale),
+                            ),
+                        );
+                        // Column 14 is past every width's full-pitch capacity.
+                        for col in [0, 1, 14, 5000] {
+                            row.node_col = col;
+                            let node = graph_node_bounds(&row, false, 1.0, cell, grid, scale);
+                            assert_even_device_diameter(
+                                node,
+                                scale.ui_text(20.0) + scale.px(author_size - 20.0),
+                                device_scale,
+                            );
+                            assert!(node.left() >= cell.left());
+                            assert!(node.right() <= cell.right());
+                            assert!(node.top() >= cell.top());
+                            assert!(node.bottom() <= cell.bottom());
+                            if col >= 14 {
+                                let edge = grid.snap(cell.left()) + grid.edge_x(cell.size.width);
+                                assert!(
+                                    (node.center().x - edge).abs() < px(0.001),
+                                    "the node center must stay on the pinned edge"
+                                );
+                            }
+                            assert!(grid.col_gap > node.size.width);
+                        }
+                        let stash = graph_node_bounds(&row, true, 1.0, cell, grid, scale);
+                        assert_even_device_diameter(
+                            stash,
+                            scale.ui_text(16.0) + scale.px(icon_size - 16.0),
+                            device_scale,
+                        );
+                        row.is_merge = true;
+                        assert_eq!(
+                            graph_node_bounds(&row, false, 1.0, cell, grid, scale),
+                            stash
+                        );
+                        row.is_merge = false;
+                    }
+                }
+            }
         }
     }
 }

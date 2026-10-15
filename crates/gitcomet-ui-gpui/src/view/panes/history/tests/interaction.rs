@@ -384,6 +384,8 @@ fn arrowing_off_a_worktree_row_with_no_index_does_not_jump_to_the_end(
                 !history.history_select_adjacent_commit(-1, cx),
                 "there is nothing to step from, so the key is not handled"
             );
+            assert!(!history.history_select_page(-1, cx));
+            assert!(!history.history_select_page(1, cx));
             assert!(
                 history
                     .active_repo()

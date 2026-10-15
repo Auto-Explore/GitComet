@@ -6,7 +6,7 @@ use gpui::{
 };
 
 type PrepaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>;
-type PaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>;
+type PaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, T, &GlobalElementId, &mut Window, &mut App)>;
 
 pub(super) fn take_once_or_debug<T>(slot: &mut Option<T>, context: &'static str) -> Option<T> {
     let value = slot.take();
@@ -18,6 +18,17 @@ pub(super) fn keyed_canvas<T>(
     id: impl Into<ElementId>,
     prepaint: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T,
     paint: impl 'static + FnOnce(Bounds<Pixels>, T, &mut Window, &mut App),
+) -> KeyedCanvas<T> {
+    keyed_canvas_with_id(id, prepaint, move |bounds, state, _, window, cx| {
+        paint(bounds, state, window, cx)
+    })
+}
+
+/// Reuse the element's existing global identity for persistent paint state.
+pub(super) fn keyed_canvas_with_id<T>(
+    id: impl Into<ElementId>,
+    prepaint: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T,
+    paint: impl 'static + FnOnce(Bounds<Pixels>, T, &GlobalElementId, &mut Window, &mut App),
 ) -> KeyedCanvas<T> {
     KeyedCanvas {
         id: id.into(),
@@ -118,7 +129,13 @@ impl<T: 'static> Element for KeyedCanvas<T> {
             interaction.paint_canvas(window);
         }
         style.paint(bounds, window, cx, move |window, cx| {
-            paint(bounds, prepaint_state, window, cx)
+            paint(
+                bounds,
+                prepaint_state,
+                _id.expect("keyed canvas has an id"),
+                window,
+                cx,
+            )
         });
     }
 }

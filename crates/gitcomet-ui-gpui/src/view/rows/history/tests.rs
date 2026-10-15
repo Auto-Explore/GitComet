@@ -7,7 +7,7 @@ use super::{
     markdown_preview_expanded_slice_range, markdown_preview_image_source,
     markdown_preview_inline_highlight, markdown_preview_picture_skeleton,
     markdown_preview_row_background, markdown_preview_row_marker, markdown_preview_row_styled_text,
-    worktree_preview_apply_query_overlay,
+    worktree_preview_apply_query_overlay, worktree_row_key,
 };
 use crate::view::markdown_preview::MarkdownInlineSpan;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
@@ -1078,4 +1078,34 @@ fn local_link_availability_refuses_symlinks_out_of_the_repository() {
     );
 
     std::fs::remove_dir_all(&root).expect("cleanup");
+}
+
+/// Rows sharing an id share hover, press and selection-glow state.
+#[test]
+fn distinct_non_utf8_worktree_paths_keep_distinct_row_keys() {
+    // Units that are not valid Unicode on each platform.
+    #[cfg(unix)]
+    let invalid = |unit: u8| {
+        use std::os::unix::ffi::OsStrExt as _;
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&[b'w', unit]))
+    };
+    #[cfg(windows)]
+    let invalid = |unit: u16| {
+        use std::os::windows::ffi::OsStringExt as _;
+        std::path::PathBuf::from(std::ffi::OsString::from_wide(&[u16::from(b'w'), unit]))
+    };
+    #[cfg(unix)]
+    let units = [0xff, 0xfe];
+    #[cfg(windows)]
+    let units = [0xd800, 0xdc00];
+    let keys = [
+        worktree_row_key(&invalid(units[0])),
+        worktree_row_key(&invalid(units[1])),
+        worktree_row_key(std::path::Path::new("w\u{fffd}")),
+        worktree_row_key(std::path::Path::new("w-a")),
+    ];
+    for (ix, key) in keys.iter().enumerate() {
+        assert!(!keys[..ix].contains(key), "{key:?} repeats");
+    }
+    assert_eq!(keys[3].as_ref(), "w-a");
 }
