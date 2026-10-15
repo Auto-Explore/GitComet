@@ -2218,7 +2218,6 @@ fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
 #[cfg(unix)]
 fn with_lfs_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
     use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
     const CHILD: &str = "GITCOMET_LFS_TEST_ROOT";
     let Some(root) = std::env::var_os(CHILD) else {
         let root = tempfile::tempdir().unwrap();
