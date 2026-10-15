@@ -56,6 +56,8 @@ x11-clipboard = { workspace = true }
 gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 
 [dev-dependencies]
+# The kit's tests read the text model's test-only counters and state checks.
+gitcomet-text = { workspace = true, features = ["test-support"] }
 gpui_parley = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true }
