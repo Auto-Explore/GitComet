@@ -594,3 +594,12 @@ contract test now checks. The caches' test-only accessors (`peek`, `len`,
 `clear`, `metrics`) became ordinary API, so no feature is needed to reach them.
 All 50 moved tests pass in the new crate, and the UI suite count reconciles
 exactly with the tests that left it.
+
+### 2.1a Syntax styling in the kit
+
+The theme's token styles (`syntax_highlight_color`, `syntax_highlight_style`,
+`SyntaxHighlightPalette`) moved from the host's diff-row modules into the kit's
+`syntax_style` module with their six tests. `gitcomet-text` gained
+`SyntaxTokenKind::ALL` and a `SyntaxPalette` trait that the kit's palette
+implements, so the syntax engine can produce styled runs for any renderer
+without depending on GPUI.

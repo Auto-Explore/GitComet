@@ -46,3 +46,59 @@ pub enum SyntaxTokenKind {
     DiffDelta,
     Lifetime,
 }
+
+impl SyntaxTokenKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 43] = [
+        Self::None,
+        Self::Comment,
+        Self::CommentDoc,
+        Self::String,
+        Self::StringEscape,
+        Self::StringRegex,
+        Self::StringSpecial,
+        Self::Keyword,
+        Self::KeywordControl,
+        Self::Preproc,
+        Self::Number,
+        Self::Boolean,
+        Self::Function,
+        Self::FunctionMethod,
+        Self::FunctionSpecial,
+        Self::Constructor,
+        Self::Type,
+        Self::TypeBuiltin,
+        Self::TypeInterface,
+        Self::Namespace,
+        Self::Variable,
+        Self::VariableParameter,
+        Self::VariableSpecial,
+        Self::VariableBuiltin,
+        Self::Property,
+        Self::Label,
+        Self::Constant,
+        Self::ConstantBuiltin,
+        Self::Operator,
+        Self::Punctuation,
+        Self::PunctuationBracket,
+        Self::PunctuationDelimiter,
+        Self::PunctuationSpecial,
+        Self::PunctuationListMarker,
+        Self::Tag,
+        Self::Attribute,
+        Self::MarkupHeading,
+        Self::MarkupLink,
+        Self::TextLiteral,
+        Self::DiffPlus,
+        Self::DiffMinus,
+        Self::DiffDelta,
+        Self::Lifetime,
+    ];
+}
+
+/// A renderer's style for each token kind; `None` leaves the kind unstyled.
+pub trait SyntaxPalette {
+    type Style: Copy + PartialEq;
+
+    fn style(&self, kind: SyntaxTokenKind) -> Option<Self::Style>;
+}

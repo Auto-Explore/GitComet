@@ -38,6 +38,7 @@ pub mod menu_placement;
 mod minimap;
 pub mod press_gesture;
 mod scrollbar;
+pub mod syntax_style;
 mod text_input;
 pub mod text_layout;
 pub mod text_runs;

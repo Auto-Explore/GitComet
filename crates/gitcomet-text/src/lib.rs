@@ -8,4 +8,4 @@ pub mod tab_width;
 pub mod text_model;
 mod token;
 
-pub use token::SyntaxTokenKind;
+pub use token::{SyntaxPalette, SyntaxTokenKind};
