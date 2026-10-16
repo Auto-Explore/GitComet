@@ -7,9 +7,9 @@ allowance_bytes = 8_000_000_000
 # One shared bundle per OS family: crate files, the sparse index and git databases (522 MiB on Linux).
 sources_mib = 600
 
-# Compiled bundles for the three longest jobs. Measured on dev pushes (2026-10-15): macos15-x64 1454 MiB,
-# ubuntu22-arm64 1497 MiB, ubuntu22-x64 1640 MiB with its app context, which Windows also builds.
+# Compiled bundles for the three longest jobs. Measured on dev push 38886019692 (2026-10-16):
+# macos15-x64 1367 MiB (previously 1454 MiB), windows-arm64 2061 MiB.
 [compiled_mib]
-macos15-x64-workspace-ci-test = 1664
+macos15-x64-workspace-ci-test = 1536
 windows-x64-workspace-ci-test = 2048
-windows-arm64-workspace-ci-test = 2048
+windows-arm64-workspace-ci-test = 2176
