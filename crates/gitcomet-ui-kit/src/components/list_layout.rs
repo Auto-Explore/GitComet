@@ -159,7 +159,6 @@ mod tests {
     fn the_icon_follows_the_layout_and_a_right_click_asks_for_the_menu(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let menus = Rc::new(RefCell::new(0));
         let (view, cx) = cx.add_window_view(|_, _| Picker {
             layout: ListLayout::Flat,

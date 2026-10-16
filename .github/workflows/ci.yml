@@ -92,6 +92,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # report.py imports cache.py, which needs tomllib (3.11+); the runner's system Python is 3.10.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
       - name: Verify every validation lane completed
         env:
           CI_RESULTS: ${{ toJSON(needs) }}

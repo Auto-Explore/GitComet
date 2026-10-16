@@ -64,6 +64,12 @@ impl Effect {
 
 #[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
+    ValidateAuthPrompt {
+        generation: u64,
+        challenge: gitcomet_core::auth::AuthChallenge,
+        auth: StagedGitAuth,
+        cancellation: gitcomet_core::services::CancellationToken,
+    },
     Filesystem(gitcomet_core::filesystem::Request),
     IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
     DiffSession(crate::diff_session::DiffSessionEffect),

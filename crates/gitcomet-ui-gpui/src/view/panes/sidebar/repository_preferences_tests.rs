@@ -31,7 +31,6 @@ fn repository_lists_use_configured_defaults_until_an_explicit_sort_is_saved(
 ) {
     use gitcomet_state::model::RepositoryPreferenceUpdate;
 
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let state = long_list_tests::branch_fixture(1);
     let repo_id = state.repos[0].id;
@@ -131,7 +130,6 @@ fn remote_locator_broadcasts_expansions_and_keeps_them_after_later_updates(
 ) {
     use gitcomet_state::model::RepositoryPreferenceUpdate;
 
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let mut state = long_list_tests::branch_fixture(2);
     let repo = &mut Arc::make_mut(&mut state).repos[0];
@@ -234,7 +232,6 @@ fn remote_locator_broadcasts_expansions_and_keeps_them_after_later_updates(
 fn final_sort_selection_survives_an_unchanged_pane_snapshot(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::RepositoryPreferenceUpdate;
 
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let state = long_list_tests::branch_fixture(1);
     let repo_id = state.repos[0].id;
@@ -316,7 +313,6 @@ fn final_sort_selection_survives_an_unchanged_pane_snapshot(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn shared_snapshots_update_sidebar_menus_and_every_file_list(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

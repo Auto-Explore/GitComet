@@ -984,7 +984,6 @@ impl GitBackend for RecordingOpenBackend {
 fn review_regression_picking_a_worktree_open_elsewhere_uses_the_invoking_window(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let feature = std::env::temp_dir().join("ws/feature");
 

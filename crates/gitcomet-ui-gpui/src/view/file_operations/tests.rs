@@ -88,7 +88,6 @@ fn colliding_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
 fn keep_both_with_apply_to_all_resolves_every_collision_with_one_dialog(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (root, cx) = open_window(cx);
     let (_directory, workdir, destination) = colliding_fixture();
     let request = Request::new(Operation::Transfer {
@@ -146,7 +145,6 @@ fn keep_both_with_apply_to_all_resolves_every_collision_with_one_dialog(
 
 #[gpui::test]
 fn without_apply_to_all_each_collision_is_asked_about(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (root, cx) = open_window(cx);
     let (_directory, workdir, destination) = colliding_fixture();
     let request = Request::new(Operation::Transfer {
@@ -199,7 +197,6 @@ fn without_apply_to_all_each_collision_is_asked_about(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn escape_cancels_every_queued_collision_and_releases_the_drop(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (root, cx) = open_window(cx);
     let (_directory, workdir, destination) = colliding_fixture();
     let request = Request::new(Operation::Transfer {
@@ -253,7 +250,6 @@ fn escape_cancels_every_queued_collision_and_releases_the_drop(cx: &mut gpui::Te
 
 #[gpui::test]
 fn delete_permanently_waits_for_the_themed_dialog(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (root, cx) = open_window(cx);
     let directory = tempfile::tempdir().unwrap();
     let workdir =
@@ -300,7 +296,6 @@ fn delete_permanently_waits_for_the_themed_dialog(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn a_displaced_dialog_comes_back_when_the_screen_is_free(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (root, cx) = open_window(cx);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("item.txt");

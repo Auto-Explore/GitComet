@@ -748,6 +748,20 @@ impl GitCometView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_history_show_graph_gradient(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.show_graph_gradient = enabled;
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_show_graph_gradient(enabled, cx);
+        });
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_history_relative_dates(
         &mut self,
         enabled: bool,

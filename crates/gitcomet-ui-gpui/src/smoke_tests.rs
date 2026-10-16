@@ -1,4 +1,3 @@
-use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
 use crate::view::test_support::TestBackend;
 use crate::{theme::AppTheme, ui_scale, view};
@@ -483,7 +482,6 @@ fn text_input_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -868,7 +866,6 @@ fn multiline_text_input_mousewheel_does_not_trigger_cursor_autoscroll(
 
 #[gpui::test]
 fn text_input_right_click_context_menu_supports_copy(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -1071,7 +1068,6 @@ fn text_input_context_menu_grows_wider_with_ui_zoom(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn text_input_supports_ctrl_z_undo(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -1152,7 +1148,6 @@ fn text_input_double_click_selects_word(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -1190,7 +1185,6 @@ fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn text_input_supports_shift_pageup_pagedown_selection(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -2556,7 +2550,6 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
 fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
     // Measures Compact layout; a fresh session now defaults to Comfortable.
     cx.update(crate::appearance::pin_compact_for_test);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2616,7 +2609,6 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
 fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppContext) {
     // Measures Compact layout; a fresh session now defaults to Comfortable.
     cx.update(crate::appearance::pin_compact_for_test);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -3001,7 +2993,6 @@ fn worktree_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(SubmoduleTestBackend::default()));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -3614,7 +3605,6 @@ fn titlebar_hamburger_opens_app_menu(cx: &mut gpui::TestAppContext) {
         return;
     }
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -3665,7 +3655,6 @@ fn titlebar_hamburger_opens_from_keyboard_and_restores_focus_on_escape(
         return;
     }
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -3715,7 +3704,6 @@ fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext)
         return;
     }
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -4167,7 +4155,6 @@ fn scroll_over(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, 
 fn titlebar_only_reserves_visible_repository_controls_from_window_drag(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -4406,7 +4393,6 @@ fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAp
 fn the_title_bar_keeps_its_leading_control_clear_of_the_traffic_lights(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -4450,7 +4436,6 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
             .size
     }
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -4518,7 +4503,6 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
 
 #[gpui::test]
 fn repository_tabs_shrink_long_names_before_short_names(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -5038,7 +5022,6 @@ fn press_gesture_hits(
 
 #[gpui::test]
 fn release_outside_a_text_input_does_not_click_where_it_lands(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = cx.add_window_view(PressGestureHostView::new);
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -5109,7 +5092,6 @@ fn release_outside_a_text_input_does_not_click_where_it_lands(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn a_press_under_an_occluding_overlay_still_clears_the_claim(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (_view, cx) = cx.add_window_view(PressGestureHostView::new);
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -5146,7 +5128,6 @@ fn a_press_under_an_occluding_overlay_still_clears_the_claim(cx: &mut gpui::Test
 
 #[gpui::test]
 fn a_button_less_pointer_move_clears_a_stranded_claim(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (_view, cx) = cx.add_window_view(PressGestureHostView::new);
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -5178,7 +5159,6 @@ fn a_button_less_pointer_move_clears_a_stranded_claim(cx: &mut gpui::TestAppCont
 /// blurs the input it was meant to protect.
 #[gpui::test]
 fn text_input_context_menu_copy_keeps_focus_and_selection(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {

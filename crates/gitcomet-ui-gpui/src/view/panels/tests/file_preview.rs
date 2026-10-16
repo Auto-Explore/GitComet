@@ -45,7 +45,6 @@ fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestA
 fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -164,7 +163,6 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
 
 #[gpui::test]
 fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2136,7 +2134,6 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
 fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::TestAppContext) {
     const PAYLOAD_BYTES: usize = 256 * 1024;
 
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2229,7 +2226,6 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
 ) {
     const PAYLOAD_BYTES: usize = 96 * 1024;
 
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2639,7 +2635,6 @@ fn xml_file_preview_renders_syntax_highlights_from_real_document(cx: &mut gpui::
 fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::TestAppContext) {
     // The read-only content view drew the annotation column but mounted no drag
     // handle, so only the diff view could resize it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

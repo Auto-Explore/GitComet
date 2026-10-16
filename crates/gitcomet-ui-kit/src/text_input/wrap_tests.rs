@@ -779,7 +779,6 @@ fn wrapped_background_results_cannot_overwrite_edits_or_changed_line_indices(
 #[cfg(target_os = "linux")]
 #[test]
 fn wrapped_real_font_typing_is_stable_at_normal_and_enlarged_scale() {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let platform = gpui_platform::current_platform(true);
     for percent in [100, 150] {
         let mut cx = gpui::HeadlessAppContext::new(platform.text_system());

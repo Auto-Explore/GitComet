@@ -644,6 +644,9 @@ impl MainPaneView {
     /// on its file.
     pub(in crate::view) fn error_action_available(&self, action: &ErrorAction) -> bool {
         match action {
+            ErrorAction::ReviewLocalChanges { repo_id } => {
+                self.state.repos.iter().any(|repo| repo.id == *repo_id)
+            }
             ErrorAction::SaveEditorAs { repo_id, path, .. }
             | ErrorAction::RevealInEditor { repo_id, path, .. } => {
                 self.main_pane_surface().body == MainPaneBody::FileEditor

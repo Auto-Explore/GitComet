@@ -26,6 +26,7 @@ fn running_hook_activity(operation_id: u64) -> GitHookOperation {
         time: std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(operation_id),
         duration: None,
         status: GitHookOperationStatus::Running,
+        handled_by_auth_prompt: false,
         hooks: vec![gitcomet_state::model::GitHookRun {
             id: gitcomet_core::git_operation::HookExecutionId {
                 sid: Arc::from("ui-test"),
@@ -167,7 +168,6 @@ fn drag_activity_text(cx: &mut gpui::VisualTestContext, key: &'static str) {
 
 #[gpui::test]
 fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -273,7 +273,6 @@ fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -474,7 +473,6 @@ fn hook_activity_minimized_indicator_is_repository_specific(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn hook_activity_text_layout_and_selected_fill_across_appearances(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1299,6 +1297,7 @@ fn running_fetch(operation_id: u64, percent: Option<u8>) -> GitHookOperation {
         time: std::time::SystemTime::UNIX_EPOCH,
         duration: None,
         status: GitHookOperationStatus::Running,
+        handled_by_auth_prompt: false,
         hooks: Vec::new(),
         output: Default::default(),
         output_bytes: 0,

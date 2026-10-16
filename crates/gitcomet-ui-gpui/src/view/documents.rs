@@ -562,14 +562,11 @@ impl StandaloneBuffer {
         let path = self.identity.0.clone();
         let identity = self.identity.clone();
         let image = self.image;
+        let filesystem = self.store.filesystem();
         self.load_task = Some(cx.spawn(async move |view, cx| {
             let result = crate::ui_runtime::background_compute(move || {
                 preflight_worktree_file_for_editing(&path)?;
-                let lock = || {
-                    gitcomet_core::filesystem::global()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                };
+                let lock = || filesystem.lock().unwrap_or_else(|e| e.into_inner());
                 let guard = lock();
                 let version = read_worktree_file_version_for_editing(&path)?;
                 // Outside a repository there are no attributes: detect only.

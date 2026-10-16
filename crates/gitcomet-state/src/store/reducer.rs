@@ -795,6 +795,27 @@ fn reduce_inner(
             }
             Vec::new()
         }
+        Msg::AcknowledgeNotifications { through_seq } => {
+            state.acknowledge_notifications(through_seq);
+            Vec::new()
+        }
+        Msg::AcknowledgeRepoFeedback {
+            repo_id,
+            lifetime,
+            diagnostics_through_seq,
+            command_log_through_seq,
+        } => {
+            if let Some(repo_state) = state
+                .repos
+                .iter_mut()
+                .find(|r| r.id == repo_id && r.lifetime() == lifetime)
+            {
+                repo_state
+                    .feedback
+                    .acknowledge(diagnostics_through_seq, command_log_through_seq);
+            }
+            Vec::new()
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,
@@ -825,10 +846,17 @@ fn reduce_inner(
             repo_id,
             operation_id,
         } => git_operations::cancel_git_operation(state, repo_id, operation_id),
-        Msg::SubmitAuthPrompt { username, secret } => {
-            auth::submit_auth_prompt(repos, id_alloc, state, username, secret)
-        }
+        Msg::SubmitAuthPrompt {
+            generation,
+            username,
+            secret,
+        } => auth::submit_auth_prompt(repos, id_alloc, state, generation, username, secret),
         Msg::CancelAuthPrompt => auth::cancel_auth_prompt(state),
+        Msg::Internal(crate::msg::InternalMsg::AuthPromptValidated {
+            generation,
+            result,
+            auth,
+        }) => auth::auth_prompt_validated(repos, id_alloc, state, generation, result, auth),
         Msg::SetGitRuntimeState(runtime) => settings::set_git_runtime_state(state, runtime),
         Msg::SetCommitSignatureTargets {
             repo_id,

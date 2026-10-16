@@ -786,7 +786,6 @@ fn upstream_picker_empty_search_requires_navigation_before_unlink(cx: &mut gpui:
 
 #[gpui::test]
 fn selecting_search_text_cannot_activate_unlink_on_release(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let repo_id = RepoId(1);
     let (view, cx) = open_popover(
         cx,

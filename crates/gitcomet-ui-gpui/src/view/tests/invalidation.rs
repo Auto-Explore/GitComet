@@ -4,7 +4,6 @@ use super::*;
 
 #[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -27,7 +26,6 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -109,7 +107,6 @@ fn rail_has_annex_icon(cx: &mut gpui::VisualTestContext) -> bool {
 
 #[gpui::test]
 fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -200,7 +197,6 @@ fn full_chrome_layout_caches_the_pane_subviews() {
 
 #[gpui::test]
 fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let _cache_guard = enable_stable_cached_views_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -230,7 +226,6 @@ fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext)
 fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -276,7 +271,6 @@ fn review_regression_unchanged_snapshots_do_not_notify_workspace_observers(
     use std::cell::Cell;
     use std::rc::Rc;
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -332,7 +326,6 @@ fn review_regression_unchanged_snapshots_do_not_notify_workspace_observers(
 
 #[gpui::test]
 fn pr530_home_rows_reuse_data_until_an_input_changes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let workspace = named_saved_workspace("Saved", "/tmp/pr530-home");
     let id = workspace.id;
     let (view, cx) = home_view_with(cx, vec![workspace], Vec::new());

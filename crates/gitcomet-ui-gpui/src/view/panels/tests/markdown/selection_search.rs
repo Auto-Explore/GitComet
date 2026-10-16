@@ -117,7 +117,6 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
     cx: &mut gpui::TestAppContext,
 ) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -400,7 +399,6 @@ fn markdown_preview_hitboxes_follow_the_scrolled_viewport(cx: &mut gpui::TestApp
     // a fixture that fits on screen, so nothing else exercises the gate — and a
     // gate reading the wrong coordinate space would reject visible rows and
     // silently stop selection working in any scrolled preview.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -478,8 +476,6 @@ fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
     // The counterpart to `source_mode_copies_the_file_exactly_as_written`: the
     // rendered preview copies what it drew, so the heading loses its `#` and
     // the section break under it comes back as the blank line it looks like.
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -533,7 +529,6 @@ fn source_mode_selection_highlights_whole_lines_after_a_wrapped_paragraph(
     // Once a paragraph wraps, row positions run ahead of line numbers. A row
     // that does not wrap must still be measured by its own line, or the
     // highlight stops at another line's width and blank lines get none.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -648,8 +643,6 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
     // document it draws, but Text mode is showing the file itself, so a
     // selection there has to come back byte for byte — every tag, marker, and
     // blank line the author wrote.
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -716,8 +709,6 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn dragging_across_table_cells_copies_tab_separated_rows(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -767,7 +758,6 @@ fn markdown_preview_selection_highlights_every_line_of_a_wrapped_row(
     // The highlight is a paint-time computation, so a regression that puts
     // every quad on the first visual line, or steps them by the wrong amount,
     // is invisible to every other assertion in this file.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -843,7 +833,6 @@ fn markdown_preview_selection_paints_over_inline_code_backgrounds(cx: &mut gpui:
     // Inline-code styling owns a run background. If StyledText paints that
     // background after the selection quad, the selected part of the code span
     // looks unselected even though copy and selection geometry are correct.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -895,7 +884,6 @@ fn a_partial_wrapped_selection_starts_and_ends_where_the_drag_did(cx: &mut gpui:
     // Selecting a whole row is the easy case: every quad spans its line. A drag
     // that starts and ends mid-line is where the first and last quads have to
     // be measured rather than assumed.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1022,7 +1010,6 @@ fn a_drag_past_the_preview_autoscrolls_after_an_earlier_selection(cx: &mut gpui:
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // A press over an existing selection began a new one without the timer
     // that scrolls it, so after any selection a drag stopped at the pane edge.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1066,7 +1053,6 @@ fn a_drag_held_outside_the_window_autoscrolls_by_the_pointers_distance(
     // pointer. Each tick replaced that with the last point the root view saw
     // inside the window, so the drag slowed to a crawl and the selection
     // snapped back to that point.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1102,8 +1088,6 @@ fn a_drag_held_outside_the_window_autoscrolls_by_the_pointers_distance(
 #[gpui::test]
 fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1196,8 +1180,6 @@ fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpu
 #[gpui::test]
 fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1294,8 +1276,6 @@ fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui
 #[gpui::test]
 fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1685,8 +1665,6 @@ fn a_drag_that_runs_past_a_short_line_still_selects_it(cx: &mut gpui::TestAppCon
     // row at all. Hit testing used to refuse any point outside a row, so a drag
     // that crossed one of those gaps stopped extending the selection and the
     // reader was left with whatever they had already covered.
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1739,8 +1717,6 @@ fn a_drag_that_runs_past_a_short_line_still_selects_it(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1798,8 +1774,6 @@ fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui:
 #[gpui::test]
 fn markdown_below_eof_resolves_after_a_trailing_thematic_break(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1865,7 +1839,6 @@ fn markdown_preview_hit_testing_follows_a_row_onto_its_wrapped_lines(
     // A flowing row covers several visual lines, so a click has to resolve in
     // two dimensions. Reading only the x offset along one shaped line put the
     // caret near the start of the row wherever the reader clicked low and left.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1917,7 +1890,6 @@ fn dragging_the_split_markdown_preview_divider_resizes_its_columns(cx: &mut gpui
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // The rendered split drew its two halves 50/50 with a plain line between
     // them: nothing to drag, unlike the text split beside it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2358,8 +2330,6 @@ fn copying_across_alignment_padding_adds_no_blank_lines(cx: &mut gpui::TestAppCo
     // The old side of this split diff is [a, Spacer, Spacer, b]; each spacer
     // yields `Some(0..0)` from `diff_text_source_selection_range`, so
     // `selected_diff_text_string` writes an empty line for it.
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2406,7 +2376,6 @@ fn copying_across_alignment_padding_adds_no_blank_lines(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn redrawing_under_an_unchanged_search_does_not_rebuild_the_matcher(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2455,7 +2424,6 @@ fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
     cx: &mut gpui::TestAppContext,
 ) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2534,7 +2502,6 @@ fn aligned_rows_are_highlighted_where_their_lines_are_painted(cx: &mut gpui::Tes
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // Selection geometry must include inherited alignment before glyphs paint.
     // Cover wrapped centred text and short centred/right-aligned lines.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2623,8 +2590,6 @@ fn aligned_rows_are_highlighted_where_their_lines_are_painted(cx: &mut gpui::Tes
 #[gpui::test]
 fn a_double_click_on_an_aligned_word_selects_the_word_painted_there(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

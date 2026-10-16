@@ -210,7 +210,7 @@ pub struct SidebarDataRequest {
     pub stashes: bool,
 }
 
-/// User-visible repository feedback and bounded diagnostic/activity history.
+/// User-visible repository feedback and bounded activity history.
 ///
 /// Keeping this together makes the lifecycle explicit: a successful reopen can
 /// reset repository feedback without touching loaded Git data or navigation.
@@ -218,15 +218,60 @@ pub struct SidebarDataRequest {
 pub struct RepoFeedbackState {
     pub missing_on_disk: bool,
     pub last_error: Option<String>,
+    /// Diagnostics the window has not acknowledged yet
+    /// (`Msg::AcknowledgeRepoFeedback`).
     pub diagnostics: Vec<DiagnosticEntry>,
-    /// Number appended, including entries evicted from the bounded history.
+    /// Number appended, including entries already acknowledged and dropped.
     pub diagnostics_seq: u64,
+    /// Command results the window has not acknowledged yet
+    /// (`Msg::AcknowledgeRepoFeedback`).
     pub command_log: Vec<CommandLogEntry>,
+    /// Number appended, including entries already acknowledged and dropped.
+    pub command_log_seq: u64,
     pub hook_activity: Vec<GitHookOperation>,
     pub hook_activity_rev: u64,
     /// Set only while reducing the existing command completion nested inside a
     /// `GitOperationFinished` message.
     pub(crate) command_log_operation_id: Option<GitOperationId>,
+}
+
+impl RepoFeedbackState {
+    /// Queues a diagnostic for the window.
+    pub fn push_diagnostic(&mut self, entry: DiagnosticEntry) {
+        self.diagnostics_seq = self.diagnostics_seq.wrapping_add(1);
+        self.diagnostics.push(entry);
+    }
+
+    /// Queues a command result for the window.
+    pub fn push_command_result(&mut self, entry: CommandLogEntry) {
+        self.command_log_seq = self.command_log_seq.wrapping_add(1);
+        self.command_log.push(entry);
+    }
+
+    /// Diagnostics queued after diagnostic number `seq`.
+    pub fn diagnostics_after(&self, seq: u64) -> &[DiagnosticEntry] {
+        super::feedback_after(&self.diagnostics, self.diagnostics_seq, seq)
+    }
+
+    /// Command results queued after result number `seq`.
+    pub fn command_log_after(&self, seq: u64) -> &[CommandLogEntry] {
+        super::feedback_after(&self.command_log, self.command_log_seq, seq)
+    }
+
+    /// Releases the diagnostics and command results the window has shown, up
+    /// to the given numbers.
+    pub fn acknowledge(&mut self, diagnostics_through_seq: u64, command_log_through_seq: u64) {
+        super::acknowledge_feedback(
+            &mut self.diagnostics,
+            self.diagnostics_seq,
+            diagnostics_through_seq,
+        );
+        super::acknowledge_feedback(
+            &mut self.command_log,
+            self.command_log_seq,
+            command_log_through_seq,
+        );
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

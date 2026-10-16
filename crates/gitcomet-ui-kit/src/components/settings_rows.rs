@@ -573,7 +573,6 @@ mod option_row_tests {
     /// Only the selected row is filled; both span their list.
     #[gpui::test]
     fn the_selected_option_row_alone_is_filled(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_, _| Options { theme });
         crate::test_support::redraw(cx);

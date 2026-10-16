@@ -453,6 +453,7 @@ impl RacyClockSkew {
 
     /// Freeze the clock and age only the worktree input. Files created by the
     /// read stay fresh even if the test thread is descheduled afterwards.
+    #[cfg(unix)]
     pub(crate) fn set_for_path(path: PathBuf, skew: std::time::Duration) -> Self {
         Self::install(TestRacyClock {
             now: Some(std::time::SystemTime::now()),

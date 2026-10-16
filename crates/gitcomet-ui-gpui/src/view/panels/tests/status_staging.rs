@@ -181,6 +181,33 @@ fn wait_for_displayed_content(cx: &mut gpui::VisualTestContext, view: &View) {
     });
 }
 
+/// Waits for the open editor to show `disk_text`, then prepends an unsaved line.
+fn type_unsaved_line(cx: &mut gpui::VisualTestContext, view: &View, disk_text: &str) {
+    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|_, app| main_pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    cx.run_until_parked();
+    super::shortcuts::wait_until(cx, "editor loaded before typing", |cx| {
+        cx.update(|_, app| {
+            let pane = main_pane.read(app);
+            !pane.file_editor_loading && pane.file_editor_input.read(app).text() == disk_text
+        })
+    });
+    cx.update(|_, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "unsaved\n", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert!(
+            main_pane.read(app).file_editor_is_dirty(),
+            "the edit must be dirty before pressing anything"
+        );
+    });
+}
+
 /// Real index mutations and their reloads must both finish before checking the
 /// view. A missing repository handle would only test the dispatch's first half.
 fn exercise(
@@ -323,34 +350,7 @@ fn exercise_with_failure(
     });
     wait_for_displayed_content(cx, &view);
     if matches!(viewed, Viewed::Editor) {
-        cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.ensure_file_editor_loaded(cx);
-            });
-        });
-        cx.run_until_parked();
-        super::shortcuts::wait_until(cx, "editor loaded before typing", |cx| {
-            cx.update(|_, app| {
-                let pane = view.read(app).main_pane.read(app);
-                !pane.file_editor_loading
-                    && pane.file_editor_input.read(app).text() == "base\nstaged\nunstaged\n"
-            })
-        });
-        cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.file_editor_input.update(cx, |input, cx| {
-                    input.replace_utf8_range(0..0, "unsaved\n", cx);
-                });
-            });
-        });
-        cx.run_until_parked();
-        cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
-            assert!(
-                pane.file_editor_is_dirty(),
-                "the edit must be dirty before staging"
-            );
-        });
+        type_unsaved_line(cx, &view, "base\nstaged\nunstaged\n");
     }
     if matches!(
         surface,
@@ -652,7 +652,6 @@ fn exercise_with_failure(
 
 #[gpui::test]
 fn staging_buttons_keep_the_opposite_diff_open(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::All, Surface::Row, Surface::Selected] {
         exercise(
             cx,
@@ -675,7 +674,6 @@ fn staging_buttons_keep_the_opposite_diff_open(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn staging_buttons_close_only_the_affected_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for surface in [Surface::All, Surface::Row, Surface::Selected] {
             exercise(cx, area, surface, Viewed::Diff(area), "a.txt", true);
@@ -688,7 +686,6 @@ fn staging_buttons_close_only_the_affected_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn staging_buttons_preserve_content_and_unsaved_editors(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for surface in [Surface::All, Surface::Row] {
             for viewed in [Viewed::Content, Viewed::Editor] {
@@ -700,7 +697,6 @@ fn staging_buttons_preserve_content_and_unsaved_editors(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn staging_split_sections_only_close_included_diffs(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     exercise(
         cx,
         DiffArea::Unstaged,
@@ -729,7 +725,6 @@ fn staging_split_sections_only_close_included_diffs(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn staging_confirmation_preserves_opposite_diff_and_content(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for viewed in [Viewed::Diff(DiffArea::Staged), Viewed::Content] {
         exercise(
             cx,
@@ -752,7 +747,6 @@ fn staging_confirmation_preserves_opposite_diff_and_content(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn staging_menus_preserve_opposite_diffs_and_file_content(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::ContextMenu, Surface::CommandPalette] {
         for (area, opposite) in [
             (DiffArea::Unstaged, DiffArea::Staged),
@@ -766,7 +760,6 @@ fn staging_menus_preserve_opposite_diffs_and_file_content(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn failed_staging_preserves_the_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for failure in [Failure::IndexLocked, Failure::GitUnavailable] {
         for area in [DiffArea::Unstaged, DiffArea::Staged] {
             for surface in [Surface::All, Surface::Folder, Surface::CommandPalette] {
@@ -783,7 +776,6 @@ fn failed_staging_preserves_the_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn palette_unstage_all_includes_both_sides_of_a_rename(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     exercise(
         cx,
         DiffArea::Staged,
@@ -796,7 +788,6 @@ fn palette_unstage_all_includes_both_sides_of_a_rename(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn staging_folders_and_palette_close_only_affected_diffs(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         let opposite = if area == DiffArea::Unstaged {
             DiffArea::Staged
@@ -840,7 +831,6 @@ fn staging_folders_and_palette_close_only_affected_diffs(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn staging_shortcuts_consume_the_selected_paths(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for key in [
             "space",
@@ -871,7 +861,6 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
     use crate::view::FileListLayout;
     use crate::view::rows::CommitFileSort;
 
-    let _guard = lock_visual_test();
     for section in [
         StatusSection::CombinedUnstaged,
         StatusSection::Unstaged,
@@ -1064,7 +1053,6 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
 
 #[gpui::test]
 fn staging_a_row_preserves_an_unrelated_multi_selection(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         exercise(
             cx,
@@ -1079,7 +1067,6 @@ fn staging_a_row_preserves_an_unrelated_multi_selection(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn discarding_files_closes_only_the_affected_unstaged_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::DiscardSelected, Surface::DiscardPath] {
         for (viewed, path, closes) in [
             (Viewed::Diff(DiffArea::Unstaged), "a.txt", true),
@@ -1134,7 +1121,6 @@ fn conflicted_merge(dir: &Path) {
 
 #[gpui::test]
 fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     std::fs::write(dir.path().join("b.txt"), "base\nchanged\n").unwrap();
@@ -1201,9 +1187,120 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     crate::view::test_support::drain_store_worker(&view, cx);
 }
 
+#[derive(Clone, Copy, Debug)]
+enum EditorKeyFocus {
+    Panel,
+    Search,
+}
+
+/// While the editor is open, Save owns Ctrl/Cmd+S and Stage is off the bar,
+/// so no key may stage the on-disk file underneath unsaved edits.
+#[gpui::test]
+fn editing_keys_save_the_buffer_and_never_stage(cx: &mut gpui::TestAppContext) {
+    for focus in [EditorKeyFocus::Panel, EditorKeyFocus::Search] {
+        press_editor_keys(cx, focus);
+    }
+}
+
+fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut scenario = ScenarioApp {
+        app: cx.new_app(),
+        store: None,
+        finished: false,
+    };
+    let cx = &mut scenario.app;
+    restore_repository(dir.path(), clean_repository_template());
+    std::fs::write(dir.path().join("a.txt"), "base\n").unwrap();
+    git(dir.path(), &["add", "a.txt"]);
+    std::fs::write(dir.path().join("a.txt"), "base\nunstaged\n").unwrap();
+    let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+    let status = backend.status().unwrap();
+    let mut repo = opening_repo_state(REPO, dir.path());
+    repo.open = Loadable::Ready(());
+    repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+    repo.staged_status = Loadable::Ready(status.staged.clone());
+    repo.status = Loadable::Ready(Arc::new(status));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    scenario.store = Some(store.clone());
+    store.disable_repo_monitors_for_test();
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    store.insert_repo_for_test(REPO, backend);
+    super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, _| {
+            pane.auto_save_file_edits = false;
+        });
+    });
+    store.dispatch(Msg::OpenFileEditor {
+        repo_id: REPO,
+        path: "a.txt".into(),
+    });
+    wait_for(cx, &view, &store, "editor open", |repo| {
+        repo.diff_state.edit_mode
+    });
+    wait_for_displayed_content(cx, &view);
+    type_unsaved_line(cx, &view, "base\nunstaged\n");
+    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+        main_pane.update(app, |pane, cx| match focus {
+            EditorKeyFocus::Panel => pane.diff_panel_focus_handle.clone().focus(window, cx),
+            EditorKeyFocus::Search => {
+                assert!(pane.open_search_for_active_view(window, cx));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let index_before = git_output(dir.path(), &["ls-files", "--stage"]);
+    let ops_before = store.snapshot().repos[0].ops_rev;
+
+    if matches!(focus, EditorKeyFocus::Panel) {
+        cx.simulate_keystrokes("space");
+        draw_and_drain_test_window(cx);
+        crate::view::test_support::drain_store_worker(&view, cx);
+        assert_eq!(
+            store.snapshot().repos[0].ops_rev,
+            ops_before,
+            "{focus:?}: Space must not stage while editing"
+        );
+        cx.update(|_, app| {
+            let pane = main_pane.read(app);
+            assert!(pane.is_file_editor_active(), "{focus:?}: still editing");
+            assert!(pane.file_editor_is_dirty(), "{focus:?}: edits kept");
+        });
+    }
+
+    cx.simulate_keystrokes("secondary-s");
+    draw_and_drain_test_window(cx);
+    super::finish_editor_saves(&view, cx);
+    wait_for(cx, &view, &store, "save returns from the editor", |repo| {
+        !repo.diff_state.edit_mode
+    });
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "unsaved\nbase\nunstaged\n",
+        "{focus:?}: Ctrl/Cmd+S saves the buffer"
+    );
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--stage"]),
+        index_before,
+        "{focus:?}: Ctrl/Cmd+S must not stage while editing"
+    );
+
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    drop(view);
+    scenario.finish().expect("editor keys teardown");
+}
+
 #[gpui::test]
 fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();

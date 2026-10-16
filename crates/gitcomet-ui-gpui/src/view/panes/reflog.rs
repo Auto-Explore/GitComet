@@ -1115,7 +1115,6 @@ mod view_tests {
     /// filter box is parked against the trailing edge, not next to the tab.
     #[gpui::test]
     fn the_filter_box_sits_at_the_trailing_edge_of_the_header(cx: &mut gpui::TestAppContext) {
-        let _visual_guard = crate::test_support::lock_visual_test();
         let (_pane, _repo_id, cx) = open_pane(cx, reflog_entries(8));
         cx.update(|window, app| {
             let _ = window.draw(app);

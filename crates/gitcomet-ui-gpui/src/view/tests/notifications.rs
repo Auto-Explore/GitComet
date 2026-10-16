@@ -4,7 +4,6 @@ use super::*;
 
 #[gpui::test]
 fn startup_crash_report_is_visible_after_relaunch(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(backend);
     let config = GitCometViewConfig::normal(Some(StartupCrashReport {
@@ -32,7 +31,6 @@ fn startup_crash_report_is_visible_after_relaunch(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let recovery_dir = tempfile::tempdir().expect("create recovery state directory");
     let crash_log_path = recovery_dir.path().join("pending-startup-report.log");
     std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
@@ -69,7 +67,6 @@ fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui
 
 #[gpui::test]
 fn reporting_startup_crash_keeps_report_and_notification(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let report_dir = tempfile::tempdir().expect("create report directory");
     let crash_log_path = report_dir.path().join("pending-startup-report.log");
     std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
@@ -170,7 +167,6 @@ fn worktree_tooltip_includes_branch_name() {
 
 #[gpui::test]
 fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -214,7 +210,6 @@ fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui
 
 #[gpui::test]
 fn home_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -280,7 +275,6 @@ fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) 
 fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -361,7 +355,6 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
 fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappears(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -463,7 +456,6 @@ fn auth_prompt_banner_colors_use_accent_palette() {
 
 #[gpui::test]
 fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -478,8 +470,7 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
     );
     repo.feedback.last_error = Some(error.clone());
     repo.feedback
-        .command_log
-        .push(gitcomet_state::model::CommandLogEntry {
+        .push_command_result(gitcomet_state::model::CommandLogEntry {
             time: std::time::SystemTime::now(),
             ok: false,
             command: "git fetch".to_string(),
@@ -487,6 +478,8 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
             stdout: "".into(),
             stderr: "fatal: test".into(),
             announce_success: true,
+            handled_by_auth_prompt: false,
+            failure_id: None,
             hook_operation_id: None,
         });
     next.active_repo = Some(repo_id);
@@ -513,9 +506,840 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
     assert_eq!(error_toasts(cx, &view).len(), 1);
 }
 
+const WINDOWS_SSH_PASSPHRASE_CHALLENGE: &str = "git@github.com: Permission denied (publickey).\n\
+fatal: Could not read from remote repository.\n\
+Please make sure you have the correct access rights\n\
+and the repository exists.\n\
+SSH key passphrase prompt:\n\
+Enter passphrase for key 'C:\\Users\\sampo/.ssh/id_ed25519':";
+
+const AUTH_PROMPT_KINDS: [AuthPromptKind; 2] =
+    [AuthPromptKind::Passphrase, AuthPromptKind::UsernamePassword];
+
+fn announced_command(summary: &str) -> gitcomet_state::model::CommandLogEntry {
+    gitcomet_state::model::CommandLogEntry {
+        time: std::time::SystemTime::now(),
+        ok: true,
+        command: "git push".into(),
+        summary: summary.into(),
+        stdout: "".into(),
+        stderr: "".into(),
+        announce_success: true,
+        handled_by_auth_prompt: false,
+        failure_id: None,
+        hook_operation_id: None,
+    }
+}
+
+fn warning(message: &str) -> gitcomet_state::model::AppNotification {
+    gitcomet_state::model::AppNotification {
+        time: std::time::SystemTime::now(),
+        kind: gitcomet_state::model::AppNotificationKind::Warning,
+        message: message.into(),
+    }
+}
+
+#[gpui::test]
+fn toasts_follow_feedback_sequences_after_shown_entries_are_dropped(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut repo = open_repo_state_with_workdir("/tmp/acknowledged-feedback");
+    for ix in 1..=3 {
+        repo.feedback
+            .push_command_result(announced_command(&format!("Pushed {ix}")));
+    }
+    let mut state = AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        notifications: vec![warning("Warning 1")],
+        notifications_seq: 1,
+        ..AppState::test_default()
+    };
+    apply_notification_snapshot(cx, &view, &state);
+
+    // The store dropped what the window acknowledged and one more of each
+    // arrived meanwhile: both queues got shorter, yet each holds news.
+    state.notifications = vec![warning("Warning 2")];
+    state.notifications_seq = 2;
+    let feedback = &mut state.repos[0].feedback;
+    feedback.command_log = vec![announced_command("Pushed 4")];
+    feedback.command_log_seq = 4;
+    apply_notification_snapshot(cx, &view, &state);
+    apply_notification_snapshot(cx, &view, &state);
+
+    let toasts = all_toasts(cx, &view)
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        toasts,
+        [
+            "Warning 1",
+            "Pushed 1",
+            "Pushed 2",
+            "Pushed 3",
+            "Warning 2",
+            "Pushed 4"
+        ]
+    );
+}
+
+#[gpui::test]
+fn shown_feedback_is_released_with_the_next_store_change(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let store = cx.update(|_window, app| view.read(app).store.clone());
+    // Still opening, so the view requests no loads that would add feedback.
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/released-feedback"),
+        },
+    );
+    repo.feedback
+        .push_command_result(announced_command("Pushed"));
+    repo.feedback
+        .push_diagnostic(gitcomet_state::model::DiagnosticEntry {
+            time: std::time::SystemTime::now(),
+            kind: DiagnosticKind::Error,
+            message: "Disk full".into(),
+        });
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        active_repo: Some(repo_id),
+        repos: vec![repo],
+        notifications: vec![warning("Low on space")],
+        notifications_seq: 1,
+        ..AppState::test_default()
+    }));
+    let show_store_state = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+        });
+        test_support::drain_store_worker(&view, cx);
+    };
+    let queued = |store: &AppStore| {
+        let state = store.snapshot();
+        let feedback = &state.repos[0].feedback;
+        state
+            .notifications
+            .iter()
+            .map(|notification| notification.message.clone())
+            .chain(feedback.diagnostics.iter().map(|d| d.message.clone()))
+            .chain(feedback.command_log.iter().map(|e| e.summary.clone()))
+            .collect::<Vec<_>>()
+    };
+
+    show_store_state(cx);
+    let shown = ["Low on space", "Pushed", "Disk full"];
+    assert_eq!(
+        all_toasts(cx, &view)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>(),
+        shown
+    );
+
+    // The store applies the acknowledgement with its next change.
+    store.dispatch(Msg::ReportError {
+        repo_id: Some(repo_id),
+        message: "Disk still full".into(),
+    });
+    test_support::drain_store_worker(&view, cx);
+    let after_report = queued(&store);
+    assert!(
+        shown
+            .iter()
+            .all(|message| !after_report.iter().any(|queued| queued == message)),
+        "shown feedback is still queued: {after_report:?}"
+    );
+    assert!(
+        after_report
+            .iter()
+            .any(|queued| queued == "Disk still full"),
+        "newer feedback was dropped: {after_report:?}"
+    );
+
+    show_store_state(cx);
+    assert_eq!(
+        error_toasts(cx, &view),
+        vec![
+            (Some(repo_id), "Disk still full".to_string()),
+            (Some(repo_id), "Disk full".to_string()),
+        ]
+    );
+    store.dispatch(Msg::DismissRepoError { repo_id });
+    test_support::drain_store_worker(&view, cx);
+    let after_dismiss = queued(&store);
+    assert!(
+        !after_dismiss
+            .iter()
+            .any(|queued| queued == "Disk still full"),
+        "shown feedback is still queued: {after_dismiss:?}"
+    );
+}
+
+fn auth_challenge(kind: AuthPromptKind) -> &'static str {
+    match kind {
+        AuthPromptKind::Passphrase => WINDOWS_SSH_PASSPHRASE_CHALLENGE,
+        AuthPromptKind::UsernamePassword => {
+            "fatal: Authentication failed for 'https://example.com/private/repo.git/'"
+        }
+        AuthPromptKind::HostVerification => unreachable!("these tests require credential input"),
+    }
+}
+
+fn auth_rejection(kind: AuthPromptKind) -> &'static str {
+    match kind {
+        AuthPromptKind::Passphrase => "The passphrase could not unlock this key. Try again.",
+        AuthPromptKind::UsernamePassword => "The username or password was not accepted. Try again.",
+        AuthPromptKind::HostVerification => unreachable!("these tests require credential input"),
+    }
+}
+
+fn auth_pull_attempt(kind: AuthPromptKind) -> gitcomet_state::model::CommandLogEntry {
+    let challenge = auth_challenge(kind);
+    gitcomet_state::model::CommandLogEntry {
+        time: std::time::SystemTime::UNIX_EPOCH,
+        ok: false,
+        command: "git pull --prune".into(),
+        summary: format!("Pull failed:\n\n{challenge}"),
+        stdout: "".into(),
+        stderr: challenge.into(),
+        announce_success: true,
+        handled_by_auth_prompt: true,
+        failure_id: None,
+        hook_operation_id: None,
+    }
+}
+
+fn auth_pull_state(kind: AuthPromptKind) -> AppState {
+    let mut repo = open_repo_state_with_workdir("/tmp/auth-pull-notifications");
+    repo.feedback.push_command_result(auth_pull_attempt(kind));
+    AppState {
+        active_repo: Some(repo.id),
+        auth_prompt: Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: AuthPromptStatus::AwaitingInput,
+            kind,
+            reason: auth_challenge(kind).into(),
+            operation: AuthRetryOperation::RepoCommand {
+                repo_id: repo.id,
+                command: gitcomet_state::msg::RepoCommandKind::Pull {
+                    mode: PullMode::Default,
+                },
+            },
+        }),
+        repos: vec![repo],
+        ..AppState::test_default()
+    }
+}
+
+fn successful_pull_attempt() -> gitcomet_state::model::CommandLogEntry {
+    gitcomet_state::model::CommandLogEntry {
+        time: std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+        ok: true,
+        summary: "Pull: Fast-forwarded".into(),
+        stdout: "Updating 1111111..2222222\nFast-forward\n".into(),
+        stderr: "".into(),
+        handled_by_auth_prompt: false,
+        ..auth_pull_attempt(AuthPromptKind::Passphrase)
+    }
+}
+
+fn apply_notification_snapshot(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+    state: &AppState,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::new(state.clone()), cx);
+        });
+    });
+}
+
+fn all_toasts(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+) -> Vec<(components::ToastKind, String)> {
+    cx.update(|_window, app| view.read(app).toast_host.read(app).toasts_for_tests(app))
+}
+
+fn first_auth_input(view: &GitCometView, kind: AuthPromptKind) -> Entity<components::TextInput> {
+    if kind == AuthPromptKind::UsernamePassword {
+        view.auth_prompt_username_input.clone()
+    } else {
+        view.auth_prompt_secret_input.clone()
+    }
+}
+
+/// Moves the keyboard to the diff panel, somewhere that is not a text field.
+fn focus_diff_panel(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+) -> gpui::FocusHandle {
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .clone();
+        window.focus(&focus, app);
+        focus
+    })
+}
+
+#[gpui::test]
+fn authentication_prompt_focuses_first_input_before_typing(cx: &mut gpui::TestAppContext) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, _app| window.activate());
+        cx.run_until_parked();
+
+        apply_notification_snapshot(cx, &view, &auth_pull_state(kind));
+        test_support::redraw(cx);
+        let input = cx.update(|_window, app| first_auth_input(view.read(app), kind));
+        cx.update(|window, app| {
+            assert!(
+                window.is_window_active(),
+                "typing requires an active window"
+            );
+            assert!(
+                input.read(app).focus_handle().is_focused(window),
+                "a new {kind:?} prompt must be ready to type into"
+            );
+        });
+
+        cx.simulate_input("credential-input");
+        cx.update(|_window, app| {
+            assert_eq!(
+                input.read(app).text(),
+                "credential-input",
+                "typing without clicking must enter the first {kind:?} field"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn authentication_prompt_preserves_user_focus_on_redraw_and_unrelated_snapshot(
+    cx: &mut gpui::TestAppContext,
+) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, _app| window.activate());
+        cx.run_until_parked();
+        let mut state = auth_pull_state(kind);
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        let input = cx.update(|_window, app| first_auth_input(view.read(app), kind));
+        cx.simulate_input("partly-entered-credential");
+
+        let other_focus = focus_diff_panel(cx, &view);
+        test_support::redraw(cx);
+        assert!(
+            cx.update(|window, _app| other_focus.is_focused(window)),
+            "redrawing an existing {kind:?} prompt must preserve the user's focus"
+        );
+
+        state.repos[0]
+            .feedback
+            .push_command_result(successful_pull_attempt());
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(
+            cx.update(|window, _app| other_focus.is_focused(window)),
+            "an unrelated repository update must not refocus the {kind:?} prompt"
+        );
+        cx.update(|_window, app| {
+            assert_eq!(
+                input.read(app).text(),
+                "partly-entered-credential",
+                "the existing {kind:?} prompt must retain its input across updates"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn validating_authentication_prompt_preserves_focus_and_rejection_refocuses_input(
+    cx: &mut gpui::TestAppContext,
+) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, _app| window.activate());
+        cx.run_until_parked();
+        let mut state = auth_pull_state(kind);
+        let mut prompt = state.auth_prompt.take().unwrap();
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        let input = cx.update(|_window, app| first_auth_input(view.read(app), kind));
+        let other_focus = focus_diff_panel(cx, &view);
+
+        // The first delivered snapshot can already be checking a submitted secret.
+        prompt.status = AuthPromptStatus::Validating;
+        state.auth_prompt = Some(prompt);
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(
+            cx.update(|window, _app| other_focus.is_focused(window)),
+            "a validating {kind:?} prompt must not steal focus"
+        );
+        cx.update(|_window, app| {
+            assert!(
+                view.read(app)
+                    .auth_prompt_secret_input
+                    .read(app)
+                    .is_read_only()
+            );
+            assert!(input.read(app).is_read_only());
+        });
+
+        let prompt = state.auth_prompt.as_mut().unwrap();
+        prompt.generation += 1;
+        prompt.status = AuthPromptStatus::Rejected;
+        prompt.reason = auth_rejection(kind).into();
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        cx.update(|window, app| {
+            let input = input.read(app);
+            assert!(!input.is_read_only());
+            assert!(input.text().is_empty());
+            assert!(
+                input.focus_handle().is_focused(window),
+                "a rejected {kind:?} attempt with a new generation must focus the retry input"
+            );
+        });
+        cx.simulate_input("corrected-credential");
+        cx.update(|_window, app| {
+            assert_eq!(input.read(app).text(), "corrected-credential");
+        });
+    }
+}
+
+#[gpui::test]
+fn dismissed_authentication_prompt_returns_focus_it_took(cx: &mut gpui::TestAppContext) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|window, _app| window.activate());
+        cx.run_until_parked();
+        let mut state = auth_pull_state(kind);
+        let prompt = state.auth_prompt.take();
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        let diff_focus = focus_diff_panel(cx, &view);
+
+        state.auth_prompt = prompt;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        let input = cx.update(|_window, app| first_auth_input(view.read(app), kind));
+        assert!(cx.update(|window, app| input.read(app).focus_handle().is_focused(window)));
+
+        // Escape dismisses the prompt; the store then publishes it as gone.
+        cx.update(|_window, app| view.update(app, |view, cx| view.cancel_auth_prompt(cx)));
+        state.auth_prompt = None;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(
+            cx.update(|window, _app| diff_focus.is_focused(window)),
+            "dismissing the {kind:?} prompt must return focus to where it was"
+        );
+    }
+}
+
+#[gpui::test]
+fn pull_authentication_announces_only_the_successful_retry(cx: &mut gpui::TestAppContext) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        assert!(all_toasts(cx, &view).is_empty());
+
+        let mut state = auth_pull_state(kind);
+        apply_notification_snapshot(cx, &view, &state);
+        assert!(
+            all_toasts(cx, &view).is_empty(),
+            "the challenge is recoverable"
+        );
+
+        state.auth_prompt = None;
+        apply_notification_snapshot(cx, &view, &state);
+        assert!(
+            all_toasts(cx, &view).is_empty(),
+            "submitting must not reveal an old error"
+        );
+
+        state.repos[0]
+            .feedback
+            .push_command_result(successful_pull_attempt());
+        apply_notification_snapshot(cx, &view, &state);
+        apply_notification_snapshot(cx, &view, &state);
+        assert_eq!(
+            all_toasts(cx, &view),
+            vec![(
+                components::ToastKind::Success,
+                "Pull: Fast-forwarded".into()
+            )]
+        );
+        assert!(error_toasts(cx, &view).is_empty());
+        cx.update(|_window, app| {
+            let state = &view.read(app).state;
+            assert_eq!(state.repos[0].feedback.command_log.len(), 2);
+            assert_eq!(
+                state.repos[0].feedback.command_log[0].stderr.as_ref(),
+                auth_challenge(kind)
+            );
+            assert!(
+                !state.repos[0].feedback.command_log[0].ok,
+                "keep the real exit result in the log"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn coalesced_authentication_and_success_snapshots_do_not_revive_the_challenge(
+    cx: &mut gpui::TestAppContext,
+) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let mut state = auth_pull_state(kind);
+        state.auth_prompt = None;
+        state.repos[0]
+            .feedback
+            .push_command_result(successful_pull_attempt());
+
+        // The UI never received the prompt or retry-in-flight snapshots.
+        apply_notification_snapshot(cx, &view, &state);
+        assert_eq!(
+            all_toasts(cx, &view),
+            vec![(
+                components::ToastKind::Success,
+                "Pull: Fast-forwarded".into()
+            )]
+        );
+        assert!(error_toasts(cx, &view).is_empty());
+    }
+}
+
+#[gpui::test]
+fn rejected_credentials_and_prompt_cancellation_do_not_accumulate_error_toasts(
+    cx: &mut gpui::TestAppContext,
+) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let mut state = auth_pull_state(kind);
+        apply_notification_snapshot(cx, &view, &state);
+        let mut prompt = state.auth_prompt.take().unwrap();
+        apply_notification_snapshot(cx, &view, &state);
+
+        let mut rejected = auth_pull_attempt(kind);
+        rejected.time += Duration::from_secs(1);
+        state.repos[0].feedback.push_command_result(rejected);
+        prompt.generation += 1;
+        prompt.status = AuthPromptStatus::Rejected;
+        prompt.reason = auth_rejection(kind).into();
+        state.auth_prompt = Some(prompt);
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(
+            cx.debug_bounds("auth_prompt_error").is_some(),
+            "rejected {kind:?} credentials must show an inline error"
+        );
+        assert!(
+            all_toasts(cx, &view).is_empty(),
+            "rejected credentials belong in the prompt"
+        );
+
+        state.auth_prompt = None;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("auth_prompt_confirm").is_none());
+        assert!(
+            all_toasts(cx, &view).is_empty(),
+            "cancelling does not expose either failed attempt"
+        );
+    }
+}
+
+#[gpui::test]
+fn authentication_validation_rejection_and_new_generation_clear_stale_input(
+    cx: &mut gpui::TestAppContext,
+) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let mut state = auth_pull_state(kind);
+        apply_notification_snapshot(cx, &view, &state);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.auth_prompt_username_input
+                    .update(cx, |input, cx| input.set_text("alice", cx));
+                this.auth_prompt_secret_input
+                    .update(cx, |input, cx| input.set_text("wrong-secret", cx));
+                this.try_auth_prompt_submit(cx);
+                assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+                assert_eq!(this.auth_prompt_submitted_generation, Some(1));
+            });
+        });
+        state.auth_prompt.as_mut().unwrap().status = AuthPromptStatus::Validating;
+        apply_notification_snapshot(cx, &view, &state);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.try_auth_prompt_submit(cx);
+                assert!(
+                    this.auth_prompt_input_error.is_none(),
+                    "validation cannot be submitted twice"
+                );
+            });
+        });
+
+        let prompt = state.auth_prompt.as_mut().unwrap();
+        prompt.status = AuthPromptStatus::Rejected;
+        prompt.reason = auth_rejection(kind).into();
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("auth_prompt_error").is_some());
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                assert!(this.auth_prompt_submitted_generation.is_none());
+                assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+                this.auth_prompt_username_input
+                    .update(cx, |input, cx| input.set_text("alice", cx));
+                this.auth_prompt_secret_input
+                    .update(cx, |input, cx| input.set_text("corrected-secret", cx));
+                this.try_auth_prompt_submit(cx);
+                assert_eq!(this.auth_prompt_submitted_generation, Some(1));
+                assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            });
+        });
+
+        // The same operation and prompt text can represent another challenge.
+        state.auth_prompt.as_mut().unwrap().generation = 2;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                assert_eq!(this.auth_prompt_key, Some(2));
+                assert!(this.auth_prompt_submitted_generation.is_none());
+                this.auth_prompt_secret_input
+                    .update(cx, |input, cx| input.set_text("cancelled-secret", cx));
+                this.cancel_auth_prompt(cx);
+                assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            });
+        });
+        assert!(all_toasts(cx, &view).is_empty());
+    }
+}
+
+#[gpui::test]
+fn repeated_auth_rejection_reenables_input_when_validation_snapshot_is_skipped(
+    cx: &mut gpui::TestAppContext,
+) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let mut state = auth_pull_state(kind);
+        let prompt = state.auth_prompt.as_mut().unwrap();
+        prompt.generation = 2;
+        prompt.status = AuthPromptStatus::Rejected;
+        prompt.reason = auth_rejection(kind).into();
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.auth_prompt_username_input
+                    .update(cx, |input, cx| input.set_text("alice", cx));
+                this.auth_prompt_secret_input
+                    .update(cx, |input, cx| input.set_text("another-wrong-secret", cx));
+                this.try_auth_prompt_submit(cx);
+                assert_eq!(this.auth_prompt_submitted_generation, Some(2));
+                assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            });
+        });
+        test_support::redraw(cx);
+        cx.update(|_window, app| {
+            assert!(
+                view.read(app)
+                    .auth_prompt_secret_input
+                    .read(app)
+                    .is_read_only()
+            );
+        });
+
+        // Only the attempt identity changes: the UI never receives Validating,
+        // and the repeated rejection has exactly the same reason and challenge.
+        state.auth_prompt.as_mut().unwrap().generation = 3;
+        apply_notification_snapshot(cx, &view, &state);
+        test_support::redraw(cx);
+        assert!(cx.debug_bounds("auth_prompt_error").is_some());
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                assert_eq!(this.auth_prompt_key, Some(3));
+                assert!(this.auth_prompt_submitted_generation.is_none());
+                assert!(!this.auth_prompt_secret_input.read(cx).is_read_only());
+                assert!(!this.auth_prompt_username_input.read(cx).is_read_only());
+                assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+                this.auth_prompt_username_input
+                    .update(cx, |input, cx| input.set_text("alice", cx));
+                this.auth_prompt_secret_input
+                    .update(cx, |input, cx| input.set_text("corrected-secret", cx));
+                this.try_auth_prompt_submit(cx);
+                assert_eq!(this.auth_prompt_submitted_generation, Some(3));
+                assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            });
+        });
+        assert!(all_toasts(cx, &view).is_empty());
+    }
+}
+
+#[gpui::test]
+fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppContext) {
+    for kind in AUTH_PROMPT_KINDS {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let mut state = auth_pull_state(kind);
+        apply_notification_snapshot(cx, &view, &state);
+        state.auth_prompt = None;
+
+        for (command, summary) in [
+            ("git pull --prune", "Pull failed: Connection timed out"),
+            (
+                "git push",
+                "Push failed: ! [rejected] main -> main (fetch first)",
+            ),
+        ] {
+            state.repos[0]
+                .feedback
+                .push_command_result(gitcomet_state::model::CommandLogEntry {
+                    command: command.into(),
+                    summary: summary.into(),
+                    stderr: summary.into(),
+                    handled_by_auth_prompt: false,
+                    ..auth_pull_attempt(kind)
+                });
+            apply_notification_snapshot(cx, &view, &state);
+            assert_eq!(
+                error_toasts(cx, &view)[0],
+                (Some(RepoId(1)), summary.into())
+            );
+        }
+        assert_eq!(error_toasts(cx, &view).len(), 2);
+    }
+}
+
+#[gpui::test]
+fn pull_blocked_after_authentication_has_one_actionable_failure_and_no_stale_prompt(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state(AuthPromptKind::Passphrase);
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("auth_prompt_confirm").is_some());
+
+    state.auth_prompt = None;
+    state.repos[0]
+        .feedback
+        .push_command_result(gitcomet_state::model::CommandLogEntry {
+            summary: "Pull failed".into(),
+            stderr: "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md\nAborting".into(),
+            handled_by_auth_prompt: false,
+            failure_id: Some(gitcomet_core::error::GitFailureId::WorktreeWouldBeOverwritten),
+            ..auth_pull_attempt(AuthPromptKind::Passphrase)
+        });
+    apply_notification_snapshot(cx, &view, &state);
+    test_support::redraw(cx);
+    assert!(cx.debug_bounds("auth_prompt_confirm").is_none());
+    cx.update(|_window, app| {
+        let notices = view.read(app).toast_host.read(app).error_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].1.text.summary, "Pull blocked by local changes");
+        assert_eq!(
+            notices[0].1.actions,
+            vec![ErrorAction::ReviewLocalChanges { repo_id: RepoId(1) }]
+        );
+    });
+}
+
+#[gpui::test]
+fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut state = auth_pull_state(AuthPromptKind::Passphrase);
+    state.auth_prompt = None;
+    let operation_id = GitOperationId(1);
+    state.repos[0].feedback.command_log[0].hook_operation_id = Some(operation_id);
+    state.repos[0].feedback.command_log[0].command = "git push".into();
+    state.repos[0].feedback.command_log[0].summary =
+        format!("Push failed:\n\n{WINDOWS_SSH_PASSPHRASE_CHALLENGE}");
+    state.repos[0]
+        .feedback
+        .hook_activity
+        .push(GitHookOperation {
+            id: operation_id,
+            label: "Push".into(),
+            context: None,
+            time: std::time::SystemTime::UNIX_EPOCH,
+            duration: Some(Duration::from_secs(1)),
+            status: GitHookOperationStatus::Failed,
+            handled_by_auth_prompt: true,
+            hooks: vec![gitcomet_state::model::GitHookRun {
+                id: gitcomet_core::git_operation::HookExecutionId {
+                    sid: "auth-test".into(),
+                    child_id: 1,
+                },
+                name: "pre-push".into(),
+                status: GitHookRunStatus::Failed,
+                exit_code: Some(1),
+                duration: Some(Duration::from_secs(1)),
+            }],
+            output: Default::default(),
+            output_bytes: 0,
+            output_truncated: false,
+            latest_line: String::new(),
+            command_started: true,
+            transfer: None,
+            progress_lane: false,
+            progress: None,
+        });
+
+    apply_notification_snapshot(cx, &view, &state);
+    apply_notification_snapshot(cx, &view, &state);
+    assert!(
+        all_toasts(cx, &view).is_empty(),
+        "neither completion path announces an auth challenge"
+    );
+}
+
 #[gpui::test]
 fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -524,18 +1348,16 @@ fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
     let mut next = AppState::test_default();
     let mut repo = open_repo_state_with_workdir("/tmp/persist-repo");
     repo.feedback
-        .diagnostics
-        .push(gitcomet_state::model::DiagnosticEntry {
+        .push_diagnostic(gitcomet_state::model::DiagnosticEntry {
             time: std::time::SystemTime::now(),
             kind: DiagnosticKind::Error,
             message: message.clone(),
         });
-    next.notifications
-        .push(gitcomet_state::model::AppNotification {
-            time: std::time::SystemTime::now(),
-            kind: gitcomet_state::model::AppNotificationKind::Error,
-            message: message.clone(),
-        });
+    next.push_notification(gitcomet_state::model::AppNotification {
+        time: std::time::SystemTime::now(),
+        kind: gitcomet_state::model::AppNotificationKind::Error,
+        message: message.clone(),
+    });
     next.active_repo = Some(repo_id);
     next.repos.push(repo);
     let next = Arc::new(next);
@@ -563,7 +1385,6 @@ fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
 fn apply_state_snapshot_routes_clone_progress_errors_into_global_error_toasts(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -604,14 +1425,18 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_error_toasts(
 }
 
 #[gpui::test]
-fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
+fn try_auth_prompt_submit_passphrase_without_secret_shows_inline_error(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "Enter passphrase".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -629,17 +1454,17 @@ fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::T
         });
     });
 
-    assert!(
-        error_toasts(cx, &view)
-            .iter()
-            .any(|(_, message)| message.contains("Passphrase is required")),
-        "an empty passphrase shows an error, visible above the auth prompt"
-    );
+    assert!(error_toasts(cx, &view).is_empty());
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).auth_prompt_input_error.as_deref(),
+            Some("Passphrase is required.")
+        );
+    });
 }
 
 #[gpui::test]
 fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -647,6 +1472,9 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::Passphrase,
         reason: "Enter passphrase".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -663,6 +1491,13 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
             this.auth_prompt_secret_input
                 .update(cx, |input, cx| input.set_text("my-passphrase", cx));
             this.try_auth_prompt_submit(cx);
+            assert!(this.auth_prompt_secret_input.read(cx).text().is_empty());
+            assert_eq!(this.auth_prompt_submitted_generation, Some(1));
+            this.try_auth_prompt_submit(cx);
+            assert!(
+                this.auth_prompt_input_error.is_none(),
+                "a second submit is ignored while validation starts"
+            );
         });
     });
 
@@ -673,16 +1508,18 @@ fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
-fn try_auth_prompt_submit_username_password_empty_username_shows_error(
+fn try_auth_prompt_submit_username_password_empty_username_shows_inline_error(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -702,16 +1539,17 @@ fn try_auth_prompt_submit_username_password_empty_username_shows_error(
         });
     });
 
-    assert!(
-        error_toasts(cx, &view)
-            .iter()
-            .any(|(_, message)| message.contains("Username is required"))
-    );
+    assert!(error_toasts(cx, &view).is_empty());
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).auth_prompt_input_error.as_deref(),
+            Some("Username is required.")
+        );
+    });
 }
 
 #[gpui::test]
 fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -719,6 +1557,9 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
 
     let mut state = AppState::test_default();
     state.auth_prompt = Some(AuthPromptState {
+        generation: 1,
+        challenge: None,
+        status: AuthPromptStatus::AwaitingInput,
         kind: AuthPromptKind::UsernamePassword,
         reason: "auth required".to_string(),
         operation: AuthRetryOperation::Clone {
@@ -748,7 +1589,6 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn outdated_git_shows_one_sticky_update_notice(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     crate::view::git_version_notice::reset_outdated_git_notice_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =

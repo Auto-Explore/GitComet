@@ -46,7 +46,6 @@ fn draw_and_assert_commit_end_caret(
 #[gpui::test]
 fn cached_commit_form_caret_tracks_wrapped_growth_and_shrink(cx: &mut gpui::TestAppContext) {
     use gpui::EntityInputHandler as _;
-    let _visual_guard = lock_visual_test();
     let _cache_guard = crate::view::enable_stable_cached_views_for_test();
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

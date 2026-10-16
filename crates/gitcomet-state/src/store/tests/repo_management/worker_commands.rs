@@ -308,6 +308,7 @@ fn guarded_effect_sender_wraps_repository_load_messages() {
         Arc::new(std::sync::atomic::AtomicBool::new(true)),
         StoreInstanceId::next(),
         crate::store::repository_preferences::PreferenceHub::new(None),
+        crate::store::isolated_filesystem(),
     );
     let guarded = sender.with_repo_load_guard(repo_id, 3, CancellationToken::new());
 
@@ -401,6 +402,47 @@ fn store_barrier_acknowledges_publication_without_changing_preferences() {
             .recv_timeout(Duration::from_secs(3)),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
     );
+}
+
+#[test]
+fn feedback_acknowledgements_wait_for_the_next_state_change() {
+    let (store, _) = AppStore::new_test(Arc::new(FailingBackend));
+    let barrier = |store: &AppStore| {
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+    };
+    let report = |message: &str| Msg::ReportError {
+        repo_id: None,
+        message: message.into(),
+    };
+    let queued = |store: &AppStore| {
+        store
+            .snapshot()
+            .notifications
+            .iter()
+            .map(|notification| notification.message.clone())
+            .collect::<Vec<_>>()
+    };
+
+    store.dispatch(report("first"));
+    let reported = barrier(&store);
+    store.dispatch(Msg::AcknowledgeNotifications { through_seq: 1 });
+    assert_eq!(
+        barrier(&store),
+        reported,
+        "an acknowledgement alone copies and publishes no state"
+    );
+    assert_eq!(queued(&store), ["first"]);
+
+    store.dispatch(report("second"));
+    barrier(&store);
+    assert_eq!(queued(&store), ["second"]);
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
 }
 
 #[test]

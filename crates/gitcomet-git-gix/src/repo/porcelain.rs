@@ -821,14 +821,17 @@ impl GixRepo {
         }
 
         let detail = stash_apply_failure_detail(&stdout, &stderr);
-        Err(Error::new(ErrorKind::Git(GitFailure::new(
-            "git stash apply",
-            failure_id,
-            output.status.code(),
-            output.stdout,
-            output.stderr,
-            detail,
-        ))))
+        Err(Error::new(ErrorKind::Git(
+            GitFailure::new(
+                "git stash apply",
+                failure_id,
+                output.status.code(),
+                output.stdout,
+                output.stderr,
+                detail,
+            )
+            .with_auth_outcome(output.auth_outcome),
+        )))
     }
 
     pub(super) fn stash_drop_impl(&self, index: usize) -> Result<()> {

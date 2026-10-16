@@ -244,6 +244,7 @@ fn auto_resolve_session_on_open(repo_state: &mut RepoState, path: &Path) {
             stats,
         ),
         None,
+        false,
     );
 }
 

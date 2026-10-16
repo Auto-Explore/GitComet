@@ -14,7 +14,6 @@ use gitcomet_core::services::{CancellationToken, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const ANNEX_KEY: &str =
     "SHA256E-s5--2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824.bin";
@@ -1685,6 +1684,7 @@ fn lfs_lock_listing_does_not_consume_credentials_staged_for_a_command() {
     git(&repo, &["remote", "add", "origin", &file_url(&remote)]);
     let opened = GixBackend.open(&repo).unwrap();
     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+        challenge: None,
         kind: GitAuthKind::UsernamePassword,
         username: Some("alice".into()),
         secret: "test-token".into(),
@@ -2228,7 +2228,7 @@ fn with_lfs_shim(name: &str, script: &str, test: impl FnOnce(&Path)) {
         fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
         let mut paths = vec![bin];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-        let mut child = Command::new(std::env::current_exe().unwrap());
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         test_git_env::apply(&mut child);
         let result = child
             .args(["--exact", name, "--nocapture"])
@@ -2288,6 +2288,7 @@ esac
             let command = LargeFileCommand::LfsPull { paths };
             {
                 let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
+                    challenge: None,
                     kind: GitAuthKind::UsernamePassword,
                     username: Some("test".into()),
                     secret: "lfs-test-secret".into(),

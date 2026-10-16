@@ -6,10 +6,15 @@ use gitcomet_state::model::{AuthRetryOperation, CommandLogEntry};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PendingCommitAmend {
     repo_id: RepoId,
-    last_command_log_entry: Option<CommandLogEntry>,
+    /// The repository's `command_log_seq` when the amend started; its result
+    /// is a later entry.
+    command_log_seq: u64,
+    /// The amend failed while a retry took over. The store drops the failed
+    /// entry once the window has shown it, so the outcome is kept here.
+    failed_awaiting_retry: bool,
 }
 
 /// The cached [`WorktreeFileListInputs`] and the scan they were derived from:
@@ -907,15 +912,16 @@ impl DetailsPaneView {
     }
 
     pub(in super::super) fn mark_pending_commit_amend(&mut self, repo_id: RepoId) {
-        let last_command_log_entry = self
+        let command_log_seq = self
             .state
             .repos
             .iter()
             .find(|repo| repo.id == repo_id)
-            .and_then(|repo| repo.feedback.command_log.last().cloned());
+            .map_or(0, |repo| repo.feedback.command_log_seq);
         self.pending_commit_amend = Some(PendingCommitAmend {
             repo_id,
-            last_command_log_entry,
+            command_log_seq,
+            failed_awaiting_retry: false,
         });
     }
 
@@ -923,20 +929,35 @@ impl DetailsPaneView {
         pending: &PendingCommitAmend,
         repo: &'a RepoState,
     ) -> Option<&'a CommandLogEntry> {
-        let start = pending
-            .last_command_log_entry
-            .as_ref()
-            .and_then(|last_seen| {
-                repo.feedback
-                    .command_log
-                    .iter()
-                    .rposition(|entry| entry == last_seen)
-                    .map(|index| index + 1)
-            })
-            .unwrap_or(0);
-        repo.feedback.command_log[start..]
+        repo.feedback
+            .command_log_after(pending.command_log_seq)
             .iter()
             .rfind(|entry| entry.command == "Amend")
+    }
+
+    /// Follows a pending amend into `state`: `Some(ok)` once its result is in.
+    /// The amend stays pending only while a retry will produce another result;
+    /// the store drops the failed entry once shown, so its outcome is kept.
+    fn advance_pending_commit_amend(
+        pending_amend: &mut Option<PendingCommitAmend>,
+        state: &AppState,
+        active_repo_id: Option<RepoId>,
+    ) -> Option<bool> {
+        let pending = pending_amend.as_mut()?;
+        if Some(pending.repo_id) != active_repo_id {
+            return None;
+        }
+        let repo = state.repos.iter().find(|repo| repo.id == pending.repo_id)?;
+        let entry_ok = Self::pending_commit_amend_completed_entry(pending, repo)
+            .map(|entry| entry.ok)
+            .or(pending.failed_awaiting_retry.then_some(false))?;
+        if Self::should_clear_pending_commit_amend_after_log_entry(state, pending.repo_id, entry_ok)
+        {
+            *pending_amend = None;
+        } else {
+            pending.failed_awaiting_retry = true;
+        }
+        Some(entry_ok)
     }
 
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
@@ -2558,32 +2579,14 @@ impl DetailsPaneView {
             if was_amend_enabled {
                 self.sync_commit_amend_enabled_to_root(false, cx);
             }
-        } else if let Some((repo_id, entry_ok)) =
-            self.pending_commit_amend.as_ref().and_then(|pending| {
-                if Some(pending.repo_id) != next_repo_id {
-                    return None;
-                }
-                let repo = self
-                    .state
-                    .repos
-                    .iter()
-                    .find(|repo| repo.id == pending.repo_id)?;
-                let entry = Self::pending_commit_amend_completed_entry(pending, repo)?;
-                Some((pending.repo_id, entry.ok))
-            })
+        } else if Self::advance_pending_commit_amend(
+            &mut self.pending_commit_amend,
+            &self.state,
+            next_repo_id,
+        ) == Some(true)
         {
-            let clear_pending = Self::should_clear_pending_commit_amend_after_log_entry(
-                &self.state,
-                repo_id,
-                entry_ok,
-            );
-            if entry_ok {
-                self.commit_amend_enabled = false;
-                self.sync_commit_amend_enabled_to_root(false, cx);
-            }
-            if clear_pending {
-                self.pending_commit_amend = None;
-            }
+            self.commit_amend_enabled = false;
+            self.sync_commit_amend_enabled_to_root(false, cx);
         }
         if switched_repo {
             if let Some(prev_repo_id) = prev_active_repo_id {
@@ -2997,20 +3000,27 @@ mod tests {
             stdout: "".into(),
             stderr: "".into(),
             announce_success: true,
+            handled_by_auth_prompt: false,
+            failure_id: None,
             hook_operation_id: None,
+        }
+    }
+
+    fn pending_amend_after(repo_id: RepoId, repo: &RepoState) -> PendingCommitAmend {
+        PendingCommitAmend {
+            repo_id,
+            command_log_seq: repo.feedback.command_log_seq,
+            failed_awaiting_retry: false,
         }
     }
 
     #[test]
     fn pending_amend_ignores_previous_amend_log_entry() {
         let repo_id = RepoId(1);
-        let old_entry = command_log_entry("Amend", true, 1);
-        let pending = PendingCommitAmend {
-            repo_id,
-            last_command_log_entry: Some(old_entry.clone()),
-        };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.feedback.command_log.push(old_entry);
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", true, 1));
+        let pending = pending_amend_after(repo_id, &repo);
 
         assert!(DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo).is_none());
     }
@@ -3018,15 +3028,12 @@ mod tests {
     #[test]
     fn pending_amend_observes_later_amend_log_entry() {
         let repo_id = RepoId(1);
-        let old_entry = command_log_entry("Amend", true, 1);
-        let new_entry = command_log_entry("Amend", true, 2);
-        let pending = PendingCommitAmend {
-            repo_id,
-            last_command_log_entry: Some(old_entry.clone()),
-        };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.feedback.command_log.push(old_entry);
-        repo.feedback.command_log.push(new_entry);
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", true, 1));
+        let pending = pending_amend_after(repo_id, &repo);
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", true, 2));
 
         assert_eq!(
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -3038,17 +3045,14 @@ mod tests {
     #[test]
     fn pending_amend_observes_amend_before_later_push_log_entry() {
         let repo_id = RepoId(1);
-        let old_entry = command_log_entry("Amend", true, 1);
-        let new_entry = command_log_entry("Amend", true, 2);
-        let push_entry = command_log_entry("Push after commit", true, 3);
-        let pending = PendingCommitAmend {
-            repo_id,
-            last_command_log_entry: Some(old_entry.clone()),
-        };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.feedback.command_log.push(old_entry);
-        repo.feedback.command_log.push(new_entry);
-        repo.feedback.command_log.push(push_entry);
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", true, 1));
+        let pending = pending_amend_after(repo_id, &repo);
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", true, 2));
+        repo.feedback
+            .push_command_result(command_log_entry("Push after commit", true, 3));
 
         assert_eq!(
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -3060,17 +3064,14 @@ mod tests {
     #[test]
     fn pending_amend_observes_successful_retry_after_failed_amend_log_entry() {
         let repo_id = RepoId(1);
-        let marker_entry = command_log_entry("Commit", true, 1);
-        let failed_amend = command_log_entry("Amend", false, 2);
-        let successful_retry = command_log_entry("Amend", true, 3);
-        let pending = PendingCommitAmend {
-            repo_id,
-            last_command_log_entry: Some(marker_entry.clone()),
-        };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.feedback.command_log.push(marker_entry);
-        repo.feedback.command_log.push(failed_amend);
-        repo.feedback.command_log.push(successful_retry);
+        repo.feedback
+            .push_command_result(command_log_entry("Commit", true, 1));
+        let pending = pending_amend_after(repo_id, &repo);
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", false, 2));
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", true, 3));
 
         let completed_entry =
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo);
@@ -3082,12 +3083,114 @@ mod tests {
     }
 
     #[test]
+    fn pending_amend_observes_retry_after_shown_entries_were_dropped() {
+        let repo_id = RepoId(1);
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.feedback
+            .push_command_result(command_log_entry("Commit", true, 1));
+        let pending = pending_amend_after(repo_id, &repo);
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", false, 2));
+        // The window acknowledged everything up to the failed attempt.
+        repo.feedback.command_log.clear();
+
+        assert!(DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo).is_none());
+
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", true, 3));
+        assert_eq!(
+            DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
+                .map(|entry| (entry.ok, entry.time)),
+            Some((true, UNIX_EPOCH + Duration::from_secs(3)))
+        );
+    }
+
+    fn amend_retry_prompt(repo_id: RepoId) -> AuthPromptState {
+        AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: AuthPromptStatus::AwaitingInput,
+            kind: AuthPromptKind::Passphrase,
+            reason: "auth required".into(),
+            operation: AuthRetryOperation::Commit {
+                repo_id,
+                message: "message".into(),
+                amend: true,
+                push_after_commit: false,
+            },
+        }
+    }
+
+    /// An amend that failed into a passphrase prompt, as the window saw it.
+    fn failed_amend_awaiting_retry(repo_id: RepoId) -> (Option<PendingCommitAmend>, AppState) {
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        let mut pending = Some(pending_amend_after(repo_id, &repo));
+        repo.feedback
+            .push_command_result(command_log_entry("Amend", false, 1));
+        let state = AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            auth_prompt: Some(amend_retry_prompt(repo_id)),
+            ..AppState::test_default()
+        };
+        assert_eq!(
+            DetailsPaneView::advance_pending_commit_amend(&mut pending, &state, Some(repo_id)),
+            Some(false)
+        );
+        assert!(
+            pending.is_some_and(|pending| pending.failed_awaiting_retry),
+            "the prompt will retry the amend"
+        );
+        (pending, state)
+    }
+
+    #[test]
+    fn pending_amend_clears_when_its_retry_is_abandoned_after_the_failure_was_dropped() {
+        let repo_id = RepoId(1);
+        let (mut pending, mut state) = failed_amend_awaiting_retry(repo_id);
+        // The window acknowledged the failure, then the prompt was cancelled.
+        state.repos[0].feedback.acknowledge(0, 1);
+        state.auth_prompt = None;
+
+        assert_eq!(
+            DetailsPaneView::advance_pending_commit_amend(&mut pending, &state, Some(repo_id)),
+            Some(false)
+        );
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn pending_amend_sees_a_successful_retry_after_the_failure_was_dropped() {
+        let repo_id = RepoId(1);
+        let (mut pending, mut state) = failed_amend_awaiting_retry(repo_id);
+        state.repos[0].feedback.acknowledge(0, 1);
+        assert_eq!(
+            DetailsPaneView::advance_pending_commit_amend(&mut pending, &state, Some(repo_id)),
+            Some(false)
+        );
+        assert!(pending.is_some(), "the prompt is still open");
+
+        state.auth_prompt = None;
+        state.repos[0]
+            .feedback
+            .push_command_result(command_log_entry("Amend", true, 2));
+        assert_eq!(
+            DetailsPaneView::advance_pending_commit_amend(&mut pending, &state, Some(repo_id)),
+            Some(true)
+        );
+        assert_eq!(pending, None);
+    }
+
+    #[test]
     fn pending_amend_marker_survives_auth_prompt_retry() {
         let repo_id = RepoId(1);
         let state = AppState {
             repos: vec![repo_state(repo_id, "/tmp/repo")],
             active_repo: Some(repo_id),
             auth_prompt: Some(AuthPromptState {
+                generation: 1,
+                challenge: None,
+                status: AuthPromptStatus::AwaitingInput,
                 kind: AuthPromptKind::UsernamePassword,
                 reason: "auth required".into(),
                 operation: AuthRetryOperation::Commit {

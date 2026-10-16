@@ -81,7 +81,6 @@ fn assert_in_bar(cx: &mut gpui::VisualTestContext, selector: &'static str, bar: 
 
 #[gpui::test]
 fn builtins_move_in_both_directions_and_keep_their_handlers(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = open_window(cx, Registry::build(vec![Box::new(Layout)]).unwrap());
     for selector in ["terminal", "create_branch", "stash"] {
         assert_in_bar(cx, selector, "bottom_status_bar");
@@ -174,7 +173,6 @@ impl Extension for Contributed {
 fn contributed_items_keep_scope_lifetime_and_independent_invalidation(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let builds = Rc::new(Cell::new(0));
     let indicator = Rc::new(RefCell::new(None));
     let (_, cx) = open_window(

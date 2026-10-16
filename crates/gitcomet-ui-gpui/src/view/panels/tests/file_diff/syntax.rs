@@ -84,7 +84,6 @@ fn whole_patch_target_has_no_diff_rows_in_the_main_pane(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

@@ -3,8 +3,6 @@ use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_core::domain::SubmoduleStatus;
 use std::sync::Arc;
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
 /// Line box for the path label, in UI-font units so it tracks the font
@@ -12,35 +10,19 @@ const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
 const STATUS_ROW_LINE_HEIGHT_PX: f32 = 18.0;
 
 #[cfg(test)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct StatusSelectionBenchSnapshot {
-    pub position_scan_steps: u64,
+fn status_selection_scan_steps() -> u64 {
+    STATUS_SELECTION_SCAN_STEPS.with(Cell::get)
 }
 
 #[cfg(test)]
-pub(in crate::view) fn bench_snapshot_status_selection() -> StatusSelectionBenchSnapshot {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
-    {
-        StatusSelectionBenchSnapshot {
-            position_scan_steps: STATUS_SELECTION_POSITION_SCAN_STEPS.load(Ordering::Relaxed),
-        }
-    }
-    #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
-    {
-        StatusSelectionBenchSnapshot::default()
-    }
+fn reset_status_selection_scan_steps() {
+    STATUS_SELECTION_SCAN_STEPS.with(|steps| steps.set(0));
 }
 
 #[cfg(test)]
-pub(in crate::view) fn bench_reset_status_selection() {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
-    {
-        STATUS_SELECTION_POSITION_SCAN_STEPS.store(0, Ordering::Relaxed);
-    }
+thread_local! {
+    static STATUS_SELECTION_SCAN_STEPS: Cell<u64> = const { Cell::new(0) };
 }
-
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
-static STATUS_SELECTION_POSITION_SCAN_STEPS: AtomicU64 = AtomicU64::new(0);
 
 struct StatusMultiSelectionSlice<'a> {
     selected: &'a mut Vec<std::path::PathBuf>,
@@ -174,34 +156,21 @@ fn status_selection_entry_index_hint(
     index_hint.filter(|&ix| entries.get(ix).is_some_and(|path| path.as_path() == target))
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
 fn status_selection_entry_index(
     entries: &[std::path::PathBuf],
     target: &std::path::Path,
     index_hint: Option<usize>,
     trust_hint: bool,
 ) -> Option<usize> {
-    if let Some(ix) = status_selection_entry_index_hint(entries, target, index_hint, trust_hint) {
-        return Some(ix);
-    }
-    for (ix, path) in entries.iter().enumerate() {
-        STATUS_SELECTION_POSITION_SCAN_STEPS.fetch_add(1, Ordering::Relaxed);
-        if path.as_path() == target {
-            return Some(ix);
-        }
-    }
-    None
-}
-
-#[cfg(not(any(debug_assertions, feature = "benchmarks")))]
-fn status_selection_entry_index(
-    entries: &[std::path::PathBuf],
-    target: &std::path::Path,
-    index_hint: Option<usize>,
-    trust_hint: bool,
-) -> Option<usize> {
-    status_selection_entry_index_hint(entries, target, index_hint, trust_hint)
-        .or_else(|| entries.iter().position(|path| path.as_path() == target))
+    status_selection_entry_index_hint(entries, target, index_hint, trust_hint).or_else(|| {
+        entries
+            .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                STATUS_SELECTION_SCAN_STEPS.with(|steps| steps.set(steps.get() + 1));
+            })
+            .position(|path| path.as_path() == target)
+    })
 }
 
 pub(super) fn apply_status_multi_selection_click(
@@ -1548,7 +1517,7 @@ mod tests {
 
     #[test]
     fn status_selection_shift_click_uses_index_hints_without_scanning() {
-        bench_reset_status_selection();
+        reset_status_selection_scan_steps();
 
         let mut sel = StatusMultiSelection::default();
         let entries = vec![pb("a"), pb("b"), pb("c"), pb("d")];
@@ -1581,12 +1550,12 @@ mod tests {
         assert_eq!(sel.unstaged_anchor, Some(pb("b")));
         assert_eq!(sel.unstaged_anchor_index, Some(1));
         assert_eq!(sel.unstaged_anchor_order_rev, Some(1));
-        assert_eq!(bench_snapshot_status_selection().position_scan_steps, 0);
+        assert_eq!(status_selection_scan_steps(), 0);
     }
 
     #[test]
     fn status_selection_shift_click_falls_back_when_index_hint_is_stale() {
-        bench_reset_status_selection();
+        reset_status_selection_scan_steps();
 
         let mut sel = StatusMultiSelection::default();
         let entries = vec![pb("a"), pb("b"), pb("c"), pb("d")];
@@ -1618,9 +1587,8 @@ mod tests {
         assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
         assert_eq!(sel.unstaged_anchor, Some(pb("b")));
         assert_eq!(sel.unstaged_anchor_index, Some(1));
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         assert!(
-            bench_snapshot_status_selection().position_scan_steps > 0,
+            status_selection_scan_steps() > 0,
             "stale index hints should fall back to a path scan"
         );
     }

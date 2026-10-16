@@ -400,7 +400,7 @@ fn file_save_receipts_wait_for_execution_and_report_success_or_failure() {
     for (path, succeeds) in [("file.txt", true), ("../outside.txt", false)] {
         let (release, wait) = std::sync::mpsc::channel();
         // Saves run on the shared filesystem queue, not the repo executor.
-        super::super::executor::filesystem_executor().spawn(move || {
+        super::super::executor::FILESYSTEM_QUEUE.spawn(move || {
             let _ = wait.recv();
         });
         let (completion, received) = smol::channel::bounded(1);
@@ -555,6 +555,7 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
     };
     let auth = gitcomet_core::auth::StagedGitAuth {
+        challenge: None,
         kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
         username: Some("alice".to_string()),
         secret: "token".to_string(),

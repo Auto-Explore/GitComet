@@ -19,7 +19,7 @@ use gitcomet_core::process::current_git_runtime;
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, AuthPromptStatus, BranchExistsPromptOperation,
     BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
     FileBrowserSettings, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable,
     MaintenanceSettings, RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
@@ -451,10 +451,6 @@ const HISTORY_GRAPH_ELBOW_RADIUS_PX: f32 = 6.0;
 /// fades from transparent into the border on the message cell, tying a commit's
 /// dot to its message.
 const HISTORY_GRAPH_FADE_WIDTH_PX: f32 = 44.0;
-/// Alpha the fade reaches where it meets the message border. Deliberately faint:
-/// it runs behind the lane strokes on every row, so anything stronger reads as a
-/// selection highlight.
-const HISTORY_GRAPH_FADE_ALPHA: f32 = 0.10;
 /// Below this much ref-column width the hover branch badge is dropped rather
 /// than truncated to an unreadable stub.
 const HISTORY_BRANCH_BADGE_MIN_W_PX: f32 = 34.0;

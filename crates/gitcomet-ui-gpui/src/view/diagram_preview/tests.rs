@@ -1087,7 +1087,6 @@ impl Render for Harness {
 
 #[gpui::test]
 fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let source: Arc<str> = "flowchart LR\nA-->B".into();
     let (view, cx) = cx.add_window_view(|_, _| Harness {
         key: DiagramKey::new(DiagramKind::Mermaid, source.clone()),
