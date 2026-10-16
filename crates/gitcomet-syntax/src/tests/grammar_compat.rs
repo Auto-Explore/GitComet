@@ -1600,7 +1600,7 @@ const UNREAD_HIGHLIGHT_SETTINGS: &[(DiffSyntaxLanguage, &str, usize, &str)] = &[
 )];
 
 /// The (language, name) pairs in `found` that `allowed` does not explain with
-/// the exact count.
+/// the exact count, and the `allowed` rows nothing in `found` still needs.
 fn unexplained(
     found: &[(DiffSyntaxLanguage, String)],
     allowed: &[(DiffSyntaxLanguage, &str, usize, &str)],
@@ -1618,6 +1618,18 @@ fn unexplained(
         })
         .map(|(language, name)| format!("{language:?} {name}"))
         .collect();
+    unexplained.extend(
+        allowed
+            .iter()
+            .filter(|(l, n, c, _)| {
+                found
+                    .iter()
+                    .filter(|(language, name)| language == l && name == n)
+                    .count()
+                    != *c
+            })
+            .map(|(l, n, c, _)| format!("stale allowlist row: {l:?} {n} x{c}")),
+    );
     unexplained.sort();
     unexplained.dedup();
     unexplained
@@ -1673,10 +1685,16 @@ fn no_wired_query_relies_on_a_predicate_the_engine_skips() {
 #[test]
 fn every_highlight_capture_is_supported_or_ignored() {
     let mut unsupported = Vec::new();
+    let mut used_unmapped = Vec::new();
     for language in all_supported_languages() {
         let Some(spec) = tree_sitter_highlight_spec(language) else {
             continue;
         };
+        used_unmapped.extend(
+            UNMAPPED_CAPTURES
+                .iter()
+                .filter(|(l, name)| *l == language && spec.query.capture_names().contains(name)),
+        );
         unsupported.extend(
             spec.query
                 .capture_names()
@@ -1689,6 +1707,12 @@ fn every_highlight_capture_is_supported_or_ignored() {
                 .map(|name| format!("{language:?} @{name}")),
         );
     }
+    unsupported.extend(
+        UNMAPPED_CAPTURES
+            .iter()
+            .filter(|row| !used_unmapped.contains(row))
+            .map(|(l, name)| format!("stale allowlist row: {l:?} @{name}")),
+    );
     assert!(
         unsupported.is_empty(),
         "unsupported captures: {unsupported:?}"
