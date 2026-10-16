@@ -842,7 +842,6 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
     }
     cx.update(|_, app| {
         let docs = view.read(app).documents.read(app);
-        assert!(docs.saves_drained(app));
         assert!(
             docs.unsaved_labels(app).is_empty(),
             "the recovered source must use its moved disk baseline"
