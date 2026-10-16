@@ -117,8 +117,8 @@ fn word_moves_on_flat_text(text: &str, offset: usize) -> (usize, usize) {
         offset
     };
     let space = |ch: char| ch.is_whitespace();
-    let word = TextInput::is_word_char;
-    let symbol = |ch: char| !ch.is_whitespace() && !TextInput::is_word_char(ch);
+    let word = crate::text_selection::is_word_char;
+    let symbol = |ch: char| !ch.is_whitespace() && !crate::text_selection::is_word_char(ch);
     let start = left(left(left(left(offset, &space), &symbol), &space), &word);
     let end = match text[offset..].chars().next() {
         None => text.len(),

@@ -2,6 +2,7 @@ use super::shaping::*;
 use super::state::*;
 use super::wrap::*;
 use super::*;
+use crate::text_selection::is_word_char;
 
 impl TextInput {
     /// Collapses the selection once another surface has taken the window's.
@@ -785,10 +786,6 @@ impl TextInput {
             .unwrap_or(row.end)
     }
 
-    pub(super) fn is_word_char(ch: char) -> bool {
-        crate::text_selection::is_word_char(ch)
-    }
-
     /// Walks left over characters matching `predicate`, reading only the ones
     /// it passes; a whitespace run crosses rows, since a newline is whitespace.
     fn skip_left_while(
@@ -829,12 +826,12 @@ impl TextInput {
 
         // Skip punctuation/symbols (e.g. '.' '/' '-') so word navigation doesn't get stuck on them.
         offset = Self::skip_left_while(&content, offset, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
+            !ch.is_whitespace() && !is_word_char(ch)
         });
 
         // Skip any whitespace again, then skip the word itself.
         offset = Self::skip_left_while(&content, offset, |ch| ch.is_whitespace());
-        Self::skip_left_while(&content, offset, Self::is_word_char)
+        Self::skip_left_while(&content, offset, is_word_char)
     }
 
     pub(super) fn next_word_end(&self, offset: usize) -> usize {
@@ -847,12 +844,12 @@ impl TextInput {
         if ch.is_whitespace() {
             return Self::skip_right_while(&content, offset, |ch| ch.is_whitespace());
         }
-        if Self::is_word_char(ch) {
-            return Self::skip_right_while(&content, offset, Self::is_word_char);
+        if is_word_char(ch) {
+            return Self::skip_right_while(&content, offset, is_word_char);
         }
 
         Self::skip_right_while(&content, offset, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
+            !ch.is_whitespace() && !is_word_char(ch)
         })
     }
 
