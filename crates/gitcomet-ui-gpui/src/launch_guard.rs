@@ -1,4 +1,4 @@
-use gitcomet_core::text_utils::panic_payload_to_string;
+use gitcomet_core::panic::panic_payload_to_string;
 use std::any::Any;
 use std::fmt;
 

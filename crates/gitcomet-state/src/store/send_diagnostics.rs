@@ -36,7 +36,7 @@ fn failure_counter(kind: SendFailureKind) -> &'static AtomicU64 {
 /// stays consistent; takes a reference so a caller holding a `Box` can pass
 /// `payload.as_ref()` without giving up ownership.
 pub(super) fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
-    gitcomet_core::text_utils::panic_payload_to_string(payload, "unknown panic payload")
+    gitcomet_core::panic::panic_payload_to_string(payload, "unknown panic payload")
 }
 
 fn record_send_failure(kind: SendFailureKind, context: &'static str) {

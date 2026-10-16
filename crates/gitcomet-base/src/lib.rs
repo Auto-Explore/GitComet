@@ -1,6 +1,6 @@
 //! Product identity, per-user directories, platform detection, file utilities,
-//! the background loading state and instrumentation shared by every GitComet
-//! layer. It holds no Git domain types, so the UI kit builds on it rather than
+//! the background loading state, panic containment and instrumentation shared
+//! by every GitComet layer. It holds no Git domain types, so the UI kit builds on it rather than
 //! on `gitcomet-core`.
 
 pub mod environment;
@@ -9,6 +9,7 @@ pub mod history_perf;
 pub mod identity;
 mod loadable;
 pub mod op_trace;
+pub mod panic;
 pub mod platform;
 
 pub use loadable::Loadable;

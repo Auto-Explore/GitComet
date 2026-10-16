@@ -63,7 +63,9 @@ pub fn install() {
 
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        write_panic_log(info);
+        if !gitcomet_core::panic::note_contained(info) {
+            write_panic_log(info);
+        }
         previous(info);
     }));
 }
@@ -1487,6 +1489,75 @@ mod tests {
         );
         assert!(parsed.backtrace.is_empty());
         assert!(!contents.contains("backtrace:"));
+    }
+
+    extern "C" fn panic_across_ffi() {
+        panic!("panic across ffi");
+    }
+
+    #[test]
+    fn only_panics_that_reach_contain_skip_the_crash_report() {
+        const CHILD: &str = "GITCOMET_CONTAINED_PANIC_TEST_CHILD";
+        if let Ok(kind) = std::env::var(CHILD) {
+            install();
+            begin_session().expect("begin child session");
+            let contained = gitcomet_core::panic::contain(|| panic!("contained test panic"));
+            assert_eq!(
+                contained.map_err(|panic| panic.message),
+                Err("contained test panic".to_owned())
+            );
+            match kind.as_str() {
+                "uncontained" => panic!("uncontained test panic"),
+                "cannot-unwind" => {
+                    let _ = gitcomet_core::panic::contain(|| panic_across_ffi());
+                }
+                _ => {}
+            }
+            finish_session().expect("finish child session");
+            std::process::exit(0);
+        }
+
+        for (kind, message) in [
+            ("contained", None),
+            ("uncontained", Some("uncontained test panic")),
+            (
+                "cannot-unwind",
+                Some("panic in a function that cannot unwind"),
+            ),
+        ] {
+            let root = tempdir().expect("child profile root");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "crashlog::tests::only_panics_that_reach_contain_skip_the_crash_report",
+                    "--nocapture",
+                ])
+                .env(CHILD, kind)
+                .env("GITCOMET_PROFILE_ROOT", root.path())
+                .output()
+                .expect("run contained panic child");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.success(),
+                message.is_none(),
+                "{kind}: {stderr}"
+            );
+            assert!(stderr.contains("contained test panic"), "{kind}: {stderr}");
+            let dir = root
+                .path()
+                .join("state")
+                .join(identity::current().directory_name())
+                .join("crashes");
+            let report = take_startup_report_from_crash_dir(&dir);
+            let Some(message) = message else {
+                assert!(report.is_none(), "{kind}");
+                continue;
+            };
+            let report = report.expect("crash report");
+            let parsed = parse_crash_log(&std::fs::read_to_string(report.crash_log_path).unwrap());
+            assert_eq!(parsed.failure_kind.as_deref(), Some("panic"), "{kind}");
+            assert_eq!(parsed.message.as_deref(), Some(message), "{kind}");
+        }
     }
 
     #[test]

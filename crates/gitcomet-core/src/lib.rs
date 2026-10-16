@@ -1,5 +1,5 @@
-// Shared foundations, kept at their established paths.
-pub use gitcomet_base::{environment, fs_utils, history_perf, identity, op_trace, platform};
+// Core re-exports gitcomet-base's modules at `gitcomet_core::` paths.
+pub use gitcomet_base::{environment, fs_utils, history_perf, identity, op_trace, panic, platform};
 
 pub mod annex;
 pub mod auth;
