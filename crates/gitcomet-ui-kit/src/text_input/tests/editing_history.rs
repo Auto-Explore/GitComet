@@ -89,6 +89,33 @@ fn single_line_shift_enter_is_a_noop(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// History outlives many edits, so its entries must not pin the whole-document
+/// caches each revision warmed: a line-start table and a flattened copy per
+/// keystroke, up to the step limit.
+#[gpui::test]
+fn undo_history_keeps_no_whole_document_caches(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            for _ in 0..3 {
+                // What prepaint and caret motion read between keystrokes.
+                input.content.line_starts();
+                input.text();
+                input.replace_utf8_range(0..0, "x", cx);
+            }
+            input.undo(&Undo, window, cx);
+
+            let history = input.selection.undo_stack.iter();
+            for entry in history.chain(&input.selection.redo_stack) {
+                assert!(!entry.content.is_line_index_built());
+                assert!(!entry.content.is_materialized());
+            }
+        });
+    });
+}
+
 #[gpui::test]
 fn redo_restores_text_after_undo(cx: &mut gpui::TestAppContext) {
     let (input, cx) = cx.add_window_view(|window, cx| {

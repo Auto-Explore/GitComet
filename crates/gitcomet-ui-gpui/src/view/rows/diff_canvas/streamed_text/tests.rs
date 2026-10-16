@@ -65,7 +65,7 @@ fn diff_text_paint_payload_reveals_whitespace_markers() {
         tab_width,
         Some(&styled),
         None,
-        Some("a b\t"),
+        Some(super::super::DiffRowText::Str("a b\t")),
         true,
         DiffTextRegion::Inline,
         None,

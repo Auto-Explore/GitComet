@@ -619,6 +619,23 @@ pub(in crate::view) fn is_streamable_diff_text(
     text.len() >= STREAMED_DIFF_TEXT_MIN_BYTES && !text.has_tabs_without_loading()
 }
 
+/// A row's text as its producer holds it. The paint payload reads a
+/// source-backed line only when it needs the whole line.
+#[derive(Clone, Copy)]
+pub(super) enum DiffRowText<'a> {
+    Str(&'a str),
+    Line(&'a gitcomet_core::file_diff::FileDiffLineText),
+}
+
+impl<'a> DiffRowText<'a> {
+    fn as_str(self) -> &'a str {
+        match self {
+            Self::Str(text) => text,
+            Self::Line(line) => line.as_ref(),
+        }
+    }
+}
+
 pub(in crate::view) fn whitespace_visible_diff_offset_map(
     tab_width: usize,
     text: &str,
@@ -706,7 +723,7 @@ pub(super) fn inline_diff_line_row_canvas(
     gutter_fg: gpui::Rgba,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
-    raw_text: Option<&str>,
+    raw_text: Option<DiffRowText<'_>>,
     reveal_whitespace_chars: bool,
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
@@ -969,8 +986,8 @@ pub(super) fn split_diff_line_row_canvas(
     right_styled: Option<&CachedDiffStyledText>,
     left_streamed_spec: Option<StreamedDiffTextPaintSpec>,
     right_streamed_spec: Option<StreamedDiffTextPaintSpec>,
-    left_raw_text: Option<&str>,
-    right_raw_text: Option<&str>,
+    left_raw_text: Option<DiffRowText<'_>>,
+    right_raw_text: Option<DiffRowText<'_>>,
     reveal_whitespace_chars: bool,
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
@@ -1327,7 +1344,7 @@ pub(super) fn patch_split_column_row_canvas(
     line_no: SharedString,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
-    raw_text: Option<&str>,
+    raw_text: Option<DiffRowText<'_>>,
     reveal_whitespace_chars: bool,
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
@@ -1644,7 +1661,7 @@ pub(super) fn worktree_preview_row_canvas(
     line_no: SharedString,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
-    raw_text: Option<&str>,
+    raw_text: Option<DiffRowText<'_>>,
     reveal_whitespace_chars: bool,
     wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {

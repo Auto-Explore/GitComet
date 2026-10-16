@@ -148,6 +148,13 @@ impl DiffRenderer {
             && self.rendered_file_diff_cache_is_current()
     }
 
+    /// Batches a pass over the visible rows' source-backed text.
+    pub(in crate::view) fn batch_visible_row_reads(
+        &self,
+    ) -> gitcomet_core::file_diff::FileSliceBatch {
+        super::super::diff_search::row_pass_batch(self.is_collapsed_diff_projection_active())
+    }
+
     pub(in crate::view) fn collapsed_visible_row(
         &self,
         visible_ix: usize,

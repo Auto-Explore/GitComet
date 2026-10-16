@@ -35,7 +35,7 @@ impl<T: Clone + 'static> PickerNavRows for IndexedNavRows<T> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 pub(in crate::view) struct PickerNavKeys {
     pub escape: bool,
     pub arrow_up: bool,

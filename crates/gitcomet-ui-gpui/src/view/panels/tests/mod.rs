@@ -41,7 +41,9 @@ pub(super) fn finish_editor_saves(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    // A save is real disk I/O on two worker threads; loaded Windows CI runners
+    // have taken over 1 s, so this is a hang guard, not a speed check.
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
     loop {
         cx.run_until_parked();
         let drained = cx.update(|_, app| {
@@ -54,12 +56,41 @@ pub(super) fn finish_editor_saves(
         if drained {
             return;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "filesystem save did not finish"
-        );
+        if std::time::Instant::now() >= deadline {
+            let report = cx.update(|_, app| unfinished_saves_report(view, app));
+            panic!(
+                "filesystem save did not finish within {DEFAULT_MAIN_PANE_WAIT_TIMEOUT:?}: {report}"
+            );
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+/// Where each unfinished save stands: still in the store's engine, finished but
+/// never taken by the pane, or never seen by the store.
+fn unfinished_saves_report(view: &gpui::Entity<GitCometView>, app: &gpui::App) -> String {
+    let main = view.read(app).diff_renderer.read(app);
+    let snapshot = main.store.snapshot().expect("window store");
+    let waiting: Vec<_> = main
+        .editor_documents
+        .pending()
+        .iter()
+        .filter_map(|buffer| {
+            let state = buffer.read();
+            let save = state.saving().as_ref()?;
+            Some((save.operation, save.destination.clone()))
+        })
+        .collect();
+    let completed: Vec<_> = snapshot
+        .filesystem
+        .completed
+        .iter()
+        .map(|result| result.id)
+        .collect();
+    format!(
+        "pane waits on {waiting:?}; store in flight {:?}, completed {completed:?}",
+        snapshot.filesystem.pending
+    )
 }
 
 pub(super) fn simulate_counted_click(

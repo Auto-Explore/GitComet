@@ -2127,6 +2127,19 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
         );
     });
 
+    // Painting reads the visible slice; a redraw must not load the whole row.
+    let _ = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let read = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+    assert!(
+        read < 64 * 1024,
+        "a redraw read {read} bytes of the {} byte preview row",
+        long_json.len()
+    );
+
     std::fs::remove_dir_all(&workdir).expect("cleanup committed deleted preview fixture");
 }
 

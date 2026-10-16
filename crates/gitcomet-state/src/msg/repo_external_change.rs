@@ -45,15 +45,20 @@ impl ChangedPaths {
 
     /// Whether `path` (relative) may have changed: always, when unknown. A
     /// known path covers everything below it, since a moved or removed
-    /// directory is reported as one path with no event per file inside.
-    pub fn may_contain(&self, path: &Path) -> bool {
+    /// directory is reported as one path with no event per file inside. A
+    /// directory or gitlink also changes with any known path inside it.
+    pub fn may_have_changed(&self, path: &Path) -> bool {
         match self {
             Self::Unknown => true,
-            Self::Known(paths) => path.ancestors().any(|ancestor| {
-                paths
-                    .binary_search_by(|known| known.as_path().cmp(ancestor))
-                    .is_ok()
-            }),
+            Self::Known(paths) => {
+                path.ancestors().any(|ancestor| {
+                    paths
+                        .binary_search_by(|known| known.as_path().cmp(ancestor))
+                        .is_ok()
+                }) || paths
+                    .get(paths.partition_point(|known| known.as_path() < path))
+                    .is_some_and(|known| known.starts_with(path))
+            }
         }
     }
 
@@ -207,15 +212,22 @@ mod tests {
             known.paths(),
             Some(&[PathBuf::from("a"), PathBuf::from("b")][..])
         );
-        assert!(known.may_contain(Path::new("a")));
-        assert!(!known.may_contain(Path::new("c")));
-        assert!(ChangedPaths::Unknown.may_contain(Path::new("c")));
+        assert!(known.may_have_changed(Path::new("a")));
+        assert!(!known.may_have_changed(Path::new("c")));
+        assert!(ChangedPaths::Unknown.may_have_changed(Path::new("c")));
         // `mv src lib` is two directory paths; the files inside get no event.
         let moved = ChangedPaths::known(vec!["lib".into(), "src".into()]);
-        assert!(moved.may_contain(Path::new("src/main.rs")));
-        assert!(moved.may_contain(Path::new("lib/deep/mod.rs")));
-        assert!(!moved.may_contain(Path::new("srcs/main.rs")));
-        assert!(!moved.may_contain(Path::new("other.rs")));
+        assert!(moved.may_have_changed(Path::new("src/main.rs")));
+        assert!(moved.may_have_changed(Path::new("lib/deep/mod.rs")));
+        assert!(!moved.may_have_changed(Path::new("srcs/main.rs")));
+        assert!(!moved.may_have_changed(Path::new("other.rs")));
+        // A gitlink changes with the files inside its submodule.
+        let inside = ChangedPaths::known(vec!["sub/src/lib.rs".into(), "subtle.rs".into()]);
+        assert!(inside.may_have_changed(Path::new("sub")));
+        assert!(inside.may_have_changed(Path::new("sub/src")));
+        assert!(!inside.may_have_changed(Path::new("su")));
+        assert!(!inside.may_have_changed(Path::new("sub/src/main.rs")));
+        assert!(!inside.may_have_changed(Path::new("vendor")));
 
         let too_many = (0..=MAX_CHANGED_PATHS)
             .map(|n| PathBuf::from(format!("f{n}")))

@@ -123,6 +123,16 @@ impl CommitFileSort {
         Self::ALL.into_iter().find(|sort| sort.key() == raw)
     }
 
+    pub(in crate::view) const fn needs_line_stats(self) -> bool {
+        match self {
+            Self::EditSizeAscending | Self::EditSizeDescending | Self::Edits => true,
+            Self::PathAscending
+            | Self::PathDescending
+            | Self::FileTypeAscending
+            | Self::FileTypeDescending => false,
+        }
+    }
+
     /// Each option reads "Ascending"/"Descending" its own way -- path A→Z, file
     /// type by extension A→Z -- so the direction word is the same everywhere and
     /// the noun in front says what is being ordered. Edit size keeps

@@ -451,8 +451,12 @@ impl StandaloneBuffer {
             input.set_text(path.display().to_string(), cx);
             input
         });
-        let subscriptions = vec![cx.observe(&input, |this, _, cx| {
-            if !this.loading() {
+        let subscriptions = vec![
+            cx.observe(&input, |_, _, cx| cx.notify()),
+            cx.subscribe(&input, |this, _, _: &crate::kit::TextInputChanged, cx| {
+                if this.loading() {
+                    return;
+                }
                 if this.editing {
                     this.document.edit(
                         file_editor_text_fingerprint(&this.input.read(cx).text_snapshot()),
@@ -461,9 +465,8 @@ impl StandaloneBuffer {
                     );
                 }
                 this.refresh_syntax(cx);
-            }
-            cx.notify();
-        })];
+            }),
+        ];
         let image = initial.is_none() && image_format_for_path(&path).is_some();
         let wrap = wraps_by_default(&path);
         cx.on_release(|this, cx| {
@@ -671,6 +674,9 @@ impl StandaloneBuffer {
                     }
                     Err(error) => this.document.fail_read(generation, error.into(), cx),
                 }
+                // A restyle asked for while loading waited for this; unchanged
+                // text emits no change event, and a failed read keeps the text.
+                this.refresh_syntax(cx);
                 cx.notify();
             });
         }));

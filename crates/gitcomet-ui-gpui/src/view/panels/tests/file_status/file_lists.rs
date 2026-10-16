@@ -1421,6 +1421,94 @@ fn the_untracked_section_sorts_by_edit_size(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// Line counts arrive after every save of a modified file. A section sorted by
+/// path keeps its cached order and the identity a shift-click anchor checks;
+/// only a sort that reads the counts re-sorts.
+#[gpui::test]
+fn status_line_stats_resort_only_sections_sorted_by_edit_size(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(651);
+    let paths = ["src/a.rs", "src/b.rs", "src/c.rs"];
+    // One repository lifetime: a fresh RepoState would key every cache anew.
+    let base = repo_with_unstaged_paths(repo_id, &paths);
+    let push_stats = |cx: &mut gpui::VisualTestContext, rev: u64| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = base.clone();
+                let unstaged = paths
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, path)| {
+                        let added = (ix as u64 + rev) as u32;
+                        (
+                            std::path::PathBuf::from(path),
+                            gitcomet_core::domain::LineStats::from((Some(added), Some(1))),
+                        )
+                    })
+                    .collect();
+                repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    gitcomet_core::domain::UncommittedLineStats {
+                        staged: Default::default(),
+                        unstaged,
+                    },
+                ));
+                repo.unstaged_line_stats_rev = rev;
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+    let order = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).details_pane.read(app);
+            let repo = pane.active_repo().expect("active repo");
+            (
+                pane.active_status_section_order(repo_id, StatusSection::CombinedUnstaged)
+                    .expect("combined order"),
+                pane.status_anchor_order_rev(repo, StatusSection::CombinedUnstaged),
+            )
+        })
+    };
+
+    push_stats(cx, 1);
+    let (path_sorted, path_anchor) = order(cx);
+    push_stats(cx, 2);
+    let (path_resorted, path_anchor_after) = order(cx);
+    assert!(
+        Arc::ptr_eq(&path_sorted, &path_resorted),
+        "path sort kept its order"
+    );
+    assert_eq!(path_anchor, path_anchor_after, "path sort kept its anchor");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_status_file_sort(
+                    StatusSection::CombinedUnstaged,
+                    crate::view::rows::CommitFileSort::EditSizeDescending,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let (size_sorted, size_anchor) = order(cx);
+    assert_eq!(&*size_sorted, &[2, 1, 0], "largest edit first");
+    push_stats(cx, 3);
+    let (size_resorted, size_anchor_after) = order(cx);
+    assert!(
+        !Arc::ptr_eq(&size_sorted, &size_resorted),
+        "edit-size sort re-sorted for the new counts"
+    );
+    assert_ne!(
+        size_anchor, size_anchor_after,
+        "edit-size sort moved its anchor"
+    );
+}
+
 /// A tree hoists directories above files, so a range computed in ordinal space
 /// skips files displayed between the clicks — and those files then get staged.
 #[gpui::test]

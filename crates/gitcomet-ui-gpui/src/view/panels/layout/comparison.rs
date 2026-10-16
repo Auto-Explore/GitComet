@@ -23,6 +23,13 @@ const COMPARISON_CARDS_MAX_BODY_FRACTION: f32 = 0.5;
 pub(super) const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 70.0;
 
 impl DetailsPaneView {
+    /// Whether the pane compares commits (a range, or a multi-selection): the
+    /// one view that shows loaded history rows.
+    pub(in crate::view) fn shows_comparison(repo: &RepoState) -> bool {
+        repo.history_state.range_selection.is_some()
+            || repo.history_state.multi_selection.is_multi()
+    }
+
     /// Selected IDs in displayed history order, independent of the bounded
     /// metadata cache. Missing metadata must not shrink the selection's cards.
     pub(super) fn multi_selected_commit_ids_in_log_order(repo: &RepoState) -> Vec<CommitId> {

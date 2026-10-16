@@ -186,25 +186,9 @@ impl Harness {
         })
     }
 
-    /// Saves run on the real filesystem worker, while this harness publishes
-    /// synthetic snapshots; hand the worker's results to the pane directly.
     fn finish_saves(&self, cx: &mut gpui::VisualTestContext) {
-        for _ in 0..200 {
-            cx.run_until_parked();
-            let drained = cx.update(|_, app| {
-                let main = self.view.read(app).diff_renderer.clone();
-                let owner = self.view.read(app).ui_model.read(app).documents.clone();
-                let snapshot = main.read(app).store.snapshot().expect("window store");
-                owner.finish_saves(&snapshot, app);
-                main.read(app).editor_documents.pending().is_empty()
-            });
-            if drained {
-                cx.run_until_parked();
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("filesystem save did not finish");
+        finish_editor_saves(&self.view, cx);
+        cx.run_until_parked();
     }
 
     fn editor_error(&self, cx: &mut gpui::VisualTestContext) -> Option<String> {

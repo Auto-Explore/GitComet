@@ -6,9 +6,9 @@ use super::{
     MouseMoveEvent, PreparedDiffSyntaxLine, Range, SharedString, ThreeWayColumn, ViewPerfSpan,
     Window, build_cached_diff_styled_text_for_prepared_document_line_nonblocking,
     build_conflict_cached_diff_styled_text, conflict_canvas, conflict_diff_line_number_cell,
-    conflict_diff_query_matcher, conflict_diff_text_cell, conflict_display_text,
-    conflict_input_row_min_width, conflict_resolver, conflict_scaled_px, div, line_number_string,
-    perf, three_way_input_row_menu_targets, with_alpha,
+    conflict_diff_text_cell, conflict_display_text, conflict_input_row_min_width,
+    conflict_resolver, conflict_scaled_px, div, line_number_string, perf,
+    three_way_input_row_menu_targets, with_alpha,
 };
 use crate::kit::click::PointerClickExt;
 use gpui::prelude::*;
@@ -31,7 +31,7 @@ impl DiffRenderer {
         let query = this.diff_search_query_or_empty().as_ref().to_string();
         let query_options = this.diff_search_options_or_default();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
-        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        let query_matcher = this.diff_search_query_matcher_shared();
         // The current match wears a different wash, and it moves as the search
         // cursor steps, so its row is rebuilt every frame instead of cached.
         let current_match_row = this.diff_search_current_match_row();
@@ -136,7 +136,7 @@ impl DiffRenderer {
         // Search wash, layered over whatever the pass above produced. It needs
         // its own pass because that one skips lines with no syntax and no word
         // highlights, and those lines still have to show their matches.
-        if let Some(matcher) = query_matcher.as_ref() {
+        if let Some(matcher) = query_matcher.as_deref() {
             // Built into a batch first: the builder reads all of `this`, so the
             // cache insert cannot happen while that borrow is live.
             let built: Vec<_> = range
@@ -366,7 +366,7 @@ impl DiffRenderer {
                     // and a line still waiting on a background parse, which the
                     // pass above refuses to cache so the degraded colouring does
                     // not outlive the parse.
-                    let inline_styled = match (query_matcher.as_ref(), side_line) {
+                    let inline_styled = match (query_matcher.as_deref(), side_line) {
                         (Some(matcher), Some(l))
                             if current_match_row == Some(vi)
                                 || !this

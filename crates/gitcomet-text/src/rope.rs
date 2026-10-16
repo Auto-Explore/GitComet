@@ -393,6 +393,12 @@ impl Rope {
         self.chunks_in_range(0..self.len())
     }
 
+    /// The text in `range`, back to front, as borrowed chunk slices.
+    pub fn reversed_chunks_in_range(&self, range: Range<usize>) -> ReversedChunks<'_> {
+        let range = self.clip_range(range);
+        ReversedChunks::new(&self.chunks, range)
+    }
+
     /// Materialize `range`. Callers on a hot path should prefer
     /// [`Rope::chunks_in_range`]; this exists for the many places that need a
     /// small, bounded slice (one visible row, a word under the caret).
@@ -551,14 +557,12 @@ impl Rope {
         Point::new(point.row, point.column.min(line_len))
     }
 
-    /// The chunk containing `offset`, from `offset` up to `limit` or the end of
-    /// that chunk, whichever comes first.
+    /// Bytes starting at exactly `offset`, up to `limit` or the end of the chunk
+    /// holding `offset`, whichever comes first. Empty when `offset >= limit`.
     ///
     /// This is the primitive tree-sitter's chunked reader wants: it asks for
     /// bytes at an offset and is happy with however many it gets, so a parse
     /// never needs the document as one buffer.
-    /// Bytes starting at exactly `offset`, at most up to `limit`, from a single
-    /// chunk. Empty when `offset >= limit`.
     ///
     /// Byte-exact on both ends, which `chunks_in_range` deliberately is not:
     /// that widens a range to whole characters so it can hand back `&str`. A
@@ -577,13 +581,14 @@ impl Rope {
         &bytes[..bytes.len().min(limit - offset)]
     }
 
-    /// Identity of each chunk's backing allocation, for tests that assert
-    /// copy-on-write sharing rather than timing it.
+    /// Each chunk's byte length, for tests that place a range on a chunk seam.
     #[cfg(any(test, feature = "test-support"))]
     fn chunk_sizes_for_test(&self) -> Vec<usize> {
         self.chunks.iter().map(|chunk| chunk.0.len()).collect()
     }
 
+    /// Identity of each chunk's backing allocation, for tests that assert
+    /// copy-on-write sharing rather than timing it.
     #[cfg(any(test, feature = "test-support"))]
     fn chunk_identities(&self) -> Vec<*const u8> {
         self.chunks.iter().map(|chunk| chunk.0.as_ptr()).collect()
@@ -738,9 +743,53 @@ impl<'a> Iterator for Chunks<'a> {
     }
 }
 
-/// Split `text` into pieces of at most [`MAX_CHUNK_BYTES`], never mid-character.
-/// Split `text` into chunks of at most [`MAX_CHUNK_BYTES`], balanced so the
-/// last one is not a sliver.
+/// Borrowed chunk slices covering a byte range, back to front.
+pub struct ReversedChunks<'a> {
+    cursor: gpui_sum_tree::Cursor<'a, 'static, Chunk, usize>,
+    range: Range<usize>,
+    done: bool,
+}
+
+impl<'a> ReversedChunks<'a> {
+    fn new(chunks: &'a SumTree<Chunk>, range: Range<usize>) -> Self {
+        let mut cursor = chunks.cursor::<usize>(());
+        // Left bias lands on the chunk holding the byte before `range.end`.
+        cursor.seek(&range.end, Bias::Left);
+        Self {
+            cursor,
+            range,
+            done: false,
+        }
+    }
+}
+
+impl<'a> Iterator for ReversedChunks<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        loop {
+            if self.done || self.range.start >= self.range.end {
+                return None;
+            }
+            let chunk_start = *self.cursor.start();
+            let Some(chunk) = self.cursor.item() else {
+                self.done = true;
+                return None;
+            };
+            let chunk_end = chunk_start + chunk.0.len();
+            let slice_start = self.range.start.max(chunk_start) - chunk_start;
+            let slice_end = self.range.end.min(chunk_end).max(chunk_start) - chunk_start;
+            self.cursor.prev();
+            self.range.end = chunk_start.max(self.range.start);
+            if slice_end > slice_start {
+                return Some(&chunk.0[slice_start..slice_end]);
+            }
+        }
+    }
+}
+
+/// Split `text` into chunks of at most [`MAX_CHUNK_BYTES`], never
+/// mid-character, balanced so the last one is not a sliver.
 ///
 /// Taking a greedy 512 bytes at a time would leave the remainder, and an edit
 /// rebuilds the straddled chunk plus the inserted text — so a one-character

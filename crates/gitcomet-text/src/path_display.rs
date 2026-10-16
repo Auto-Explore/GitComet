@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHasher;
 #[cfg(not(windows))]
 use smallvec::SmallVec;
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 use std::cell::Cell;
 #[cfg(not(windows))]
 use std::hash::{Hash, Hasher};
@@ -94,7 +94,6 @@ impl PathDisplayCache {
     #[cfg(any(test, feature = "benchmarks"))]
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
 
         self.recent.clear();
@@ -110,7 +109,7 @@ impl PathDisplayCache {
     }
 
     fn rotate_generations(&mut self) {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
         #[cfg(not(windows))]
         {
@@ -278,7 +277,7 @@ pub fn path_display_shared_fast(path: &Path) -> SharedString {
 pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedString {
     #[cfg(not(windows))]
     let Some(path_key) = path.to_str() else {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_miss);
         return path_display_shared(path);
     };
@@ -293,14 +292,14 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
         && cache.overflow_tail_active
         && !hash_counts_contains(&cache.present_hash_counts, path_key_hash)
     {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_miss);
         return SharedString::new(path_key);
     }
 
     #[cfg(not(windows))]
     if let Some(s) = cache_lookup(&cache.recent, path_key_hash, path_key) {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_hit);
         cache.overflow_tail_active = false;
         return s;
@@ -308,7 +307,7 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
 
     #[cfg(windows)]
     if let Some(s) = cache.recent.get(path) {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_hit);
         return s.clone();
     }
@@ -325,7 +324,7 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
             path_key,
         )
     {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_hit);
         cache.overflow_tail_active = false;
         // Promote to recent so subsequent lookups hit the fast path.
@@ -347,7 +346,7 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
     if cache.previous_entries != 0
         && let Some(s) = cache.previous.remove(path)
     {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_hit);
         cache.previous_entries = cache.previous_entries.saturating_sub(1);
         // Promote to recent so subsequent lookups hit the fast path.
@@ -360,7 +359,7 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
         return s;
     }
 
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks"))]
     PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_miss);
     if cache.recent_entries >= PathDisplayCache::RECENT_MAX_ENTRIES {
         if cache.previous_entries == 0 || cache.len() < PathDisplayCache::MAX_ENTRIES {
@@ -411,32 +410,22 @@ pub fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> SharedS
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub fn bench_snapshot() -> PathDisplayBenchSnapshot {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
-    {
-        PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::snapshot)
-    }
-    #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
-    {
-        PathDisplayBenchSnapshot::default()
-    }
+    PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::snapshot)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub fn bench_reset() {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
-    {
-        PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::reset);
-    }
+    PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::reset);
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 struct PathDisplayBenchCounters {
     cache_hits: Cell<u64>,
     cache_misses: Cell<u64>,
     cache_clears: Cell<u64>,
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 impl PathDisplayBenchCounters {
     fn new() -> Self {
         Self {
@@ -460,7 +449,6 @@ impl PathDisplayBenchCounters {
             .set(self.cache_clears.get().saturating_add(1));
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     fn snapshot(&self) -> PathDisplayBenchSnapshot {
         PathDisplayBenchSnapshot {
             cache_hits: self.cache_hits.get(),
@@ -469,7 +457,6 @@ impl PathDisplayBenchCounters {
         }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     fn reset(&self) {
         self.cache_hits.set(0);
         self.cache_misses.set(0);
@@ -477,7 +464,7 @@ impl PathDisplayBenchCounters {
     }
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 thread_local! {
     static PATH_DISPLAY_BENCH_COUNTERS: PathDisplayBenchCounters = PathDisplayBenchCounters::new();
 }

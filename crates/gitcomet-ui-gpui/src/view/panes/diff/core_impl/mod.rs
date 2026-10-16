@@ -730,8 +730,8 @@ impl DiffRenderer {
         {
             self.diff_text_query_cache_query = query.to_string().into();
             self.diff_text_query_cache_options = options;
-            self.diff_text_query_cache_matcher_shared = (!query.is_empty())
-                .then(|| Arc::new(super::diff_search::DiffSearchMatcher::new(query, options)));
+            self.diff_text_query_cache_matcher_shared =
+                super::diff_search::diff_search_query_matcher(query, options).map(Arc::new);
             self.diff_text_query_cache_generation =
                 self.diff_text_query_cache_generation.wrapping_add(1);
         }
@@ -2174,6 +2174,12 @@ impl DiffRenderer {
     pub(in crate::view) fn is_file_diff_view_active(&self) -> bool {
         self.effective_diff_content_mode() == DiffContentMode::Full
             && self.rendered_file_diff_cache_is_current()
+    }
+
+    /// Whether the rows on screen are file-diff rows: the full file view, or
+    /// collapsed hunks listing them.
+    pub(in crate::view) fn lists_file_diff_rows(&self) -> bool {
+        self.is_file_diff_view_active() || self.is_collapsed_diff_projection_active()
     }
 
     /// Whether the rasterized image diff on screen belongs to the current

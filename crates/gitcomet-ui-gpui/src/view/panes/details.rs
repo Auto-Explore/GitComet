@@ -302,14 +302,21 @@ impl DetailsPaneView {
                 .map(|snapshot| snapshot.revision)
                 .hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
-            repo.history_state.selected_commit_rev.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
-            repo.history_state.indexed.rev.hash(&mut hasher);
-            repo.history_state.commit_details_rev.hash(&mut hasher);
+            let history = &repo.history_state;
+            history.selected_commit_rev.hash(&mut hasher);
+            // Loaded history rows show up only as a comparison's cards.
+            if Self::shows_comparison(repo) {
+                repo.log_rev.hash(&mut hasher);
+                history.indexed.rev.hash(&mut hasher);
+            }
+            history.commit_details_rev.hash(&mut hasher);
             repo.stashes_rev.hash(&mut hasher);
-            repo.history_state.commit_signatures_rev.hash(&mut hasher);
-            repo.history_state.worktree_selection_rev.hash(&mut hasher);
-            repo.history_state.range_files_rev.hash(&mut hasher);
+            // Only the shown commit's signature, not each verified batch.
+            if let Loadable::Ready(details) = &history.commit_details {
+                history.commit_signatures.get(&details.id).hash(&mut hasher);
+            }
+            history.worktree_selection_rev.hash(&mut hasher);
+            history.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.suggested_commit_message_rev.hash(&mut hasher);
@@ -1696,6 +1703,9 @@ impl DetailsPaneView {
         &self,
         list: crate::view::rows::FileListId,
     ) -> crate::view::rows::CommitFileSort {
+        if let crate::view::rows::FileListId::Status(section) = list {
+            return self.status_file_sort_for(section);
+        }
         if let Some(sort) = self
             .active_repo_id()
             .and_then(|id| self.shared_file_sort_for(id, list))
@@ -1703,7 +1713,6 @@ impl DetailsPaneView {
             return sort;
         }
         match list {
-            crate::view::rows::FileListId::Status(section) => self.status_file_sort_for(section),
             crate::view::rows::FileListId::CommitFiles => self.commit_file_sort,
             other => self
                 .active_repo_id()
@@ -1719,15 +1728,15 @@ impl DetailsPaneView {
         sort: crate::view::rows::CommitFileSort,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.publish_file_sort(list, sort) {
-            return;
-        }
         match list {
             crate::view::rows::FileListId::Status(section) => {
                 self.set_status_file_sort(section, sort, cx)
             }
             crate::view::rows::FileListId::CommitFiles => self.set_commit_file_sort(sort, cx),
             other => {
+                if self.publish_file_sort(other, sort) {
+                    return;
+                }
                 let Some(repo_id) = self.active_repo_id() else {
                     return;
                 };
@@ -1820,7 +1829,7 @@ impl DetailsPaneView {
         let sort = self.status_file_sort_for(section);
         let key = crate::view::rows::file_list_projection_key(
             repo.id.0,
-            self.file_source_key(repo.id, status_section_content_rev(repo, section), None),
+            self.file_source_key(repo.id, status_section_order_rev(repo, section, sort), None),
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
@@ -1840,7 +1849,8 @@ impl DetailsPaneView {
             entries,
             &base,
             sort,
-            repo.line_stats_for_area(section.diff_area()),
+            repo.line_stats_for_area(section.diff_area())
+                .filter(|_| sort.needs_line_stats()),
         );
         cache[slot] = Some((key, Arc::clone(&ordered)));
         Some(ordered)
@@ -1926,9 +1936,10 @@ impl DetailsPaneView {
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let list = crate::view::rows::FileListId::Status(section);
+        let sort = self.status_file_sort_for(section);
         let mut hasher = rustc_hash::FxHasher::default();
-        status_section_content_rev(repo, section).hash(&mut hasher);
-        self.file_list_sort_for(list).hash(&mut hasher);
+        status_section_order_rev(repo, section, sort).hash(&mut hasher);
+        sort.hash(&mut hasher);
         self.file_list_layout_for(repo.id, list)
             .key()
             .hash(&mut hasher);

@@ -245,6 +245,7 @@ impl Render for GitCometView {
             .font(gpui::Font {
                 family: crate::font_preferences::applied_ui_font_family(
                     &font_preferences.ui_font_family,
+                    cx,
                 )
                 .into(),
                 features: font_features,

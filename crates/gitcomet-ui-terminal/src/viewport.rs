@@ -1931,10 +1931,7 @@ impl Render for TerminalViewportView {
     }
 }
 
-fn terminal_text_style<C>(theme: AppTheme, window: &Window, cx: &mut C) -> gpui::TextStyle
-where
-    C: gpui::BorrowAppContext,
-{
+fn terminal_text_style(theme: AppTheme, window: &Window, cx: &mut gpui::App) -> gpui::TextStyle {
     let mut style = window.text_style();
     style.font_family = gitcomet_ui_kit::font_preferences::current_editor_font_family(cx).into();
     style.font_features = gpui::FontFeatures::disable_ligatures();

@@ -1,4 +1,292 @@
 use super::*;
+use unicode_segmentation::UnicodeSegmentation as _;
+
+/// Caret steps segment only the chunks around the caret, which must agree with
+/// the whole document everywhere: CR LF, combining marks, ZWJ emoji, flag
+/// pairs and Indic conjuncts, at row edges and split across rope chunk seams.
+/// The dense text is shifted through one whole period, and the test checks that
+/// a seam really lands inside each kind of cluster.
+#[gpui::test]
+fn caret_steps_agree_with_whole_document_graphemes(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let unit = "a\r\nb\u{301}\n👩\u{200d}👩\u{200d}👧\r\n🇫🇮🇸🇪\n\ne\u{301}\u{302}x\r\n";
+    let dense = "👩\u{200d}👩\u{200d}👧🇫🇮🇸🇪e\u{301}\u{302}क्ष\r\n";
+    let texts = std::iter::once(unit.to_owned())
+        .chain((0..dense.len()).map(|pad| format!("{}{}", "x".repeat(pad), dense.repeat(60))));
+    let mut split = std::collections::BTreeSet::new();
+    for text in texts {
+        let starts: Vec<usize> = text.grapheme_indices(true).map(|(ix, _)| ix).collect();
+        cx.update(|_, app| {
+            input.update(app, |input, cx| {
+                input.set_text(text.as_str(), cx);
+                let rope = input.content.snapshot().rope();
+                let mut seam = 0;
+                for chunk in rope.chunks() {
+                    seam += chunk.len();
+                    let next = starts.partition_point(|start| *start < seam);
+                    if next > 0 && seam < text.len() && starts.get(next) != Some(&seam) {
+                        let end = starts.get(next).copied().unwrap_or(text.len());
+                        split.insert(cluster_kind(&text[starts[next - 1]..end]));
+                    }
+                }
+                for offset in 0..=text.len() {
+                    let before = starts.partition_point(|ix| *ix < offset);
+                    let after = starts.partition_point(|ix| *ix <= offset);
+                    assert_eq!(
+                        input.previous_boundary(offset),
+                        before.checked_sub(1).map_or(0, |ix| starts[ix]),
+                        "before {offset}"
+                    );
+                    assert_eq!(
+                        input.next_boundary(offset),
+                        starts.get(after).copied().unwrap_or(text.len()),
+                        "after {offset}"
+                    );
+                }
+            });
+        });
+    }
+    for kind in [
+        "ZWJ family",
+        "flag pair",
+        "combining marks",
+        "conjunct",
+        "CR LF",
+    ] {
+        assert!(split.contains(kind), "no chunk seam fell inside a {kind}");
+    }
+}
+
+/// Which kind of cluster the seam test split, by the codepoints that join it.
+fn cluster_kind(cluster: &str) -> &'static str {
+    if cluster.contains('\u{200d}') {
+        "ZWJ family"
+    } else if cluster.contains('\u{94d}') {
+        "conjunct"
+    } else if cluster.contains('\u{301}') {
+        "combining marks"
+    } else if cluster == "\r\n" {
+        "CR LF"
+    } else if cluster
+        .chars()
+        .all(|ch| ('\u{1f1e6}'..='\u{1f1ff}').contains(&ch))
+    {
+        "flag pair"
+    } else {
+        "other"
+    }
+}
+
+/// Arrow keys, Backspace and Delete after an edit read the text around the
+/// caret, not a flattened copy of the document; at 4.8 MB that copy plus a
+/// scan from the far end took 23-29 ms per key.
+#[gpui::test]
+fn caret_steps_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+
+            input.previous_boundary(middle);
+            input.next_boundary(middle);
+
+            let content = input.content.snapshot();
+            assert!(!content.is_materialized());
+            assert!(!content.is_line_index_built());
+        });
+    });
+}
+
+/// Home and End stop at the row's own newline, CR included in the row.
+#[gpui::test]
+fn row_bounds_stop_at_the_rows_newlines(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "first\r\n\nthird row\nlast";
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text, cx);
+            for offset in 0..=text.len() {
+                let start = text[..offset].rfind('\n').map_or(0, |ix| ix + 1);
+                let end = text[offset..]
+                    .find('\n')
+                    .map_or(text.len(), |ix| offset + ix);
+                assert_eq!(
+                    input.logical_row_boundaries(offset),
+                    (start, end),
+                    "at {offset}"
+                );
+            }
+        });
+    });
+}
+
+/// Home, End and the protected-line check read one row or one byte, so after
+/// an edit they leave the document unflattened.
+#[gpui::test]
+fn row_bounds_and_protected_checks_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let row = "let value = compute(alpha, beta);\n";
+    let text = row.repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let protected = row.len() * 10..row.len() * 11;
+            input.set_protected_ranges(Arc::from([protected.clone()]));
+            input.replace_utf8_range(0..0, "x", cx);
+            let protected = protected.start + 1..protected.end + 1;
+
+            input.logical_row_boundaries(text.len() / 2);
+            assert!(input.edit_alters_protected_range(&(protected.start - 3..protected.start), ""));
+
+            let content = input.content.snapshot();
+            assert!(!content.is_materialized());
+            assert!(!content.is_line_index_built());
+        });
+    });
+}
+
+/// The word moves as they ran on a flattened copy of the text.
+fn word_moves_on_flat_text(text: &str, offset: usize) -> (usize, usize) {
+    let left = |mut offset: usize, keep: &dyn Fn(char) -> bool| {
+        while let Some((ix, ch)) = text[..offset].char_indices().next_back() {
+            if !keep(ch) {
+                break;
+            }
+            offset = ix;
+        }
+        offset
+    };
+    let right = |mut offset: usize, keep: &dyn Fn(char) -> bool| {
+        while let Some(ch) = text[offset..].chars().next() {
+            if !keep(ch) {
+                break;
+            }
+            offset += ch.len_utf8();
+        }
+        offset
+    };
+    let space = |ch: char| ch.is_whitespace();
+    let word = crate::text_selection::is_word_char;
+    let symbol = |ch: char| !ch.is_whitespace() && !crate::text_selection::is_word_char(ch);
+    let start = left(left(left(left(offset, &space), &symbol), &space), &word);
+    let end = match text[offset..].chars().next() {
+        None => text.len(),
+        Some(ch) if space(ch) => right(offset, &space),
+        Some(ch) if word(ch) => right(offset, &word),
+        Some(_) => right(offset, &symbol),
+    };
+    (start, end)
+}
+
+/// Word moves cross rows (a newline is whitespace) and rope chunk seams (a
+/// word or a gap longer than a chunk), and must land where they did on the
+/// flattened text.
+#[gpui::test]
+fn word_moves_cross_rows_like_the_flat_text(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let word = "w".repeat(700);
+    let gap = " ".repeat(600);
+    let text = format!("fn alpha(b: u8) {{\r\n\n   \n  šeta_2 = ö.ä;\n}}\n{word}{gap}.{word}\n");
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            for offset in (0..=text.len()).filter(|ix| text.is_char_boundary(*ix)) {
+                assert_eq!(
+                    (
+                        input.previous_word_start(offset),
+                        input.next_word_end(offset)
+                    ),
+                    word_moves_on_flat_text(&text, offset),
+                    "at {offset}"
+                );
+            }
+        });
+    });
+}
+
+/// An offset inside a character walks from that character's start, so a word
+/// move lands on a boundary inside the text.
+#[gpui::test]
+fn word_moves_from_inside_a_character_start_at_it(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text("aé", cx);
+
+            assert_eq!(input.previous_word_start(2), 0);
+            assert_eq!(input.next_word_end(2), 3);
+        });
+    });
+}
+
+/// Word moves after an edit read the characters they pass, not a flattened
+/// copy of the document.
+#[gpui::test]
+fn word_moves_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+
+            input.previous_word_start(middle);
+            input.next_word_end(middle);
+
+            let content = input.content.snapshot();
+            assert!(!content.is_materialized());
+            assert!(!content.is_line_index_built());
+        });
+    });
+}
+
+/// On one long row, a minified file, a word move copies nothing: reading the
+/// row as slices cost a copy of it up to the caret per skip.
+#[gpui::test]
+fn word_moves_on_a_long_row_copy_nothing(cx: &mut gpui::TestAppContext) {
+    use crate::text_model::OWNED_SLICES;
+    let (input, cx) = multiline_input(cx);
+    let text = "alpha beta.gamma ".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+            OWNED_SLICES.with(|count| count.set(0));
+
+            input.previous_word_start(middle);
+            input.next_word_end(middle);
+
+            assert_eq!(OWNED_SLICES.with(|count| count.get()), 0);
+        });
+    });
+}
+
+/// On one long row, a minified file, a caret step copies nothing: reading the
+/// caret's row as a slice copied the whole row on every key, 39.6 ms at 4.8 MB.
+#[gpui::test]
+fn caret_steps_on_a_long_row_copy_nothing(cx: &mut gpui::TestAppContext) {
+    use crate::text_model::OWNED_SLICES;
+    let (input, cx) = multiline_input(cx);
+    let text = "alpha beta.gamma ".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+            OWNED_SLICES.with(|count| count.set(0));
+
+            input.previous_boundary(middle);
+            input.next_boundary(middle);
+
+            assert_eq!(OWNED_SLICES.with(|count| count.get()), 0);
+        });
+    });
+}
 
 // The identical-replacement shortcut compared by copying the replaced range
 // first, so select-all and typing copied the whole buffer on every keystroke.

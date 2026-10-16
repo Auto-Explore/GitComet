@@ -20,7 +20,9 @@ pub struct IndexedHistoryState {
     pub ranges: BTreeMap<usize, Arc<HistoryRange>>,
     pub range_errors: BTreeMap<usize, String>,
     /// Aggregate notification revision; consumers cache metadata by block identity.
+    /// A progress report moves only `status_rev`, since it changes no row.
     pub rev: u64,
+    /// Moves when `loading`, `progress` or `error` change.
     pub status_rev: u64,
     pub ranges_rev: u64,
     pub epoch: RepoLoadEpoch,

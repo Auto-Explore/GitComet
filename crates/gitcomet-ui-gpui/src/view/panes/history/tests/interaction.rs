@@ -2533,6 +2533,106 @@ fn history_refs_hover_closes_when_history_scrolls_programmatically(cx: &mut gpui
     assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
 }
 
+/// A full-history build reports progress every 100 ms for as long as it runs.
+#[gpui::test]
+fn history_refs_hover_survives_index_build_progress(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
+    let store_for_test = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let page = Arc::new(log_page(vec![commit("c00", &[], "commit 00")], None));
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-refs-hover-index-progress"),
+        },
+    );
+    repo.history_state.history_scope = LogScope::AllBranches;
+    repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+    repo.branches_rev = 1;
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_branches_rev = 1;
+    repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.tags_rev = 1;
+    repo.log = Loadable::Ready(Arc::clone(&page));
+    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page);
+    repo.history_state.log_rev = 1;
+    repo.history_state.indexed.loading = true;
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    });
+    store_for_test.replace_snapshot_for_test(Arc::clone(&state));
+    cx.update(|_window, app| {
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| model.set_state(Arc::clone(&state), cx));
+    });
+    ensure_history_cache_for_tests(cx, &view, state);
+    wait_until(cx, "history row with displayed refs", |cx| {
+        cx.debug_bounds("history_row_0").is_some()
+    });
+
+    let row = cx
+        .debug_bounds("history_row_0")
+        .expect("history row should be rendered");
+    cx.simulate_mouse_move(
+        point(row.left() + px(24.0), row.center().y),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let hover_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        })
+    };
+    assert!(hover_open(cx));
+
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _observer = cx.update(|_, app| {
+        let notified = notified.clone();
+        app.observe(&history, move |_, _| notified.set(notified.get() + 1))
+    });
+    store_for_test.dispatch(Msg::IndexedHistory(
+        gitcomet_state::indexed_history::IndexedHistoryMsg::Progress {
+            repo_id,
+            seq: 0,
+            progress: gitcomet_core::history_index::HistoryIndexProgress {
+                scanned: 2048,
+                matched: 2048,
+            },
+        },
+    ));
+    wait_for_store(cx, &view, "index build progress", || {
+        store_for_test.snapshot().repos[0]
+            .history_state
+            .indexed
+            .progress
+            .is_some()
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        hover_open(cx),
+        "a progress report changes no row, so the refs hover must stay open"
+    );
+    assert!(
+        notified.get() > 0,
+        "the history header repaints its commit count"
+    );
+}
+
 #[gpui::test]
 fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations(
     cx: &mut gpui::TestAppContext,

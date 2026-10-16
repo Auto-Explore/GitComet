@@ -339,6 +339,7 @@ pub(in super::super) struct PopoverHost {
     submodule_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     worktree_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     branch_ref_rows_cache: rows_cache::RowsCache<String>,
+    history_author_rows_cache: rows_cache::RowsCache<author_filter::AuthorTarget>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,

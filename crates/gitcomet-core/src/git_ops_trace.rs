@@ -1,6 +1,6 @@
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 use std::cell::Cell;
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,15 +80,15 @@ impl GitOpTraceSnapshot {
 }
 
 pub struct GitOpTraceScope {
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks"))]
     kind: GitOpTraceKind,
-    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    #[cfg(any(test, feature = "benchmarks"))]
     started_at: Option<Instant>,
 }
 
 impl Drop for GitOpTraceScope {
     fn drop(&mut self) {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         {
             let Some(started_at) = self.started_at.take() else {
                 return;
@@ -102,13 +102,13 @@ impl Drop for GitOpTraceScope {
 
 #[inline]
 pub fn scope(kind: GitOpTraceKind) -> GitOpTraceScope {
-    #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
+    #[cfg(not(any(test, feature = "benchmarks")))]
     let _ = kind;
 
     GitOpTraceScope {
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         kind,
-        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        #[cfg(any(test, feature = "benchmarks"))]
         started_at: is_enabled().then(Instant::now),
     }
 }
@@ -148,18 +148,18 @@ pub fn clear() {
 }
 
 #[inline]
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn is_enabled() -> bool {
     TRACE_STATE.with(ThreadGitOpTraceState::enabled)
 }
 
 #[inline]
-#[cfg(not(any(debug_assertions, feature = "benchmarks")))]
+#[cfg(not(any(test, feature = "benchmarks")))]
 pub fn is_enabled() -> bool {
     false
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 #[derive(Debug)]
 struct ThreadGitOpTraceStats {
     calls: Cell<u64>,
@@ -168,7 +168,7 @@ struct ThreadGitOpTraceStats {
     max_nanos: Cell<u64>,
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 impl ThreadGitOpTraceStats {
     const fn new() -> Self {
         Self {
@@ -206,7 +206,7 @@ impl ThreadGitOpTraceStats {
     }
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 #[derive(Debug)]
 struct ThreadGitOpTraceState {
     enabled: Cell<bool>,
@@ -217,7 +217,7 @@ struct ThreadGitOpTraceState {
     ref_enumerate: ThreadGitOpTraceStats,
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 impl ThreadGitOpTraceState {
     fn new() -> Self {
         Self {
@@ -270,7 +270,7 @@ impl ThreadGitOpTraceState {
     }
 }
 
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 thread_local! {
     // Capture state is per-thread so concurrent fixture tests do not observe
     // each other's synthetic git operations.
@@ -278,7 +278,7 @@ thread_local! {
 }
 
 #[inline]
-#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg(any(test, feature = "benchmarks"))]
 fn record_ns(kind: GitOpTraceKind, elapsed_nanos: u64) {
     TRACE_STATE.with(|state| state.stats(kind).record_ns(elapsed_nanos));
 }
@@ -289,7 +289,7 @@ fn nanos_to_millis(value: u64) -> f64 {
     value as f64 / 1_000_000.0
 }
 
-#[cfg(all(test, any(debug_assertions, feature = "benchmarks")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};

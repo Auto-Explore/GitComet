@@ -36,8 +36,9 @@ impl Clone for TextModelCore {
             revision: self.revision,
             // O(1): the tree is persistent and shares every node.
             rope: self.rope.clone(),
-            // A copy-on-write clone exists because a mutation is coming, which
-            // would invalidate both caches anyway.
+            // A clone exists because a mutation is coming, which would
+            // invalidate both caches anyway, or to be kept as history, which
+            // must not pin them.
             line_starts: OnceLock::new(),
             materialized: OnceLock::new(),
         }
@@ -142,6 +143,15 @@ impl TextModel {
     pub fn snapshot(&self) -> TextModelSnapshot {
         TextModelSnapshot {
             core: Arc::clone(&self.core),
+        }
+    }
+
+    /// A snapshot sharing the text but none of the whole-document caches, for
+    /// history kept across many edits. A stack of [`TextModel::snapshot`]s pins
+    /// every revision's flattened copy and line-start table.
+    pub fn snapshot_without_caches(&self) -> TextModelSnapshot {
+        TextModelSnapshot {
+            core: Arc::new(TextModelCore::clone(&self.core)),
         }
     }
 
@@ -373,6 +383,25 @@ impl TextModelSnapshot {
         let start = self.clamp_offset_to_char_boundary(range.start.min(self.len()));
         let end = self.clamp_offset_to_char_boundary(range.end.min(self.len()));
         if end < start { end..start } else { start..end }
+    }
+
+    /// The characters from `offset` to the end, read chunk by chunk: a walk
+    /// that stops early never copies or touches the rest of the document. Both
+    /// walks split the text where [`TextModelSnapshot::slice`] does, so an
+    /// offset inside a character counts as that character's start.
+    pub fn chars_at(&self, offset: usize) -> impl Iterator<Item = char> + '_ {
+        self.core
+            .rope
+            .chunks_in_range(self.normalized_char_range(offset..self.len()))
+            .flat_map(str::chars)
+    }
+
+    /// The characters before `offset`, nearest first, read the same way.
+    pub fn reversed_chars_at(&self, offset: usize) -> impl Iterator<Item = char> + '_ {
+        self.core
+            .rope
+            .reversed_chunks_in_range(self.normalized_char_range(0..offset))
+            .flat_map(|chunk| chunk.chars().rev())
     }
 
     /// The text in `range`. Borrowed when it lives inside a single chunk, which
@@ -654,6 +683,17 @@ mod tests {
             let expected_starts = line_starts_for_text(control.as_str());
             assert_eq!(model.line_starts(), expected_starts.as_slice());
         }
+    }
+
+    /// A caret offset inside a character must not hand the character to both
+    /// walks: a word move subtracts what the backward walk passed.
+    #[test]
+    fn char_walks_split_a_mid_character_offset_at_its_start() {
+        let snapshot = TextModel::from_large_text("aé").snapshot();
+
+        assert_eq!(snapshot.reversed_chars_at(2).collect::<String>(), "a");
+        assert_eq!(snapshot.chars_at(2).collect::<String>(), "é");
+        assert_eq!(snapshot.reversed_chars_at(3).collect::<String>(), "éa");
     }
 }
 
@@ -973,6 +1013,23 @@ mod edit_cost_tests {
         assert_eq!(before.line_text(0).as_ref(), "line of text");
         assert_eq!(model.snapshot().line_text(0).as_ref(), "prefix");
         assert_ne!(before, model.snapshot());
+    }
+
+    /// History keeps these across many edits: the text and its identity, none
+    /// of the caches the live model warmed.
+    #[test]
+    fn snapshots_without_caches_keep_only_the_text_and_identity() {
+        let model = TextModel::from_large_text("alpha\nbeta");
+        model.as_str();
+        model.line_starts();
+
+        let history = model.snapshot_without_caches();
+
+        assert_eq!(history, model.snapshot());
+        assert_eq!(history.line_text(1).as_ref(), "beta");
+        assert!(!history.is_materialized());
+        assert!(!history.is_line_index_built());
+        assert!(model.snapshot().is_materialized());
     }
 
     /// `longest_row` backs the horizontal scroll bound, and it must stay a

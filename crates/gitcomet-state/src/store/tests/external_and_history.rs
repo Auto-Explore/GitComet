@@ -373,6 +373,89 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
 }
 
 #[test]
+fn external_changes_reload_the_selected_diff_only_when_they_can_alter_it() {
+    use crate::msg::{ChangedPaths, RepoExternalChange};
+    let unstaged = |path: &str| DiffTarget::working_tree(PathBuf::from(path), DiffArea::Unstaged);
+    let staged = |path: &str| DiffTarget::working_tree(PathBuf::from(path), DiffArea::Staged);
+    let to_worktree = |path: &str| {
+        DiffTarget::commit_range(
+            CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            None,
+            Some(PathBuf::from(path)),
+        )
+    };
+    let saved = |path: &str| RepoExternalChange {
+        paths: ChangedPaths::known(vec![path.into()]),
+        ..RepoExternalChange::worktree()
+    };
+    // The watcher reports a `.gitattributes` edit without its path.
+    let attributes = RepoExternalChange {
+        text_attributes: true,
+        paths: ChangedPaths::none(),
+        ..RepoExternalChange::worktree()
+    };
+    for (target, change, reloads) in [
+        (unstaged("a.txt"), saved("b.txt"), false),
+        (unstaged("a.txt"), saved("a.txt"), true),
+        (unstaged("vendor/sub"), saved("vendor/sub/src/lib.rs"), true),
+        (unstaged("a.txt"), attributes.clone(), true),
+        (staged("a.txt"), saved("a.txt"), false),
+        (staged("a.txt"), attributes.clone(), true),
+        (to_worktree("a.txt"), saved("b.txt"), false),
+        (to_worktree("a.txt"), saved("a.txt"), true),
+        (to_worktree("a.txt"), attributes, true),
+    ] {
+        let mut repos: RepositoryRuntimes = Default::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::test_default();
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+        );
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+                preferences: None,
+                repo_id: RepoId(1),
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo"),
+                },
+                repo: Arc::new(DummyRepo::new("/tmp/repo")),
+            }),
+        );
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SelectDiff {
+                repo_id: RepoId(1),
+                target: target.clone(),
+            },
+        );
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id: RepoId(1),
+                change: change.clone(),
+            },
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadDiff { .. })),
+            reloads,
+            "{target:?} after {change:?}"
+        );
+    }
+}
+
+#[test]
 fn external_index_change_refreshes_both_staged_and_unstaged_lanes() {
     // An external `git add` / `git reset` / `git restore --staged` rewrites `.git/index` without
     // touching any worktree file, so the monitor reports an index-only change. The index is one
