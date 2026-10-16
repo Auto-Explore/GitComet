@@ -188,3 +188,33 @@ fn structural_rows_preserve_neutral_text_and_highlight_only_novel_tokens() {
     assert_eq!(split.change_blocks(), vec![1..2]);
     assert_eq!(inline.change_blocks(), vec![1..3]);
 }
+
+#[test]
+fn a_cancelled_difftastic_build_yields_no_rows() {
+    let file = FileDiffText::new_shared(
+        "app.js".into(),
+        Some(Arc::from("call(a, b);\n")),
+        Some(Arc::from("call(a, c);\n")),
+    );
+    let build = |cancellation: &CancellationToken| {
+        super::super::file_diff::build_file_diff_cache_with_engine(
+            &file,
+            std::path::Path::new("/repo"),
+            None,
+            DiffWhitespaceMode::Show,
+            DiffEngine::Difftastic,
+            cancellation,
+        )
+    };
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert_eq!(build(&cancelled).err(), Some(FileDiffCacheError::Cancelled));
+    let rebuild = build(&CancellationToken::new()).expect("difftastic build");
+    assert_eq!(
+        rebuild.engine_status,
+        DiffEngineStatus::Difftastic {
+            syntactic_changes: true,
+            text_differs: true,
+        }
+    );
+}

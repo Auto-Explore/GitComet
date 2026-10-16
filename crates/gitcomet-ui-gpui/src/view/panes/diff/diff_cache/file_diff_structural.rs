@@ -37,21 +37,21 @@ pub(super) fn compare(
     if engine == DiffEngine::LineByLine {
         return Ok(result);
     }
-    if old.source_len.max(new.source_len) > gitcomet_difftastic::runner::BYTE_LIMIT {
+    if old.source_len.max(new.source_len) > gitcomet_difftastic::BYTE_LIMIT {
         result.status = DiffEngineStatus::Fallback(DiffEngineFallback::ByteLimit);
         return Ok(result);
     }
     let old_text = file_diff_source_plan_text(old)?;
     let new_text = file_diff_source_plan_text(new)?;
-    let outcome = gitcomet_difftastic::runner::compare(
-        gitcomet_difftastic::runner::DiffInput {
+    let outcome = gitcomet_difftastic::compare(
+        gitcomet_difftastic::Input {
             path: &file.path,
             old: &old_text,
             new: &new_text,
         },
         cancellation,
     )
-    .unwrap_or_else(|error| StructuralDiffOutcome::Fallback(error.fallback()));
+    .map_err(|gitcomet_difftastic::Cancelled| FileDiffCacheError::Cancelled)?;
     match outcome {
         StructuralDiffOutcome::Fallback(reason) => {
             result.status = DiffEngineStatus::Fallback(reason)

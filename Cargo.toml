@@ -149,6 +149,8 @@ ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
 dekobon-tree-sitter-groovy = "0.3.0"
+# Vendored as a library; see vendor/README.md.
+difftastic = { path = "vendor/difftastic" }
 # Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
 encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
 faster-hex = { version = "1.0.0", default-features = false, features = ["std"] }

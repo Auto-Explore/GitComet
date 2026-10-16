@@ -16,7 +16,7 @@ The engine is independent of presentation:
 
 Both source texts remain available, including formatting that Difftastic considers structurally unchanged. A formatting-only comparison shows a notice with **Show full text** and **Show line changes** actions. Ignore whitespace is unavailable while a structural result is displayed; the saved whitespace preference remains intact. Show line changes temporarily selects the line engine with whitespace shown.
 
-If Difftastic cannot compare a file, the viewer uses the line engine and displays the reason. Unsupported languages, parse errors, resource limits, unavailable helpers, and invalid helper output can cause a fallback. The user's engine preference stays selected. Image/binary views and merge resolution retain their existing behavior.
+If Difftastic cannot compare a file, the viewer uses the line engine and displays the reason. Unsupported languages, parse errors, resource limits (size, complexity, nesting depth, time), and internal Difftastic failures can cause a fallback. The user's engine preference stays selected. Image/binary views and merge resolution retain their existing behavior.
 
 Standalone GUI file comparisons also use full sources and support both engines. Regular UTF-8 file pairs up to the source limit are eligible. Directory, patch-only, non-UTF-8, binary, symlink, oversized, mode-change, and BOM-change inputs retain the patch view. Before/After labels are preserved separately from the language-detection filename.
 
@@ -39,21 +39,12 @@ python3 scripts/check-difftastic.py --helper target/debug/helpers/difft --notice
 
 Use `python` and `difft.exe` on Windows. For release builds use `--profile release --output target/release/helpers`. `--target` supports an explicit Rust target with the appropriate cross-compilation toolchain. The builder verifies the pinned source archive checksum and builds with upstream's lockfile in an isolated Cargo workspace. It also generates `difftastic-NOTICES.txt`, including parser/dependency licenses and an inventory.
 
-The app resolves a bundled helper relative to its executable, without searching `PATH`:
-
-| Distribution | Helper location |
-| --- | --- |
-| Development / portable | `helpers/difft` beside `gitcomet` (`difft.exe` on Windows) |
-| Linux installation / AppImage | `../libexec/gitcomet/difft` relative to the app's `bin` directory |
-| macOS app | `Contents/Helpers/difft` |
-| Windows MSI | `bin/helpers/difft.exe` |
-
 The Linux installer and macOS packager build the helper unless `--no-build` is supplied. All package paths require the helper and notices. Release CI checks extracted Linux packages, the installed Windows MSI, and the mounted macOS disk image. The Windows and macOS signing flows also sign the helper.
 
 ## Runtime contract
 
-Difftastic exposes an executable rather than a Rust library. GitComet consumes its [unstable JSON protocol](https://github.com/Wilfred/difftastic/blob/0.71.0/src/display/json.rs) through a version-pinned adapter. It renders native paged rows from line alignment and changed-token byte ranges, without parsing terminal colors. Difftastic does not supply applicable Git patches; partial actions use GitComet's separate Git patch pipeline.
+GitComet links a trimmed copy of Difftastic as a Rust library (`vendor/difftastic`; its changes are listed in `vendor/README.md`) and runs it in-process through `crates/gitcomet-difftastic`. It renders native paged rows from Difftastic's line alignment and changed-token byte ranges. Difftastic does not supply applicable Git patches; partial actions use GitComet's separate Git patch pipeline.
 
-Each comparison allows 1,000,000 bytes per source, 3,000,000 graph vertices, a shared five-second deadline for the version probe and comparison, 32 MiB stdout, and 64 KiB stderr. Queue wait is excluded. At most two workers run concurrently. Obsolete work is cancelled and reaped. The child environment removes inherited `DFT_*` and `GIT_*` settings. The adapter validates zero-based source lines, UTF-8 byte ranges, and complete source coverage; it preserves carriage returns and removes only the helper's synthetic EOF row.
+Each comparison allows 1,000,000 bytes per source, 3,000,000 graph vertices, syntax trees 1,000 levels deep, and five seconds. Queue wait is excluded. One comparison runs at a time, on its own thread with a 4 MiB stack, since a comparison can use about 1 GB of memory. Obsolete work is cancelled and stops within about half a second. Difftastic reads no environment variables. A panic inside Difftastic becomes a fallback, not a crash report. The adapter validates zero-based source lines, UTF-8 byte ranges, and complete source coverage, and preserves carriage returns.
 
 The hosted pane API exposes `DiffEngine`, `DiffPaneOptions.engine_override`, and `DiffPane::set_engine_override`. Hosted and repository viewers share prepared engine results, source-line anchors, cancellation, and engine-aware cache identity.

@@ -501,6 +501,7 @@ impl DiffRenderer {
                     this.file_diff_cache_inflight = None;
                     let rebuild = match rebuild_result {
                         Ok(rebuild) => rebuild,
+                        Err(file_diff::FileDiffCacheError::Cancelled) => return,
                         Err(error) => {
                             this.reset_file_diff_cache_data();
                             this.file_diff_cache_repo_id = Some(repo_id);

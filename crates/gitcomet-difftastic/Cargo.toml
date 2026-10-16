@@ -11,13 +11,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+difftastic = { workspace = true }
 gitcomet-core = { workspace = true }
 log = { workspace = true }
-process-wrap = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tempfile = { workspace = true }
 thiserror = { workspace = true }
-
-[build-dependencies]
-serde_json = { workspace = true }

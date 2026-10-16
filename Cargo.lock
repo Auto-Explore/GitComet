@@ -2556,12 +2556,9 @@ dependencies = [
 name = "gitcomet-difftastic"
 version = "0.3.0"
 dependencies = [
+ "difftastic",
  "gitcomet-core",
  "log",
- "process-wrap",
- "serde",
- "serde_json",
- "tempfile",
  "thiserror 2.0.21",
 ]
 

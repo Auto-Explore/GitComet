@@ -440,6 +440,8 @@ pub(in crate::view) enum FileDiffCacheError {
         new_bytes: Option<u64>,
     },
     Message(String),
+    /// Superseded while it ran; whoever cancelled it starts the next build.
+    Cancelled,
 }
 
 impl From<String> for FileDiffCacheError {
@@ -453,6 +455,7 @@ impl std::fmt::Display for FileDiffCacheError {
         match self {
             Self::NotText { .. } => f.write_str("file diff source is not valid UTF-8"),
             Self::Message(message) => f.write_str(message),
+            Self::Cancelled => f.write_str("file diff build was cancelled"),
         }
     }
 }

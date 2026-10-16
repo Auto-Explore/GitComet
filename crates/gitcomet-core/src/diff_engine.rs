@@ -38,12 +38,11 @@ impl DiffEngine {
 pub enum DiffEngineFallback {
     MissingSources,
     UnsupportedLanguage,
-    Binary,
     ParseErrors,
     ByteLimit,
     GraphLimit,
+    NestingLimit,
     Timeout,
-    Unavailable,
     InvalidOutput,
     Failed,
 }
@@ -53,12 +52,11 @@ impl DiffEngineFallback {
         match self {
             Self::MissingSources => "Complete source texts are unavailable",
             Self::UnsupportedLanguage => "Language is not supported by Difftastic",
-            Self::Binary => "Binary comparison",
             Self::ParseErrors => "Difftastic could not parse this file",
             Self::ByteLimit => "File exceeds Difftastic's size limit",
             Self::GraphLimit => "Comparison exceeds Difftastic's complexity limit",
+            Self::NestingLimit => "File is nested too deeply for Difftastic",
             Self::Timeout => "Difftastic exceeded its time limit",
-            Self::Unavailable => "The bundled Difftastic helper is unavailable",
             Self::InvalidOutput => "Difftastic returned an invalid comparison",
             Self::Failed => "Difftastic could not complete this comparison",
         }
