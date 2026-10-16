@@ -280,6 +280,28 @@ impl InputQueries {
 }
 
 impl PreparedReduction {
+    pub(in crate::store) fn for_repo_switch(
+        repo_id: RepoId,
+        state: &RwLock<Arc<AppState>>,
+        repos: &RepositoryRuntimes,
+        unchanged: bool,
+    ) -> Self {
+        let now = SystemTime::now();
+        let queries = {
+            let state = state.read().unwrap_or_else(|error| error.into_inner());
+            let mut queries = InputQueries::default();
+            if !super::repo_management::repo_switch_reuses_selected_diff(&state, repo_id, unchanged)
+            {
+                capture_message(&Msg::SetActiveRepo { repo_id }, &state, repos, &mut queries);
+            }
+            queries
+        };
+        Self {
+            message: Msg::SetActiveRepo { repo_id },
+            inputs: queries.resolve(now),
+        }
+    }
+
     pub(in crate::store) fn for_worker(
         message: Msg,
         state: &RwLock<Arc<AppState>>,
@@ -325,6 +347,11 @@ impl PreparedReduction {
 
     pub(in crate::store) fn into_parts(self) -> (Msg, ReducerInputs) {
         (self.message, self.inputs)
+    }
+
+    #[cfg(test)]
+    pub(in crate::store) fn selected_input_counts(&self) -> (usize, usize) {
+        (self.inputs.head.len(), self.inputs.markers.len())
     }
 }
 

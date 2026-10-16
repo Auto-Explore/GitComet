@@ -890,6 +890,29 @@ fn repo_switch_state_complete(repo_state: &RepoState, git_log_settings: GitLogSe
         && !repo_state.loads_in_flight.any_in_flight()
 }
 
+/// Decide before preparing filesystem inputs: a retained diff that will not
+/// reload also needs no fresh HEAD or submodule-marker classification.
+pub(super) fn repo_switch_reuses_selected_diff(
+    state: &AppState,
+    repo_id: RepoId,
+    unchanged: bool,
+) -> bool {
+    unchanged
+        && state.active_repo != Some(repo_id)
+        && state.repos.iter().any(|repo| {
+            repo.id == repo_id
+                && matches!(repo.open, Loadable::Ready(()))
+                && repo_switch_state_complete(repo, state.git_log_settings)
+                && matches!(repo.diff_state.diff, Loadable::Ready(_))
+                && !matches!(repo.diff_state.diff_file, Loadable::Loading)
+                && repo
+                    .diff_state
+                    .diff_target
+                    .as_ref()
+                    .is_some_and(|target| selected_conflict_target(repo, target).is_none())
+        })
+}
+
 fn fill_set_active_repo_inline_impl(
     inputs: &ReducerInputs,
     state: &mut AppState,
@@ -913,11 +936,14 @@ fn fill_set_active_repo_inline_impl(
     let now = inputs.now();
     let previous_active = state.active_repo;
     let changed = previous_active != Some(repo_id);
+    let reuse_selected_diff = repo_switch_reuses_selected_diff(state, repo_id, unchanged);
     if changed {
         // The inactive tab may have observed a HEAD move while no monitor was
         // attached to it. Refresh its retained path before capturing the diff
         // reload plan below.
-        super::refresh_selected_head_gitlink(inputs, state, repo_id);
+        if !reuse_selected_diff {
+            super::refresh_selected_head_gitlink(inputs, state, repo_id);
+        }
         // Leaving cancels whatever is in flight, but keeps the values it was
         // about to replace.
         if let Some(previous) = state
@@ -950,22 +976,23 @@ fn fill_set_active_repo_inline_impl(
     // selection below. Commit file metadata distinguishes submodules and
     // added/deleted preview-only files, but the selection reset deliberately
     // clears that metadata from the details pane.
-    let selected_diff_reload = if changed && matches!(repo_state.open, Loadable::Ready(())) {
-        repo_state.diff_state.diff_target.as_ref().map(|target| {
-            if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
-                match conflict_target {
-                    SelectedConflictTarget::Current => SelectedDiffReload::ConflictCurrent,
-                    SelectedConflictTarget::Path(path) => {
-                        SelectedDiffReload::Conflict(path.to_path_buf())
+    let selected_diff_reload =
+        if changed && !reuse_selected_diff && matches!(repo_state.open, Loadable::Ready(())) {
+            repo_state.diff_state.diff_target.as_ref().map(|target| {
+                if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
+                    match conflict_target {
+                        SelectedConflictTarget::Current => SelectedDiffReload::ConflictCurrent,
+                        SelectedConflictTarget::Path(path) => {
+                            SelectedDiffReload::Conflict(path.to_path_buf())
+                        }
                     }
+                } else {
+                    SelectedDiffReload::Diff(selected_diff_load_plan(inputs, repo_state, target))
                 }
-            } else {
-                SelectedDiffReload::Diff(selected_diff_load_plan(inputs, repo_state, target))
-            }
-        })
-    } else {
-        None
-    };
+            })
+        } else {
+            None
+        };
 
     if changed {
         // A repository tab is a workspace context, not a suspended history
@@ -1009,13 +1036,6 @@ fn fill_set_active_repo_inline_impl(
         && !reuse_retained
         && !repo_switch_can_use_primary_refresh(repo_state, git_log_settings, now);
     repo_state.last_active_at = Some(now);
-    let selected_diff_reload = selected_diff_reload.filter(|reload| {
-        !(reuse_retained
-            && matches!(reload, SelectedDiffReload::Diff(_))
-            && matches!(repo_state.diff_state.diff, Loadable::Ready(_))
-            && !matches!(repo_state.diff_state.diff_file, Loadable::Loading))
-    });
-
     let selected_history_reloads = if changed {
         selected_history_reloads_for_activation(repo_state)
     } else {

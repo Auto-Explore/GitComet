@@ -954,8 +954,8 @@ impl AppStore {
                         }
                         let unchanged = switching
                             && worker_ctx.repo_monitors.unchanged_since_inactive(repo_id);
-                        let (_, inputs) = PreparedReduction::for_worker(
-                            Msg::SetActiveRepo { repo_id }, worker_ctx.thread_state, &repos,
+                        let (_, inputs) = PreparedReduction::for_repo_switch(
+                            repo_id, worker_ctx.thread_state, &repos, unchanged,
                         ).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
