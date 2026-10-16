@@ -40,7 +40,7 @@ pub use app::{
     BrowserOpenRequest, BrowserOpenTarget, FocusedMergetoolConfig, UiLaunch, UiRunOutcome,
     run_focused_mergetool,
 };
-pub use app::{FocusedDiffConfig, run_focused_diff};
+pub use app::{FocusedDiffConfig, FocusedDiffInput, run_focused_diff};
 #[allow(deprecated)]
 pub use app::{
     run, run_with_startup_crash_report, run_with_startup_crash_report_and_shutdown_callback,

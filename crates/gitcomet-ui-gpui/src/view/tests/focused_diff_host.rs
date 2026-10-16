@@ -61,11 +61,83 @@ fn focused(
         view_mode: GitCometViewMode::FocusedDiff,
         focused_diff: Some(crate::FocusedDiffConfig {
             label_left: "before".into(), label_right: "after".into(), display_path: Some("example.rs".into()),
-            diff_text: "diff --git a/example.rs b/example.rs\n--- a/example.rs\n+++ b/example.rs\n@@ -1,2 +1,2 @@\n first\n-old\n+new\n".into(),
+            input: crate::FocusedDiffInput::Patch("diff --git a/example.rs b/example.rs\n--- a/example.rs\n+++ b/example.rs\n@@ -1,2 +1,2 @@\n first\n-old\n+new\n".into()),
         }),
         workspace: WorkspaceBootstrap::Empty,
         ..Default::default()
     }, window, cx))
+}
+
+#[gpui::test]
+fn focused_file_pair_retains_context_outside_patch_and_uses_native_layouts(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let text = "outside patch\n1\n2\n3\n4\n5\nold\n";
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(
+            store,
+            events,
+            GitCometViewConfig {
+                view_mode: GitCometViewMode::FocusedDiff,
+                focused_diff: Some(crate::FocusedDiffConfig {
+                    label_left: "before".into(),
+                    label_right: "after".into(),
+                    display_path: Some("file.rs".into()),
+                    input: crate::FocusedDiffInput::FilePair {
+                        path: "file.rs".into(),
+                        old: text.into(),
+                        new: text.replace("old", "new").into(),
+                    },
+                }),
+                workspace: WorkspaceBootstrap::Empty,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    for _ in 0..3 {
+        test_support::redraw(cx);
+    }
+    let pane = cx.update(|_, app| view.read(app).focused_diff_pane.clone().unwrap().pane);
+    assert!(cx.debug_bounds("focused_diff_left_label").is_some());
+    assert!(cx.debug_bounds("focused_diff_right_label").is_some());
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app).focused_diff_pane.as_ref().unwrap().labels,
+            [SharedString::from("before"), SharedString::from("after")]
+        )
+    });
+    for layout in [DiffLayout::Split, DiffLayout::Inline] {
+        cx.update(|_, app| {
+            pane.set_layout(layout, app);
+            pane.set_search("outside patch", app);
+        });
+        cx.run_until_parked();
+        test_support::redraw(cx);
+        cx.update(|_, app| {
+            assert!(!pane.is_loading(app));
+            assert!(pane.search_matches(app) > 0);
+            let hosted = pane
+                .view()
+                .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                .unwrap();
+            let renderer = hosted.read(app).renderer().unwrap().read(app);
+            assert_eq!(
+                renderer
+                    .file_diff_split_row(0)
+                    .unwrap()
+                    .old
+                    .unwrap()
+                    .as_ref(),
+                "outside patch"
+            );
+            assert!(!renderer.store.policy.allow_stage);
+            assert!(!renderer.store.policy.allow_edit);
+        });
+    }
 }
 
 #[gpui::test]
@@ -81,7 +153,7 @@ fn focused_diff_uses_the_common_pane_and_gate_at_each_width(cx: &mut gpui::TestA
             host.kind(),
             gitcomet_core::identity::WindowKind::FocusedDiff
         );
-        let pane = view.focused_diff_pane.clone().unwrap();
+        let pane = view.focused_diff_pane.clone().unwrap().pane;
         let entity = pane
             .view()
             .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()

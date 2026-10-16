@@ -186,7 +186,7 @@ pub(crate) fn run_mode(
                     label_left,
                     label_right,
                     display_path: config.display_path.clone(),
-                    diff_text: result.stdout.clone(),
+                    input: difftool_mode::focused_input(&config, result.stdout.clone()),
                 };
                 return gitcomet_ui_gpui::UiLaunch::new(backend())
                     .extensions(extensions)
