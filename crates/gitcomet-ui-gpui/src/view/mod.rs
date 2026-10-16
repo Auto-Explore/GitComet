@@ -248,6 +248,7 @@ pub(crate) mod clone_progress;
 mod close_guards;
 mod color;
 mod command_palette;
+mod commands;
 mod commit_message_hover;
 mod commit_message_text;
 mod commit_signature;

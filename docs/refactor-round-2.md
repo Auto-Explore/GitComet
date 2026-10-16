@@ -830,3 +830,16 @@ The rest of the plan's 4.1 (a copy-on-write repository list behind
 `repo`/`repo_mut` accessors) would save the remaining 0.6 µs per repository at
 the cost of rewriting about 550 test constructions and 200 lookups, so it waits
 for the feature owners in 4.2, which rewrite those lookups anyway.
+
+### 3.2 Typed commands
+
+The window's command dispatcher matched 98 string ids. `view/commands.rs` now
+defines `Command`, one variant per palette row, generated with its stable id by
+a small macro; the palette table builds its ids from it and
+`execute_builtin_command` matches the enum with no catch-all, so a listed
+command without a handler no longer compiles. String ids remain the edge format
+(scenario scripts, tests, extension rows): `execute_command` maps them with
+`Command::from_id` and sends the rest to the extension registry. Nine
+dispatcher arms for commands the palette never listed were empty TODO
+placeholders and are gone. Tests check that every command has exactly one
+palette row and that ids round-trip.

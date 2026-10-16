@@ -1,5 +1,6 @@
 //! Running a command palette or menu command on the window.
 
+use super::commands::Command;
 use super::{
     AnnexPopoverKind, AnnexPrompt, BranchPickerPurpose, CloseWindow, DecreaseUiScale, DiffArea,
     DiffViewMode, GitCometView, IncreaseUiScale, Loadable, Msg, NewWindow, OpenActiveViewSearch,
@@ -10,21 +11,40 @@ use super::{
 };
 
 impl GitCometView {
+    /// Runs the built-in or extension command with palette id `command_id`.
     pub(super) fn execute_command(
         &mut self,
         command_id: &str,
         window: Option<&mut Window>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let action = match command_id {
-            "open-repository"
-            | "switch-repository"
-            | "open-workspace"
-            | "clone-repository"
-            | "initialize-repository" => super::shell_policy::ShellAction::RepositoryEntry,
+        match Command::from_id(command_id) {
+            Some(command) => self.execute_builtin_command(command, window, cx),
+            None => {
+                if self.shell_action_allowed(super::shell_policy::ShellAction::Application)
+                    && let Some(id) = super::extension_host::command_id_from_palette(command_id)
+                {
+                    self.run_extension_command(id, cx);
+                }
+            }
+        }
+    }
+
+    fn execute_builtin_command(
+        &mut self,
+        command: Command,
+        window: Option<&mut Window>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let action = match command {
+            Command::OpenRepository
+            | Command::SwitchRepository
+            | Command::OpenWorkspace
+            | Command::CloneRepository
+            | Command::InitializeRepository => super::shell_policy::ShellAction::RepositoryEntry,
             _ if command_palette::COMMANDS
                 .iter()
-                .any(|command| command.id == command_id && command.requires_repo) =>
+                .any(|entry| entry.id == command.id() && entry.requires_repo) =>
             {
                 super::shell_policy::ShellAction::Repository
             }
@@ -33,31 +53,31 @@ impl GitCometView {
         if !self.shell_action_allowed(action) {
             return;
         }
-        match command_id {
-            "new-window" => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
-            "open-settings" => cx.defer(crate::view::open_settings_window),
-            "quit" => cx.defer(crate::app::quit_app_or_warn),
-            "minimize-window" => cx.defer(|cx| {
+        match command {
+            Command::NewWindow => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
+            Command::OpenSettings => cx.defer(crate::view::open_settings_window),
+            Command::Quit => cx.defer(crate::app::quit_app_or_warn),
+            Command::MinimizeWindow => cx.defer(|cx| {
                 if let Some(win) = cx.active_window() {
                     let _ = win.update(cx, |_root, win, _cx| win.minimize_window());
                 }
             }),
-            "zoom-window" => cx.defer(|cx| {
+            Command::ZoomWindow => cx.defer(|cx| {
                 if let Some(win) = cx.active_window() {
                     let _ = win.update(cx, |_root, win, _cx| {
                         super::super::app::toggle_window_zoom(win)
                     });
                 }
             }),
-            "toggle-fullscreen" => cx.defer(|cx| {
+            Command::ToggleFullscreen => cx.defer(|cx| {
                 if let Some(win) = cx.active_window() {
                     let _ = win.update(cx, |_root, win, _cx| win.toggle_fullscreen());
                 }
             }),
-            "increase-ui-scale" | "decrease-ui-scale" | "reset-ui-scale" => {
-                let action: Box<dyn gpui::Action> = match command_id {
-                    "increase-ui-scale" => Box::new(IncreaseUiScale),
-                    "decrease-ui-scale" => Box::new(DecreaseUiScale),
+            Command::IncreaseUiScale | Command::DecreaseUiScale | Command::ResetUiScale => {
+                let action: Box<dyn gpui::Action> = match command {
+                    Command::IncreaseUiScale => Box::new(IncreaseUiScale),
+                    Command::DecreaseUiScale => Box::new(DecreaseUiScale),
                     _ => Box::new(ResetUiScale),
                 };
                 // Zoom is per window: dispatch in the window that ran the command.
@@ -66,50 +86,54 @@ impl GitCometView {
                     None => cx.defer(move |cx| cx.dispatch_action(action.as_ref())),
                 }
             }
-            "close-window" => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
-            "locate-file-in-explorer" => self.locate_open_file_in_explorer(cx),
-            "open-repository" => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
-            "switch-repository" => {
+            Command::CloseWindow => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
+            Command::LocateFileInExplorer => self.locate_open_file_in_explorer(cx),
+            Command::OpenRepository => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
+            Command::SwitchRepository => {
                 if let Some(window) = window {
                     self.open_repository_switcher_centered(window, cx);
                 }
             }
-            "open-workspace" => {
+            Command::OpenWorkspace => {
                 if let Some(window) = window {
                     self.open_workspace_picker_centered(window, cx);
                 }
             }
-            "clone-repository" => {
+            Command::CloneRepository => {
                 if let Some(window) = window {
                     self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
                 }
             }
-            "close-repo-tab" => {
+            Command::CloseRepoTab => {
                 self.close_active_repo_tab(cx);
             }
-            "reload-repository" => {
+            Command::ReloadRepository => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::ReloadRepo { repo_id });
                 }
             }
-            "fetch-ref" => {
+            Command::FetchRef => {
                 if let Some(window) = window {
                     self.open_fetch_ref(window, cx);
                 }
             }
-            "fetch-all" => {
+            Command::FetchAll => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store
                         .dispatch(Msg::Fetch(gitcomet_state::msg::FetchMsg::All { repo_id }));
                 }
             }
-            "lfs-download-all" | "lfs-fetch-all" | "lfs-prune" | "lfs-fsck" | "lfs-install" => {
+            Command::LfsDownloadAll
+            | Command::LfsFetchAll
+            | Command::LfsPrune
+            | Command::LfsFsck
+            | Command::LfsInstall => {
                 use gitcomet_core::large_files::LargeFileCommand as C;
-                let command = match command_id {
-                    "lfs-download-all" => C::LfsPull { paths: Vec::new() },
-                    "lfs-fetch-all" => C::LfsFetchAll,
-                    "lfs-prune" => C::LfsPrune,
-                    "lfs-fsck" => C::LfsFsck,
+                let command = match command {
+                    Command::LfsDownloadAll => C::LfsPull { paths: Vec::new() },
+                    Command::LfsFetchAll => C::LfsFetchAll,
+                    Command::LfsPrune => C::LfsPrune,
+                    Command::LfsFsck => C::LfsFsck,
                     _ => C::LfsInstall,
                 };
                 if let Some(repo_id) = self.active_repo_id() {
@@ -117,35 +141,35 @@ impl GitCometView {
                         .dispatch(Msg::RunLargeFileCommand { repo_id, command });
                 }
             }
-            "annex-sync"
-            | "annex-pull"
-            | "annex-push"
-            | "annex-get-all"
-            | "annex-fsck"
-            | "annex-adjust-unlocked"
-            | "annex-leave-adjusted"
-            | "annex-init"
-            | "annex-restage" => {
+            Command::AnnexSync
+            | Command::AnnexPull
+            | Command::AnnexPush
+            | Command::AnnexGetAll
+            | Command::AnnexFsck
+            | Command::AnnexAdjustUnlocked
+            | Command::AnnexLeaveAdjusted
+            | Command::AnnexInit
+            | Command::AnnexRestage => {
                 use gitcomet_core::large_files::LargeFileCommand as C;
                 let content = self.state.large_file_settings.annex_sync_content;
                 let base = self
                     .active_repo()
                     .and_then(|repo| repo.annex_adjusted_branch())
                     .map(|(base, _)| base.to_string());
-                let command = match command_id {
-                    "annex-sync" => Some(C::AnnexSync { content }),
-                    "annex-pull" => Some(C::AnnexPull { content }),
-                    "annex-push" => Some(C::AnnexPush { content }),
-                    "annex-get-all" => Some(C::AnnexGet {
+                let command = match command {
+                    Command::AnnexSync => Some(C::AnnexSync { content }),
+                    Command::AnnexPull => Some(C::AnnexPull { content }),
+                    Command::AnnexPush => Some(C::AnnexPush { content }),
+                    Command::AnnexGetAll => Some(C::AnnexGet {
                         paths: vec![std::path::PathBuf::from(".")],
                         from: None,
                     }),
-                    "annex-fsck" => Some(C::AnnexFsck),
-                    "annex-restage" => Some(C::AnnexRestage),
-                    "annex-adjust-unlocked" => Some(C::AnnexAdjust {
+                    Command::AnnexFsck => Some(C::AnnexFsck),
+                    Command::AnnexRestage => Some(C::AnnexRestage),
+                    Command::AnnexAdjustUnlocked => Some(C::AnnexAdjust {
                         mode: gitcomet_core::large_files::AnnexAdjustMode::Unlock,
                     }),
-                    "annex-leave-adjusted" => base.map(|base| C::AnnexLeaveAdjusted { base }),
+                    Command::AnnexLeaveAdjusted => base.map(|base| C::AnnexLeaveAdjusted { base }),
                     _ => Some(C::AnnexInit),
                 };
                 if let (Some(repo_id), Some(command)) = (self.active_repo_id(), command) {
@@ -153,8 +177,8 @@ impl GitCometView {
                         .dispatch(Msg::RunLargeFileCommand { repo_id, command });
                 }
             }
-            "annex-unused" | "annex-webapp" => {
-                let prompt = if command_id == "annex-unused" {
+            Command::AnnexUnused | Command::AnnexWebapp => {
+                let prompt = if command == Command::AnnexUnused {
                     AnnexPrompt::Unused
                 } else {
                     AnnexPrompt::Webapp
@@ -167,59 +191,61 @@ impl GitCometView {
                     );
                 }
             }
-            "lfs-refresh-locks" => {
+            Command::LfsRefreshLocks => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::LoadLfsLocks { repo_id });
                 }
             }
-            "previous-repo-tab" => {
+            Command::PreviousRepoTab => {
                 self.activate_previous_repo_tab(cx);
             }
-            "next-repo-tab" => {
+            Command::NextRepoTab => {
                 self.activate_next_repo_tab(cx);
             }
-            "open-active-view-search" => cx.defer(|cx| cx.dispatch_action(&OpenActiveViewSearch)),
+            Command::OpenActiveViewSearch => {
+                cx.defer(|cx| cx.dispatch_action(&OpenActiveViewSearch))
+            }
             // Routed through the action so this takes the same path — and the
             // same availability gate — as the hotkey.
-            "reveal-commit" => cx.defer(|cx| cx.dispatch_action(&ToggleRevealCommit)),
+            Command::RevealCommit => cx.defer(|cx| cx.dispatch_action(&ToggleRevealCommit)),
             // The app-level `CheckForUpdates` and `InitializeRepository` actions
             // only have handlers on macOS, so these call what the menus call.
-            "check-for-updates" => self.check_for_updates_manually(cx),
-            "initialize-repository" => {
+            Command::CheckForUpdates => self.check_for_updates_manually(cx),
+            Command::InitializeRepository => {
                 if let Some(window) = window
                     && !self.blocks_repository_management_actions()
                 {
                     self.prompt_init_repo(window, cx);
                 }
             }
-            "toggle-terminal" => {
+            Command::ToggleTerminal => {
                 if let Some(window) = window {
                     self.toggle_terminal_for_active_repo(window, cx);
                 }
             }
-            "open-external-terminal" => {
+            Command::OpenExternalTerminal => {
                 if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
                     self.open_external_terminal_from_menu(repo_id, window, cx);
                 }
             }
-            "open-in-code-editor" => self.open_active_repo_in_external_code_editor(cx),
-            "open-remote-in-browser" => {
+            Command::OpenInCodeEditor => self.open_active_repo_in_external_code_editor(cx),
+            Command::OpenRemoteInBrowser => {
                 if let Some(window) = window {
                     self.open_remote_in_browser(window, cx);
                 }
             }
-            "prune-merged-branches" => {
+            Command::PruneMergedBranches => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::PruneMergedBranches { repo_id });
                 }
             }
-            "prune-local-tags" => {
+            Command::PruneLocalTags => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::PruneLocalTags { repo_id });
                 }
             }
-            "push-with-annotated-tags" | "push-with-all-tags" => {
-                let mode = if command_id == "push-with-all-tags" {
+            Command::PushWithAnnotatedTags | Command::PushWithAllTags => {
+                let mode = if command == Command::PushWithAllTags {
                     gitcomet_core::tag_push::TagPushMode::All
                 } else {
                     gitcomet_core::tag_push::TagPushMode::FollowAnnotated
@@ -231,7 +257,7 @@ impl GitCometView {
                 }
             }
             // Both abort through the action bar's confirmation.
-            "abort-merge" | "abort-rebase" => {
+            Command::AbortMerge | Command::AbortRebase => {
                 if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
                     self.open_popover_centered(
                         PopoverKind::MergeAbortConfirm { repo_id },
@@ -240,40 +266,40 @@ impl GitCometView {
                     );
                 }
             }
-            "continue-rebase" => {
+            Command::ContinueRebase => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::RebaseContinue { repo_id });
                 }
             }
-            "hide" => cx.defer(|cx| cx.hide()),
-            "hide-others" => cx.defer(|cx| cx.hide_other_apps()),
-            "install-desktop-integration" => {
+            Command::Hide => cx.defer(|cx| cx.hide()),
+            Command::HideOthers => cx.defer(|cx| cx.hide_other_apps()),
+            Command::InstallDesktopIntegration => {
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 self.install_linux_desktop_integration(cx);
             }
-            "toggle-sidebar" => {
+            Command::ToggleSidebar => {
                 self.set_sidebar_collapsed(!self.sidebar_collapsed, cx);
             }
-            "toggle-details" => {
+            Command::ToggleDetails => {
                 self.set_details_collapsed(!self.details_collapsed, cx);
             }
-            "toggle-diff-view" => {
+            Command::ToggleDiffView => {
                 let next = match self.diff_view_mode {
                     DiffViewMode::Split => DiffViewMode::Inline,
                     DiffViewMode::Inline => DiffViewMode::Split,
                 };
                 self.set_diff_view_mode(next, cx);
             }
-            "toggle-diff-word-wrap" => {
+            Command::ToggleDiffWordWrap => {
                 self.set_diff_word_wrap(!self.diff_word_wrap, cx);
             }
-            "toggle-line-numbers" => {
+            Command::ToggleLineNumbers => {
                 self.set_diff_show_line_numbers(!self.diff_show_line_numbers, cx);
             }
-            "toggle-whitespace-chars" => {
+            Command::ToggleWhitespaceChars => {
                 self.set_diff_reveal_whitespace_chars(!self.diff_reveal_whitespace_chars, cx);
             }
-            "create-branch" => {
+            Command::CreateBranch => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
@@ -302,7 +328,7 @@ impl GitCometView {
                     );
                 }
             }
-            "checkout-branch" => {
+            Command::CheckoutBranch => {
                 if let Some(window) = window {
                     self.open_popover_centered(
                         PopoverKind::BranchPicker {
@@ -313,7 +339,7 @@ impl GitCometView {
                     );
                 }
             }
-            "delete-branch" => {
+            Command::DeleteBranch => {
                 if let Some(window) = window {
                     self.open_popover_centered(
                         PopoverKind::BranchPicker {
@@ -324,7 +350,7 @@ impl GitCometView {
                     );
                 }
             }
-            "rename-branch" => {
+            Command::RenameBranch => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                     && let Some(name) = self
@@ -350,10 +376,7 @@ impl GitCometView {
                     );
                 }
             }
-            "checkout-remote-branch" => {
-                // TODO: Open remote branch picker
-            }
-            "pull" => {
+            Command::Pull => {
                 let Some(repo) = self.active_repo() else {
                     return;
                 };
@@ -371,7 +394,7 @@ impl GitCometView {
                     PullRequest::NotReady => {}
                 }
             }
-            "push" => {
+            Command::Push => {
                 let Some(repo) = self.active_repo() else {
                     return;
                 };
@@ -399,7 +422,7 @@ impl GitCometView {
                     PushRequest::NotReady => {}
                 }
             }
-            "force-push" => {
+            Command::ForcePush => {
                 let Some(repo) = self.active_repo() else {
                     return;
                 };
@@ -425,17 +448,14 @@ impl GitCometView {
                     );
                 }
             }
-            "delete-remote-branch" => {
-                // TODO: Implement delete remote branch
-            }
-            "commit" => {
+            Command::Commit => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
                     self.open_popover_centered(PopoverKind::CommitPrompt { repo_id }, window, cx);
                 }
             }
-            "apply-patch" => {
+            Command::ApplyPatch => {
                 let Some(repo_id) = self.active_repo_id() else {
                     return;
                 };
@@ -463,7 +483,7 @@ impl GitCometView {
                     .detach();
                 });
             }
-            "stage-all" => {
+            Command::StageAll => {
                 let Some(repo_id) = self.active_repo_id() else {
                     return;
                 };
@@ -501,7 +521,7 @@ impl GitCometView {
                     paths,
                 );
             }
-            "unstage-all" => {
+            Command::UnstageAll => {
                 // An empty list unstages from the index, like the Unstage all
                 // button; the status list omits a staged rename's source path.
                 if let Some(repo_id) = self.active_repo_id()
@@ -518,21 +538,18 @@ impl GitCometView {
                     );
                 }
             }
-            "discard-all" => {
-                // TODO: Implement discard all changes command
-            }
-            "stash" => {
+            Command::Stash => {
                 if let Some(window) = window {
                     self.open_popover_centered(PopoverKind::StashPrompt, window, cx);
                 }
             }
-            "stash-pop" | "stash-apply" | "stash-drop" => {
+            Command::StashPop | Command::StashApply | Command::StashDrop => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
-                    let purpose = match command_id {
-                        "stash-pop" => StashPickerPurpose::Pop,
-                        "stash-apply" => StashPickerPurpose::Apply,
+                    let purpose = match command {
+                        Command::StashPop => StashPickerPurpose::Pop,
+                        Command::StashApply => StashPickerPurpose::Apply,
                         _ => StashPickerPurpose::Drop,
                     };
                     self.open_popover_centered(
@@ -542,10 +559,7 @@ impl GitCometView {
                     );
                 }
             }
-            "merge" => {
-                // TODO: Implement merge branch/ref
-            }
-            "rebase" => {
+            Command::Rebase => {
                 if let Some(window) = window {
                     self.open_popover_centered(
                         PopoverKind::BranchPicker {
@@ -556,7 +570,7 @@ impl GitCometView {
                     );
                 }
             }
-            "create-tag" => {
+            Command::CreateTag => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
@@ -570,13 +584,10 @@ impl GitCometView {
                     );
                 }
             }
-            "delete-tag" => {
-                // TODO: Implement delete tag
-            }
-            "show-reflog" => {
+            Command::ShowReflog => {
                 self.open_reflog_panel_for_active_repo(cx);
             }
-            "add-remote" => {
+            Command::AddRemote => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
@@ -590,13 +601,7 @@ impl GitCometView {
                     );
                 }
             }
-            "remove-remote" => {
-                // TODO: Implement remove remote
-            }
-            "edit-remote-url" => {
-                // TODO: Implement edit remote URL
-            }
-            "add-submodule" => {
+            Command::AddSubmodule => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
@@ -610,15 +615,12 @@ impl GitCometView {
                     );
                 }
             }
-            "update-submodules" => {
+            Command::UpdateSubmodules => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::UpdateSubmodules { repo_id });
                 }
             }
-            "remove-submodule" => {
-                // TODO: Implement remove submodule
-            }
-            "add-worktree" => {
+            Command::AddWorktree => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
@@ -632,19 +634,11 @@ impl GitCometView {
                     );
                 }
             }
-            "remove-worktree" => {
-                // TODO: Implement remove worktree
-            }
-            "blame" => {
+            Command::Blame => {
                 self.set_annotate_enabled(!self.annotate_enabled, cx);
             }
-            "back" => self.dispatch_global_nav(false, cx),
-            "forward" => self.dispatch_global_nav(true, cx),
-            other => {
-                if let Some(id) = super::extension_host::command_id_from_palette(other) {
-                    self.run_extension_command(id, cx);
-                }
-            }
+            Command::Back => self.dispatch_global_nav(false, cx),
+            Command::Forward => self.dispatch_global_nav(true, cx),
         }
     }
 }
