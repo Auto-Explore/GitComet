@@ -1677,11 +1677,12 @@ fn every_highlight_capture_is_supported_or_ignored() {
         let Some(spec) = tree_sitter_highlight_spec(language) else {
             continue;
         };
-        used_unmapped.extend(
-            UNMAPPED_CAPTURES
-                .iter()
-                .filter(|(l, name)| *l == language && spec.query.capture_names().contains(name)),
-        );
+        used_unmapped.extend(UNMAPPED_CAPTURES.iter().filter(|(l, name)| {
+            *l == language
+                && spec.query.capture_names().contains(name)
+                && syntax_kind_from_capture_name(name).is_none()
+                && !capture_name_is_intentionally_ignored(name)
+        }));
         unsupported.extend(
             spec.query
                 .capture_names()
