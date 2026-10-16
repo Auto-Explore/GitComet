@@ -84,21 +84,31 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RepoStatus> {
         cancellation.check_cancelled()?;
+        #[cfg(feature = "benchmarks")]
+        let timing = crate::status_trace::StageTimer::new("repository-config");
         let repo = self.status_repo();
+        #[cfg(feature = "benchmarks")]
+        drop(timing);
         // Bare repositories can display history, but have no checkout whose
         // changes we can report. Do not walk the Git directory or compare HEAD
         // against a missing index (which would report every file as deleted).
         if repo.workdir().is_none() {
             return Ok(RepoStatus::default());
         }
+        #[cfg(feature = "benchmarks")]
+        let timing = crate::status_trace::StageTimer::new("index-fingerprint-gitlinks");
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         cancellation.check_cancelled()?;
+        #[cfg(feature = "benchmarks")]
+        drop(timing);
 
         // Check whether HEAD and the index file are unchanged since the last
         // status call.  When both match, the staged (Tree→Index) result is
         // identical and we can skip the tree comparison entirely, using the
         // cheaper index-worktree-only iterator.
+        #[cfg(feature = "benchmarks")]
+        let timing = crate::status_trace::StageTimer::new("staged-status");
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
         cancellation.check_cancelled()?;
 
@@ -121,6 +131,8 @@ impl GixRepo {
             collect_staged_status_from_tree_index(&repo, &tree)?
         };
         cancellation.check_cancelled()?;
+        #[cfg(feature = "benchmarks")]
+        drop(timing);
         // Use the same direct worktree walk on the first scan as on cached
         // scans. The generic status iterator keeps its stat updates private
         // and can only persist them to disk; status must remain read-only.
@@ -135,6 +147,8 @@ impl GixRepo {
         )?;
         cancellation.check_cancelled()?;
 
+        #[cfg(feature = "benchmarks")]
+        let _timing = crate::status_trace::StageTimer::new("finalize-and-gitlink-supplement");
         if !used_cached_staged {
             *self
                 .tree_index_cache
@@ -696,6 +710,8 @@ fn collect_index_worktree_status_direct(
     unstaged: &mut Vec<FileStatus>,
     cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("index-snapshot");
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
@@ -713,6 +729,8 @@ fn collect_index_worktree_status_direct(
     #[cfg(test)]
     let walk_started = tests::STAT_REFRESH_CLOCK.with(|clock| clock.get().unwrap_or(walk_started));
     let stamp = filetime::FileTime::from_unix_time(walk_started.unix_seconds() - 1, 0);
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
     let result = collect_index_worktree_status_direct_from_index(
         repo,
         refreshed
@@ -737,6 +755,8 @@ fn collect_index_worktree_status_direct(
             return Err(error);
         }
     };
+    #[cfg(feature = "benchmarks")]
+    let _timing = crate::status_trace::StageTimer::new("retain-index-stats");
     let refreshed = apply_stat_refresh(refreshed, &index, changes, stamp);
     *stat_refresh
         .lock()
@@ -803,6 +823,8 @@ fn collect_index_worktree_status_direct_from_index(
     unstaged: &mut Vec<FileStatus>,
     cancellation: &CancellationToken,
 ) -> Result<(DirectIndexWorktreeStatus, Vec<IndexWorktreeApplyChange>)> {
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("walk-options");
     let dirwalk_options = repo
         .dirwalk_options()
         .map_err(|e| {
@@ -811,6 +833,8 @@ fn collect_index_worktree_status_direct_from_index(
             )))
         })?
         .emit_untracked(gix::dir::walk::EmissionMode::Matching);
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
     // Git supplies child status below. The previous built-in provider used
     // Ignore::All, which also always returns None but still loads .gitmodules
     // and inspects each child's repository layout before ignoring the result.
@@ -868,6 +892,8 @@ where
         > + Send
         + Clone,
 {
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("attributes-and-excludes");
     let workdir = repo
         .workdir()
         .ok_or_else(|| Error::new(ErrorKind::Backend("gix status missing workdir".into())))?;
@@ -879,6 +905,10 @@ where
             None,
         )
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status attributes: {e}"))))?;
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("pathspec-realpath-fs-options");
     let (pathspec, _pathspec_attr_stack) = gix::Pathspec::new(
         repo,
         false,
@@ -904,7 +934,15 @@ where
         .filesystem_options()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status fs options: {e}"))))?;
     let fscache = filesystem_cache_enabled(repo);
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("case-insensitive-index");
     let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("resource-cache");
     let resource_cache = gix::diff::resource_cache(
         repo,
         gix::diff::blob::pipeline::Mode::ToGit,
@@ -919,10 +957,23 @@ where
             "gix status resource cache: {e}"
         )))
     })?;
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("cancellation-watcher");
     let mut collector = StatusEntryCollector::new(unstaged);
     let interrupt = StatusCancellation::new(cancellation)?;
     let mut progress = cancellation::progress(&interrupt.interrupt);
-    gix::status::plumbing::index_as_worktree_with_renames(
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("worker-policy");
+    let thread_limit = worker_limit::for_index(repo, index, cancellation)?;
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("native-walk");
+    let outcome = gix::status::plumbing::index_as_worktree_with_renames(
         index,
         workdir,
         &mut collector,
@@ -948,7 +999,7 @@ where
             fscache,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
-                thread_limit: worker_limit::for_index(repo, index, cancellation)?,
+                thread_limit,
                 fscache,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
@@ -967,6 +1018,13 @@ where
             )))
         }
     })?;
+    #[cfg(feature = "benchmarks")]
+    {
+        drop(timing);
+        crate::status_trace::record_walk(&outcome, fscache, thread_limit);
+    }
+    #[cfg(not(feature = "benchmarks"))]
+    let _ = outcome;
     cancellation.check_cancelled()?;
 
     collector.finish()

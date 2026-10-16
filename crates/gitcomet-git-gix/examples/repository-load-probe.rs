@@ -28,7 +28,8 @@ fn measure<T>(
 ) -> Option<T> {
     emit(json!({"event": "start", "iteration": iteration, "stage": stage}));
     let start = Instant::now();
-    let (result, commands) = gitcomet_git_gix::command_trace::capture(run);
+    let ((result, native_status), commands) =
+        gitcomet_git_gix::command_trace::capture(|| gitcomet_git_gix::status_trace::capture(run));
     let elapsed = start.elapsed();
     let commands: Vec<_> = commands
         .iter()
@@ -42,6 +43,37 @@ fn measure<T>(
             })
         })
         .collect();
+    let native_status = json!({
+        "stages": native_status.stages.iter().map(|stage| {
+            json!({"stage": stage.label, "milliseconds": stage.elapsed.as_secs_f64() * 1000.0})
+        }).collect::<Vec<_>>(),
+        "walks": native_status.walks.iter().map(|walk| {
+            let tracked = &walk.outcome.tracked_file_modification;
+            json!({
+                "windows_metadata_cache": cfg!(windows) && walk.filesystem_cache,
+                "thread_limit": walk.thread_limit,
+                "entries_to_process": tracked.entries_to_process,
+                "entries_processed": tracked.entries_processed,
+                "skipped_by_common_prefix": tracked.entries_skipped_by_common_prefix,
+                "skipped_by_pathspec": tracked.entries_skipped_by_pathspec,
+                "skipped_by_flags": tracked.entries_skipped_by_entry_flags,
+                "live_metadata_calls": tracked.symlink_metadata_calls,
+                "entries_to_update": tracked.entries_to_update,
+                "racy_clean": tracked.racy_clean,
+                "worktree_bytes": tracked.worktree_bytes,
+                "worktree_files_read": tracked.worktree_files_read,
+                "odb_bytes": tracked.odb_bytes,
+                "odb_objects_read": tracked.odb_objects_read,
+                "untracked_walk": walk.outcome.dirwalk.as_ref().map(|walk| {
+                    json!({
+                        "read_dir_calls": walk.read_dir_calls,
+                        "seen_entries": walk.seen_entries,
+                        "returned_entries": walk.returned_entries,
+                    })
+                }),
+            })
+        }).collect::<Vec<_>>(),
+    });
     let (witness, error) = match &result {
         Ok(value) => (describe(value), None),
         Err(error) => (Value::Null, Some(error.to_string())),
@@ -50,6 +82,7 @@ fn measure<T>(
         "event": "finish", "iteration": iteration, "stage": stage,
         "milliseconds": elapsed.as_secs_f64() * 1000.0,
         "witness": witness, "error": error, "commands": commands,
+        "native_status": native_status,
     }));
     result.ok()
 }
@@ -81,6 +114,9 @@ fn main() {
         "event": "configuration", "debug_assertions": cfg!(debug_assertions),
         "refreshes": refreshes, "history_mode": format!("{mode:?}"),
         "remote_tags": remote_tags, "execution": "sequential_backend_stages",
+        "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+        "available_parallelism": std::thread::available_parallelism().ok().map(usize::from),
+        "native_status_profiling": true,
     }));
     let Some(repo) = measure(0, "open", || GixBackend.open(&root), |_| json!("opened")) else {
         std::process::exit(1);
