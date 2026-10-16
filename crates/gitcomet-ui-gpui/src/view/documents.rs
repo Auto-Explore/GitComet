@@ -364,7 +364,6 @@ struct StandaloneBuffer {
     wrap_row_starts: Vec<usize>,
     wrap: bool,
     syntax_key: Option<(u64, u64)>,
-    edit_key: Option<(u64, u64)>,
     syntax_serial: u64,
     syntax_task: Option<gpui::Task<()>>,
     diagram_key: Option<(PathBuf, u64, u64)>,
@@ -452,20 +451,22 @@ impl StandaloneBuffer {
             input.set_text(path.display().to_string(), cx);
             input
         });
-        let subscriptions = vec![cx.observe(&input, |this, _, cx| {
-            if !this.loading() {
-                let snapshot = this.input.read(cx).text_snapshot();
-                let key = (snapshot.model_id(), snapshot.revision());
-                // Caret blinks and moves notify too; only new text is an edit.
-                if this.editing && this.edit_key != Some(key) {
-                    this.edit_key = Some(key);
-                    this.document
-                        .edit(file_editor_text_fingerprint(&snapshot), None, cx);
+        let subscriptions = vec![
+            cx.observe(&input, |_, _, cx| cx.notify()),
+            cx.subscribe(&input, |this, _, _: &crate::kit::TextInputChanged, cx| {
+                if this.loading() {
+                    return;
+                }
+                if this.editing {
+                    this.document.edit(
+                        file_editor_text_fingerprint(&this.input.read(cx).text_snapshot()),
+                        None,
+                        cx,
+                    );
                 }
                 this.refresh_syntax(cx);
-            }
-            cx.notify();
-        })];
+            }),
+        ];
         let image = initial.is_none() && image_format_for_path(&path).is_some();
         let wrap = wraps_by_default(&path);
         cx.on_release(|this, cx| {
@@ -504,7 +505,6 @@ impl StandaloneBuffer {
             wrap_row_starts: Vec::new(),
             wrap,
             syntax_key: None,
-            edit_key: None,
             syntax_serial: 0,
             syntax_task: None,
             diagram_key: None,
