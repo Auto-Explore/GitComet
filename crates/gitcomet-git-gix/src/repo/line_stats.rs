@@ -242,7 +242,9 @@ impl super::GixRepo {
         for file in files.iter_mut() {
             if file.kind == FileStatusKind::Untracked {
                 cancellation.check_cancelled()?;
-                file.line_stats = reader.added_file_line_stats(&file.path, &mut new);
+                file.line_stats = reader
+                    .find(&file.path)
+                    .map_or(LineStats::UNKNOWN, |found| found.added_line_stats(&mut new));
                 continue;
             }
             if !edits || file.line_stats.edit.is_some() || file.line_stats.additions.is_none() {
@@ -620,16 +622,6 @@ impl<'repo> WorktreeReader<'repo> {
         }
     }
 
-    /// A file with nothing stored for it: all of it is added.
-    fn added_file_line_stats(
-        &mut self,
-        relative: &std::path::Path,
-        buf: &mut Vec<u8>,
-    ) -> LineStats {
-        self.find(relative)
-            .map_or(LineStats::UNKNOWN, |found| found.added_line_stats(buf))
-    }
-
     /// Replaces `out` with the file at `relative`. `false` means gone, over
     /// the size cap, unreadable, binary, or left to the LFS clean filter.
     fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
@@ -710,7 +702,8 @@ impl Found<'_, '_> {
         })
     }
 
-    /// All of it as added, read into `buf`.
+    /// A file with nothing stored for it: all of it is added. Reads into
+    /// `buf`.
     fn added_line_stats(self, buf: &mut Vec<u8>) -> LineStats {
         if self.read(buf) {
             line_stats_from_bytes(&[], buf)
