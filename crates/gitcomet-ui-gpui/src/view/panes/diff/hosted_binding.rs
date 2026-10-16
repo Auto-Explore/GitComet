@@ -229,6 +229,7 @@ impl DiffRenderer {
         line: u32,
         top: bool,
     ) -> bool {
+        self.ensure_diff_visible_indices();
         let found = (0..self.diff_visible_len()).find(|&row| {
             let (old, new) = self.hosted_line_numbers(row);
             (match side {
@@ -274,7 +275,10 @@ impl DiffRenderer {
         }
     }
 
+    // The hosted reads refresh the row index themselves: the host pane reads
+    // them before this renderer's own render does.
     fn prepare_hosted_projection(&mut self) {
+        self.ensure_diff_visible_indices();
         let Some(decor) = &self.hosted_decor else {
             return;
         };
@@ -349,6 +353,11 @@ impl DiffRenderer {
             .filter(|decor| !decor.annotations.is_empty())
             .map(|decor| decor.markers.clone())
             .unwrap_or_default()
+    }
+
+    pub(in crate::view) fn hosted_is_empty(&mut self) -> bool {
+        self.ensure_diff_visible_indices();
+        self.diff_visible_len() == 0
     }
 
     pub(in crate::view) fn diff_list_len(&mut self) -> usize {

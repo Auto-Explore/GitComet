@@ -876,14 +876,16 @@ impl DiffPaneView {
             .and_then(|renderer| renderer.read(cx).hosted_decor.as_ref())
             .map_or(0, |decor| decor.marker_builds)
     }
-    /// The pane's note when it has no rows. The renderer refreshes its row
-    /// list in its own render, which runs after this pane's.
+    #[cfg(test)]
+    pub(crate) fn rendered_statuses(&self) -> &[Option<SharedString>] {
+        &self.rendered_statuses
+    }
+    /// The pane's note when it has no rows.
     fn empty_status(&self, cx: &mut gpui::Context<Self>) -> Option<SharedString> {
         let (empty, computing) = self.renderer.as_ref().map_or((true, false), |renderer| {
             renderer.update(cx, |pane, _| {
-                pane.ensure_diff_visible_indices();
                 (
-                    pane.diff_visible_len() == 0,
+                    pane.hosted_is_empty(),
                     pane.file_diff_cache_inflight.is_some(),
                 )
             })
@@ -895,10 +897,6 @@ impl DiffPaneView {
                 "No changes".into()
             }
         })
-    }
-    #[cfg(test)]
-    pub(crate) fn rendered_statuses(&self) -> &[Option<SharedString>] {
-        &self.rendered_statuses
     }
 }
 

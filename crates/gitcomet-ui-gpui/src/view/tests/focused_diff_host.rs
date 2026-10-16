@@ -206,6 +206,8 @@ fn focused_file_pair_retains_context_outside_patch_and_uses_native_layouts(
     }
 }
 
+/// The standalone difftool said "No changes" above a full diff: the pane read
+/// the renderer's row count before the renderer refreshed it in that frame.
 #[gpui::test]
 fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
