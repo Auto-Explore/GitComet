@@ -44,9 +44,9 @@ A->>B: hello
             .expect("diagram block");
         for row in &document.rows[range] {
             let diagram = row.diagram.as_ref().unwrap();
-            assert_eq!(diagram.kind, kind);
+            assert_eq!(diagram.key.kind(), kind);
             assert_eq!(diagram.info.as_ref(), info);
-            assert_eq!(diagram.source.as_ref(), source);
+            assert_eq!(diagram.key.source().as_ref(), source);
             assert_eq!(diagram.fence_lines, 2..4 + source.lines().count());
             assert!(diagram.fence_lines.start < row.source_line_range.start);
         }
@@ -91,7 +91,8 @@ fn diagram_changes_are_whole_old_and_new_blocks() {
                 .diagram
                 .as_ref()
                 .unwrap()
-                .source
+                .key
+                .source()
                 .as_ref(),
             expected
         );
@@ -114,7 +115,7 @@ flowchart LR;A-->B
     let blocks = markdown_document_blocks(&diff.inline);
     assert_eq!(blocks.len(), 2);
     assert_eq!(
-        diff.inline.rows[0].diagram.as_ref().unwrap().kind,
+        diff.inline.rows[0].diagram.as_ref().unwrap().key.kind(),
         DiagramKind::Mermaid
     );
     assert!(diff.inline.rows[1].diagram.is_none());

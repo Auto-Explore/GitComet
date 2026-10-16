@@ -2,14 +2,14 @@
 # part of every cache key: a budget change must not turn every bundle cold.
 
 # report.py fails a dev push whose CI caches exceed this; GitHub itself evicts beyond 10 GB.
-allowance_bytes = 8_000_000_000
+allowance_bytes = 8_200_000_000
 
 # One shared bundle per OS family: crate files, the sparse index and git databases (522 MiB on Linux).
 sources_mib = 600
 
 # Compiled bundles for the three longest jobs. Measured on dev push 38886019692 (2026-10-16):
-# macos15-x64 1367 MiB (previously 1454 MiB), windows-arm64 2061 MiB.
+# macos15-x64 1367 MiB (previously 1454 MiB), windows-arm64 2061 MiB; windows-x64 2073 MiB in a later push.
 [compiled_mib]
 macos15-x64-workspace-ci-test = 1536
-windows-x64-workspace-ci-test = 2048
+windows-x64-workspace-ci-test = 2176
 windows-arm64-workspace-ci-test = 2176

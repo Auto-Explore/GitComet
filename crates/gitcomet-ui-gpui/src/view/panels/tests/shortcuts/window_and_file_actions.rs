@@ -604,6 +604,44 @@ fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// A trackpad sends Ctrl/Cmd+scroll as many small pixel deltas; stepping on
+/// each one ran a single gesture through every zoom preset.
+#[gpui::test]
+fn ui_scale_smooth_ctrl_scroll_steps_once_per_40_px(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    draw_and_drain_test_window(cx);
+
+    let position = point(px(320.0), px(240.0));
+    let wheel = |cx: &mut gpui::VisualTestContext, dy: f32, touch_phase| {
+        cx.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(dy))),
+            modifiers: Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            touch_phase,
+        });
+        draw_and_drain_test_window(cx);
+    };
+    let zoom =
+        |cx: &mut gpui::VisualTestContext| cx.update(|_, app| view.read(app).ui_scale_percent);
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    assert_eq!(zoom(cx), 100, "30 px is short of a step");
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    assert_eq!(zoom(cx), 110);
+    // macOS starts a gesture with fingers down and no distance yet; the
+    // previous gesture's leftover must not carry into the new one.
+    wheel(cx, 30.0, gpui::TouchPhase::Moved);
+    wheel(cx, 0.0, gpui::TouchPhase::Started);
+    wheel(cx, 15.0, gpui::TouchPhase::Moved);
+    assert_eq!(zoom(cx), 110, "a new gesture starts from nothing");
+}
+
 #[gpui::test]
 fn ctrl_s_stages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

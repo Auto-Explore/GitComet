@@ -133,9 +133,8 @@ impl MarkdownPreviewDiff {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarkdownDiagramSource {
-    pub kind: gitcomet_diagrams::DiagramKind,
+    pub key: gitcomet_diagrams::source::DiagramKey,
     pub info: Arc<str>,
-    pub source: Arc<str>,
     pub fence_lines: Range<usize>,
 }
 

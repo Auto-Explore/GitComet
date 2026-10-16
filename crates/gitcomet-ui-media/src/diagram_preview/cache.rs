@@ -10,24 +10,9 @@ use std::sync::{
 };
 
 pub(super) const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
-pub(super) const MAX_RASTER_BYTES: usize = 64 * 1024 * 1024;
+/// The tile cache's size until the viewports show more than half of it.
+pub(super) const MIN_TILE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
-#[derive(Clone, Eq, PartialEq)]
-pub(super) struct CacheKey(DiagramKind, Arc<str>, u64);
-impl CacheKey {
-    pub(super) fn new(kind: DiagramKind, source: Arc<str>) -> Self {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut hasher);
-        Self(kind, source, hasher.finish())
-    }
-}
-impl std::hash::Hash for CacheKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-        self.2.hash(state);
-    }
-}
 pub(super) struct RasterDiagram {
     pub(super) scene: PreparedScene,
     pub(super) diagnostics: Vec<String>,
@@ -35,6 +20,15 @@ pub(super) struct RasterDiagram {
     pub(super) bytes: usize,
 }
 pub(super) type RasterResult = Result<Arc<RasterDiagram>, String>;
+
+/// A prepared diagram, as the size of its block depends on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SceneFacts {
+    /// The scene's height at 100%, and how many diagnostics show under it.
+    Drawn { height: f32, diagnostics: usize },
+    /// It failed: the block shows the error and its source.
+    Failed,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct TileKey {
@@ -54,15 +48,18 @@ struct Flight {
     ready: Condvar,
 }
 pub(super) struct CacheInner {
-    pub(super) entries: lru::LruCache<CacheKey, RasterResult>,
-    flights: HashMap<CacheKey, Arc<Flight>>,
+    pub(super) entries: lru::LruCache<DiagramKey, RasterResult>,
+    flights: HashMap<DiagramKey, Arc<Flight>>,
     tile_locks: HashMap<TileKey, std::sync::Weak<Mutex<()>>>,
     pub(super) bytes: usize,
     pub(super) tiles: lru::LruCache<TileKey, Arc<gpui::RenderImage>>,
+    /// The tiles each live viewport shows, by viewport id: `tiles` holds
+    /// twice their sum.
+    pub(super) shown: HashMap<u64, usize>,
     pub(super) dropped: VecDeque<Arc<gpui::RenderImage>>,
 }
 impl CacheInner {
-    pub(super) fn insert(&mut self, key: CacheKey, result: RasterResult) {
+    pub(super) fn insert(&mut self, key: DiagramKey, result: RasterResult) {
         let bytes = result.as_ref().map_or(0, |value| value.bytes);
         if bytes > MAX_SCENE_BYTES {
             return;
@@ -125,9 +122,10 @@ impl Default for DiagramCache {
                 tile_locks: HashMap::new(),
                 bytes: 0,
                 tiles: lru::LruCache::new(
-                    NonZeroUsize::new(MAX_RASTER_BYTES / (TILE_SIZE * TILE_SIZE * 4) as usize)
+                    NonZeroUsize::new(MIN_TILE_CACHE_BYTES / (TILE_SIZE * TILE_SIZE * 4) as usize)
                         .unwrap(),
                 ),
+                shown: HashMap::new(),
                 dropped: VecDeque::new(),
             }),
             work: WorkGate::default(),
@@ -139,17 +137,15 @@ impl Default for DiagramCache {
 }
 impl DiagramCache {
     #[cfg(any(test, feature = "benchmarks"))]
-    pub fn render(&self, kind: DiagramKind, source: Arc<str>) -> RasterResult {
-        self.render_current(kind, source, &AtomicU64::new(0), 0)
+    pub(super) fn render(&self, kind: DiagramKind, source: Arc<str>) -> RasterResult {
+        self.render_current(DiagramKey::new(kind, source), &AtomicU64::new(0), 0)
     }
     pub(super) fn render_current(
         &self,
-        kind: DiagramKind,
-        source: Arc<str>,
+        key: DiagramKey,
         generation: &AtomicU64,
         expected: u64,
     ) -> RasterResult {
-        let key = CacheKey::new(kind, source.clone());
         let (flight, owner) = {
             let mut inner = self.inner.lock().unwrap();
             if let Some(result) = inner.entries.get(&key) {
@@ -177,7 +173,7 @@ impl DiagramCache {
                 .is_err_and(|e| e == "Obsolete diagram request.")
                 && generation.load(Ordering::Relaxed) == expected
             {
-                return self.render_current(kind, source, generation, expected);
+                return self.render_current(key, generation, expected);
             }
             return result;
         }
@@ -185,7 +181,7 @@ impl DiagramCache {
             let _permit = self.work.acquire(false);
             if generation.load(Ordering::Relaxed) == expected {
                 self.preparations.fetch_add(1, Ordering::Relaxed);
-                gitcomet_diagrams::render(kind, &source).and_then(|output| {
+                gitcomet_diagrams::render(key.kind(), key.source()).and_then(|output| {
                     let page = output
                         .pages
                         .into_iter()
@@ -214,6 +210,45 @@ impl DiagramCache {
         }
         flight.ready.notify_all();
         result
+    }
+    /// `key`'s prepared result, when there is one.
+    pub(super) fn prepared(&self, key: &DiagramKey) -> Option<RasterResult> {
+        self.inner.lock().unwrap().entries.get(key).cloned()
+    }
+    /// What a block needs to know of `key`'s preparation to size itself,
+    /// when it is prepared.
+    pub(super) fn scene_facts(&self, key: &DiagramKey) -> Option<SceneFacts> {
+        let inner = self.inner.lock().unwrap();
+        Some(match inner.entries.peek(key)? {
+            Ok(diagram) => SceneFacts::Drawn {
+                height: diagram.scene.height(),
+                diagnostics: diagram.diagnostics.len(),
+            },
+            Err(_) => SceneFacts::Failed,
+        })
+    }
+    /// A new id for a viewport's `show_tiles` reports.
+    pub(super) fn viewport_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+    /// Records that `viewport` shows `tiles` tiles, and grows the tile cache
+    /// to twice what all viewports show together: tiles on screen are used
+    /// every frame, so under LRU they then never evict one another. It never
+    /// shrinks, so a viewport that stops showing for a moment (a Code toggle,
+    /// a scroll out and back) keeps its tiles.
+    pub(super) fn show_tiles(&self, viewport: u64, tiles: usize) {
+        let mut inner = self.inner.lock().unwrap();
+        if tiles == 0 {
+            inner.shown.remove(&viewport);
+        } else {
+            inner.shown.insert(viewport, tiles);
+        }
+        let shown: usize = inner.shown.values().sum();
+        if let Some(needed) = NonZeroUsize::new(2 * shown)
+            && needed > inner.tiles.cap()
+        {
+            inner.tiles.resize(needed);
+        }
     }
     pub(super) fn peek_tile(&self, key: TileKey) -> Option<Arc<gpui::RenderImage>> {
         self.inner.lock().unwrap().tiles.get(&key).cloned()
@@ -300,8 +335,7 @@ mod tests {
         let worker = std::thread::spawn(move || {
             started.send(()).unwrap();
             worker_cache.render_current(
-                DiagramKind::Mermaid,
-                "flowchart LR;A-->B".into(),
+                DiagramKey::new(DiagramKind::Mermaid, "flowchart LR;A-->B".into()),
                 &worker_generation,
                 0,
             )

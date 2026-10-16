@@ -29,6 +29,7 @@ gpui = { workspace = true }
 image = { workspace = true }
 lru = { workspace = true }
 resvg = { workspace = true }
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
 gitcomet-ui-kit = { workspace = true, features = ["test-support"] }

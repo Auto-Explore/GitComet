@@ -54,6 +54,7 @@ pub mod ui_runtime;
 pub mod ui_scale;
 pub mod window_chrome;
 pub mod window_focus;
+pub mod zoom_wheel;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

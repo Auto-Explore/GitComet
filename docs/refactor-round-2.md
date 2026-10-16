@@ -2,8 +2,7 @@
 
 Planned 2026-10-15 on `refactor` after the merge of `dev` (#618). This records
 the approved program, its baseline, and the rules each slice follows. Progress
-is tracked by `scripts/ci/ratchets.py` and the per-stage notes added below as
-slices land.
+is tracked by the per-stage notes added below as slices land.
 
 ## Context
 
@@ -43,30 +42,29 @@ section: the crate *graph* changes (new crates, one split) while its layering di
 is preserved, and tests move with the code they test. Everything else stands: GPUI, gix,
 MVU snapshots, executor topology, user-visible behavior, persisted formats and
 performance budgets; each slice migrates callers, tests and docs together and leaves
-no forwarding shims. Every slice must move at least one number in the ratchet table.
+no forwarding shims. Every slice must move at least one number in the baseline table.
 
-## Baseline and ratchets
+## Baseline and targets
 
 | Metric | Today | Target after round 2 | How measured |
 |---|---|---|---|
 | ui-gpui lib compile unit | 34–85 s | < 25 s (host shell only) | `cargo build --timings` |
 | ui-gpui production lines | 298k | < 150k | `wc` over `src/` minus tests |
 | GPUI test processes | 3 (ui, kit, example) | 7+ | `GPUI_PACKAGES` in `scripts/ci/run.py:33` |
-| `GitCometView` fields | 173 | < 60 | `scripts/ci/ratchets.py` |
-| `use super::*;` in production files (ui-gpui) | 384 | 0 | `scripts/ci/ratchets.py` |
-| `impl GitCometView` blocks outside `gitcomet_view*.rs` | 23 files | 0 | `scripts/ci/ratchets.py` |
-| `.set_theme(` calls in host | 130 | 0 | `scripts/ci/ratchets.py` |
-| kit → `gitcomet-core` refs | 46 | 0 (rule in boundaries.py) | `scripts/ci/ratchets.py`, then boundaries.py |
+| `GitCometView` fields | 173 | < 60 | fields of `pub struct GitCometView` |
+| `use super::*;` in production files (ui-gpui) | 384 | 0 | `git grep -l '^use super::\*;'` |
+| `impl GitCometView` blocks outside `gitcomet_view*.rs` | 23 files | 0 | `git grep -l '^impl GitCometView'` |
+| `.set_theme(` calls in host | 130 | 0 | `git grep -c '\.set_theme('` |
+| kit → `gitcomet-core` refs | 46 | 0 (rule in boundaries.py) | `scripts/ci/boundaries.py` |
 | production `.rs` files > 3,000 lines | 19 | 0 (guard lowered to 3,000) | `scripts/check-rust-source-size.sh` |
-| state `repos.iter_mut().find` sites | 213 | 0 | `scripts/ci/ratchets.py` |
+| state `repos.iter_mut().find` sites | 213 | 0 | `.iter_mut().find(` in state production code |
 | state test CPU (Linux CI, cumulative) | 282 s | < 60 s | nextest log |
-| gix integration test binaries | 32 | 1 | `scripts/ci/ratchets.py` |
+| gix integration test binaries | 32 | 1 | files in `crates/gitcomet-git-gix/tests/` |
 | build→test rebuild of dependencies | full | none (shared artifacts) | `cargo build && cargo test --no-run` timings |
 
-`scripts/ci/ratchets.py` records the static counts above in `scripts/ci/ratchets.txt`
-and fails when one regresses or improves without being recorded (`--write`), the same
-way the identity-literal guard works. Existing guards stay green at
-every commit: `scripts/check-rust-source-size.sh`, `scripts/ci/boundaries.py`,
+The CI ratchet over these counts (`scripts/ci/ratchets.py`) was removed on 2026-10-16:
+its exact-value baseline conflicted on every merge between parallel branches. Existing
+guards stay green at every commit: `scripts/check-rust-source-size.sh`, `scripts/ci/boundaries.py`,
 `scripts/ci/identity_literals.py`, `scripts/ci/inventory.py` for test moves, the three
 Clippy contexts, strict rustdoc.
 
@@ -454,7 +452,7 @@ at the same time. Mind the disk: each worktree's `target` is 30+ GB.
 
 Per slice:
 - `cargo fmt --all --check`; the three Clippy contexts from CONTRIBUTING; `cargo doc --no-deps -p gitcomet-ui-kit -p gitcomet-extension-api`.
-- `python3 scripts/ci/boundaries.py`; `bash scripts/check-rust-source-size.sh`; `python3 scripts/ci/identity_literals.py`; `python3 scripts/ci/ratchets.py` (new).
+- `python3 scripts/ci/boundaries.py`; `bash scripts/check-rust-source-size.sh`; `python3 scripts/ci/identity_literals.py`.
 - `python3 scripts/ci/inventory.py` before/after every test move; names and ignore flags must match modulo the documented module-prefix rename.
 - `python3 scripts/ci/run.py test --context <crate>` for the touched crate, `--context example` after any kit or extension-API change, `--context workspace` before merge.
 - For crate extractions: `cargo build --timings` before/after, report the ui-gpui unit time and critical path; `git diff -M --stat` shows renames, not rewrites.

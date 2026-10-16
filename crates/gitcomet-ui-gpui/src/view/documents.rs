@@ -1444,11 +1444,10 @@ impl Render for StandaloneBuffer {
                 super::rendered_preview::PreviewContent::File(
                     super::diagram_preview::DiagramPreview {
                         id: "document_diagram".into(),
-                        input,
                         theme,
                         source_element: None,
                         force_source: false,
-                        embedded: false,
+                        placement: super::diagram_preview::DiagramPlacement::Pane(input),
                     }
                     .into_any_element(),
                 ),
