@@ -1951,7 +1951,7 @@ impl DetailsPaneView {
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let list = crate::view::rows::FileListId::Status(section);
-        let sort = self.file_list_sort_for(list);
+        let sort = self.status_file_sort_for(section);
         let mut hasher = rustc_hash::FxHasher::default();
         status_section_order_rev(repo, section, sort).hash(&mut hasher);
         sort.hash(&mut hasher);
