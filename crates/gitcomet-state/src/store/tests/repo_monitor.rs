@@ -957,7 +957,9 @@ fn repo_monitor_manager_never_reuses_a_dead_monitor() {
     monitors.insert_blocked_monitor_for_test(RepoId(7), release_rx, exited_tx);
 
     // The thread ends while the monitor stays enabled, as after a panic.
-    monitors.revalidate(RepoId(7));
+    let state = active_ready_repo_state(RepoId(7), PathBuf::from("unused-monitor-workdir"));
+    let context = monitor_impl::ActivationContext::for_repo(&state.repos[0]);
+    assert!(monitors.refresh_on_activation(RepoId(7), context.clone()));
     release_tx
         .send(())
         .expect("test monitor release signal should send");
@@ -977,6 +979,10 @@ fn repo_monitor_manager_never_reuses_a_dead_monitor() {
         );
         std::thread::yield_now();
     }
+    assert!(
+        !monitors.refresh_on_activation(RepoId(7), context),
+        "a dead monitor must leave activation to the full-refresh fallback"
+    );
 }
 
 #[test]
