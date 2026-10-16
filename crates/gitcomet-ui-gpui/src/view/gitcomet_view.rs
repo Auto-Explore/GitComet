@@ -1261,6 +1261,7 @@ impl GitCometView {
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
         let diff_whitespace_mode = ui_preferences.diff.whitespace_mode;
+        let diff_engine = ui_preferences.diff.engine;
         let diff_view_mode = ui_preferences.diff.view_mode;
         let annotate_enabled = ui_preferences.diff.annotate_enabled;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
@@ -1957,6 +1958,7 @@ impl GitCometView {
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_engine,
             diff_view_mode,
             annotate_enabled,
             diff_reveal_whitespace_chars,

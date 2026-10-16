@@ -1199,7 +1199,7 @@ impl MainPaneView {
         cx.notify();
     }
 
-    fn restore_diff_panel_focus_after_toolbar_action(
+    pub(in crate::view) fn restore_diff_panel_focus_after_toolbar_action(
         &self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -1850,6 +1850,38 @@ impl MainPaneView {
                     == RenderedPreviewMode::Rendered);
 
         let mut controls = div().flex().items_center().gap_1();
+        if !is_conflict_resolver && self.effective_diff_engine() == DiffEngine::Difftastic {
+            controls = controls.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(self.diff_engine_label()),
+            );
+            if matches!(
+                self.diff_engine_status,
+                DiffEngineStatus::Difftastic {
+                    syntactic_changes: false,
+                    text_differs: true
+                }
+            ) {
+                if self.effective_diff_content_mode() == DiffContentMode::Collapsed {
+                    controls = controls.child(
+                        components::Button::new("difftastic_show_full", "Show full text").on_click(
+                            theme,
+                            cx,
+                            |this, _, _, cx| this.set_diff_content_mode(DiffContentMode::Full, cx),
+                        ),
+                    );
+                }
+                controls = controls.child(
+                    components::Button::new("difftastic_show_line_changes", "Show line changes")
+                        .on_click(theme, cx, |this, _, _, cx| {
+                            this.set_diff_whitespace_mode(DiffWhitespaceMode::Show, cx);
+                            this.set_diff_engine_override(Some(DiffEngine::LineByLine), cx);
+                        }),
+                );
+            }
+        }
         let mut change_navigation = None;
         let is_simple_conflict_strategy = matches!(
             self.conflict_resolver.strategy,
@@ -2110,7 +2142,7 @@ impl MainPaneView {
             );
         }
 
-        if let Some(repo_id) = repo_id {
+        if let Some(repo_id) = repo_id.filter(|_| !self.exact_patch_preview) {
             // The full text resolver gets its own settings menu under the cog
             // (section 30); everything else keeps the diff actions menu.
             let resolver_settings_active = is_conflict_resolver && !is_simple_conflict_strategy;

@@ -7,6 +7,7 @@ use crate::ui_scale;
 use gitcomet_core::diff::AnnotatedDiffLine;
 #[cfg(test)]
 use gitcomet_core::diff::annotate_unified;
+use gitcomet_core::diff_engine::{DiffEngine, DiffEngineFallback, DiffEngineStatus};
 #[cfg(test)]
 use gitcomet_core::domain::RepoStatus;
 use gitcomet_core::domain::{

@@ -1156,6 +1156,7 @@ pub struct GitCometView {
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_view_mode: DiffViewMode,
+    pub(super) diff_engine: DiffEngine,
     pub(super) annotate_enabled: bool,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,

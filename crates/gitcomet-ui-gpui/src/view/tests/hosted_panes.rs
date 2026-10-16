@@ -1322,6 +1322,63 @@ fn panes_show_renames_additions_deletions_and_binaries_while_history_keeps_its_d
 /// Mounts a pane's view as a window of its own.
 struct PaneHolder(gpui::AnyView);
 
+#[gpui::test]
+fn diff_engine_override_is_local_and_survives_snapshot_navigation(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::diff_engine::DiffEngine;
+    install_example(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, app_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let (pane, other) = app_cx.update(|_, app| {
+        let host = root.read(app).extension_window.as_ref().unwrap().host();
+        let snapshot = || DiffSnapshot::from_patch("file.rs", gitcomet_core::domain::Diff::from_unified(
+            DiffTarget::working_tree("file.rs".into(), DiffArea::Unstaged), "diff --git a/file.rs b/file.rs\n--- a/file.rs\n+++ b/file.rs\n@@ -1 +1 @@\n-old\n+new\n"));
+        (host.create_snapshot_pane(snapshot(), DiffPaneOptions::default(), app).unwrap(),
+         host.create_snapshot_pane(snapshot(), DiffPaneOptions::default(), app).unwrap())
+    });
+    let any = pane.view();
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(any));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        root.update(app, |root, cx| {
+            root.set_diff_engine(DiffEngine::Difftastic, cx)
+        });
+    });
+    cx.run_until_parked();
+    let entity = pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap();
+    let engine = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            entity
+                .read(app)
+                .renderer()
+                .unwrap()
+                .read(app)
+                .effective_diff_engine()
+        })
+    };
+    assert_eq!(engine(cx), DiffEngine::Difftastic);
+    cx.update(|_, app| pane.set_engine_override(Some(DiffEngine::LineByLine), app));
+    cx.run_until_parked();
+    assert_eq!(engine(cx), DiffEngine::LineByLine);
+    cx.update(|_, app| {
+        pane.set_snapshot(DiffSnapshot::from_patch("next.rs", gitcomet_core::domain::Diff::from_unified(
+            DiffTarget::working_tree("next.rs".into(), DiffArea::Unstaged), "diff --git a/next.rs b/next.rs\n--- a/next.rs\n+++ b/next.rs\n@@ -1 +1 @@\n-a\n+b\n")), app);
+        other.set_engine_override(Some(DiffEngine::Difftastic), app);
+    });
+    cx.run_until_parked();
+    assert_eq!(engine(cx), DiffEngine::LineByLine);
+    cx.update(|_, app| pane.set_engine_override(None, app));
+    cx.run_until_parked();
+    assert_eq!(engine(cx), DiffEngine::Difftastic);
+}
+
 impl Render for PaneHolder {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
         div().size_full().child(self.0.clone())

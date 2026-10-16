@@ -858,7 +858,7 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(self, *repo_id))
             }
-            PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
+            PopoverKind::DiffActionMenu => Some(diff_actions::model(self, cx)),
             PopoverKind::ExplorerSettingsMenu { repo_id } => {
                 Some(explorer_settings::model(self, *repo_id))
             }
@@ -1596,6 +1596,13 @@ impl PopoverHost {
                     main_pane.update(cx, |pane, cx| {
                         pane.set_diff_whitespace_mode_and_persist(mode, cx);
                     });
+                });
+            }
+            ContextMenuAction::SetDiffEngineOverride { engine } => {
+                restore_diff_panel_focus_after_action = true;
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| pane.set_diff_engine_override(engine, cx))
                 });
             }
             ContextMenuAction::SetDiffRevealWhitespaceChars { enabled } => {

@@ -322,6 +322,7 @@ pub type DiffPaneEventHandler = Rc<dyn Fn(DiffPaneEvent, &mut App)>;
 /// Build with `..DiffPaneOptions::default()`; fields are added over time.
 #[derive(Clone, Default)]
 pub struct DiffPaneOptions {
+    pub engine_override: Option<gitcomet_core::diff_engine::DiffEngine>,
     pub file_navigation: DiffFileNavigation,
     pub layout: DiffLayout,
     /// Optional explicit width in logical pixels; otherwise follows its bounds.
@@ -478,6 +479,11 @@ pub trait DiffPaneImpl {
     fn selected_bytes(&self, cx: &App) -> Option<Arc<[u8]>>;
     fn set_policy(&self, policy: DiffPanePolicy, cx: &mut App);
     fn set_layout(&self, layout: DiffLayout, cx: &mut App);
+    fn set_engine_override(
+        &self,
+        engine: Option<gitcomet_core::diff_engine::DiffEngine>,
+        cx: &mut App,
+    );
     fn set_content_width(&self, width: Option<f32>, cx: &mut App);
     fn scroll_anchor(&self, cx: &App) -> Option<DiffScrollAnchor>;
     fn restore_scroll_anchor(&self, anchor: DiffScrollAnchor, cx: &mut App);
@@ -562,6 +568,14 @@ impl DiffPane {
     }
     pub fn set_layout(&self, layout: DiffLayout, cx: &mut App) {
         self.0.set_layout(layout, cx);
+    }
+
+    pub fn set_engine_override(
+        &self,
+        engine: Option<gitcomet_core::diff_engine::DiffEngine>,
+        cx: &mut App,
+    ) {
+        self.0.set_engine_override(engine, cx);
     }
     pub fn set_content_width(&self, width: Option<f32>, cx: &mut App) {
         self.0.set_content_width(width, cx);

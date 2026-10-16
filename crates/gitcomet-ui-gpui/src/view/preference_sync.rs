@@ -1,6 +1,21 @@
 use super::*;
 
 impl GitCometView {
+    pub(in crate::view) fn set_diff_engine(
+        &mut self,
+        next: DiffEngine,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_engine == next {
+            return;
+        }
+        self.diff_engine = next;
+        self.update_ui_preferences(cx, move |preferences| preferences.diff.engine = next);
+        self.ui_model.update(cx, |_, cx| cx.notify());
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_engine_default(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
     pub(in crate::view) fn set_remote_url_policy(
         &mut self,
         next: RemoteUrlPolicy,

@@ -82,3 +82,14 @@ pub enum StructuralDiffOutcome {
     Unchanged,
     Fallback(DiffEngineFallback),
 }
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DiffEngineStatus {
+    #[default]
+    LineByLine,
+    Difftastic {
+        syntactic_changes: bool,
+        text_differs: bool,
+    },
+    Fallback(DiffEngineFallback),
+}

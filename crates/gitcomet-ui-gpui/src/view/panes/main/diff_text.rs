@@ -49,7 +49,7 @@ fn diff_text_local_range_from_source_ranges(
 }
 
 impl MainPaneView {
-    fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
+    pub(super) fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
         let a = self.diff_text_anchor?;
         let b = self.diff_text_head?;
         Some(if a.cmp_key() <= b.cmp_key() {
@@ -1890,7 +1890,7 @@ impl MainPaneView {
     /// a line the selection only touches the edge of. Callers that paint the
     /// highlight ignore an empty range; the one that copies has to keep it, or
     /// every blank line falls out of the text.
-    fn diff_text_source_selection_range(
+    pub(super) fn diff_text_source_selection_range(
         &self,
         source_visible_ix: usize,
         region: DiffTextRegion,
@@ -2612,7 +2612,7 @@ impl MainPaneView {
         append_diff_display_text_slice(tab_width, out, text.as_ref(), range, expanded_tabs);
     }
 
-    fn diff_text_string_for_region(
+    pub(super) fn diff_text_string_for_region(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
@@ -2634,7 +2634,7 @@ impl MainPaneView {
         (!out.is_empty()).then_some(out)
     }
 
-    fn selected_diff_text_string(&self) -> Option<String> {
+    pub(super) fn selected_diff_text_string(&self) -> Option<String> {
         let (start, end) = self.diff_text_normalized_selection()?;
         if start == end {
             return None;
@@ -2847,6 +2847,10 @@ impl MainPaneView {
             self.diff_text_selection_owner.adopt(window, cx);
         }
         if self.is_inline_submodule_diff_active() {
+            return;
+        }
+        if self.structural_diff_active() {
+            self.open_structural_line_menu(visible_ix, region, anchor, cx);
             return;
         }
         let Some(repo) = self.active_repo() else {

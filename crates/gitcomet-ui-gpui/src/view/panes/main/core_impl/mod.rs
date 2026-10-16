@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod engine;
 mod init;
 
 pub(in crate::view) use init::MainPaneInit;
@@ -359,6 +360,7 @@ impl MainPaneView {
         }
         match clear_diff_selection_action(self.view_mode) {
             ClearDiffSelectionAction::ClearSelection => {
+                self.set_diff_engine_override(None, cx);
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             }
             ClearDiffSelectionAction::ExitFocusedMergetool => {
@@ -1660,6 +1662,12 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let kind: PopoverRequest = kind.into();
+        if self.structural_diff_active()
+            && let PopoverKind::DiffHunkMenu { src_ix, .. } = &kind.kind
+        {
+            self.open_structural_block_menu(*src_ix, anchor, cx);
+            return;
+        }
         let root_view = self.root_view.clone();
         let bound_pane = self.store.binding.map(|_| cx.entity());
         let window_handle = window.window_handle();

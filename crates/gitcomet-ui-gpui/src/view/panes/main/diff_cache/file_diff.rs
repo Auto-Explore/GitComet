@@ -1,6 +1,9 @@
 use super::*;
 use std::io::Read;
 
+#[path = "file_diff_structural.rs"]
+mod structural;
+
 #[cfg(test)]
 fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
     let total_len = lines
@@ -757,6 +760,7 @@ struct StreamedFileDiffSource {
     split_visual_kinds: Box<[gitcomet_core::file_diff::FileDiffRowKind]>,
     inline_visual_kinds: Box<[gitcomet_core::domain::DiffLineKind]>,
     run_starts: std::sync::OnceLock<StreamedFileDiffRunStarts>,
+    structural: Option<structural::Presentation>,
 }
 
 impl StreamedFileDiffSource {
@@ -779,6 +783,7 @@ impl StreamedFileDiffSource {
             split_visual_kinds,
             inline_visual_kinds,
             run_starts: std::sync::OnceLock::new(),
+            structural: None,
         }
     }
 
@@ -1153,6 +1158,9 @@ impl StreamedFileDiffSource {
     // Grouped by visual kind, not by plan run: ignore-whitespace turns whole
     // runs back into context.
     fn split_change_blocks(&self) -> Vec<Range<usize>> {
+        if let Some(structural) = &self.structural {
+            return structural.split_blocks.clone();
+        }
         let kinds = &self.split_visual_kinds;
         crate::view::diff_navigation::change_block_ranges(kinds.len(), |row_ix| {
             !matches!(
@@ -1163,6 +1171,9 @@ impl StreamedFileDiffSource {
     }
 
     fn inline_change_blocks(&self) -> Vec<Range<usize>> {
+        if let Some(structural) = &self.structural {
+            return structural.inline_blocks.clone();
+        }
         let kinds = &self.inline_visual_kinds;
         crate::view::diff_navigation::change_block_ranges(kinds.len(), |inline_ix| {
             matches!(
@@ -1959,6 +1970,7 @@ fn build_file_diff_plan_from_patch(
 
 #[derive(Clone, Debug)]
 pub(in crate::view) struct FileDiffCacheRebuild {
+    pub(in crate::view) engine_status: DiffEngineStatus,
     pub(in crate::view) file_path: Option<std::path::PathBuf>,
     pub(in crate::view) language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) row_provider: Arc<PagedFileDiffRows>,
@@ -1992,14 +2004,35 @@ pub(in crate::view) fn build_file_diff_cache_rebuild(
     build_file_diff_cache_rebuild_with_patch(file, workdir, None, DiffWhitespaceMode::Show)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     file: &gitcomet_core::domain::FileDiffText,
     workdir: &std::path::Path,
     patch_diff: Option<&gitcomet_core::domain::Diff>,
     whitespace_mode: DiffWhitespaceMode,
 ) -> Result<FileDiffCacheRebuild, FileDiffCacheError> {
-    let old_source = index_file_diff_side(file, file.old_source.as_ref(), file.old.as_ref())?;
-    let new_source = index_file_diff_side(file, file.new_source.as_ref(), file.new.as_ref())?;
+    build_file_diff_cache_with_engine(
+        file,
+        workdir,
+        patch_diff,
+        whitespace_mode,
+        DiffEngine::LineByLine,
+        &gitcomet_core::services::CancellationToken::new(),
+    )
+}
+
+pub(in crate::view) fn build_file_diff_cache_with_engine(
+    file: &gitcomet_core::domain::FileDiffText,
+    workdir: &std::path::Path,
+    patch_diff: Option<&gitcomet_core::domain::Diff>,
+    whitespace_mode: DiffWhitespaceMode,
+    engine: DiffEngine,
+    cancellation: &gitcomet_core::services::CancellationToken,
+) -> Result<FileDiffCacheRebuild, FileDiffCacheError> {
+    let mut old_source = index_file_diff_side(file, file.old_source.as_ref(), file.old.as_ref())?;
+    let mut new_source = index_file_diff_side(file, file.new_source.as_ref(), file.new.as_ref())?;
+    let structural =
+        structural::compare(file, &mut old_source, &mut new_source, engine, cancellation)?;
     let old_text = file_diff_source_text(&old_source);
     let new_text = file_diff_source_text(&new_source);
     let old_source_path = file_diff_source_path(&old_source);
@@ -2024,7 +2057,9 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
                 .iter()
                 .any(|line| line.kind == gitcomet_core::domain::DiffLineKind::Hunk)
     });
-    let plan = Arc::new(if let Some(patch_diff) = patch_diff {
+    let plan = Arc::new(if let Some(plan) = structural.plan {
+        plan
+    } else if let Some(patch_diff) = patch_diff {
         build_file_diff_plan_from_patch(patch_diff, old_line_count, new_line_count)
     } else {
         build_file_diff_plan_from_indexed_sources(&old_source, &new_source)?
@@ -2036,12 +2071,20 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     );
     let (old_line_to_inline_row, new_line_to_inline_row) =
         plan_line_to_inline_row_maps(plan.as_ref(), old_line_count, new_line_count);
-    let source = Arc::new(StreamedFileDiffSource::new(
+    let mut source = StreamedFileDiffSource::new(
         Arc::clone(&plan),
         old_source,
         new_source,
-        whitespace_mode,
-    ));
+        if structural.diff.is_some() {
+            DiffWhitespaceMode::Show
+        } else {
+            whitespace_mode
+        },
+    );
+    if let Some(diff) = structural.diff {
+        source.apply_structural(diff);
+    }
+    let source = Arc::new(source);
     let row_provider = Arc::new(PagedFileDiffRows::new(
         Arc::clone(&source),
         FILE_DIFF_PAGE_SIZE,
@@ -2071,6 +2114,7 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
         .collect::<Vec<_>>();
 
     Ok(FileDiffCacheRebuild {
+        engine_status: structural.status,
         file_path,
         language,
         old_source_path,

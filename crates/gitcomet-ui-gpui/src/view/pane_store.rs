@@ -279,6 +279,33 @@ impl PaneStore {
                     edit: false,
                 }
             }
+            Msg::ApplyPreparedDiffPatch {
+                repo_id: id,
+                lifetime: origin,
+                view: origin_view,
+                file_rev,
+                generation,
+                prepared,
+            } if id == repo_id && origin == lifetime && origin_view == Some(view) && !linked => {
+                let allowed = match prepared.operation() {
+                    gitcomet_core::patch_action::PatchOperation::Stage
+                    | gitcomet_core::patch_action::PatchOperation::Unstage => {
+                        self.policy.allow_stage
+                    }
+                    gitcomet_core::patch_action::PatchOperation::Discard => self.policy.allow_edit,
+                };
+                if allowed {
+                    store.dispatch(Msg::ApplyPreparedDiffPatch {
+                        repo_id,
+                        lifetime,
+                        view: Some(view),
+                        file_rev,
+                        generation,
+                        prepared,
+                    });
+                }
+                return;
+            }
             msg @ (Msg::StagePath { repo_id: id, .. }
             | Msg::UnstagePath { repo_id: id, .. }
             | Msg::StagePaths { repo_id: id, .. }

@@ -38,6 +38,7 @@ pub(super) const UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES: usize = 3;
 mod edits;
 mod plan;
 mod rows;
+pub mod structural;
 mod text;
 
 pub(crate) use edits::*;

@@ -874,6 +874,19 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::ApplyPreparedDiffPatch { repo_id, prepared } => {
+            use gitcomet_core::patch_action::PatchOperation;
+            let command = match prepared.operation() {
+                PatchOperation::Stage => RepoCommandKind::StageHunk,
+                PatchOperation::Unstage => RepoCommandKind::UnstageHunk,
+                PatchOperation::Discard => RepoCommandKind::ApplyWorktreePatch { reverse: true },
+            };
+            send(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command,
+                result: Err(git_unavailable_error(runtime)),
+            }));
+        }
         Effect::StageHunk { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,

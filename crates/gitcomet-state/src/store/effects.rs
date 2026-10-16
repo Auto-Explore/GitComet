@@ -1529,6 +1529,9 @@ pub(super) fn schedule_effect(
         Effect::StageHunk { repo_id, patch } => {
             repo_commands::schedule_stage_hunk(executor, repos, msg_tx, repo_id, patch);
         }
+        Effect::ApplyPreparedDiffPatch { repo_id, prepared } => {
+            repo_commands::schedule_prepared_diff_patch(executor, repos, msg_tx, repo_id, prepared);
+        }
         Effect::UnstageHunk { repo_id, patch } => {
             repo_commands::schedule_unstage_hunk(executor, repos, msg_tx, repo_id, patch);
         }

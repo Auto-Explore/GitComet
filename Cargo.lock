@@ -2578,6 +2578,7 @@ dependencies = [
  "futures",
  "gitcomet-core",
  "gitcomet-diagrams",
+ "gitcomet-difftastic",
  "gitcomet-extension-api",
  "gitcomet-extension-example",
  "gitcomet-git-gix",

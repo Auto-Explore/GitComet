@@ -13,6 +13,7 @@ use std::time::Instant;
 
 mod effects;
 mod executor;
+mod mutation_gate;
 mod reducer;
 mod reducer_diagnostics;
 mod repo_load_trace;

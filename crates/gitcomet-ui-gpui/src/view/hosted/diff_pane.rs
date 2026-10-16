@@ -47,6 +47,10 @@ pub(crate) struct DiffPaneView {
     renderer: Option<Entity<MainPaneView>>,
     renderer_model: Option<Entity<AppUiModel>>,
     file_cache: Option<Arc<SharedFileDiffCache>>,
+    engine: DiffEngine,
+    preferences_subscription: Option<gpui::Subscription>,
+    build_generation: u64,
+    exact_patch_preview: bool,
     source: PaneSource,
     view_id: DiffViewId,
     options: DiffPaneOptions,
@@ -123,6 +127,10 @@ impl DiffPaneView {
             renderer: None,
             renderer_model: None,
             file_cache: None,
+            engine: DiffEngine::LineByLine,
+            preferences_subscription: None,
+            build_generation: 0,
+            exact_patch_preview: false,
             source,
             view_id: DiffViewId::next(),
             options,
@@ -191,6 +199,31 @@ impl DiffPaneView {
         pane
     }
 
+    pub(in crate::view) fn exact_patch(
+        host: WindowHost,
+        snapshot: DiffSnapshot,
+        root: WeakEntity<GitCometView>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let mut policy = DiffPanePolicy::read_only();
+        policy.select_lines = true;
+        policy.search = true;
+        let mut pane = Self::snapshot(
+            host,
+            snapshot,
+            DiffPaneOptions {
+                engine_override: Some(DiffEngine::LineByLine),
+                layout: gitcomet_extension_api::DiffLayout::Inline,
+                policy,
+                ..Default::default()
+            },
+            cx,
+        );
+        pane.exact_patch_preview = true;
+        pane.attach_root(root);
+        pane
+    }
+
     /// Inline or Split as the user set it for diffs, for `DiffLayout::Preferred`.
     fn preferred_view_mode(&self, cx: &App) -> DiffViewMode {
         self.root
@@ -198,6 +231,56 @@ impl DiffPaneView {
             .and_then(|root| root.upgrade())
             .map(|root| root.read(cx).ui_model.read(cx).preferences.diff.view_mode)
             .unwrap_or_else(|| crate::view::preferences::DiffPreferences::default().view_mode)
+    }
+
+    fn effective_engine(&self, cx: &App) -> DiffEngine {
+        self.options.engine_override.unwrap_or_else(|| {
+            self.root
+                .as_ref()
+                .and_then(WeakEntity::upgrade)
+                .map(|root| root.read(cx).ui_model.read(cx).preferences.diff.engine)
+                .unwrap_or_default()
+        })
+    }
+
+    fn whitespace_mode(&self, cx: &App) -> DiffWhitespaceMode {
+        self.renderer
+            .as_ref()
+            .map(|pane| pane.read(cx).diff_whitespace_mode)
+            .unwrap_or_else(|| {
+                self.root
+                    .as_ref()
+                    .and_then(WeakEntity::upgrade)
+                    .map(|root| {
+                        root.read(cx)
+                            .ui_model
+                            .read(cx)
+                            .preferences
+                            .diff
+                            .whitespace_mode
+                    })
+                    .unwrap_or_default()
+            })
+    }
+
+    fn refresh_engine(&mut self, cx: &mut gpui::Context<Self>) {
+        self.engine = self.effective_engine(cx);
+        self.rows_rev = None;
+        self.building_rev = None;
+        self.build = None;
+        self.build_generation = self.build_generation.wrapping_add(1);
+        if let Some(cache) = self.file_cache.take() {
+            cache.cancel();
+        }
+        if let Some(renderer) = &self.renderer {
+            renderer.update(cx, |pane, cx| {
+                pane.set_diff_engine_override(self.options.engine_override, cx)
+            });
+        }
+        match &self.source {
+            PaneSource::Snapshot(snapshot) => self.set_snapshot(snapshot.clone(), cx),
+            PaneSource::Session { .. } => self.sync(cx),
+        }
     }
 
     /// The renderer's layout, once it exists.
@@ -212,6 +295,16 @@ impl DiffPaneView {
         self.root = Some(root);
     }
 
+    pub(in crate::view) fn exact_patch_ready(&self, cx: &App) -> bool {
+        self.exact_patch_preview
+            && !self.loading
+            && self.error.is_none()
+            && self.renderer.as_ref().is_some_and(|pane| {
+                let pane = pane.read(cx);
+                pane.rendered_patch_diff_cache_is_current() && pane.patch_diff_row_len() > 0
+            })
+    }
+
     fn prepare_renderer(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         if self.renderer.is_some() {
             return;
@@ -219,11 +312,12 @@ impl DiffPaneView {
         let Some(root) = self.root.clone() else {
             return;
         };
-        let Ok((mut preferences, tooltip, store)) = root.read_with(cx, |root, cx| {
+        let Ok((mut preferences, tooltip, store, root_model)) = root.read_with(cx, |root, cx| {
             (
                 root.ui_model.read(cx).preferences.clone(),
                 root.tooltip_host.downgrade(),
                 root.store.clone(),
+                root.ui_model.clone(),
             )
         }) else {
             return;
@@ -254,6 +348,9 @@ impl DiffPaneView {
             }
         };
         preferences.diff.content_mode = DiffContentMode::Full;
+        if self.exact_patch_preview {
+            preferences.diff.whitespace_mode = DiffWhitespaceMode::Show;
+        }
         let preferred = preferences.diff.view_mode;
         let model = cx.new(|_| AppUiModel::new_with_preferences(state, preferences));
         let theme = self.host.theme(cx);
@@ -282,6 +379,8 @@ impl DiffPaneView {
             pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
             pane.annotate_enabled = self.options.policy.blame;
             pane.diff_view = diff_view_mode(self.options.layout, preferred);
+            pane.diff_engine_override = self.options.engine_override;
+            pane.exact_patch_preview = self.exact_patch_preview;
             pane.hosted_content_width = Some(
                 self.options
                     .content_width
@@ -294,6 +393,18 @@ impl DiffPaneView {
             pane
         });
         self.renderer_subscription = Some(cx.observe(&renderer, |this, renderer, cx| {
+            let engine = renderer.read(cx).effective_diff_engine();
+            let engine_override = renderer.read(cx).diff_engine_override;
+            if this.options.engine_override != engine_override
+                || this.engine != engine
+                || this
+                    .file_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.whitespace != renderer.read(cx).diff_whitespace_mode)
+            {
+                this.options.engine_override = engine_override;
+                this.refresh_engine(cx);
+            }
             let selection = renderer.read(cx).hosted_selection();
             if this.selection != selection {
                 this.selection = selection;
@@ -308,6 +419,18 @@ impl DiffPaneView {
                 }
             }
             cx.notify();
+        }));
+        self.preferences_subscription = Some(cx.observe(&root_model, |this, model, cx| {
+            let engine = model.read(cx).preferences.diff.engine;
+            if let Some(model) = &this.renderer_model {
+                model.update(cx, |model, _| model.preferences.diff.engine = engine);
+            }
+            if let Some(renderer) = &this.renderer {
+                renderer.update(cx, |pane, cx| pane.set_diff_engine_default(engine, cx));
+            }
+            if this.engine != this.effective_engine(cx) {
+                this.refresh_engine(cx);
+            }
         }));
         // Focus in the diff makes this the pane the diff keys go to.
         let focus = renderer.read(cx).diff_panel_focus_handle.clone();
@@ -374,6 +497,13 @@ impl DiffPaneView {
         cache: Option<Arc<SharedFileDiffCache>>,
         cx: &mut gpui::Context<Self>,
     ) {
+        if let Some(previous) = &self.file_cache
+            && !cache
+                .as_ref()
+                .is_some_and(|cache| Arc::ptr_eq(previous, cache))
+        {
+            previous.cancel();
+        }
         self.file_cache = cache;
         if let Some(renderer) = &self.renderer {
             renderer.update(cx, |pane, _| {
@@ -405,6 +535,10 @@ impl DiffPaneView {
 
     /// Clears what the pane showed, dropping any build still running for it.
     fn reset(&mut self, path: Option<&std::path::Path>) {
+        self.build_generation = self.build_generation.wrapping_add(1);
+        if let Some(cache) = &self.file_cache {
+            cache.cancel();
+        }
         self.engaged = next_engaged();
         self.language = path.and_then(crate::view::rows::diff_syntax_language_for_path);
         self.build = None;
@@ -498,8 +632,9 @@ impl DiffPaneView {
         *shown = snapshot.clone();
         self.snapshot_rev = self.snapshot_rev.wrapping_add(1);
         self.reset(Some(&snapshot.path));
+        self.engine = self.effective_engine(cx);
         let cache = snapshot.patch.is_none().then(|| {
-            Arc::new(SharedFileDiffCache::new(
+            Arc::new(SharedFileDiffCache::with_engine(
                 Arc::new(gitcomet_core::domain::FileDiffText::new_shared(
                     snapshot.path.clone(),
                     Some(snapshot.old.clone()),
@@ -507,6 +642,8 @@ impl DiffPaneView {
                 )),
                 None,
                 std::path::PathBuf::new(),
+                self.engine,
+                self.whitespace_mode(cx),
             ))
         });
         self.set_file_cache(cache.clone(), cx);
@@ -568,6 +705,12 @@ impl DiffPaneView {
     /// Rebuilds rows when this pane's session moved; other sessions and
     /// History never wake it.
     fn sync(&mut self, cx: &mut gpui::Context<Self>) {
+        let engine = self.effective_engine(cx);
+        if self.engine != engine {
+            self.engine = engine;
+            self.rows_rev = None;
+            self.building_rev = None;
+        }
         let Ok(state) = self.host.state(cx) else {
             return;
         };
@@ -611,13 +754,23 @@ impl DiffPaneView {
             };
             self.file_cache
                 .as_ref()
-                .filter(|cache| cache.matches(text, patch.as_ref(), &workdir))
+                .filter(|cache| {
+                    cache.matches_engine(
+                        text,
+                        patch.as_ref(),
+                        &workdir,
+                        self.engine,
+                        self.whitespace_mode(cx),
+                    )
+                })
                 .cloned()
                 .unwrap_or_else(|| {
-                    Arc::new(SharedFileDiffCache::new(
+                    Arc::new(SharedFileDiffCache::with_engine(
                         text.clone(),
                         patch.as_ref(),
                         workdir,
+                        self.engine,
+                        self.whitespace_mode(cx),
                     ))
                 })
         });
@@ -678,9 +831,14 @@ impl DiffPaneView {
         + 'static,
     ) {
         self.building_rev = rev;
+        self.build_generation = self.build_generation.wrapping_add(1);
+        let generation = self.build_generation;
         self.build = Some(cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move { build() }).await;
             let _ = this.update(cx, |pane, cx| {
+                if pane.build_generation != generation {
+                    return;
+                }
                 let (rows, raw) = match result {
                     Ok(result) => result,
                     Err(error) => {
@@ -1392,6 +1550,9 @@ impl Render for DiffPaneView {
 
 impl Drop for DiffPaneView {
     fn drop(&mut self) {
+        if let Some(cache) = &self.file_cache {
+            cache.cancel();
+        }
         if let PaneSource::Session {
             store, repository, ..
         } = &self.source
@@ -1548,6 +1709,14 @@ impl DiffPaneImpl for HostedDiffPane {
                 });
             }
             cx.notify();
+        });
+    }
+    fn set_engine_override(&self, engine: Option<DiffEngine>, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            if pane.options.engine_override != engine {
+                pane.options.engine_override = engine;
+                pane.refresh_engine(cx);
+            }
         });
     }
     fn set_content_width(&self, width: Option<f32>, cx: &mut App) {

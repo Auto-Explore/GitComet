@@ -284,6 +284,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::GlobalNavBack { .. }
             | Msg::GlobalNavForward { .. }
             | Msg::StageHunk { .. }
+            | Msg::ApplyPreparedDiffPatch { .. }
             | Msg::UnstageHunk { .. }
             | Msg::ApplyWorktreePatch { .. }
             | Msg::CheckoutBranch { .. }
@@ -1205,6 +1206,46 @@ fn reduce_inner(
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
             diff_selection::stage_hunk(repo_id, patch)
+        }
+        Msg::ApplyPreparedDiffPatch {
+            repo_id,
+            lifetime,
+            view,
+            file_rev,
+            generation,
+            prepared,
+        } => {
+            let valid = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+                .is_some_and(|repo| {
+                    let diff = match view {
+                        Some(view) => repo
+                            .diff_sessions
+                            .get(&view)
+                            .filter(|session| session.generation == generation)
+                            .map(|session| &session.diff_state),
+                        None => (repo.diff_state.diff_target_rev == generation)
+                            .then_some(&repo.diff_state),
+                    };
+                    repo.local_actions_in_flight == 0
+                        && diff.is_some_and(|diff| {
+                            diff.diff_file_rev == file_rev
+                                && diff.diff_target.as_ref() == Some(prepared.target())
+                                && !diff.diff_reload_in_flight
+                        })
+                });
+            if !valid {
+                util::push_notification(
+                    state,
+                    crate::model::AppNotificationKind::Error,
+                    "The comparison changed. Review a new patch before applying it.".to_owned(),
+                );
+                return Vec::new();
+            }
+            begin_local_action(state, repo_id);
+            vec![Effect::ApplyPreparedDiffPatch { repo_id, prepared }]
         }
         Msg::UnstageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);

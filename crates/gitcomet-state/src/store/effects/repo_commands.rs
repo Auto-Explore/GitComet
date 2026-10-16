@@ -259,6 +259,32 @@ fn schedule_repo_command_with_context<F>(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    command: RepoCommandKind,
+    context_override: Option<String>,
+    run: F,
+) where
+    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+{
+    schedule_repo_command_task(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        command,
+        context_override,
+        move |repo| {
+            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+            let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            run(repo)
+        },
+    );
+}
+
+fn schedule_repo_command_task<F>(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
     mut command: RepoCommandKind,
     context_override: Option<String>,
     run: F,
@@ -974,6 +1000,49 @@ pub(super) fn schedule_stage_hunk(
     );
 }
 
+pub(super) fn schedule_prepared_diff_patch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    prepared: Arc<gitcomet_core::patch_action::PreparedDiffPatch>,
+) {
+    use gitcomet_core::patch_action::PatchOperation;
+    let command = match prepared.operation() {
+        PatchOperation::Stage => RepoCommandKind::StageHunk,
+        PatchOperation::Unstage => RepoCommandKind::UnstageHunk,
+        PatchOperation::Discard => RepoCommandKind::ApplyWorktreePatch { reverse: true },
+    };
+    let filesystem = msg_tx.filesystem;
+    schedule_repo_command_task(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        command,
+        None,
+        move |repo| {
+            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+            let _mutation = match gate.try_write() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return Err(Error::new(ErrorKind::Backend(
+                        "Another write is in progress. Prepare the patch again when it finishes."
+                            .into(),
+                    )));
+                }
+            };
+            let _filesystem = match filesystem.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return Err(Error::new(ErrorKind::Backend("A filesystem operation is in progress. Prepare the patch again when it finishes.".into()))),
+            };
+            repo.apply_prepared_diff_patch(&prepared)
+        },
+    );
+}
+
 pub(super) fn schedule_unstage_hunk(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1348,6 +1417,8 @@ pub(super) fn schedule_safe_push_after_commit(
     let finish_context = context.clone();
     let follow_up_auth = auth.clone();
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+        let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
         let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
         send_or_log(
             &msg_tx,

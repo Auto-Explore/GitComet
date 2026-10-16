@@ -87,6 +87,22 @@ impl MainPaneView {
         let Some(area) = self.diff_stage_gutter_area() else {
             return;
         };
+        if self.structural_diff_active() {
+            let region = match (self.diff_view, kind) {
+                (DiffViewMode::Inline, _) => DiffTextRegion::Inline,
+                (_, DiffLineKind::Remove) => DiffTextRegion::SplitLeft,
+                _ => DiffTextRegion::SplitRight,
+            };
+            if let Some(row) = self.diff_mapped_ix_for_visible_ix(visible_ix) {
+                let selection = self.structural_source_lines(row..row + 1, Some(region));
+                let operation = match area {
+                    DiffArea::Unstaged => gitcomet_core::patch_action::PatchOperation::Stage,
+                    DiffArea::Staged => gitcomet_core::patch_action::PatchOperation::Unstage,
+                };
+                self.prepare_structural_patch(selection, operation, cx);
+            }
+            return;
+        }
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };

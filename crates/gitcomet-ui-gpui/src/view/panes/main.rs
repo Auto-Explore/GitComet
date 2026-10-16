@@ -7,6 +7,7 @@ mod actions_impl;
 mod conflict_actions;
 mod core_impl;
 pub(in crate::view) mod diff_cache;
+mod diff_patch;
 pub(in crate::view) mod diff_search;
 mod diff_stage;
 mod diff_text;
@@ -175,12 +176,17 @@ impl Render for MainPaneView {
         // The historical-browse treatment lives inside `diff_view` now — as a
         // tint on the file header and the content surface, see
         // `historical_browse_content_active`.
-        div().size_full().relative().child(inner)
+        let review = self.render_patch_review(window, cx);
+        div().size_full().relative().child(inner).children(review)
     }
 }
 
 impl Drop for MainPaneView {
     fn drop(&mut self) {
+        self.file_diff_cancellation.cancel();
+        if let Some(review) = &self.patch_review {
+            review.cancel();
+        }
         if let Some(token) = &self.diff_search_cancellation {
             token.cancel();
         }

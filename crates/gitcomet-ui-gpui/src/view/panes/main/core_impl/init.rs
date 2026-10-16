@@ -68,6 +68,7 @@ impl MainPaneView {
                 }
             });
         let subscription = cx.observe(&ui_model, |this, model, cx| {
+            this.set_diff_engine_default(model.read(cx).preferences.diff.engine, cx);
             let next = Arc::clone(&model.read(cx).state);
             this.process_file_editor_saves(&next, cx);
             let next_fingerprint = Self::notify_fingerprint_for(&next);
@@ -503,6 +504,15 @@ impl MainPaneView {
                 FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES,
             ),
             file_diff_cache_seq: 0,
+            diff_engine_default: preferences.diff.engine,
+            diff_engine_override: None,
+            diff_engine_status: DiffEngineStatus::LineByLine,
+            exact_patch_preview: false,
+            patch_review: None,
+            patch_review_seq: 0,
+            diff_engine_anchor: None,
+            file_diff_cache_engine: DiffEngine::LineByLine,
+            file_diff_cancellation: gitcomet_core::services::CancellationToken::new(),
             file_diff_cache_inflight: None,
             file_diff_syntax_generation: 0,
             file_diff_style_cache_epochs: FileDiffStyleCacheEpochs::default(),

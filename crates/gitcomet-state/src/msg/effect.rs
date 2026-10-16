@@ -543,6 +543,10 @@ pub enum Effect {
         repo_id: RepoId,
         patch: super::ContentBytes,
     },
+    ApplyPreparedDiffPatch {
+        repo_id: RepoId,
+        prepared: std::sync::Arc<gitcomet_core::patch_action::PreparedDiffPatch>,
+    },
     UnstageHunk {
         repo_id: RepoId,
         patch: super::ContentBytes,

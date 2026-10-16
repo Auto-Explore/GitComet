@@ -1321,7 +1321,7 @@ stage_hover
                     ) {
                         continue;
                     }
-                    if this.file_diff_inline_modify_pair_texts(inline_ix).is_some() {
+                    if !this.file_diff_inline_word_ranges(inline_ix).is_empty() {
                         continue;
                     }
                     syntax_only_rows.push(SyntaxOnlyBatchRow {

@@ -687,6 +687,12 @@ struct RecordingCheckoutRepo {
     other_worktree: Option<PathBuf>,
     /// Reported by `current_branch`; unsupported when `None`.
     current_branch: Option<String>,
+    prepared_barrier: Option<PreparedPatchBarrier>,
+}
+
+struct PreparedPatchBarrier {
+    started: std::sync::mpsc::Sender<()>,
+    release: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl RecordingCheckoutRepo {
@@ -698,6 +704,7 @@ impl RecordingCheckoutRepo {
             rename_branch_already_exists: false,
             other_worktree: None,
             current_branch: None,
+            prepared_barrier: None,
         }
     }
 
@@ -723,6 +730,19 @@ fn branch_already_exists_error(command: &str, name: &str) -> Error {
 impl GitRepository for RecordingCheckoutRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn apply_prepared_diff_patch(
+        &self,
+        _prepared: &gitcomet_core::patch_action::PreparedDiffPatch,
+    ) -> Result<CommandOutput> {
+        let Some(barrier) = &self.prepared_barrier else {
+            return unsupported_repo_result();
+        };
+        barrier.started.send(()).unwrap();
+        wait_for_release_signal(&barrier.release);
+        self.record("apply reviewed".into());
+        Ok(CommandOutput::empty_success("reviewed patch"))
     }
 
     fn branch_checked_out_in_other_worktree(&self, _name: &str) -> Result<Option<PathBuf>> {
@@ -975,5 +995,6 @@ fn run_effect_with_fixture(
 
 mod cancellation;
 mod load_scheduling;
+mod prepared_patch;
 mod repository_operations;
 mod retries_errors;

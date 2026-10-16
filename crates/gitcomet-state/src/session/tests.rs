@@ -2356,7 +2356,7 @@ fn persist_ui_settings_round_trips_diff_content_mode() {
 }
 
 #[test]
-fn persist_ui_settings_round_trips_diff_whitespace_mode() {
+fn persist_ui_settings_round_trips_diff_engine_and_whitespace_mode() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-ui-settings-test-{}-{}",
         std::process::id(),
@@ -2397,6 +2397,7 @@ fn persist_ui_settings_round_trips_diff_whitespace_mode() {
             diff_scroll_sync: None,
             diff_content_mode: None,
             diff_whitespace_mode: Some("ignore".to_string()),
+            diff_engine: Some("difftastic".to_string()),
             change_tracking_height: None,
             untracked_height: None,
             history_show_author: None,
@@ -2411,6 +2412,7 @@ fn persist_ui_settings_round_trips_diff_whitespace_mode() {
 
     let loaded = load_from_path(&path);
     assert_eq!(loaded.diff_whitespace_mode.as_deref(), Some("ignore"));
+    assert_eq!(loaded.diff_engine.as_deref(), Some("difftastic"));
 }
 
 #[test]

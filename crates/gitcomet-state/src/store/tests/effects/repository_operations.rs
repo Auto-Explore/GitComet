@@ -2802,6 +2802,7 @@ fn checkout_branch_effect_defers_worktree_refresh_until_completion() {
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -2844,6 +2845,7 @@ fn checkout_remote_branch_effect_defers_worktree_refresh_until_completion() {
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -2889,6 +2891,7 @@ fn checkout_commit_effect_defers_worktree_refresh_until_completion() {
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -2932,6 +2935,7 @@ fn create_branch_and_checkout_effect_defers_worktree_refresh_until_completion() 
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -2979,6 +2983,7 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -3023,6 +3028,7 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         rename_branch_already_exists: false,
         other_worktree: None,
         current_branch: None,
+        prepared_barrier: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();

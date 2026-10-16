@@ -76,6 +76,7 @@ pub(super) struct DiffPreferences {
     pub(super) scroll_sync: DiffScrollSync,
     pub(super) content_mode: DiffContentMode,
     pub(super) whitespace_mode: DiffWhitespaceMode,
+    pub(super) engine: DiffEngine,
     pub(super) view_mode: DiffViewMode,
     pub(super) annotate_enabled: bool,
     pub(super) reveal_whitespace_chars: bool,
@@ -91,6 +92,7 @@ impl Default for DiffPreferences {
             scroll_sync: DiffScrollSync::default(),
             content_mode: DiffContentMode::default(),
             whitespace_mode: DiffWhitespaceMode::default(),
+            engine: DiffEngine::default(),
             view_mode: DiffViewMode::Split,
             annotate_enabled: false,
             reveal_whitespace_chars: false,
@@ -375,6 +377,11 @@ impl UiPreferences {
                     .as_deref()
                     .and_then(DiffWhitespaceMode::from_key)
                     .unwrap_or_default(),
+                engine: session
+                    .diff_engine
+                    .as_deref()
+                    .and_then(DiffEngine::from_key)
+                    .unwrap_or_default(),
                 view_mode: session
                     .diff_view_mode
                     .as_deref()
@@ -494,6 +501,7 @@ mod tests {
         let preferences = UiPreferences::from_session(&session::UiSession::default());
         assert_eq!(preferences, UiPreferences::default());
         assert_eq!(preferences.diff.view_mode, DiffViewMode::Split);
+        assert_eq!(preferences.diff.engine, DiffEngine::LineByLine);
         assert!(preferences.diff.show_line_numbers);
         assert!(preferences.history.show_graph);
         assert!(preferences.history.show_graph_gradient);

@@ -62,7 +62,18 @@ impl GixRepo {
     }
 
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
+        self.build_unified_diff_command_with_policy(target, false)
+    }
+
+    pub(super) fn build_unified_diff_command_with_policy(
+        &self,
+        target: &DiffTarget,
+        exact: bool,
+    ) -> Command {
         let mut cmd = self.git_workdir_cmd();
+        if exact {
+            cmd.arg("--literal-pathspecs");
+        }
         cmd.arg("-c").arg("color.ui=false");
         // Pin the header format: the UI resolves a file's path out of the
         // `diff --git` / `---` / `+++` lines, and these settings are the ones a
@@ -86,7 +97,10 @@ impl GixRepo {
                     .arg("-c")
                     .arg("diff.autoRefreshIndex=false");
                 cmd.arg("diff").arg("--no-ext-diff");
-                if matches!(area, DiffArea::Unstaged) {
+                if exact {
+                    cmd.args(["--no-textconv", "--unified=3", "--no-renames"]);
+                }
+                if matches!(area, DiffArea::Unstaged) && !exact {
                     // Match the staged view on Windows by suppressing CR-at-EOL-only
                     // worktree noise before content is normalized into the index.
                     cmd.arg("--ignore-cr-at-eol");
