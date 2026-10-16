@@ -258,7 +258,7 @@ fn clip_point_clamps_row_and_column() {
 }
 
 #[test]
-fn chunks_in_range_covers_exactly_the_requested_bytes() {
+fn chunk_ranges_cover_exactly_the_requested_bytes_both_ways() {
     let text = "0123456789\n".repeat(200);
     let rope = Rope::from_text(&text);
     assert!(

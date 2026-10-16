@@ -684,6 +684,17 @@ mod tests {
             assert_eq!(model.line_starts(), expected_starts.as_slice());
         }
     }
+
+    /// A caret offset inside a character must not hand the character to both
+    /// walks: a word move subtracts what the backward walk passed.
+    #[test]
+    fn char_walks_split_a_mid_character_offset_at_its_start() {
+        let snapshot = TextModel::from_large_text("aé").snapshot();
+
+        assert_eq!(snapshot.reversed_chars_at(2).collect::<String>(), "a");
+        assert_eq!(snapshot.chars_at(2).collect::<String>(), "é");
+        assert_eq!(snapshot.reversed_chars_at(3).collect::<String>(), "éa");
+    }
 }
 
 /// Differential tests for the model's observable behaviour.
@@ -1019,17 +1030,6 @@ mod edit_cost_tests {
         assert!(!history.is_materialized());
         assert!(!history.is_line_index_built());
         assert!(model.snapshot().is_materialized());
-    }
-
-    /// A caret offset inside a character must not hand the character to both
-    /// walks: a word move subtracts what the backward walk passed.
-    #[test]
-    fn char_walks_split_a_mid_character_offset_at_its_start() {
-        let snapshot = TextModel::from_large_text("aé").snapshot();
-
-        assert_eq!(snapshot.reversed_chars_at(2).collect::<String>(), "a");
-        assert_eq!(snapshot.chars_at(2).collect::<String>(), "é");
-        assert_eq!(snapshot.reversed_chars_at(3).collect::<String>(), "éa");
     }
 
     /// `longest_row` backs the horizontal scroll bound, and it must stay a
