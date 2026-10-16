@@ -133,22 +133,25 @@ fn word_moves_on_flat_text(text: &str, offset: usize) -> (usize, usize) {
     (start, end)
 }
 
-/// Word moves walk the document a row at a time while whitespace runs cross
-/// rows, and must land where they did on the flattened text.
+/// Word moves cross rows (a newline is whitespace) and rope chunk seams (a
+/// word or a gap longer than a chunk), and must land where they did on the
+/// flattened text.
 #[gpui::test]
 fn word_moves_cross_rows_like_the_flat_text(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
-    let text = "fn alpha(b: u8) {\r\n\n   \n  šeta_2 = ö.ä;\n}\n";
+    let word = "w".repeat(700);
+    let gap = " ".repeat(600);
+    let text = format!("fn alpha(b: u8) {{\r\n\n   \n  šeta_2 = ö.ä;\n}}\n{word}{gap}.{word}\n");
     cx.update(|_, app| {
         input.update(app, |input, cx| {
-            input.set_text(text, cx);
+            input.set_text(text.as_str(), cx);
             for offset in (0..=text.len()).filter(|ix| text.is_char_boundary(*ix)) {
                 assert_eq!(
                     (
                         input.previous_word_start(offset),
                         input.next_word_end(offset)
                     ),
-                    word_moves_on_flat_text(text, offset),
+                    word_moves_on_flat_text(&text, offset),
                     "at {offset}"
                 );
             }
