@@ -11,7 +11,8 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::error::ResultExt as _;
 use gix::prelude::FindExt as _;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::{Hash as _, Hasher as _};
 use std::path::PathBuf;
 
 type LineStatsKey = (DiffArea, Option<gix::ObjectId>, Option<gix::ObjectId>);
@@ -22,6 +23,36 @@ type LineStatsKey = (DiffArea, Option<gix::ObjectId>, Option<gix::ObjectId>);
 pub(super) struct LineStatsMemo {
     counts: FxHashMap<LineStatsKey, LineStats>,
     pointer_index_blobs: FxHashMap<gix::ObjectId, IndexPointer>,
+    /// Untracked files have no blob id, so the read identity keys them.
+    untracked: FxHashMap<PathBuf, UntrackedCounts>,
+}
+
+impl LineStatsMemo {
+    /// Adds `other`'s entries, for a scan that saw only part of the changes.
+    fn extend(&mut self, other: Self) {
+        let Self {
+            counts,
+            pointer_index_blobs,
+            untracked,
+        } = other;
+        self.counts.extend(counts);
+        self.pointer_index_blobs.extend(pointer_index_blobs);
+        self.untracked.extend(untracked);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct UntrackedCounts {
+    identity: ReadIdentity,
+    stats: LineStats,
+}
+
+/// A worktree file's stamp and how it converts (its conversion attributes
+/// and config): the same identity reads the same bytes.
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct ReadIdentity {
+    file: super::DiskFileStamp,
+    conversion: u64,
 }
 
 /// What an index blob stands in for, decided from its first bytes.
@@ -77,6 +108,33 @@ impl MemoScan {
         self.next.pointer_index_blobs.insert(id, pointer);
         Some(pointer)
     }
+
+    /// An untracked file's counts, counted again only when its read identity
+    /// changed. `None` (no stamp to trust) always counts.
+    fn untracked(
+        &mut self,
+        path: &std::path::Path,
+        identity: Option<ReadIdentity>,
+        count: impl FnOnce() -> LineStats,
+    ) -> LineStats {
+        let Some(identity) = identity else {
+            return count();
+        };
+        if let Some((owned, entry)) = self.previous.untracked.remove_entry(path)
+            && entry.identity == identity
+        {
+            self.next.untracked.insert(owned, entry);
+            return entry.stats;
+        }
+        let stats = count();
+        // As in `counts`, unknown is never kept.
+        if stats.additions.is_some() {
+            self.next
+                .untracked
+                .insert(path.to_path_buf(), UntrackedCounts { identity, stats });
+        }
+        stats
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +146,11 @@ thread_local! {
 #[cfg(test)]
 fn take_line_stats_diffs_for_tests() -> usize {
     LINE_STATS_DIFFS.with(|diffs| diffs.replace(0))
+}
+
+#[cfg(test)]
+fn take_worktree_reads_for_tests() -> usize {
+    LINE_STATS_WORKTREE_READS.with(|reads| reads.replace(0))
 }
 
 #[cfg(test)]
@@ -146,10 +209,7 @@ impl super::GixRepo {
         *self.line_stats_memo() = if result.is_ok() {
             next
         } else {
-            previous.counts.extend(next.counts);
-            previous
-                .pointer_index_blobs
-                .extend(next.pointer_index_blobs);
+            previous.extend(next);
             previous
         };
         result
@@ -178,7 +238,7 @@ impl super::GixRepo {
         for file in files.iter_mut() {
             if file.kind == FileStatusKind::Untracked {
                 cancellation.check_cancelled()?;
-                let stats = reader.added_file_line_stats(&file.path, &mut new);
+                let stats = reader.added_file_line_stats(&file.path, &mut new, None);
                 (file.additions, file.deletions, file.edit) =
                     (stats.additions, stats.deletions, stats.edit);
                 continue;
@@ -396,8 +456,8 @@ fn unstaged_entry_line_stats(
         return LineStats::UNKNOWN;
     };
     let Some(index_id) = index.entry_by_path(rel.as_ref()).map(|found| found.id) else {
-        // Untracked: every line is added, with no diff for the memo to save.
-        return reader.added_file_line_stats(&entry.path, worktree);
+        // Untracked: every line is added.
+        return reader.added_file_line_stats(&entry.path, worktree, Some(memo));
     };
 
     let mut index_blob_loaded = false;
@@ -462,17 +522,52 @@ struct WorktreeReader<'repo> {
     filters: Option<Filters<'repo>>,
 }
 
+/// The attributes the worktree->git conversion reads; a file's states key
+/// the untracked memo. `find` takes `filter` and `working-tree-encoding` by
+/// position.
+const CONVERSION_ATTRIBUTES: [&str; 6] = [
+    "filter",
+    "working-tree-encoding",
+    "text",
+    "crlf",
+    "eol",
+    "ident",
+];
+
 /// The worktree->git filters and the attributes a read decides on.
 struct Filters<'repo> {
     pipeline: gix::filter::Pipeline<'repo>,
     index: gix::worktree::IndexPersistedOrInMemory,
     attributes: gix::AttributeStack<'repo>,
-    /// `filter` and `working-tree-encoding`, in that order.
+    /// [`CONVERSION_ATTRIBUTES`] as the last path matched them.
     selected: gix::attrs::search::Outcome,
     /// Filter drivers with a clean or process program configured.
     cleaning_drivers: Vec<gix::bstr::BString>,
+    /// The values of [`super::diff::WORKTREE_CONVERSION_CONFIG`], hashed.
+    config: u64,
     /// A file's raw sniff window, reused across files.
     window: Vec<u8>,
+}
+
+/// A worktree path stat'ed and matched against attributes, not yet read.
+enum Found<'a, 'repo> {
+    /// A symlink, stored as its target.
+    Link(gix::bstr::BString),
+    File(FoundFile<'a, 'repo>),
+}
+
+struct FoundFile<'a, 'repo> {
+    repo: &'repo gix::Repository,
+    filters: &'a mut Filters<'repo>,
+    relative: &'a std::path::Path,
+    full: PathBuf,
+    /// A clean or process program converts it.
+    cleans: bool,
+    /// It has a `working-tree-encoding`.
+    encoded: bool,
+    /// `None` while racy, or when a program converts it: a program's output
+    /// can change without its input changing.
+    stamp: Option<super::DiskFileStamp>,
 }
 
 impl<'repo> WorktreeReader<'repo> {
@@ -494,13 +589,18 @@ impl<'repo> WorktreeReader<'repo> {
                     .filter(|driver| driver.clean.is_some() || driver.process.is_some())
                     .map(|driver| driver.name)
                     .collect();
+                let snapshot = repo.config_snapshot();
+                let mut config = FxHasher::default();
+                for key in super::diff::WORKTREE_CONVERSION_CONFIG {
+                    snapshot.string(key).hash(&mut config);
+                }
                 Some(Filters {
-                    selected: attributes
-                        .selected_attribute_matches(["filter", "working-tree-encoding"]),
+                    selected: attributes.selected_attribute_matches(CONVERSION_ATTRIBUTES),
                     pipeline,
                     index,
                     attributes,
                     cleaning_drivers,
+                    config: config.finish(),
                     window: Vec::with_capacity(COMMIT_STATS_BINARY_SNIFF_BYTES),
                 })
             });
@@ -511,98 +611,168 @@ impl<'repo> WorktreeReader<'repo> {
         }
     }
 
-    /// A file with nothing stored for it: all of it is added.
+    /// A file with nothing stored for it: all of it is added. With a memo, a
+    /// file read before with the same identity is not read again.
     fn added_file_line_stats(
         &mut self,
         relative: &std::path::Path,
         buf: &mut Vec<u8>,
+        memo: Option<&mut MemoScan>,
     ) -> LineStats {
-        if !self.read(relative, buf) {
+        let Some(found) = self.find(relative) else {
             return LineStats::UNKNOWN;
+        };
+        let identity = found.identity();
+        let count = || {
+            if found.read(buf) {
+                line_stats_from_bytes(&[], buf)
+            } else {
+                LineStats::UNKNOWN
+            }
+        };
+        match memo {
+            Some(memo) => memo.untracked(relative, identity, count),
+            None => count(),
         }
-        line_stats_from_bytes(&[], buf)
     }
 
     /// Replaces `out` with the file at `relative`. `false` means gone, over
     /// the size cap, unreadable, binary, or left to the LFS clean filter.
     fn read(&mut self, relative: &std::path::Path, out: &mut Vec<u8>) -> bool {
-        use gix::attrs::StateRef;
-        use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
-        use std::io::Read as _;
+        self.find(relative).is_some_and(|found| found.read(out))
+    }
 
-        out.clear();
+    /// `None` means gone, over the size cap, unreadable, or left to the LFS
+    /// clean filter.
+    fn find<'a>(&'a mut self, relative: &'a std::path::Path) -> Option<Found<'a, 'repo>> {
+        use gix::attrs::StateRef;
+
         let full = self.workdir.join(relative);
-        let Ok(metadata) = std::fs::symlink_metadata(&full) else {
-            return false;
-        };
+        // Before the stat: a pause after it must not age a racy stamp.
+        let now = super::racy_check_now(&full);
+        let metadata = std::fs::symlink_metadata(&full).ok()?;
         if metadata.file_type().is_symlink() {
-            let Ok(target) = std::fs::read_link(&full) else {
-                return false;
-            };
-            let Ok(target) = gix::path::into_bstr(target) else {
-                return false;
-            };
-            out.extend_from_slice(target.as_ref());
-            return true;
+            let target = gix::path::into_bstr(std::fs::read_link(&full).ok()?).ok()?;
+            return Some(Found::Link(target.into_owned()));
         }
         if !metadata.is_file() || metadata.len() > COMMIT_STATS_MAX_BLOB_BYTES as u64 {
-            return false;
+            return None;
         }
-        let Some(Filters {
-            pipeline,
-            index,
-            attributes,
-            selected,
-            cleaning_drivers,
-            window,
-        }) = self.filters.as_mut()
-        else {
-            return false;
+        let filters = self.filters.as_mut()?;
+        let path = gix::path::into_bstr(relative).ok()?;
+        filters
+            .attributes
+            .at_entry(path.as_ref(), None)
+            .ok()?
+            .matching_attributes(&mut filters.selected);
+        let (filter, encoding) = {
+            let mut states = filters
+                .selected
+                .iter_selected()
+                .map(|matched| matched.assignment.state);
+            (states.next(), states.next())
         };
-        let Ok(path) = gix::path::into_bstr(relative) else {
-            return false;
-        };
-        let Ok(platform) = attributes.at_entry(path.as_ref(), None) else {
-            return false;
-        };
-        platform.matching_attributes(selected);
-        let mut states = selected
-            .iter_selected()
-            .map(|matched| matched.assignment.state);
-        let (filter, encoding) = (states.next(), states.next());
         let driver = match filter {
-            Some(StateRef::Value(name)) => cleaning_drivers
+            Some(StateRef::Value(name)) => filters
+                .cleaning_drivers
                 .iter()
                 .find(|driver| **driver == name.as_bstr()),
             _ => None,
         };
         if driver.is_some_and(|driver| *driver == super::large_files::LFS_FILTER_DRIVER) {
-            return false;
+            return None;
         }
+        let cleans = driver.is_some();
+        let encoded = matches!(encoding, Some(StateRef::Value(_)));
+        let stamp = super::DiskFileStamp::from_metadata(&metadata)
+            .filter(|stamp| !cleans && !stamp.is_racy_at(now));
+        Some(Found::File(FoundFile {
+            repo: self.repo,
+            filters,
+            relative,
+            full,
+            cleans,
+            encoded,
+            stamp,
+        }))
+    }
+}
+
+impl Found<'_, '_> {
+    /// `None` when counts read from it must not be reused.
+    fn identity(&self) -> Option<ReadIdentity> {
+        let Self::File(file) = self else {
+            return None;
+        };
+        let stamp = file.stamp?;
+        let mut conversion = FxHasher::default();
+        file.filters.config.hash(&mut conversion);
+        for matched in file.filters.selected.iter_selected() {
+            matched.assignment.state.hash(&mut conversion);
+        }
+        Some(ReadIdentity {
+            file: stamp,
+            conversion: conversion.finish(),
+        })
+    }
+
+    /// Replaces `out` with what git would store. `false` means unreadable or
+    /// binary.
+    fn read(self, out: &mut Vec<u8>) -> bool {
+        out.clear();
+        match self {
+            Self::Link(target) => {
+                out.extend_from_slice(&target);
+                true
+            }
+            Self::File(file) => file.read(out),
+        }
+    }
+}
+
+impl FoundFile<'_, '_> {
+    fn read(self, out: &mut Vec<u8>) -> bool {
+        use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
+        use std::io::Read as _;
+
+        let Filters {
+            pipeline,
+            index,
+            attributes,
+            window,
+            ..
+        } = self.filters;
         #[cfg(test)]
         LINE_STATS_WORKTREE_READS.with(|reads| reads.set(reads.get() + 1));
-        if matches!(encoding, Some(StateRef::Value(_))) {
-            let text =
-                super::text_attributes::resolve_text_attributes_on(self.repo, attributes, relative);
+        if self.encoded {
+            let text = super::text_attributes::resolve_text_attributes_on(
+                self.repo,
+                attributes,
+                self.relative,
+            );
             if super::text_attributes::decodes_working_tree_encoding(&text) {
-                let Ok(bytes) =
-                    super::diff::worktree_encoding_to_git(self.repo, index, relative, &full, &text)
-                else {
+                let Ok(bytes) = super::diff::worktree_encoding_to_git(
+                    self.repo,
+                    index,
+                    self.relative,
+                    &self.full,
+                    &text,
+                ) else {
                     return false;
                 };
                 out.extend_from_slice(&bytes);
                 return !commit_stats_looks_binary(out);
             }
         }
-        let Ok(mut file) = std::fs::File::open(&full) else {
+        let Ok(mut file) = std::fs::File::open(&self.full) else {
             return false;
         };
         // Without a cleaning driver or working-tree-encoding, conversion only
         // drops CRs and shortens `$Id$`: a NUL in the raw sniff window stays
         // binary, so such a file is not read past it.
         window.clear();
-        if driver.is_none()
-            && !matches!(encoding, Some(StateRef::Value(_)))
+        if !self.cleans
+            && !self.encoded
             && ((&mut file)
                 .take(COMMIT_STATS_BINARY_SNIFF_BYTES as u64)
                 .read_to_end(window)
@@ -612,7 +782,7 @@ impl<'repo> WorktreeReader<'repo> {
             return false;
         }
         let source = std::io::Cursor::new(window.as_slice()).chain(file);
-        let Ok(converted) = pipeline.convert_to_git(source, relative, index) else {
+        let Ok(converted) = pipeline.convert_to_git(source, self.relative, index) else {
             return false;
         };
         let read = match converted {
@@ -656,7 +826,7 @@ mod tests {
             kind: FileStatusKind::Modified,
             conflict: None,
         }];
-        LINE_STATS_WORKTREE_READS.with(|reads| reads.set(0));
+        take_worktree_reads_for_tests();
         for _ in 0..2 {
             assert_eq!(
                 repo.line_stats_for_entries_impl(&entries, &CancellationToken::new())
@@ -666,7 +836,7 @@ mod tests {
             );
         }
         assert_eq!(
-            LINE_STATS_WORKTREE_READS.with(|reads| reads.get()),
+            take_worktree_reads_for_tests(),
             0,
             "unknown annex counts must not read/hash the unlocked payload"
         );
@@ -709,7 +879,7 @@ mod tests {
         std::fs::write(dir.join("untracked.bin"), b"new payload\n").unwrap();
         write_file(dir, "content.bin", "content\nedited\n");
         let repo = open_repo(dir);
-        LINE_STATS_WORKTREE_READS.with(|reads| reads.set(0));
+        take_worktree_reads_for_tests();
         for _ in 0..2 {
             let stats = repo
                 .uncommitted_line_stats_impl(&CancellationToken::new())
@@ -726,7 +896,7 @@ mod tests {
                 Some((Some(2), Some(2)))
             );
         }
-        assert_eq!(LINE_STATS_WORKTREE_READS.with(|reads| reads.get()), 0);
+        assert_eq!(take_worktree_reads_for_tests(), 0);
         assert!(!ran.exists(), "the LFS clean filter must not run");
     }
 
@@ -914,6 +1084,8 @@ mod tests {
     }
 
     /// Refresh cost of counting untracked files: 4 KiB each, in 200 folders.
+    /// Files inside the racy window are read on every refresh; older ones
+    /// only on the first.
     #[test]
     #[ignore = "timing probe"]
     fn perf_untracked_line_stats_refresh() {
@@ -944,9 +1116,19 @@ mod tests {
             print_timing(&format!("untracked={untracked}: status walk"), || {
                 std::hint::black_box(repo.worktree_status_cancellable_impl(&token).unwrap());
             });
-            print_timing(&format!("untracked={untracked}: line stats"), || {
+            print_timing(&format!("untracked={untracked}: line stats, racy"), || {
                 std::hint::black_box(repo.line_stats_for_entries_impl(&entries, &token).unwrap());
             });
+            let _aged = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+            std::hint::black_box(repo.line_stats_for_entries_impl(&entries, &token).unwrap());
+            print_timing(
+                &format!("untracked={untracked}: line stats, unchanged"),
+                || {
+                    std::hint::black_box(
+                        repo.line_stats_for_entries_impl(&entries, &token).unwrap(),
+                    );
+                },
+            );
         }
     }
 
@@ -1435,6 +1617,222 @@ mod tests {
         assert_eq!(counts(untracked.as_ref()), Some((Some(2), Some(0))));
         assert!(untracked.is_some_and(|stats| stats.edit.is_some()));
         assert_eq!(untracked, intent_to_add);
+    }
+
+    /// An untracked file is read once; later refreshes reuse its counts
+    /// while it keeps its stamp.
+    #[test]
+    fn unchanged_untracked_files_are_not_read_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "seed.txt", "seed\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, "a.txt", &lines("a", 3));
+        write_file(dir, "nested/b.txt", &lines("b", 2));
+        let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        take_worktree_reads_for_tests();
+
+        let first = repo.uncommitted_line_stats_impl(&token).unwrap();
+        assert_eq!(take_worktree_reads_for_tests(), 2);
+        let second = repo.uncommitted_line_stats_impl(&token).unwrap();
+
+        assert_eq!(second, first);
+        assert_eq!(
+            counts(second.unstaged.get(std::path::Path::new("a.txt"))),
+            Some((Some(3), Some(0)))
+        );
+        // Off Unix a stamp has no inode or ctime, so it is never trusted.
+        assert_eq!(
+            take_worktree_reads_for_tests(),
+            if cfg!(unix) { 0 } else { 2 }
+        );
+    }
+
+    /// An edit that keeps the size and modification time still changes the
+    /// ctime, so the file is counted again.
+    #[test]
+    fn an_edited_untracked_file_is_counted_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "seed.txt", "seed\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, "ab\ncd\n").unwrap();
+        let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let repo = open_repo(dir);
+        let notes = || {
+            let stats = repo
+                .uncommitted_line_stats_impl(&CancellationToken::new())
+                .unwrap();
+            counts(stats.unstaged.get(std::path::Path::new("notes.txt")))
+        };
+        assert_eq!(notes(), Some((Some(2), Some(0))));
+
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::write(&path, "abcde\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+
+        assert_eq!(notes(), Some((Some(1), Some(0))));
+    }
+
+    /// A file inside the racy window can change again without its stamp
+    /// moving, so its counts are not kept.
+    #[test]
+    fn a_racy_untracked_file_is_read_on_every_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "seed.txt", "seed\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, "new.txt", &lines("new", 2));
+        // Frozen right after the write, however slowly the scans run.
+        #[cfg(unix)]
+        let _clock = crate::repo::RacyClockSkew::set_for_path(
+            dir.join("new.txt"),
+            std::time::Duration::ZERO,
+        );
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        take_worktree_reads_for_tests();
+
+        let first = repo.uncommitted_line_stats_impl(&token).unwrap();
+        let second = repo.uncommitted_line_stats_impl(&token).unwrap();
+
+        assert_eq!(second, first);
+        assert_eq!(take_worktree_reads_for_tests(), 2);
+    }
+
+    /// The memo keys on how a file converts: without its
+    /// `working-tree-encoding`, the same UTF-16 bytes are binary.
+    #[test]
+    fn an_attribute_change_counts_untracked_files_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(
+            dir,
+            ".gitattributes",
+            "*.txt working-tree-encoding=UTF-16LE-BOM\n",
+        );
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain("a\nb\nc\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        std::fs::write(dir.join("notes.txt"), utf16).unwrap();
+        let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let repo = open_repo(dir);
+        let notes = || {
+            repo.uncommitted_line_stats_impl(&CancellationToken::new())
+                .unwrap()
+                .unstaged[std::path::Path::new("notes.txt")]
+        };
+        assert_eq!(counts(Some(&notes())), Some((Some(3), Some(0))));
+
+        write_file(dir, ".gitattributes", "*.md text\n");
+
+        assert_eq!(notes(), LineStats::UNKNOWN);
+    }
+
+    /// The memo keys on the conversion config: with `core.safecrlf`, a CRLF
+    /// file that `core.autocrlf=input` would rewrite cannot be stored.
+    #[test]
+    fn a_conversion_config_change_counts_untracked_files_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "seed.txt", "seed\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        git_success(dir, &["config", "core.autocrlf", "input"]);
+        std::fs::write(dir.join("crlf.txt"), "a\r\nb\r\n").unwrap();
+        let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let repo = open_repo(dir);
+        let crlf = || {
+            repo.uncommitted_line_stats_impl(&CancellationToken::new())
+                .unwrap()
+                .unstaged[std::path::Path::new("crlf.txt")]
+        };
+        assert_eq!(counts(Some(&crlf())), Some((Some(2), Some(0))));
+
+        git_success(dir, &["config", "core.safecrlf", "true"]);
+
+        assert_eq!(crlf(), LineStats::UNKNOWN);
+    }
+
+    /// A clean program's output can change while the file does not, so the
+    /// files it converts are counted on every refresh.
+    #[cfg(unix)]
+    #[test]
+    fn files_a_clean_program_converts_are_counted_on_every_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, ".gitattributes", "*.dat filter=pick\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        git_success(dir, &["config", "filter.pick.clean", "cat"]);
+        write_file(dir, "data.dat", "one\ntwo\n");
+        let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let repo = open_repo(dir);
+        let data = || {
+            let stats = repo
+                .uncommitted_line_stats_impl(&CancellationToken::new())
+                .unwrap();
+            counts(stats.unstaged.get(std::path::Path::new("data.dat")))
+        };
+        assert_eq!(data(), Some((Some(2), Some(0))));
+
+        git_success(dir, &["config", "filter.pick.clean", "sed -n 1p"]);
+
+        assert_eq!(data(), Some((Some(1), Some(0))));
+    }
+
+    /// The memo holds only files the last scan listed, so paths that stop
+    /// being untracked do not pile up.
+    #[cfg(unix)]
+    #[test]
+    fn untracked_counts_are_kept_only_for_listed_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "seed.txt", "seed\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, "kept.txt", "kept\n");
+        write_file(dir, "removed.txt", "removed\n");
+        let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        let memo_paths = || {
+            let mut paths: Vec<PathBuf> =
+                repo.line_stats_memo().untracked.keys().cloned().collect();
+            paths.sort();
+            paths
+        };
+        repo.uncommitted_line_stats_impl(&token).unwrap();
+        assert_eq!(
+            memo_paths(),
+            [PathBuf::from("kept.txt"), PathBuf::from("removed.txt")]
+        );
+
+        std::fs::remove_file(dir.join("removed.txt")).unwrap();
+        repo.uncommitted_line_stats_impl(&token).unwrap();
+
+        assert_eq!(memo_paths(), [PathBuf::from("kept.txt")]);
     }
 
     #[test]

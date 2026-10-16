@@ -1974,6 +1974,14 @@ impl GixRepo {
     }
 }
 
+/// The config the worktree->git conversion reads.
+pub(super) const WORKTREE_CONVERSION_CONFIG: [&str; 4] = [
+    "core.autocrlf",
+    "core.eol",
+    "core.safecrlf",
+    "core.checkRoundtripEncoding",
+];
+
 /// Resolve attributes with the same source precedence as the filter pipeline.
 /// This includes system/user attributes, info/attributes, and index-backed
 /// .gitattributes when worktree copies are absent. Re-resolving these small
@@ -1999,12 +2007,7 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         .matching_attributes(&mut outcome);
     let mut hasher = FxHasher::default();
     let config = repo.config_snapshot();
-    for key in [
-        "core.autocrlf",
-        "core.eol",
-        "core.safecrlf",
-        "core.checkRoundtripEncoding",
-    ] {
+    for key in WORKTREE_CONVERSION_CONFIG {
         config.string(key).hash(&mut hasher);
     }
     for matched in outcome.iter() {
