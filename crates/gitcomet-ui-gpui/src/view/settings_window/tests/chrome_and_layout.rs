@@ -60,7 +60,8 @@ fn settings_window_titlebar_options_match_platform_chrome_strategy() {
     );
     assert_eq!(
         options.traffic_light_position,
-        cfg!(target_os = "macos").then_some(chrome::macos_traffic_light_position()),
+        cfg!(target_os = "macos")
+            .then_some(crate::kit::window_chrome::macos_traffic_light_position()),
         "the settings header is the same fixed bar as the main window's, so the \
          lights have to land in the same place"
     );
@@ -77,7 +78,7 @@ fn settings_window_frame_strategy_matches_platform_chrome() {
     {
         assert_eq!(
             settings_window_client_inset(),
-            chrome::CLIENT_SIDE_DECORATION_INSET
+            crate::kit::window_chrome::CLIENT_SIDE_DECORATION_INSET
         );
     }
 }

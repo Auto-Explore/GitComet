@@ -1,5 +1,5 @@
 use super::*;
-use chrome::{cursor_style_for_resize_edge, resize_edge};
+use crate::kit::window_chrome::{cursor_style_for_resize_edge, resize_edge};
 
 #[cfg(test)]
 use tooltip::clear_visible_tooltip_text_for_test;
@@ -218,7 +218,7 @@ impl Render for GitCometView {
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (
                 Some(tiling),
-                chrome::client_side_decoration_inset(self.ui_scale_percent),
+                crate::kit::window_chrome::client_side_decoration_inset(self.ui_scale_percent),
             ),
             Decorations::Server => (None, px(0.0)),
         };
@@ -268,7 +268,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                chrome::TITLE_BAR_HEIGHT,
+                crate::kit::window_chrome::TITLE_BAR_HEIGHT,
             ));
         }
 
@@ -791,7 +791,7 @@ impl Render for GitCometView {
             let size = window.viewport_size();
             let next = resize_edge(
                 e.position,
-                chrome::client_side_decoration_inset(this.ui_scale_percent),
+                crate::kit::window_chrome::client_side_decoration_inset(this.ui_scale_percent),
                 size,
                 tiling,
             );
@@ -827,7 +827,9 @@ impl Render for GitCometView {
                     let size = window.viewport_size();
                     let edge = resize_edge(
                         e.position,
-                        chrome::client_side_decoration_inset(this.ui_scale_percent),
+                        crate::kit::window_chrome::client_side_decoration_inset(
+                            this.ui_scale_percent,
+                        ),
                         size,
                         tiling,
                     );
@@ -836,7 +838,7 @@ impl Render for GitCometView {
                     };
 
                     cx.stop_propagation();
-                    crate::app::begin_window_resize(window, edge);
+                    crate::kit::window_chrome::begin_window_resize(window, edge);
                 }),
             );
         } else if self.hover_resize_edge.is_some() {
@@ -859,7 +861,7 @@ impl Render for GitCometView {
             .child(stable_cached_overlay_view(self.toast_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));
 
-        root = root.child(chrome::window_frame(
+        root = root.child(crate::kit::window_chrome::window_frame(
             theme,
             decorations,
             framed_content.into_any_element(),

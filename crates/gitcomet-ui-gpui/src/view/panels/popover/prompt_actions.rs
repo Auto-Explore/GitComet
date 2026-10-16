@@ -17,7 +17,7 @@ impl PopoverHost {
             .clone()
             .unwrap_or_else(|| PopoverAnchor::Point(point(px(64.0), px(64.0))));
         let anchor_is_bounds = matches!(&anchor_source, PopoverAnchor::Bounds(_));
-        let surface = crate::view::chrome::window_surface_bounds(window);
+        let surface = crate::kit::window_chrome::window_surface_bounds(window);
         let margin_x = scaled_px(16.0);
 
         let is_context_menu = popover_is_context_menu(&kind);

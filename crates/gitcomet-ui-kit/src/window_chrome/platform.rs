@@ -1,14 +1,19 @@
-//! Window chrome platform glue: zoom, the system menu, and native move/resize.
+//! Platform glue behind the chrome: zoom, the system menu, and native
+//! move/resize grabs.
 
 use super::*;
+#[cfg(target_os = "windows")]
+use raw_window_handle::RawWindowHandle;
+use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WindowZoomAction {
+pub enum WindowZoomAction {
     Zoom,
     Restore,
 }
 
-pub(crate) fn window_zoom_action(is_maximized: bool) -> WindowZoomAction {
+pub fn window_zoom_action(is_maximized: bool) -> WindowZoomAction {
     if cfg!(target_os = "windows") && is_maximized {
         WindowZoomAction::Restore
     } else {
@@ -16,7 +21,7 @@ pub(crate) fn window_zoom_action(is_maximized: bool) -> WindowZoomAction {
     }
 }
 
-pub(crate) fn toggle_window_zoom(window: &Window) {
+pub fn toggle_window_zoom(window: &Window) {
     match window_zoom_action(window.is_maximized()) {
         WindowZoomAction::Zoom => window.zoom_window(),
         WindowZoomAction::Restore => {
@@ -30,7 +35,7 @@ pub(crate) fn toggle_window_zoom(window: &Window) {
     }
 }
 
-pub(crate) fn show_window_system_menu(window: &Window, position: Point<Pixels>) {
+pub fn show_window_system_menu(window: &Window, position: Point<Pixels>) {
     #[cfg(target_os = "windows")]
     if show_windows_window_system_menu(window, position) {
         return;
@@ -39,13 +44,8 @@ pub(crate) fn show_window_system_menu(window: &Window, position: Point<Pixels>) 
     window.show_window_menu(position);
 }
 
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn application() -> gpui::Application {
-    gpui_platform::application()
-}
-
 #[cfg(any(target_os = "windows", test))]
-pub(super) fn window_menu_position(position: Point<Pixels>, scale_factor: f32) -> (i32, i32) {
+pub fn window_menu_position(position: Point<Pixels>, scale_factor: f32) -> (i32, i32) {
     (
         (f32::from(position.x) * scale_factor).round() as i32,
         (f32::from(position.y) * scale_factor).round() as i32,
@@ -54,14 +54,14 @@ pub(super) fn window_menu_position(position: Point<Pixels>, scale_factor: f32) -
 
 #[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WindowSystemMenuRequest {
+pub struct WindowSystemMenuRequest {
     pub hwnd: isize,
     pub x: i32,
     pub y: i32,
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn window_hwnd(window: &Window) -> Option<isize> {
+pub fn window_hwnd(window: &Window) -> Option<isize> {
     let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
         return None;
     };
@@ -87,14 +87,14 @@ thread_local! {
 /// NotifyUngrab arrive too) — indistinguishable from the user alt-tabbing away
 /// and back. This marker lets the activation observer ignore its own echo
 /// instead of treating it as a return to the app and refreshing the repo.
-pub(crate) fn note_window_grab_started() {
+pub fn note_window_grab_started() {
     LAST_WINDOW_GRAB_AT.with(|cell| cell.set(Some(Instant::now())));
 }
 
 /// Whether a grab was requested no more than `max_age` ago. Always consumes the
 /// marker, so a grab the compositor silently dropped cannot arm suppression for
 /// an unrelated activation minutes later.
-pub(crate) fn take_window_grab_started_within(now: Instant, max_age: Duration) -> bool {
+pub fn take_window_grab_started_within(now: Instant, max_age: Duration) -> bool {
     LAST_WINDOW_GRAB_AT.with(|cell| match cell.take() {
         Some(at) => now.saturating_duration_since(at) <= max_age,
         None => false,
@@ -107,18 +107,18 @@ pub(crate) fn take_window_grab_started_within(now: Instant, max_age: Duration) -
 /// and synthesizes the `WM_LBUTTONUP` the modal move loop swallows, so the app
 /// sees a complete press/release pair after every move, and the native
 /// restore-on-drag for maximized windows works the same either way.
-pub(crate) fn begin_window_move(window: &Window) {
+pub fn begin_window_move(window: &Window) {
     note_window_grab_started();
     window.start_window_move();
 }
 
-pub(crate) fn begin_window_resize(window: &Window, edge: gpui::ResizeEdge) {
+pub fn begin_window_resize(window: &Window, edge: gpui::ResizeEdge) {
     note_window_grab_started();
     window.start_window_resize(edge);
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn restore_maximized_window(window: &Window) -> bool {
+pub fn restore_maximized_window(window: &Window) -> bool {
     let Some(hwnd) = window_hwnd(window) else {
         return false;
     };
@@ -129,7 +129,7 @@ pub(super) fn restore_maximized_window(window: &Window) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn show_windows_window_system_menu(window: &Window, position: Point<Pixels>) -> bool {
+pub fn show_windows_window_system_menu(window: &Window, position: Point<Pixels>) -> bool {
     let Some(request) = window_system_menu_request(window, position) else {
         return false;
     };
@@ -139,7 +139,7 @@ pub(super) fn show_windows_window_system_menu(window: &Window, position: Point<P
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn window_system_menu_request(
+pub fn window_system_menu_request(
     window: &Window,
     position: Point<Pixels>,
 ) -> Option<WindowSystemMenuRequest> {

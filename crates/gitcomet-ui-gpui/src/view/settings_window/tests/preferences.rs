@@ -214,7 +214,10 @@ fn hidden_window_controls_keep_only_close_in_settings_chrome(cx: &mut gpui::Test
 
     cx.update(|window, app| {
         let _ = window.draw(app);
-        crate::window_controls::set_current(app, crate::window_controls::WindowControlsMode::Hide);
+        crate::kit::window_chrome::controls::set_current(
+            app,
+            crate::kit::window_chrome::controls::WindowControlsMode::Hide,
+        );
         open_settings_window(app);
     });
     cx.run_until_parked();

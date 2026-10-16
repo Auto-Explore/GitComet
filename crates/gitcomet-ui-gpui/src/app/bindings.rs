@@ -121,7 +121,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         cx.defer(|cx| {
             if let Some(window) = cx.active_window() {
                 let _ = window.update(cx, |_root, window, _cx| {
-                    toggle_window_zoom(window);
+                    crate::kit::window_chrome::toggle_window_zoom(window);
                 });
             }
         });

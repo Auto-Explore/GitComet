@@ -65,7 +65,7 @@ impl GitCometView {
             Command::ZoomWindow => cx.defer(|cx| {
                 if let Some(win) = cx.active_window() {
                     let _ = win.update(cx, |_root, win, _cx| {
-                        super::super::app::toggle_window_zoom(win)
+                        crate::kit::window_chrome::toggle_window_zoom(win)
                     });
                 }
             }),

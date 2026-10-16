@@ -642,10 +642,10 @@ fn the_title_bar_keeps_its_leading_control_clear_of_the_traffic_lights(
         .expect("expected repository picker bounds");
 
     assert!(
-        picker.left() >= crate::view::chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET,
+        picker.left() >= crate::kit::window_chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET,
         "the first control in the bar starts at {:?}, inside the {:?} reserved for the lights",
         picker.left(),
-        crate::view::chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET
+        crate::kit::window_chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET
     );
 }
 
@@ -716,7 +716,7 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
         // so a bar that silently compressed would still "not move".
         assert_eq!(
             box_of(cx, "titlebar_drag", percent).height,
-            crate::view::chrome::TITLE_BAR_HEIGHT,
+            crate::kit::window_chrome::TITLE_BAR_HEIGHT,
             "the title bar must hold its own fixed height at {percent}% UI scale"
         );
         // Re-checked every step, so neither iteration can pass vacuously.

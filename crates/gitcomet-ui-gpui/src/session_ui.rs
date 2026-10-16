@@ -5,6 +5,7 @@
 
 use crate::appearance::{self, Appearance, AppearancePreferences};
 use crate::font_preferences::{self, AppFontPreferences, StoredFontPreferences};
+use crate::kit::window_chrome::controls::{self as window_controls, AppWindowControls};
 use crate::ui_scale::{self, AppUiScale};
 use gitcomet_state::session::UiSession;
 use gpui::{App, BorrowAppContext, Window};
@@ -29,6 +30,13 @@ pub(crate) fn initialize_appearance(session: &UiSession, cx: &mut App) {
 /// The default UI scale new windows open at, seeded from the session once.
 pub(crate) fn ui_scale<C: BorrowAppContext>(session: &UiSession, cx: &mut C) -> AppUiScale {
     ui_scale::default_or_initialize(session.ui_scale_percent, cx)
+}
+
+pub(crate) fn window_controls<C: BorrowAppContext>(
+    session: &UiSession,
+    cx: &mut C,
+) -> AppWindowControls {
+    window_controls::current_or_initialize(session.window_controls_mode.as_deref(), cx)
 }
 
 pub(crate) fn font_preferences<C: BorrowAppContext>(

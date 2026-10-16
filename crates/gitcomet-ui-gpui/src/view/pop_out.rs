@@ -66,7 +66,7 @@ pub(in crate::view) fn open(
         titlebar: Some(TitlebarOptions {
             title: Some(format!("{} — {title}", identity.display_name()).into()),
             appears_transparent: false,
-            traffic_light_position: Some(chrome::macos_traffic_light_position()),
+            traffic_light_position: Some(crate::kit::window_chrome::macos_traffic_light_position()),
         }),
         app_id: Some(identity.window_app_id(gitcomet_core::identity::WindowKind::Main)),
         window_decorations: Some(WindowDecorations::Server),

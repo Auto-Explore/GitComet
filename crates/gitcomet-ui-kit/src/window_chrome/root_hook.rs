@@ -16,12 +16,12 @@ use gpui::{
 
 /// Runs `install` from `paint`, for every frame it is painted in, so whatever
 /// listeners it registers are window-level rather than hitbox-gated.
-pub(crate) struct WindowRootHook {
+pub struct WindowRootHook {
     install: fn(&mut Window),
 }
 
 impl WindowRootHook {
-    pub(crate) fn new(install: fn(&mut Window)) -> Self {
+    pub fn new(install: fn(&mut Window)) -> Self {
         Self { install }
     }
 }

@@ -866,3 +866,23 @@ is one `PopoverClosed` request. What remains direct is reading: the window id,
 the active context-menu invoker, error-details state and two terminal calls
 that return values. Replacing the weak root handle with a request sink, and
 the sibling entities `PopoverHostInit` hands the host, are the rest of 3.4.
+
+### 1.4 `kit::window_chrome`
+
+The client-side window frame was split between `view/chrome.rs`,
+`app/chrome.rs`, `window_root_hook.rs` and `window_controls.rs`, all in the
+host. The generic parts are now `gitcomet-ui-kit/src/window_chrome/`: frame and
+title-bar geometry, title-bar drag and double-click handling, frame insets,
+corner rounding, resize edges and cursors, the frame element, the control
+buttons and their cluster (`mod.rs`); zoom, the system menu and native
+move/resize grabs (`platform.rs`); the root mouse hook; and the window-controls
+mode (`controls.rs`), which now takes the saved mode key instead of reading the
+app session, so the host's `session_ui::window_controls` does that read. The
+host keeps `TitleBarView`, workspace tints and the title-bar background, which
+read product state. Their tests moved with them (19 kit tests), and the
+host's fixed-px chrome scan now covers the kit module too.
+
+`app/placement.rs` stays in the host: every function in it converts to or from
+the persisted `session` placement types, so it is session restore policy, not
+chrome.
+

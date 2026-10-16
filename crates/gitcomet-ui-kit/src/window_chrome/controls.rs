@@ -1,8 +1,9 @@
-use gitcomet_state::session;
+//! Which minimize/maximize/close controls a window shows.
+
 use gpui::{BorrowAppContext, Decorations, WindowButton, WindowButtonLayout};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum WindowControlsMode {
+pub enum WindowControlsMode {
     #[default]
     System,
     Show,
@@ -10,9 +11,9 @@ pub(crate) enum WindowControlsMode {
 }
 
 impl WindowControlsMode {
-    pub(crate) const ALL: [Self; 3] = [Self::System, Self::Show, Self::Hide];
+    pub const ALL: [Self; 3] = [Self::System, Self::Show, Self::Hide];
 
-    pub(crate) const fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::System => "system",
             Self::Show => "show",
@@ -20,7 +21,7 @@ impl WindowControlsMode {
         }
     }
 
-    pub(crate) fn from_key(key: &str) -> Option<Self> {
+    pub fn from_key(key: &str) -> Option<Self> {
         match key {
             "system" => Some(Self::System),
             "show" => Some(Self::Show),
@@ -29,7 +30,7 @@ impl WindowControlsMode {
         }
     }
 
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::System => "Follow system",
             Self::Show => "Always show",
@@ -37,7 +38,7 @@ impl WindowControlsMode {
         }
     }
 
-    pub(crate) const fn detail(self) -> &'static str {
+    pub const fn detail(self) -> &'static str {
         match self {
             Self::System => "Follow the desktop layout and hide controls while tiled.",
             Self::Show => "Show minimize and maximize controls in every window.",
@@ -47,8 +48,8 @@ impl WindowControlsMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AppWindowControls {
-    pub(crate) mode: WindowControlsMode,
+pub struct AppWindowControls {
+    pub mode: WindowControlsMode,
     initialized: bool,
 }
 
@@ -63,17 +64,15 @@ impl Default for AppWindowControls {
 
 impl gpui::Global for AppWindowControls {}
 
-pub(crate) fn current<C>(cx: &mut C) -> AppWindowControls
+pub fn current<C>(cx: &mut C) -> AppWindowControls
 where
     C: BorrowAppContext,
 {
     cx.update_default_global::<AppWindowControls, _>(|controls, _cx| *controls)
 }
 
-pub(crate) fn current_or_initialize_from_session<C>(
-    ui_session: &session::UiSession,
-    cx: &mut C,
-) -> AppWindowControls
+/// The app-wide mode, initialized once from the saved mode key.
+pub fn current_or_initialize<C>(saved_mode: Option<&str>, cx: &mut C) -> AppWindowControls
 where
     C: BorrowAppContext,
 {
@@ -83,9 +82,7 @@ where
     }
 
     let next = AppWindowControls {
-        mode: ui_session
-            .window_controls_mode
-            .as_deref()
+        mode: saved_mode
             .and_then(WindowControlsMode::from_key)
             .unwrap_or_default(),
         initialized: true,
@@ -94,7 +91,7 @@ where
     next
 }
 
-pub(crate) fn set_current<C>(cx: &mut C, mode: WindowControlsMode)
+pub fn set_current<C>(cx: &mut C, mode: WindowControlsMode)
 where
     C: BorrowAppContext,
 {
@@ -105,12 +102,12 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedWindowControls {
-    pub(crate) left: [Option<WindowButton>; 3],
-    pub(crate) right: [Option<WindowButton>; 3],
+pub struct ResolvedWindowControls {
+    pub left: [Option<WindowButton>; 3],
+    pub right: [Option<WindowButton>; 3],
 }
 
-pub(crate) fn resolve_visibility(
+pub fn resolve_visibility(
     mode: WindowControlsMode,
     system_layout: Option<WindowButtonLayout>,
     system_layout_supported: bool,

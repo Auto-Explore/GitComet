@@ -52,6 +52,7 @@ pub mod tooltip_host;
 pub mod ui_probe;
 pub mod ui_runtime;
 pub mod ui_scale;
+pub mod window_chrome;
 pub mod window_focus;
 
 #[cfg(any(test, feature = "test-support"))]

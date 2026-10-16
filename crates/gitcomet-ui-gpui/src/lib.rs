@@ -26,10 +26,8 @@ mod render_guards;
 mod session_ui;
 mod startup_probe;
 mod view;
-mod window_controls;
 #[cfg(test)]
 mod window_focus_tests;
-mod window_root_hook;
 #[cfg(any(target_os = "windows", test))]
 mod windows_renderer;
 mod workspaces;

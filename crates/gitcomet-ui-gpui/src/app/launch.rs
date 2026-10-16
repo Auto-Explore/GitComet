@@ -464,7 +464,7 @@ pub(super) fn run_windowed_app(
         launch.view_config.view_mode == GitCometViewMode::Normal,
     );
     #[cfg(not(target_os = "windows"))]
-    let application = application();
+    let application = gpui_platform::application();
     let application = application
         .with_assets(GitCometAssets::with_extensions(extensions.assets()))
         .with_http_client(crate::http::client());
@@ -689,7 +689,7 @@ pub(super) fn open_gitcomet_window(
     clear_clean_shutdown_request(cx);
     let ui_session = session::load();
     let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
-    crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+    crate::session_ui::window_controls(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
     let default_size = fit_default_window_size(
         main_window_default_size_for_percent(ui_scale.percent),
@@ -747,7 +747,7 @@ pub(super) fn open_gitcomet_window(
                     title: Some(window_title.into()),
                     appears_transparent: true,
                     traffic_light_position: Some(
-                        crate::view::chrome::macos_traffic_light_position(),
+                        crate::kit::window_chrome::macos_traffic_light_position(),
                     ),
                 }),
                 app_id: Some(app_id),

@@ -1,5 +1,4 @@
 use super::*;
-use gpui::point;
 use gpui::{
     Action, Context, FocusHandle, InteractiveElement, IntoElement, Render, Styled, Window, div,
 };
@@ -8,6 +7,7 @@ use crate::test_support::lock_visual_test;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitRepository, Result};
 use gitcomet_state::msg::Msg;
+use std::cell::Cell;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -1752,26 +1752,6 @@ fn review_regression_colliding_restored_window_frames_are_cascaded(cx: &mut gpui
         first.get_bounds(),
         second.get_bounds(),
         "identical saved frames must not restore directly on top of one another"
-    );
-}
-
-#[test]
-fn window_zoom_action_restores_only_on_windows_when_already_maximized() {
-    assert_eq!(window_zoom_action(false), WindowZoomAction::Zoom);
-
-    let expected = if cfg!(target_os = "windows") {
-        WindowZoomAction::Restore
-    } else {
-        WindowZoomAction::Zoom
-    };
-    assert_eq!(window_zoom_action(true), expected);
-}
-
-#[test]
-fn window_menu_position_scales_logical_pixels_to_device_pixels() {
-    assert_eq!(
-        window_menu_position(point(px(12.4), px(7.6)), 1.25),
-        (16, 10)
     );
 }
 

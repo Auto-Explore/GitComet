@@ -884,7 +884,7 @@ pub(super) fn panel(
     }
     let ui_scale = popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
-    let window_size = crate::view::chrome::window_surface_bounds(window).size;
+    let window_size = crate::kit::window_chrome::window_surface_bounds(window).size;
     let margin = scaled_px(DIALOG_MARGIN_PX);
     let available = gpui::size(
         (window_size.width - margin * 2.0).max(px(0.0)),

@@ -33,8 +33,8 @@ use gpui::{
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
     ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, Styled, TextRun,
-    Tiling, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div,
-    fill, point, px, relative, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, fill,
+    point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(test)]
@@ -414,7 +414,7 @@ pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
-pub(crate) use chrome::window_frame;
+pub(crate) use crate::kit::window_chrome::window_frame;
 use color::{composite_over, with_alpha};
 pub(crate) use icons::svg_icon;
 use icons::svg_spinner;

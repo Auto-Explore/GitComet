@@ -1026,8 +1026,11 @@ impl GitCometView {
                 // the app. Remember it so the matching re-activation does not
                 // refresh the repo.
                 this.window_grab_activation_suppressed_at =
-                    crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE)
-                        .then_some(now);
+                    crate::kit::window_chrome::take_window_grab_started_within(
+                        now,
+                        WINDOW_GRAB_DEACTIVATE_GRACE,
+                    )
+                    .then_some(now);
                 return;
             }
             crate::app::mark_gitcomet_window_focused(cx, this.window_handle.window_id());

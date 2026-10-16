@@ -251,7 +251,7 @@ mod tests {
     /// `window_bounds()` reports the *restore* size while the window is
     /// maximized or fullscreen, and includes the client-side decoration inset, so
     /// anything sized or placed from it misfits the visible window. Views use
-    /// `chrome::window_surface_bounds`.
+    /// `crate::kit::window_chrome::window_surface_bounds`.
     #[test]
     fn view_code_sizes_against_the_visible_surface_not_restore_bounds() {
         let mut offenders = Vec::new();
@@ -263,7 +263,7 @@ mod tests {
 
         assert!(
             offenders.is_empty(),
-            "use chrome::window_surface_bounds instead: {offenders:#?}"
+            "use crate::kit::window_chrome::window_surface_bounds instead: {offenders:#?}"
         );
     }
 }

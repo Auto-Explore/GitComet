@@ -153,7 +153,7 @@ fn full_chrome_layout_caches_the_pane_subviews() {
 
     assert!(
         normalized_root.contains(
-            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::TITLE_BAR_HEIGHT"
+            "stable_cached_fixed_height_view(self.title_bar.clone(),crate::kit::window_chrome::TITLE_BAR_HEIGHT"
         ),
         "expected the title bar (hosting the repo tabs bar) to stay behind the stable cache boundary"
     );

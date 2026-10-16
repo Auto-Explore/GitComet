@@ -1,6 +1,6 @@
 use super::*;
+use crate::kit::window_chrome::{cursor_style_for_resize_edge, resize_edge};
 use crate::view::test_support::TestBackend;
-use chrome::{cursor_style_for_resize_edge, resize_edge};
 use gitcomet_core::domain::{
     Branch, CommitId, FileEntry, FileEntryKind, Remote, RemoteBranch, RepoSpec, StashEntry,
     Submodule, SubmoduleStatus, Upstream, Worktree,
@@ -12,6 +12,7 @@ use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_core::test_support::git_fixture::FixtureTimer;
 use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoId, RepoState};
 use gitcomet_state::store::AppStore;
+use gpui::Tiling;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};

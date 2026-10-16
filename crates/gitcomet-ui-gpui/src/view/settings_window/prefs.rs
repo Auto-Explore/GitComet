@@ -544,7 +544,7 @@ impl SettingsWindowView {
 
     pub(super) fn set_window_controls_mode(
         &mut self,
-        mode: crate::window_controls::WindowControlsMode,
+        mode: crate::kit::window_chrome::controls::WindowControlsMode,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.window_controls_mode == mode {
@@ -553,7 +553,7 @@ impl SettingsWindowView {
 
         self.window_controls_mode = mode;
         self.expanded_section = None;
-        crate::window_controls::set_current(cx, mode);
+        crate::kit::window_chrome::controls::set_current(cx, mode);
         self.persist_preferences(cx);
         cx.defer(|cx| cx.refresh_windows());
         cx.notify();
