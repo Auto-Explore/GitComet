@@ -12,6 +12,7 @@ that `super::` cannot provide falls back to the compiler's suggestion.
 import argparse
 import collections
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -58,7 +59,7 @@ def primary_file(message):
 
 
 def write_imports(path, from_super, full_paths):
-    text = open(path).read()
+    text = pathlib.Path(path).read_text()
     block = []
     if from_super:
         block.append("use super::{" + ", ".join(sorted(from_super)) + "};")
@@ -75,13 +76,12 @@ def write_imports(path, from_super, full_paths):
     while insert < len(lines) and (lines[insert].startswith("//!") or lines[insert] == ""):
         insert += 1
     lines[insert:insert] = [marker.rstrip("\n")] + block + [marker.rstrip("\n")]
-    open(path, "w").write("\n".join(lines))
+    pathlib.Path(path).write_text("\n".join(lines))
 
 
 def finish(path):
-    text = open(path).read()
-    text = re.sub(r"// expand_glob_imports\n", "", text)
-    open(path, "w").write(text)
+    file = pathlib.Path(path)
+    file.write_text(re.sub(r"// expand_glob_imports\n", "", file.read_text()))
 
 
 def main():
@@ -90,7 +90,7 @@ def main():
     parser.add_argument("--features", default="")
     parser.add_argument("files", nargs="+")
     args = parser.parse_args()
-    files = [f for f in args.files if GLOB in open(f).read()]
+    files = [f for f in args.files if GLOB in pathlib.Path(f).read_text()]
     names = {f: set() for f in files}
     full = {f: set() for f in files}
     for f in files:
