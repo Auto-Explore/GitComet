@@ -33,8 +33,8 @@ pub(crate) enum InvalidComparison {
     AlignmentIncomplete { side: Side },
     #[error("{side:?} change on missing line {line}")]
     MissingLine { side: Side, line: usize },
-    #[error("{side:?} change {range:?} on line {line} splits a character")]
-    RangeOffCharBoundary {
+    #[error("{side:?} change {range:?} is not a character range of line {line}")]
+    RangeNotInLine {
         side: Side,
         line: usize,
         range: Range<usize>,
@@ -224,7 +224,7 @@ fn add_side(
     for range in ranges.ranges {
         let range = range.start as usize..range.end as usize;
         if text.get(range.clone()).is_none() {
-            return Err(InvalidComparison::RangeOffCharBoundary { side, line, range });
+            return Err(InvalidComparison::RangeNotInLine { side, line, range });
         }
         changes.entry(line).or_default().push(range);
     }

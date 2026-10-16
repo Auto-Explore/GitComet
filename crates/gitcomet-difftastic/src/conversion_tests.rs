@@ -52,10 +52,26 @@ fn a_range_inside_a_utf8_character_is_rejected() {
     );
     assert_eq!(
         outcome(comparison, "a", "é"),
-        Err(InvalidComparison::RangeOffCharBoundary {
+        Err(InvalidComparison::RangeNotInLine {
             side: Side::New,
             line: 0,
             range: 1..2,
+        })
+    );
+}
+
+#[test]
+fn a_range_past_the_line_end_is_rejected() {
+    let comparison = rust_changes(
+        vec![Row::Both { old: 0, new: 0 }],
+        vec![vec![ChunkLine::New(ranges(0, std::iter::once(0..2)))]],
+    );
+    assert_eq!(
+        outcome(comparison, "a\n", "b\n"),
+        Err(InvalidComparison::RangeNotInLine {
+            side: Side::New,
+            line: 0,
+            range: 0..2,
         })
     );
 }
