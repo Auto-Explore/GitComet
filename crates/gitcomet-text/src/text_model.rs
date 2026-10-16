@@ -385,6 +385,23 @@ impl TextModelSnapshot {
         if end < start { end..start } else { start..end }
     }
 
+    /// The characters from `offset` to the end, read chunk by chunk: a walk
+    /// that stops early never copies or touches the rest of the document.
+    pub fn chars_at(&self, offset: usize) -> impl Iterator<Item = char> + '_ {
+        self.core
+            .rope
+            .chunks_in_range(offset..self.len())
+            .flat_map(str::chars)
+    }
+
+    /// The characters before `offset`, nearest first, read the same way.
+    pub fn reversed_chars_at(&self, offset: usize) -> impl Iterator<Item = char> + '_ {
+        self.core
+            .rope
+            .reversed_chunks_in_range(0..offset)
+            .flat_map(|chunk| chunk.chars().rev())
+    }
+
     /// The text in `range`. Borrowed when it lives inside a single chunk, which
     /// covers a typical row; owned only when it straddles one.
     pub fn slice(&self, range: Range<usize>) -> Cow<'_, str> {

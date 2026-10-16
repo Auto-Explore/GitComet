@@ -152,7 +152,8 @@ fn word_moves_cross_rows_like_the_flat_text(cx: &mut gpui::TestAppContext) {
     });
 }
 
-/// Word moves after an edit read rows, not a flattened copy of the document.
+/// Word moves after an edit read the characters they pass, not a flattened
+/// copy of the document.
 #[gpui::test]
 fn word_moves_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
@@ -167,6 +168,28 @@ fn word_moves_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppCo
             input.next_word_end(middle);
 
             assert!(!input.content.snapshot().is_materialized());
+        });
+    });
+}
+
+/// On one long row, a minified file, a word move copies nothing: reading the
+/// row as slices cost a copy of it up to the caret per skip.
+#[gpui::test]
+fn word_moves_on_a_long_row_copy_nothing(cx: &mut gpui::TestAppContext) {
+    use crate::text_model::OWNED_SLICES;
+    let (input, cx) = multiline_input(cx);
+    let text = "alpha beta.gamma ".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+            OWNED_SLICES.with(|count| count.set(0));
+
+            input.previous_word_start(middle);
+            input.next_word_end(middle);
+
+            assert_eq!(OWNED_SLICES.with(|count| count.get()), 0);
         });
     });
 }

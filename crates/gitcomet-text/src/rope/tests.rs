@@ -283,6 +283,36 @@ fn chunks_in_range_covers_exactly_the_requested_bytes() {
 }
 
 #[test]
+fn reversed_chunks_in_range_cover_the_requested_bytes_back_to_front() {
+    let text = "0123456789\n".repeat(200);
+    let rope = Rope::from_text(&text);
+
+    for (start, end) in [
+        (0, 0),
+        (0, text.len()),
+        (5, 5),
+        (0, 1),
+        (text.len() - 1, text.len()),
+        (MAX_CHUNK_BYTES, MAX_CHUNK_BYTES),
+        (MAX_CHUNK_BYTES - 1, MAX_CHUNK_BYTES + 1),
+        (MAX_CHUNK_BYTES, text.len()),
+        (7, text.len() - 7),
+    ] {
+        let chunks: Vec<&str> = rope.reversed_chunks_in_range(start..end).collect();
+        assert!(
+            chunks.iter().all(|chunk| !chunk.is_empty()),
+            "{start}..{end}"
+        );
+        let actual: String = chunks.into_iter().rev().collect();
+        assert_eq!(
+            actual,
+            text[start..end],
+            "reversed_chunks_in_range({start}..{end})"
+        );
+    }
+}
+
+#[test]
 fn chunks_never_yields_an_empty_slice() {
     let rope = Rope::from_text(&"ab\n".repeat(500));
     assert!(
@@ -396,6 +426,13 @@ fn fuzz_seed(seed: u64, operations: usize) {
                 read,
                 expected[start..end],
                 "seed {seed} op {op}: chunks_in_range({start}..{end})"
+            );
+            let mut back: Vec<&str> = actual.reversed_chunks_in_range(start..end).collect();
+            back.reverse();
+            assert_eq!(
+                back.concat(),
+                expected[start..end],
+                "seed {seed} op {op}: reversed_chunks_in_range({start}..{end})"
             );
 
             let offset = floor_boundary(&expected, rng.up_to(expected.len()));

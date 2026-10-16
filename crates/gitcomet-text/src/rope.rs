@@ -393,6 +393,12 @@ impl Rope {
         self.chunks_in_range(0..self.len())
     }
 
+    /// The text in `range`, back to front, as borrowed chunk slices.
+    pub fn reversed_chunks_in_range(&self, range: Range<usize>) -> ReversedChunks<'_> {
+        let range = self.clip_range(range);
+        ReversedChunks::new(&self.chunks, range)
+    }
+
     /// Materialize `range`. Callers on a hot path should prefer
     /// [`Rope::chunks_in_range`]; this exists for the many places that need a
     /// small, bounded slice (one visible row, a word under the caret).
@@ -731,6 +737,51 @@ impl<'a> Iterator for Chunks<'a> {
             let slice_end = (self.range.end.min(chunk_end)) - chunk_start;
             self.cursor.next();
             self.range.start = chunk_end.min(self.range.end);
+            if slice_end > slice_start {
+                return Some(&chunk.0[slice_start..slice_end]);
+            }
+        }
+    }
+}
+
+/// Borrowed chunk slices covering a byte range, back to front.
+pub struct ReversedChunks<'a> {
+    cursor: gpui_sum_tree::Cursor<'a, 'static, Chunk, usize>,
+    range: Range<usize>,
+    done: bool,
+}
+
+impl<'a> ReversedChunks<'a> {
+    fn new(chunks: &'a SumTree<Chunk>, range: Range<usize>) -> Self {
+        let mut cursor = chunks.cursor::<usize>(());
+        // Left bias lands on the chunk holding the byte before `range.end`.
+        cursor.seek(&range.end, Bias::Left);
+        Self {
+            cursor,
+            range,
+            done: false,
+        }
+    }
+}
+
+impl<'a> Iterator for ReversedChunks<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        loop {
+            if self.done || self.range.start >= self.range.end {
+                return None;
+            }
+            let chunk_start = *self.cursor.start();
+            let Some(chunk) = self.cursor.item() else {
+                self.done = true;
+                return None;
+            };
+            let chunk_end = chunk_start + chunk.0.len();
+            let slice_start = self.range.start.max(chunk_start) - chunk_start;
+            let slice_end = self.range.end.min(chunk_end).max(chunk_start) - chunk_start;
+            self.cursor.prev();
+            self.range.end = chunk_start.max(self.range.start);
             if slice_end > slice_start {
                 return Some(&chunk.0[slice_start..slice_end]);
             }

@@ -789,47 +789,35 @@ impl TextInput {
         crate::text_selection::is_word_char(ch)
     }
 
-    /// Walks left over characters matching `predicate`, a row at a time: a
-    /// whitespace run crosses rows, since the newline above counts as one.
+    /// Walks left over characters matching `predicate`, reading only the ones
+    /// it passes; a whitespace run crosses rows, since a newline is whitespace.
     fn skip_left_while(
         content: &TextModelSnapshot,
-        mut offset: usize,
+        offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        offset = offset.min(content.len());
-        while offset > 0 {
-            let row_start = content
-                .line_range_with_terminator(content.row_for_offset(offset - 1))
-                .start;
-            for (ix, ch) in content.slice(row_start..offset).char_indices().rev() {
-                if !predicate(ch) {
-                    return offset;
-                }
-                offset = row_start + ix;
-            }
-        }
-        offset
+        let offset = offset.min(content.len());
+        let skipped: usize = content
+            .reversed_chars_at(offset)
+            .take_while(|ch| predicate(*ch))
+            .map(char::len_utf8)
+            .sum();
+        offset - skipped
     }
 
-    /// Walks right over characters matching `predicate`, a row at a time.
+    /// Walks right over characters matching `predicate`, the same way.
     fn skip_right_while(
         content: &TextModelSnapshot,
-        mut offset: usize,
+        offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        offset = offset.min(content.len());
-        while offset < content.len() {
-            let row_end = content
-                .line_range_with_terminator(content.row_for_offset(offset))
-                .end;
-            for ch in content.slice(offset..row_end).chars() {
-                if !predicate(ch) {
-                    return offset;
-                }
-                offset += ch.len_utf8();
-            }
-        }
-        offset
+        let offset = offset.min(content.len());
+        let skipped: usize = content
+            .chars_at(offset)
+            .take_while(|ch| predicate(*ch))
+            .map(char::len_utf8)
+            .sum();
+        offset + skipped
     }
 
     pub(super) fn previous_word_start(&self, offset: usize) -> usize {
@@ -852,10 +840,7 @@ impl TextInput {
     pub(super) fn next_word_end(&self, offset: usize) -> usize {
         let content = self.content.snapshot();
         let offset = offset.min(content.len());
-        let row_end = content
-            .line_range_with_terminator(content.row_for_offset(offset))
-            .end;
-        let Some(ch) = content.slice(offset..row_end).chars().next() else {
+        let Some(ch) = content.chars_at(offset).next() else {
             return content.len();
         };
 
