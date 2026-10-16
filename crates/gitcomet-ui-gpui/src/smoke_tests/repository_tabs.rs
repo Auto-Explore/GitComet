@@ -1112,6 +1112,11 @@ fn activating_a_repo_scrolls_its_tab_into_view(cx: &mut gpui::TestAppContext) {
 
     let last = *repo_ids.last().expect("repo ids");
     store_for_test.dispatch(Msg::SetActiveRepo { repo_id: last });
+    // The store reduces on its own thread; syncing before it has would draw
+    // the old active tab.
+    wait_until("the store to activate the last repository", || {
+        store_for_test.snapshot().active_repo == Some(last)
+    });
     sync_view_for_tests(cx, &view);
     sync_view_for_tests(cx, &view);
 
