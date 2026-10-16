@@ -156,8 +156,40 @@ pub(super) fn rows(authors: &[SharedString], current: Option<&str>) -> AuthorRow
     }
 }
 
-/// Every row for `repo_id`, with the repository's active filter marked.
-fn rows_for_repo(this: &mut PopoverHost, repo_id: RepoId) -> AuthorRows {
+/// Digests what the rows are built from: the inputs [`suggestions`] keys its
+/// author list on, and the active filter that marks a row.
+fn rows_signature(this: &PopoverHost, repo_id: RepoId) -> u64 {
+    use std::hash::Hash;
+    let history = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| &repo.history_state);
+    super::rows_cache::signature(|hasher| {
+        repo_id.hash(hasher);
+        if let Some(history) = history {
+            history.log_rev.hash(hasher);
+            history.authors.rev.hash(hasher);
+            history.history_scope.hash(hasher);
+            history.history_author_filter.hash(hasher);
+        }
+    })
+}
+
+/// The rows for `query`, built once per change to the author list or the
+/// active filter, though the popover redraws on every blink of its search box.
+/// The panel and the arrow keys both read them from here.
+pub(super) fn cached(
+    this: &mut PopoverHost,
+    repo_id: RepoId,
+    query: &str,
+) -> std::rc::Rc<super::rows_cache::CachedRows<AuthorTarget>> {
+    let key = super::rows_cache::RowsCacheKey::new(
+        super::rows_cache::RowsCacheOwner::AuthorFilter,
+        rows_signature(this, repo_id),
+        query,
+    );
     let authors = suggestions(this, repo_id);
     let current = this
         .state
@@ -165,7 +197,10 @@ fn rows_for_repo(this: &mut PopoverHost, repo_id: RepoId) -> AuthorRows {
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| repo.history_state.history_author_filter.clone());
-    rows(&authors, current.as_deref())
+    super::rows_cache::get_or_build(&this.history_author_rows_cache, key, |_now| {
+        let rows = rows(&authors, current.as_deref());
+        (rows.items, rows.targets, rows.marked_index)
+    })
 }
 
 #[cfg(test)]
@@ -179,11 +214,9 @@ pub(super) fn take_nav_target_builds_for_tests() -> usize {
     NAV_TARGET_BUILDS.with(|count| count.replace(0))
 }
 
-/// What the arrow keys walk, in the order the rows are rendered.
-///
-/// `PickerPrompt` re-sorts a non-empty query's matches by where the match lands,
-/// so this has to go through the layout helper — walking `targets` directly
-/// would let Enter apply a different author than the highlighted row.
+/// What the arrow keys walk, in the order the rows are rendered: the filtered
+/// order of the same cached layout the panel draws, so Enter cannot apply a
+/// different author than the highlighted row.
 pub(super) fn nav_targets(
     this: &mut PopoverHost,
     repo_id: RepoId,
@@ -191,31 +224,7 @@ pub(super) fn nav_targets(
 ) -> Vec<AuthorTarget> {
     #[cfg(test)]
     NAV_TARGET_BUILDS.with(|count| count.set(count.get() + 1));
-    let rows = rows_for_repo(this, repo_id);
-    let layout = components::picker_prompt_layout(&rows.items, query);
-    layout
-        .item_indices
-        .iter()
-        .filter_map(|&ix| rows.targets.get(ix).cloned())
-        .collect()
-}
-
-/// The rows the dropdown renders for `query`, with the layout that places them.
-///
-/// The list is windowed, so a row below the viewport has no element for
-/// `ScrollHandle::scroll_to_item` to find; keyboard navigation scrolls by this
-/// geometry instead. See `PopoverHost::scroll_picker_prompt_to_row`.
-pub(super) fn rendered_rows(
-    this: &mut PopoverHost,
-    repo_id: RepoId,
-    query: &str,
-) -> (
-    Vec<components::PickerPromptItem>,
-    components::PickerPromptLayout,
-) {
-    let rows = rows_for_repo(this, repo_id);
-    let layout = components::picker_prompt_layout(&rows.items, query);
-    (rows.items, layout)
+    cached(this, repo_id, query).filtered_payloads()
 }
 
 pub(super) fn apply(
@@ -285,8 +294,7 @@ pub(super) fn panel(
     });
 
     let query = search.read(cx).text().trim().to_string();
-    let rows = rows_for_repo(this, repo_id);
-    let targets = rows.targets;
+    let rows = cached(this, repo_id, &query);
 
     // Free-form matching remains available while the full catalog is loading,
     // and for substrings rather than exact author names.
@@ -296,12 +304,8 @@ pub(super) fn panel(
         "No match — Enter filters on what you typed"
     };
 
-    // Items and layout together, so the rows rendered and the rows navigation
-    // walks are one derivation rather than two that could order differently.
-    let layout = std::rc::Rc::new(components::picker_prompt_layout(&rows.items, &query));
-    let items: std::rc::Rc<[components::PickerPromptItem]> = rows.items.into();
     let prompt = components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-        .prebuilt_items(items, layout)
+        .prebuilt_items(rows.items.clone(), rows.layout.clone())
         .tooltip_host(this.tooltip_host.clone())
         .empty_text(empty_text)
         .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
@@ -329,7 +333,7 @@ pub(super) fn panel(
         div()
             .child(
                 prompt.render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
-                    let Some(target) = targets.get(ix).cloned() else {
+                    let Some(target) = rows.payloads.get(ix).cloned() else {
                         return;
                     };
                     apply(this, repo_id, target, cx);

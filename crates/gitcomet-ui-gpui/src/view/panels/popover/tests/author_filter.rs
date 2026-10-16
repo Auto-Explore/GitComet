@@ -284,3 +284,50 @@ fn author_navigation_targets_wait_for_a_new_query(cx: &mut gpui::TestAppContext)
         "a new query works them out again"
     );
 }
+
+/// The popover redraws whenever its search box does, a caret blink included,
+/// and building a row for each of 30,000 authors takes 3.3 ms. The rows are
+/// built once per author list and active filter, and reused until either
+/// changes.
+#[gpui::test]
+fn author_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(9006);
+    let push =
+        |cx: &mut gpui::VisualTestContext, log_rev, authors: &[&str], filter: Option<&str>| {
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    let mut repo = repo_with_authors(repo_id, log_rev, authors);
+                    repo.history_state.history_author_filter = filter.map(str::to_owned);
+                    push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+                });
+            });
+        };
+    let rows = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host
+                    .update(cx, |host, _cx| author_filter::cached(host, repo_id, ""))
+            })
+        })
+    };
+
+    push(cx, 1, &["Bob", "Alice"], None);
+    let first = rows(cx);
+    assert!(std::rc::Rc::ptr_eq(&first, &rows(cx)), "nothing changed");
+
+    push(cx, 2, &["Bob", "Alice", "Carol"], None);
+    let grown = rows(cx);
+    assert_eq!(grown.items.len(), 4, "a new author is a new row");
+
+    push(cx, 2, &["Bob", "Alice", "Carol"], Some("Bob"));
+    let filtered = rows(cx);
+    assert!(!std::rc::Rc::ptr_eq(&grown, &filtered));
+    assert_eq!(
+        filtered.marked_index,
+        Some(2),
+        "the active filter's row is marked"
+    );
+}

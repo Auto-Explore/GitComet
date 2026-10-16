@@ -81,9 +81,9 @@ impl PopoverHost {
             .as_ref()
             .map(|input| input.read(cx).text().trim().to_string())
             .unwrap_or_default();
-        let (items, layout) = author_filter::rendered_rows(self, repo_id, &query);
+        let rows = author_filter::cached(self, repo_id, &query);
         self.scroll_picker_prompt_to_row(
-            &components::PickerPromptGeometry::new(&items, &layout, super::popover_ui_scale(cx)),
+            &rows.geometry(super::popover_ui_scale(cx)),
             sel,
             components::PICKER_LIST_MAX_HEIGHT_PX,
             cx,
