@@ -486,8 +486,9 @@ fn prepared_solidity_document_highlights_core_syntax() {
         (3, "contract", SyntaxTokenKind::Keyword),
         (4, "uint256", SyntaxTokenKind::Type),
         (6, "function", SyntaxTokenKind::Keyword),
-        // The query captures both as `@keyword.return`.
-        (6, "returns", SyntaxTokenKind::KeywordControl),
+        // `returns` declares outputs; queries/solidity_supplement.scm keeps it off
+        // the control-flow style its query's `@keyword.return` would give it.
+        (6, "returns", SyntaxTokenKind::Keyword),
         (8, "return", SyntaxTokenKind::KeywordControl),
     ] {
         let kinds =

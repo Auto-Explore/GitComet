@@ -593,7 +593,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Solidity => Some((
             tree_sitter_solidity::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(SOLIDITY_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                SOLIDITY_HIGHLIGHTS_QUERY,
+                SOLIDITY_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Assembly => Some((
             tree_sitter_asm::LANGUAGE.into(),
