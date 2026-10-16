@@ -253,10 +253,10 @@ fn git_worktree_changes(
                 || counts.contains_key(&change.path)
         })
         .map(|change| {
-            let (additions, deletions) = change.line_counts(&counts);
+            let line_stats = change.line_counts(&counts).into();
             CommitFileChange::new(change.path, change.kind)
                 .with_submodule(change.is_submodule)
-                .with_line_counts(additions, deletions)
+                .with_line_stats(line_stats)
                 .with_old_path(change.old_path)
                 .with_ids(change.old_id, change.new_id)
                 .with_modes(change.old_mode, change.new_mode)
@@ -420,8 +420,8 @@ mod tests {
                 (
                     file.path.as_path(),
                     file.kind,
-                    file.additions,
-                    file.deletions,
+                    file.line_stats.additions,
+                    file.line_stats.deletions,
                 )
             })
             .collect();
@@ -462,7 +462,11 @@ mod tests {
                 .iter()
                 .find(|file| file.path == Path::new(name))
                 .unwrap();
-            (file.kind, file.additions, file.deletions)
+            (
+                file.kind,
+                file.line_stats.additions,
+                file.line_stats.deletions,
+            )
         };
         assert_eq!(
             counts("small.txt"),
@@ -502,13 +506,8 @@ mod tests {
                 .unwrap();
             let listed = status[Path::new(path)];
             assert_eq!(
-                (file.kind, file.additions, file.deletions, file.edit),
-                (
-                    FileStatusKind::Untracked,
-                    listed.additions,
-                    listed.deletions,
-                    listed.edit
-                ),
+                (file.kind, file.line_stats),
+                (FileStatusKind::Untracked, listed),
                 "{path}"
             );
         }
@@ -544,13 +543,16 @@ mod tests {
         };
 
         let new = file("new.txt");
-        assert_eq!((new.additions, new.deletions), (Some(2), Some(0)));
-        assert!(new.edit.is_some(), "the edit comes with the counts");
-        let edited = file("tracked/000.txt");
         assert_eq!(
-            (edited.additions, edited.deletions, edited.edit),
-            (Some(1), Some(1), None)
+            (new.line_stats.additions, new.line_stats.deletions),
+            (Some(2), Some(0))
         );
+        assert!(
+            new.line_stats.edit.is_some(),
+            "the edit comes with the counts"
+        );
+        let edited = file("tracked/000.txt");
+        assert_eq!(edited.line_stats, (Some(1), Some(1)).into());
     }
 
     fn against_the_worktree_with_untracked(repo: &GixRepo) -> Vec<CommitFileChange> {

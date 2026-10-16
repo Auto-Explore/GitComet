@@ -242,12 +242,10 @@ impl super::GixRepo {
         for file in files.iter_mut() {
             if file.kind == FileStatusKind::Untracked {
                 cancellation.check_cancelled()?;
-                let stats = reader.added_file_line_stats(&file.path, &mut new);
-                (file.additions, file.deletions, file.edit) =
-                    (stats.additions, stats.deletions, stats.edit);
+                file.line_stats = reader.added_file_line_stats(&file.path, &mut new);
                 continue;
             }
-            if !edits || file.edit.is_some() || file.additions.is_none() {
+            if !edits || file.line_stats.edit.is_some() || file.line_stats.additions.is_none() {
                 continue;
             }
             cancellation.check_cancelled()?;
@@ -262,7 +260,7 @@ impl super::GixRepo {
             if file.kind != FileStatusKind::Deleted && !reader.read(&file.path, &mut new) {
                 continue;
             }
-            file.edit = line_stats_from_bytes(&old, &new).edit;
+            file.line_stats.edit = line_stats_from_bytes(&old, &new).edit;
         }
         Ok(())
     }
@@ -2273,6 +2271,7 @@ mod tests {
                 .files
                 .iter()
                 .find(|f| f.path == std::path::Path::new(path))?
+                .line_stats
                 .edit
         };
         assert_same_edit(committed);
@@ -2293,6 +2292,7 @@ mod tests {
                 .files
                 .iter()
                 .find(|f| f.path == std::path::Path::new(path))?
+                .line_stats
                 .edit
         };
         assert_same_edit(edit);

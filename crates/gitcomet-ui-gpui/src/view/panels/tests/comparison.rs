@@ -37,7 +37,7 @@ impl Files {
                             std::path::PathBuf::from(format!("src/file_{ix}.rs")),
                             FileStatusKind::Modified,
                         )
-                        .with_line_counts(Some(1), Some(0))
+                        .with_line_stats((Some(1), Some(0)).into())
                     })
                     .collect(),
             )),
@@ -431,6 +431,7 @@ mod worktree_uncommitted {
                 .read(app)
                 .cached_worktree_file_inputs(repo_id, 0, &summary)
                 .files[0]
+                .line_stats
                 .edit
         });
 

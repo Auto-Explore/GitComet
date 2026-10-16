@@ -411,7 +411,10 @@ fn compare_files_flags_a_submodule_pointer_against_the_working_tree() {
 fn a_submodule_pointer_has_no_line_counts_against_the_working_tree() {
     let files = worktree_files_with_a_staged_gitlink();
     let gitlink = staged_gitlink(&files);
-    assert_eq!((gitlink.additions, gitlink.deletions), (None, None));
+    assert_eq!(
+        (gitlink.line_stats.additions, gitlink.line_stats.deletions),
+        (None, None)
+    );
 }
 
 /// A rename is the one `git diff --raw` record that carries *two* path
@@ -1202,13 +1205,16 @@ fn commit_details_stats_skip_oversized_blobs_without_inflating_them() {
     };
     assert_eq!(
         (
-            by_path("small.txt").additions,
-            by_path("small.txt").deletions
+            by_path("small.txt").line_stats.additions,
+            by_path("small.txt").line_stats.deletions
         ),
         (Some(1), Some(0))
     );
     assert_eq!(
-        (by_path("big.bin").additions, by_path("big.bin").deletions),
+        (
+            by_path("big.bin").line_stats.additions,
+            by_path("big.bin").line_stats.deletions
+        ),
         (None, None),
         "a blob over the size cap must report unknown stats"
     );
@@ -1235,7 +1241,7 @@ fn commit_details_stats_treat_binary_and_absent_sides_as_before() {
             .iter()
             .find(|file| file.path == Path::new(name))
             .unwrap_or_else(|| panic!("{name} in details"));
-        (file.additions, file.deletions)
+        (file.line_stats.additions, file.line_stats.deletions)
     };
     assert_eq!(stats("binary.dat"), (None, None));
     assert_eq!(stats("keep.txt"), (Some(0), Some(2)));

@@ -408,8 +408,8 @@ impl FileListController {
                 FileTree::build(
                     shown.iter().map(|&ix| FileTreeItem {
                         path: &files[ix].path,
-                        additions: files[ix].additions,
-                        deletions: files[ix].deletions,
+                        additions: files[ix].line_stats.additions,
+                        deletions: files[ix].line_stats.deletions,
                     }),
                     sort,
                 )

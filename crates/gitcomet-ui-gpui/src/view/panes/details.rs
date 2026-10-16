@@ -1261,8 +1261,8 @@ impl DetailsPaneView {
                             .get(*source_ix)
                             .map(|file| crate::view::rows::FileTreeItem {
                                 path: file.path.as_path(),
-                                additions: file.additions,
-                                deletions: file.deletions,
+                                additions: file.line_stats.additions,
+                                deletions: file.line_stats.deletions,
                             })
                     }),
                     sort,

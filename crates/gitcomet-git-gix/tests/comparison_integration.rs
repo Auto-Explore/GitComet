@@ -178,7 +178,10 @@ fn a_worktree_comparison_keeps_renames_and_lists_untracked_files_only_when_asked
         .expect("compare with untracked files");
     let scratch = change(&with_untracked.files, "scratch.txt");
     assert_eq!(scratch.kind, FileStatusKind::Untracked);
-    assert_eq!((scratch.additions, scratch.deletions), (Some(2), Some(0)));
+    assert_eq!(
+        (scratch.line_stats.additions, scratch.line_stats.deletions),
+        (Some(2), Some(0))
+    );
 }
 
 #[test]

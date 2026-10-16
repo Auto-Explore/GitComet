@@ -353,27 +353,27 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                             "src/modified.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Modified,
                         )
-                        .with_line_counts(Some(1), Some(2)),
+                        .with_line_stats((Some(1), Some(2)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/removed.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Deleted,
                         )
-                        .with_line_counts(Some(0), Some(4)),
+                        .with_line_stats((Some(0), Some(4)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/added.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Added,
                         )
-                        .with_line_counts(Some(5), Some(0)),
+                        .with_line_stats((Some(5), Some(0)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/renamed.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Renamed,
                         )
-                        .with_line_counts(Some(0), Some(0)),
+                        .with_line_stats((Some(0), Some(0)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/added-small.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Added,
                         )
-                        .with_line_counts(Some(1), Some(0)),
+                        .with_line_stats((Some(1), Some(0)).into()),
                     ],
                 },
             ));
@@ -950,7 +950,7 @@ fn commit_details_state_with_paths(
                         (*path).into(),
                         gitcomet_core::domain::FileStatusKind::Modified,
                     )
-                    .with_line_counts(Some(1), Some(1))
+                    .with_line_stats((Some(1), Some(1)).into())
                 })
                 .collect(),
         }));

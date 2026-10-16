@@ -1021,9 +1021,12 @@ mod tests {
             ],
             lane,
         );
-        assert_eq!((files[0].additions, files[0].deletions), (Some(2), Some(1)));
-        assert_eq!(files[0].edit, stats.edit);
-        assert_eq!(files[1].edit, None, "a file the lane lacks is left alone");
+        assert_eq!(files[0].line_stats, stats);
+        assert_eq!(
+            files[1].line_stats,
+            LineStats::UNKNOWN,
+            "a file the lane lacks is left alone"
+        );
 
         assert!(
             worktree_line_stats(&repo, &ChangeSource::Commit(CommitId("HEAD".into()))).is_none(),
