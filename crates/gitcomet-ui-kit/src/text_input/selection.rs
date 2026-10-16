@@ -246,7 +246,7 @@ impl TextInput {
 
     pub(super) fn logical_row_boundaries(&self, offset: usize) -> (usize, usize) {
         let content = self.content.snapshot();
-        let row = content.line_range(content.row_for_offset(offset.min(content.len())));
+        let row = content.line_range(content.row_for_offset(offset));
         (row.start, row.end)
     }
 
