@@ -1708,6 +1708,9 @@ impl DetailsPaneView {
         &self,
         list: crate::view::rows::FileListId,
     ) -> crate::view::rows::CommitFileSort {
+        if let crate::view::rows::FileListId::Status(section) = list {
+            return self.status_file_sort_for(section);
+        }
         if let Some(sort) = self
             .active_repo_id()
             .and_then(|id| self.shared_file_sort_for(id, list))
@@ -1715,7 +1718,6 @@ impl DetailsPaneView {
             return sort;
         }
         match list {
-            crate::view::rows::FileListId::Status(section) => self.status_file_sort_for(section),
             crate::view::rows::FileListId::CommitFiles => self.commit_file_sort,
             other => self
                 .active_repo_id()
