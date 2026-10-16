@@ -32,7 +32,6 @@ pub(crate) enum ViewPerfRenderLane {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SpanStats {
     pub calls: u64,
@@ -40,7 +39,6 @@ pub(crate) struct SpanStats {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RowBatchStats {
     pub calls: u64,
@@ -49,7 +47,6 @@ pub(crate) struct RowBatchStats {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ViewPerfSnapshot {
     pub render_resolved_preview_rows_batch: RowBatchStats,
@@ -120,7 +117,6 @@ pub(crate) fn record_row_batch(
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[inline]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 pub(crate) fn snapshot() -> ViewPerfSnapshot {
     ViewPerfSnapshot {
         render_resolved_preview_rows_batch: RENDER_RESOLVED_PREVIEW_ROWS_BATCH.snapshot(),
@@ -141,7 +137,6 @@ pub(crate) fn snapshot() -> ViewPerfSnapshot {
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[inline]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 pub(crate) fn reset() {
     RENDER_RESOLVED_PREVIEW_ROWS_BATCH.reset();
     MARKDOWN_PREVIEW_ROWS_BATCH.reset();
@@ -166,7 +161,6 @@ fn saturating_usize_to_u64(value: usize) -> u64 {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Debug)]
 struct AtomicSpanStats {
     calls: AtomicU64,
@@ -174,7 +168,6 @@ struct AtomicSpanStats {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 impl AtomicSpanStats {
     const fn new() -> Self {
         Self {
@@ -205,7 +198,6 @@ impl AtomicSpanStats {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Debug)]
 struct AtomicRowBatchStats {
     calls: AtomicU64,
@@ -214,7 +206,6 @@ struct AtomicRowBatchStats {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 impl AtomicRowBatchStats {
     const fn new() -> Self {
         Self {
