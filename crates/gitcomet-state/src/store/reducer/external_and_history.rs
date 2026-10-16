@@ -311,13 +311,13 @@ pub(super) fn repo_externally_changed(
         effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
     }
 
-    let should_reload_diff = repo_state
+    if let Some(target) = repo_state
         .diff_state
         .diff_target
         .as_ref()
-        .is_some_and(|target| external_change_reloads_diff(target, &change));
-
-    if should_reload_diff && let Some(target) = repo_state.diff_state.diff_target.clone() {
+        .filter(|target| external_change_reloads_diff(target, &change))
+        .cloned()
+    {
         // A moved HEAD (external commit / checkout / rebase) can leave the patch
         // byte-identical while every line's attribution changes ("Not Committed
         // Yet" → a real commit), and nothing downstream can detect that, so drop
