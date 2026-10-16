@@ -895,6 +895,28 @@ mod tests {
         assert!(!ran.exists(), "the LFS clean filter must not run");
     }
 
+    /// Six timed runs of a probe's refresh, in milliseconds, fastest first.
+    fn sample_ms(mut refresh: impl FnMut()) -> Vec<f64> {
+        let mut samples: Vec<f64> = (0..6)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                refresh();
+                started.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        samples.sort_by(f64::total_cmp);
+        samples
+    }
+
+    fn print_samples(label: &str, samples: &[f64]) {
+        eprintln!(
+            "{label}: min {:.1} ms, median {:.1} ms, max {:.1} ms",
+            samples[0],
+            samples[samples.len() / 2],
+            samples[samples.len() - 1]
+        );
+    }
+
     /// Refresh cost of counting untracked files: 4 KiB each, in 200 folders.
     #[test]
     #[ignore = "timing probe"]
@@ -923,22 +945,14 @@ mod tests {
             let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
             assert_eq!(entries.len(), untracked);
             std::hint::black_box(repo.line_stats_for_entries_impl(&entries, &token).unwrap());
-            let (mut walk_ms, mut stats_ms) = (Vec::new(), Vec::new());
-            for _ in 0..5 {
-                let started = std::time::Instant::now();
-                let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
-                walk_ms.push(started.elapsed().as_secs_f64() * 1000.0);
-                let started = std::time::Instant::now();
-                let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
-                stats_ms.push(started.elapsed().as_secs_f64() * 1000.0);
-                std::hint::black_box(stats);
-            }
-            walk_ms.sort_by(f64::total_cmp);
-            stats_ms.sort_by(f64::total_cmp);
-            eprintln!(
-                "untracked={untracked}: status walk min {:.1} median {:.1} ms | line stats min {:.1} median {:.1} ms",
-                walk_ms[0], walk_ms[2], stats_ms[0], stats_ms[2]
-            );
+            let walk = sample_ms(|| {
+                std::hint::black_box(repo.worktree_status_cancellable_impl(&token).unwrap());
+            });
+            let stats = sample_ms(|| {
+                std::hint::black_box(repo.line_stats_for_entries_impl(&entries, &token).unwrap());
+            });
+            print_samples(&format!("untracked={untracked}: status walk"), &walk);
+            print_samples(&format!("untracked={untracked}: line stats"), &stats);
         }
     }
 
@@ -971,22 +985,18 @@ mod tests {
             let token = CancellationToken::new();
             let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
             assert_eq!(entries.len(), 200);
-            let mut samples = Vec::new();
-            for _ in 0..6 {
-                let started = std::time::Instant::now();
+            let samples = sample_ms(|| {
                 let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
-                samples.push(started.elapsed().as_secs_f64() * 1000.0);
                 assert!(
                     stats
                         .unstaged
                         .values()
                         .all(|stats| *stats == LineStats::UNKNOWN)
                 );
-            }
-            samples.sort_by(f64::total_cmp);
-            eprintln!(
-                "untracked binaries under {attributes:?}: min {:.1} ms, median {:.1} ms, max {:.1} ms",
-                samples[0], samples[3], samples[5]
+            });
+            print_samples(
+                &format!("untracked binaries under {attributes:?}"),
+                &samples,
             );
         }
     }
@@ -1024,23 +1034,16 @@ mod tests {
         let token = CancellationToken::new();
         let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
         assert_eq!(entries.len(), 200);
-        let mut samples = Vec::new();
-        for _ in 0..6 {
-            let started = std::time::Instant::now();
+        let samples = sample_ms(|| {
             let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
-            samples.push(started.elapsed().as_secs_f64() * 1000.0);
             assert!(
                 stats
                     .unstaged
                     .values()
                     .all(|stats| stats.additions == Some(2))
             );
-        }
-        samples.sort_by(f64::total_cmp);
-        eprintln!(
-            "untracked encoded: min {:.1} ms, median {:.1} ms, max {:.1} ms",
-            samples[0], samples[3], samples[5]
-        );
+        });
+        print_samples("untracked encoded", &samples);
     }
 
     /// Refresh cost with real `git-lfs`: 20 modified 1 MiB payloads.
@@ -1067,18 +1070,11 @@ mod tests {
         }
         let repo = open_repo(dir);
         let token = CancellationToken::new();
-        let mut samples = Vec::new();
-        for _ in 0..6 {
-            let started = std::time::Instant::now();
+        let samples = sample_ms(|| {
             let stats = repo.uncommitted_line_stats_impl(&token).unwrap();
-            samples.push(started.elapsed().as_secs_f64() * 1000.0);
             assert_eq!(stats.unstaged.len(), 20);
-        }
-        samples.sort_by(f64::total_cmp);
-        eprintln!(
-            "lfs unstaged line stats refresh: min {:.1} ms, median {:.1} ms, max {:.1} ms",
-            samples[0], samples[3], samples[5]
-        );
+        });
+        print_samples("lfs unstaged line stats refresh", &samples);
     }
 
     #[test]
