@@ -305,7 +305,7 @@ impl DetailsPaneView {
             let history = &repo.history_state;
             history.selected_commit_rev.hash(&mut hasher);
             // Loaded history rows show up only as a comparison's cards.
-            if history.multi_selection.is_multi() || history.range_selection.is_some() {
+            if Self::shows_comparison(repo) {
                 repo.log_rev.hash(&mut hasher);
                 history.indexed.rev.hash(&mut hasher);
             }
@@ -315,8 +315,8 @@ impl DetailsPaneView {
             if let Loadable::Ready(details) = &history.commit_details {
                 history.commit_signatures.get(&details.id).hash(&mut hasher);
             }
-            repo.history_state.worktree_selection_rev.hash(&mut hasher);
-            repo.history_state.range_files_rev.hash(&mut hasher);
+            history.worktree_selection_rev.hash(&mut hasher);
+            history.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.suggested_commit_message_rev.hash(&mut hasher);

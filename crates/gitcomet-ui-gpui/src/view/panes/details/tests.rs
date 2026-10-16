@@ -310,18 +310,30 @@ fn indexed_regression_details_fingerprint_tracks_comparison_metadata() {
         repos: vec![repo_state(RepoId(1), "/tmp/indexed-comparison")],
         ..AppState::test_default()
     };
-    state.repos[0].history_state.range_selection = Some(RangeSelection::new(
+    let (a, b) = (
         CommitId("a".repeat(40).into()),
-        Some(CommitId("b".repeat(40).into())),
-        "a".into(),
-        "b".into(),
-    ));
-    let before = DetailsPaneView::notify_fingerprint(&state);
-    state.repos[0].history_state.indexed.rev += 1;
-    let after_index = DetailsPaneView::notify_fingerprint(&state);
-    assert_ne!(before, after_index);
-    state.repos[0].log_rev += 1;
-    assert_ne!(after_index, DetailsPaneView::notify_fingerprint(&state));
+        CommitId("b".repeat(40).into()),
+    );
+    let range = RangeSelection::new(a.clone(), Some(b.clone()), "a".into(), "b".into());
+    for multi in [false, true] {
+        let history = &mut state.repos[0].history_state;
+        if multi {
+            history.range_selection = None;
+            history.multi_selection.commits = Arc::new(vec![a.clone(), b.clone()]);
+        } else {
+            history.range_selection = Some(range.clone());
+        }
+        let before = DetailsPaneView::notify_fingerprint(&state);
+        state.repos[0].history_state.indexed.rev += 1;
+        let after_index = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(before, after_index, "multi={multi}");
+        state.repos[0].log_rev += 1;
+        assert_ne!(
+            after_index,
+            DetailsPaneView::notify_fingerprint(&state),
+            "multi={multi}"
+        );
+    }
 }
 
 /// History pages load and signatures stream in while the user scrolls the
