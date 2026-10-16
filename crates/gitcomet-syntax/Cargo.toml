@@ -34,6 +34,7 @@ tree-sitter-clojure-orchard = { workspace = true }
 tree-sitter-caddyfile = { workspace = true }
 tree-sitter-cil = { workspace = true }
 tree-sitter-cmake = { workspace = true }
+tree-sitter-commonlisp = { workspace = true }
 tree-sitter-containerfile = { workspace = true }
 tree-sitter-coffee = { workspace = true }
 tree-sitter-cpp = { workspace = true }
@@ -46,6 +47,7 @@ tree-sitter-devicetree = { workspace = true }
 tree-sitter-dhall = { workspace = true }
 tree-sitter-diff = { workspace = true }
 tree-sitter-ebnf = { workspace = true }
+tree-sitter-elisp = { workspace = true }
 tree-sitter-elixir = { workspace = true }
 tree-sitter-elm = { workspace = true }
 tree-sitter-erlang = { workspace = true }
@@ -60,6 +62,7 @@ tree-sitter-haskell = { workspace = true }
 tree-sitter-gitignore = { workspace = true }
 tree-sitter-hcl = { workspace = true }
 tree-sitter-html = { workspace = true }
+tree-sitter-janet-simple = { workspace = true }
 tree-sitter-jinja-dialects = { workspace = true }
 tree-sitter-ini = { workspace = true }
 tree-sitter-javascript = { workspace = true }
@@ -89,11 +92,13 @@ tree-sitter-proto = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-qmljs = { workspace = true }
 tree-sitter-r = { workspace = true }
+tree-sitter-racket = { workspace = true }
 tree-sitter-regex = { workspace = true }
 tree-sitter-ron = { workspace = true }
 tree-sitter-ruby = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-scala = { workspace = true }
+tree-sitter-scheme = { workspace = true }
 tree-sitter-sequel = { workspace = true }
 tree-sitter-sfapex = { workspace = true }
 tree-sitter-smali = { workspace = true }
@@ -118,5 +123,3 @@ gitcomet-text = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true }
 gpui = { workspace = true }
 tempfile = { workspace = true }
-# Grammars only vendor/difftastic uses yet; the ABI test covers every vendored grammar.
-tree-sitter-janet-simple = { workspace = true }

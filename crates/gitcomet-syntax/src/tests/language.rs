@@ -526,6 +526,31 @@ const LANGUAGE_BASELINES: &[(DiffSyntaxLanguage, &str, &[SyntaxTokenKind])] = {
             &[K::Comment, K::Keyword, K::String],
         ),
         (
+            DiffSyntaxLanguage::CommonLisp,
+            ";; c\n(defun add (a b)\n  \"Sum.\"\n  (+ a b 1))\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Racket,
+            "; c\n(define (square x)\n  (* x x 2))\n(displayln \"hi\")\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Scheme,
+            "; c\n(define (square x)\n  (* x x 2))\n(display \"hi\")\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::EmacsLisp,
+            ";; c\n(defun greet (name)\n  (message \"hi %s\" name 1))\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Janet,
+            "# c\n(defn add [a b]\n  (+ a b 1))\n(print \"hi\")\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
             DiffSyntaxLanguage::Dhall,
             "-- c\nlet name = \"demo\"\nin  { greeting = name }\n",
             &[K::Comment, K::String, K::Keyword],

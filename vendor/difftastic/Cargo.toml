@@ -45,12 +45,12 @@ tree-sitter-c-sharp = { workspace = true }
 tree-sitter-clojure-orchard = { workspace = true }
 tree-sitter-cmake = { workspace = true }
 tree-sitter-containerfile = { workspace = true }
-tree-sitter-commonlisp = "0.4.1"
+tree-sitter-commonlisp = { workspace = true }
 tree-sitter-cpp = { workspace = true }
 tree-sitter-css = { workspace = true }
 tree-sitter-dart = { workspace = true }
 tree-sitter-devicetree = { workspace = true }
-tree-sitter-elisp = "1.7.0"
+tree-sitter-elisp = { workspace = true }
 tree-sitter-elixir = { workspace = true }
 tree-sitter-elm = { workspace = true }
 tree-sitter-erlang = { workspace = true }
@@ -81,11 +81,11 @@ tree-sitter-proto = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-qmljs = { workspace = true }
 tree-sitter-r = { workspace = true }
-tree-sitter-racket = "0.24.7"
+tree-sitter-racket = { workspace = true }
 tree-sitter-ruby = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-scala = { workspace = true }
-tree-sitter-scheme = "0.24.7"
+tree-sitter-scheme = { workspace = true }
 tree-sitter-sequel = { workspace = true }
 tree-sitter-sfapex = { workspace = true }
 tree-sitter-smali = { workspace = true }

@@ -250,6 +250,10 @@ const HEURISTIC_C_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockComme
     start: "/*",
     end: "*/",
 };
+const HEURISTIC_LISP_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "#|",
+    end: "|#",
+};
 const HEURISTIC_POWERSHELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "<#",
     end: "#>",
@@ -321,7 +325,16 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // only the first is expressible here.
         DiffSyntaxLanguage::Wat => HeuristicCommentConfig::line(";;"),
         DiffSyntaxLanguage::Llvm | DiffSyntaxLanguage::Spirv => HeuristicCommentConfig::line(";"),
-        DiffSyntaxLanguage::Clojure => HeuristicCommentConfig::line(";"),
+        // `#` is not a comment in these Lisps (`#'f`, `#t`, `#\a`). Common Lisp,
+        // Racket and Scheme also take `#| ... |#` blocks; they nest, which this
+        // fallback does not track.
+        DiffSyntaxLanguage::Clojure | DiffSyntaxLanguage::EmacsLisp => {
+            HeuristicCommentConfig::line(";")
+        }
+        DiffSyntaxLanguage::CommonLisp | DiffSyntaxLanguage::Racket | DiffSyntaxLanguage::Scheme => {
+            HeuristicCommentConfig::line_block(";", HEURISTIC_LISP_BLOCK_COMMENT)
+        }
+        DiffSyntaxLanguage::Janet => HeuristicCommentConfig::hash(),
         // Assembly takes `;` (MASM/NASM) and `/* */` (GAS, every target).
         //
         // Neither GAS line-comment spelling is here. `#` is out because ARM writes
@@ -1088,6 +1101,11 @@ pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> Heuri
         | DiffSyntaxLanguage::OCaml
         | DiffSyntaxLanguage::OCamlInterface
         | DiffSyntaxLanguage::Clojure
+        | DiffSyntaxLanguage::CommonLisp
+        | DiffSyntaxLanguage::Racket
+        | DiffSyntaxLanguage::Scheme
+        | DiffSyntaxLanguage::EmacsLisp
+        | DiffSyntaxLanguage::Janet
         // LaTeX has no quoted strings: `'` is an apostrophe or a closing quote.
         | DiffSyntaxLanguage::Latex => HeuristicSingleQuote::Identifier,
         // Julia's postfix `'` is the adjoint operator: `A'` transposes, `'c'` is a
@@ -1141,6 +1159,20 @@ fn heuristic_single_quote_opens_string(
                     && !matches!(prev, b'_' | b'}' | b')' | b']' | b'>' | b'"' | b'\'')
             }),
     }
+}
+
+/// Lisp names run over hyphens (`do-something`, `when-let`); elsewhere `-` is
+/// an operator.
+fn heuristic_identifiers_take_hyphens(language: DiffSyntaxLanguage) -> bool {
+    matches!(
+        language,
+        DiffSyntaxLanguage::Clojure
+            | DiffSyntaxLanguage::CommonLisp
+            | DiffSyntaxLanguage::Racket
+            | DiffSyntaxLanguage::Scheme
+            | DiffSyntaxLanguage::EmacsLisp
+            | DiffSyntaxLanguage::Janet
+    )
 }
 
 fn heuristic_allows_backtick_strings(language: DiffSyntaxLanguage) -> bool {
@@ -1369,8 +1401,12 @@ pub fn syntax_tokens_for_line_heuristic_into(
     let is_ident_start = |byte: u8| byte == b'_' || byte.is_ascii_alphabetic();
     // `'` continues an identifier only where it is not a quote -- Nix's `foldl'`.
     let ident_tick = single_quote == HeuristicSingleQuote::Identifier;
+    let ident_hyphen = heuristic_identifiers_take_hyphens(language);
     let is_ident_continue = move |byte: u8| {
-        byte == b'_' || byte.is_ascii_alphanumeric() || (ident_tick && byte == b'\'')
+        byte == b'_'
+            || byte.is_ascii_alphanumeric()
+            || (ident_tick && byte == b'\'')
+            || (ident_hyphen && byte == b'-')
     };
     let is_comment_lead = |byte: u8| {
         comment_config

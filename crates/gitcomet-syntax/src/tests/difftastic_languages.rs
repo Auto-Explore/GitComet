@@ -120,3 +120,141 @@ fn ada_loops_are_control_flow_and_packages_namespaces() {
     assert_eq!(kinds(3, "loop"), [K::KeywordControl]);
     assert_eq!(kinds(7, "Int_Vectors"), [K::Namespace]);
 }
+
+#[test]
+fn common_lisp_definitions_quotes_and_function_references_keep_their_kinds() {
+    let text = "(defun add (a b) (+ a b))\n(mapcar #'car '(1 2))\n(list 'sym t nil)\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::CommonLisp, text, line, fragment);
+    assert_eq!(kinds(0, "add"), [K::Function]);
+    assert!(kinds(1, "#'car").contains(&K::Function));
+    assert_eq!(kinds(1, "1"), [K::Number]);
+    assert_eq!(kinds(2, "sym"), [K::Constant]);
+    assert_eq!(kinds(2, " t "), [K::Boolean]);
+}
+
+#[test]
+fn racket_and_scheme_quoted_data_keep_their_own_colours() {
+    for language in [DiffSyntaxLanguage::Racket, DiffSyntaxLanguage::Scheme] {
+        let text = "(define xs '(0 1 2))\n";
+        let kinds = |fragment| kinds(language, text, 0, fragment);
+        assert_eq!(kinds("0"), [K::Number], "{language:?}");
+        assert_eq!(kinds("'"), [K::Operator], "{language:?}");
+    }
+}
+
+#[test]
+fn scheme_let_bindings_are_not_functions() {
+    let text = "(let ((x 1) (y 2))\n  (+ x y))\n";
+    let kinds = kinds(DiffSyntaxLanguage::Scheme, text, 0, "x");
+    assert!(!kinds.contains(&K::Function), "{kinds:?}");
+}
+
+#[test]
+fn emacs_lisp_docstrings_are_strings_not_comments() {
+    let text = "(defun greet (name)\n  \"Say hello to NAME.\"\n  (message name))\n";
+    let kinds = kinds(DiffSyntaxLanguage::EmacsLisp, text, 1, "Say hello");
+    assert!(kinds.contains(&K::String), "{kinds:?}");
+    assert!(!kinds.contains(&K::Comment), "{kinds:?}");
+}
+
+#[test]
+fn janet_definitions_parameters_and_literals_keep_their_kinds() {
+    let text = "(defn add [a b] (+ a b))\n(def ok true)\n(get m :key)\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Janet, text, line, fragment);
+    assert_eq!(kinds(0, "add"), [K::Function]);
+    assert_eq!(
+        kinds(0, "[a"),
+        [K::PunctuationBracket, K::VariableParameter]
+    );
+    assert_eq!(kinds(1, "true"), [K::Boolean]);
+    assert_eq!(kinds(2, ":key"), [K::Constant]);
+}
+
+#[test]
+fn lisp_block_comments_are_heuristic_comments() {
+    for language in [
+        DiffSyntaxLanguage::CommonLisp,
+        DiffSyntaxLanguage::Racket,
+        DiffSyntaxLanguage::Scheme,
+    ] {
+        let tokens = heuristic_tokens("#| a block |# (car x)", language);
+        assert_eq!(
+            tokens
+                .first()
+                .map(|token| (token.range.clone(), token.kind)),
+            Some((0..13, K::Comment)),
+            "{language:?}: {tokens:?}"
+        );
+    }
+}
+
+#[test]
+fn lisp_heuristic_keywords_are_whole_hyphenated_names() {
+    for (language, text, expected) in [
+        (
+            DiffSyntaxLanguage::Racket,
+            "(define (do-something xs)",
+            vec!["define"],
+        ),
+        (DiffSyntaxLanguage::Racket, "(for-each display xs)", vec![]),
+        (
+            DiffSyntaxLanguage::CommonLisp,
+            "(return-from scan (case-p l))",
+            vec!["return-from"],
+        ),
+        (
+            DiffSyntaxLanguage::Scheme,
+            "(define-syntax swap!",
+            vec!["define-syntax"],
+        ),
+        (
+            DiffSyntaxLanguage::EmacsLisp,
+            "(cl-defun demo-greet (name)",
+            vec!["cl-defun"],
+        ),
+        (
+            DiffSyntaxLanguage::Janet,
+            "(defn- helper [x]",
+            vec!["defn-"],
+        ),
+        (
+            DiffSyntaxLanguage::Clojure,
+            "(when-let [x (do-it)]",
+            vec!["when-let"],
+        ),
+    ] {
+        assert_eq!(
+            heuristic_keywords(text, language),
+            expected,
+            "{language:?}: {text}"
+        );
+    }
+}
+
+#[test]
+fn lisp_value_definitions_are_plain_and_dynamic_names_special() {
+    for (language, text) in [
+        (DiffSyntaxLanguage::Racket, "(define limit 10)\n"),
+        (DiffSyntaxLanguage::Scheme, "(define limit 10)\n"),
+        (DiffSyntaxLanguage::Janet, "(def limit 10)\n"),
+    ] {
+        assert_eq!(
+            kinds(language, text, 0, "limit"),
+            [K::Variable],
+            "{language:?}"
+        );
+    }
+    let janet = "(defdyn *depth*)\n";
+    assert_eq!(
+        kinds(DiffSyntaxLanguage::Janet, janet, 0, "*depth*"),
+        [K::VariableSpecial]
+    );
+}
+
+#[test]
+fn racket_prefixed_requires_name_their_module() {
+    let text = "(require racket/list (prefix-in s: racket/string))\n";
+    let kinds = |fragment| kinds(DiffSyntaxLanguage::Racket, text, 0, fragment);
+    assert_eq!(kinds("racket/list"), [K::Namespace]);
+    assert_eq!(kinds("racket/string"), [K::Namespace]);
+}

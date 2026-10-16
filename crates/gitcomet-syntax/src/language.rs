@@ -91,6 +91,11 @@ language_registry! {
     DiffSyntaxLanguage::Qml => ["qml"],
     DiffSyntaxLanguage::Vhdl => ["vhd", "vhdl"],
     DiffSyntaxLanguage::Ada => ["adb", "ads", "ada"],
+    DiffSyntaxLanguage::CommonLisp => ["lisp", "lsp", "asd", "commonlisp", "common-lisp"],
+    DiffSyntaxLanguage::Racket => ["rkt", "racket"],
+    DiffSyntaxLanguage::Scheme => ["scm", "sch", "ss", "scheme"],
+    DiffSyntaxLanguage::EmacsLisp => ["el", ".emacs", "_emacs", "cask", "elisp", "emacs-lisp"],
+    DiffSyntaxLanguage::Janet => ["janet", "jdn"],
     DiffSyntaxLanguage::Kotlin => ["kt", "kts", "kotlin"],
     DiffSyntaxLanguage::Zig => ["zig"],
     // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
@@ -481,6 +486,26 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Ada => Some((
             tree_sitter_ada::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(ADA_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::CommonLisp => Some((
+            tree_sitter_commonlisp::LANGUAGE_COMMONLISP.into(),
+            TreesitterQueryAsset::highlights(COMMONLISP_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Racket => Some((
+            tree_sitter_racket::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(RACKET_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Scheme => Some((
+            tree_sitter_scheme::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(SCHEME_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::EmacsLisp => Some((
+            tree_sitter_elisp::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(ELISP_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Janet => Some((
+            tree_sitter_janet_simple::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(JANET_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Crontab => Some((
             tree_sitter_crontab::LANGUAGE.into(),
@@ -951,6 +976,11 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Qml => highlight_spec_entry!(Qml),
         DiffSyntaxLanguage::Vhdl => highlight_spec_entry!(Vhdl),
         DiffSyntaxLanguage::Ada => highlight_spec_entry!(Ada),
+        DiffSyntaxLanguage::CommonLisp => highlight_spec_entry!(CommonLisp),
+        DiffSyntaxLanguage::Racket => highlight_spec_entry!(Racket),
+        DiffSyntaxLanguage::Scheme => highlight_spec_entry!(Scheme),
+        DiffSyntaxLanguage::EmacsLisp => highlight_spec_entry!(EmacsLisp),
+        DiffSyntaxLanguage::Janet => highlight_spec_entry!(Janet),
         DiffSyntaxLanguage::Crontab => highlight_spec_entry!(Crontab),
         DiffSyntaxLanguage::Caddyfile => highlight_spec_entry!(Caddyfile),
         DiffSyntaxLanguage::Gitignore => highlight_spec_entry!(Gitignore),

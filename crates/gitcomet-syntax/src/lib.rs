@@ -66,6 +66,11 @@ const APEX_HIGHLIGHTS_QUERY: &str = include_str!("queries/apex_highlights.scm");
 const QML_SUPPLEMENT_QUERY: &str = include_str!("queries/qml_supplement.scm");
 const VHDL_HIGHLIGHTS_QUERY: &str = include_str!("queries/vhdl_highlights.scm");
 const ADA_HIGHLIGHTS_QUERY: &str = include_str!("queries/ada_highlights.scm");
+const COMMONLISP_HIGHLIGHTS_QUERY: &str = include_str!("queries/commonlisp_highlights.scm");
+const RACKET_HIGHLIGHTS_QUERY: &str = include_str!("queries/racket_highlights.scm");
+const SCHEME_HIGHLIGHTS_QUERY: &str = include_str!("queries/scheme_highlights.scm");
+const ELISP_HIGHLIGHTS_QUERY: &str = include_str!("queries/elisp_highlights.scm");
+const JANET_HIGHLIGHTS_QUERY: &str = include_str!("queries/janet_highlights.scm");
 const CRONTAB_HIGHLIGHTS_QUERY: &str = include_str!("queries/crontab_highlights.scm");
 const CRONTAB_INJECTIONS_QUERY: &str = include_str!("queries/crontab_injections.scm");
 const GITIGNORE_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitignore_highlights.scm");
@@ -437,6 +442,16 @@ pub enum DiffSyntaxLanguage {
     Vhdl,
     /// `.adb`, `.ads`, `.ada`.
     Ada,
+    /// `.lisp`, `.lsp`, `.asd`. Not `.cl`, which is OpenCL.
+    CommonLisp,
+    /// `.rkt`.
+    Racket,
+    /// `.scm`, `.sch`, `.ss` -- which makes tree-sitter query files Scheme too.
+    Scheme,
+    /// `.el`, `.emacs`, `Cask`.
+    EmacsLisp,
+    /// `.janet`, `.jdn`.
+    Janet,
     Rust,
     Python,
     JavaScript,
