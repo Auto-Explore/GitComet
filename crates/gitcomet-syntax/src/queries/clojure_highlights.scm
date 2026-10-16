@@ -149,6 +149,9 @@
 (dis_expr) @comment
 
 (dis_expr
+  _ @comment)
+
+(dis_expr
   (_ _* @comment))
 
 (dis_expr

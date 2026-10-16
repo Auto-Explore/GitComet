@@ -810,16 +810,18 @@ fn clojure_def_names_a_value_unless_it_binds_a_function() {
 /// keep their own colours.
 #[test]
 fn clojure_discarded_forms_are_comments_throughout() {
-    let text = "(+ 1 2)\n#_(foo \"bar\" :k [1 {:a 2}])\n";
+    let text = "(+ 1 2)\n#_(foo \"bar\" :k [1 {:a 2}])\n#_42\n#_\"skip\"\n#_nil\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Clojure, text);
-    let tokens = syntax_tokens_for_prepared_document_line(document, 1).expect("line tokens");
-    assert!(
-        !tokens.is_empty()
-            && tokens
-                .iter()
-                .all(|token| token.kind == SyntaxTokenKind::Comment),
-        "{tokens:?}"
-    );
+    for line in 1..=4 {
+        let tokens = syntax_tokens_for_prepared_document_line(document, line).expect("line tokens");
+        assert!(
+            !tokens.is_empty()
+                && tokens
+                    .iter()
+                    .all(|token| token.kind == SyntaxTokenKind::Comment),
+            "line {line}: {tokens:?}"
+        );
+    }
 }
 
 /// Java, PHP and Groovy all use queries that capture no punctuation at all.
