@@ -75,6 +75,12 @@ fn a_second_panic_before_contain_takes_the_first_is_reported() {
         let _ = std::panic::catch_unwind(|| panic!("first"));
         panic!("second");
     });
-    assert!(result.is_err());
+    assert_eq!(
+        result,
+        Err(ContainedPanic {
+            message: "second".to_owned(),
+            location: None,
+        })
+    );
     assert_eq!(UNCONTAINED.with(Cell::get), 1);
 }

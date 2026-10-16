@@ -39,15 +39,16 @@ pub fn contain<R>(f: impl FnOnce() -> R) -> Result<R, ContainedPanic> {
 
 /// For the process panic hook: true when this thread is inside [`contain`],
 /// after recording where it panicked. A second panic before `contain` took the
-/// first is one that cannot unwind (across `extern "C"`, or in a destructor
-/// while unwinding), so the process aborts and the hook must report it.
+/// first means the first never reached `contain` (it cannot unwind, or the
+/// contained code caught it), so the hook reports it and no location is kept.
 pub fn note_contained(info: &PanicHookInfo<'_>) -> bool {
     if CONTAINING.with(Cell::get) == 0 {
         return false;
     }
     NOTED.with(|noted| {
         let mut noted = noted.borrow_mut();
-        if noted.is_some() {
+        if let Some(pending) = noted.as_mut() {
+            pending.location = None;
             return false;
         }
         *noted = Some(Noted {
