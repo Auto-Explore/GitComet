@@ -115,37 +115,30 @@ fn benchmark_override() -> Option<Option<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{git_command, open_gix};
+    use crate::test_support::{git_success, open_gix};
 
     fn fixture(attributes: &str) -> (tempfile::TempDir, gix::Repository) {
         let dir = tempfile::tempdir().unwrap();
-        let git = |args: &[&str]| {
-            let output = git_command()
-                .arg("-C")
-                .arg(dir.path())
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        };
-        git(&["init"]);
+        git_success(dir.path(), &["init"]);
         std::fs::write(dir.path().join("a.bin"), b"asset").unwrap();
         std::fs::write(dir.path().join(".gitattributes"), attributes).unwrap();
-        git(&[
-            "-c",
-            "filter.lfs.required=false",
-            "-c",
-            "filter.lfs.process=",
-            "-c",
-            "filter.lfs.clean=",
-            "add",
-            ".",
-        ]);
-        git(&["config", "filter.lfs.process", "git-lfs filter-process"]);
+        git_success(
+            dir.path(),
+            &[
+                "-c",
+                "filter.lfs.required=false",
+                "-c",
+                "filter.lfs.process=",
+                "-c",
+                "filter.lfs.clean=",
+                "add",
+                ".",
+            ],
+        );
+        git_success(
+            dir.path(),
+            &["config", "filter.lfs.process", "git-lfs filter-process"],
+        );
         let repo = open_gix(dir.path());
         (dir, repo)
     }
@@ -181,36 +174,27 @@ mod tests {
         let (dir, _) = fixture("");
         let global = dir.path().join(".git/global-attributes");
         std::fs::write(&global, "*.bin filter=lfs\n").unwrap();
-        let git = |args: &[&std::ffi::OsStr]| {
-            assert!(
-                git_command()
-                    .arg("-C")
-                    .arg(dir.path())
-                    .args(args)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-        };
-        git(&[
-            "config".as_ref(),
-            "core.attributesFile".as_ref(),
-            global.as_os_str(),
-        ]);
+        git_success(
+            dir.path(),
+            &["config", "core.attributesFile", global.to_str().unwrap()],
+        );
         let repo = open_gix(dir.path());
         assert_eq!(policy(&repo), Some(1));
         std::fs::create_dir(dir.path().join("nested")).unwrap();
         std::fs::write(dir.path().join("nested/b.bin"), "asset").unwrap();
-        git(&[
-            "-c".as_ref(),
-            "filter.lfs.required=false".as_ref(),
-            "-c".as_ref(),
-            "filter.lfs.process=".as_ref(),
-            "-c".as_ref(),
-            "filter.lfs.clean=".as_ref(),
-            "add".as_ref(),
-            "nested/b.bin".as_ref(),
-        ]);
+        git_success(
+            dir.path(),
+            &[
+                "-c",
+                "filter.lfs.required=false",
+                "-c",
+                "filter.lfs.process=",
+                "-c",
+                "filter.lfs.clean=",
+                "add",
+                "nested/b.bin",
+            ],
+        );
         let repo = open_gix(dir.path());
         assert_eq!(policy(&repo), Some(1));
         std::fs::write(dir.path().join("nested/.gitattributes"), "*.bin -filter\n").unwrap();
