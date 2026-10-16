@@ -45,7 +45,9 @@ fn caret_steps_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppC
             input.previous_boundary(middle);
             input.next_boundary(middle);
 
-            assert!(!input.content.snapshot().is_materialized());
+            let content = input.content.snapshot();
+            assert!(!content.is_materialized());
+            assert!(!content.is_line_index_built());
         });
     });
 }
@@ -91,7 +93,9 @@ fn row_bounds_and_protected_checks_do_not_flatten_the_document(cx: &mut gpui::Te
             input.logical_row_boundaries(text.len() / 2);
             assert!(input.edit_alters_protected_range(&(protected.start - 3..protected.start), ""));
 
-            assert!(!input.content.snapshot().is_materialized());
+            let content = input.content.snapshot();
+            assert!(!content.is_materialized());
+            assert!(!content.is_line_index_built());
         });
     });
 }
@@ -167,7 +171,9 @@ fn word_moves_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppCo
             input.previous_word_start(middle);
             input.next_word_end(middle);
 
-            assert!(!input.content.snapshot().is_materialized());
+            let content = input.content.snapshot();
+            assert!(!content.is_materialized());
+            assert!(!content.is_line_index_built());
         });
     });
 }
