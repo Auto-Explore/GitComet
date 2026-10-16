@@ -239,7 +239,7 @@ impl super::GixRepo {
         for file in files.iter_mut() {
             if file.kind == FileStatusKind::Untracked {
                 cancellation.check_cancelled()?;
-                let stats = reader.added_file_line_stats(&file.path, &mut new, None);
+                let stats = reader.added_file_line_stats(&file.path, &mut new);
                 (file.additions, file.deletions, file.edit) =
                     (stats.additions, stats.deletions, stats.edit);
                 continue;
@@ -457,8 +457,15 @@ fn unstaged_entry_line_stats(
         return LineStats::UNKNOWN;
     };
     let Some(index_id) = index.entry_by_path(rel.as_ref()).map(|found| found.id) else {
-        // Untracked: every line is added.
-        return reader.added_file_line_stats(&entry.path, worktree, Some(memo));
+        // Untracked: every line is added. With no blob to key the memo on,
+        // the read identity does.
+        return reader
+            .find(&entry.path)
+            .map_or(LineStats::UNKNOWN, |found| {
+                memo.untracked(&entry.path, found.identity(), || {
+                    found.added_line_stats(worktree)
+                })
+            });
     };
 
     let mut index_blob_loaded = false;
@@ -612,29 +619,14 @@ impl<'repo> WorktreeReader<'repo> {
         }
     }
 
-    /// A file with nothing stored for it: all of it is added. With a memo, a
-    /// file read before with the same identity is not read again.
+    /// A file with nothing stored for it: all of it is added.
     fn added_file_line_stats(
         &mut self,
         relative: &std::path::Path,
         buf: &mut Vec<u8>,
-        memo: Option<&mut MemoScan>,
     ) -> LineStats {
-        let Some(found) = self.find(relative) else {
-            return LineStats::UNKNOWN;
-        };
-        let identity = found.identity();
-        let count = || {
-            if found.read(buf) {
-                line_stats_from_bytes(&[], buf)
-            } else {
-                LineStats::UNKNOWN
-            }
-        };
-        match memo {
-            Some(memo) => memo.untracked(relative, identity, count),
-            None => count(),
-        }
+        self.find(relative)
+            .map_or(LineStats::UNKNOWN, |found| found.added_line_stats(buf))
     }
 
     /// Replaces `out` with the file at `relative`. `false` means gone, over
@@ -715,6 +707,15 @@ impl Found<'_, '_> {
             file: stamp,
             conversion: conversion.finish(),
         })
+    }
+
+    /// All of it as added, read into `buf`.
+    fn added_line_stats(self, buf: &mut Vec<u8>) -> LineStats {
+        if self.read(buf) {
+            line_stats_from_bytes(&[], buf)
+        } else {
+            LineStats::UNKNOWN
+        }
     }
 
     /// Replaces `out` with what git would store. `false` means unreadable or
