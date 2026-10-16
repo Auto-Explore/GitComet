@@ -3,15 +3,17 @@ use super::*;
 #[cfg(windows)]
 #[test]
 fn windows_tree_termination_helper_stops_a_running_process_without_a_console() {
-    let mut command = Command::new("cmd.exe");
+    // No `cmd /C` wrapper: its `ping` could start after taskkill walks the
+    // tree, outlive the test and keep the test's inherited output pipes open.
+    let mut command = Command::new("ping.exe");
     configure_background_command(&mut command);
     let mut child = command
-        .args(["/D", "/C", "ping -n 30 127.0.0.1 >nul"])
+        .args(["-n", "30", "127.0.0.1"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("start the synthetic process tree");
+        .expect("start the synthetic process");
     let result = gitcomet_win32_window_utils::terminate_process_tree(child.id());
     // Windows termination is asynchronous; helper exit is not a notification
     // that the target has finished exiting.

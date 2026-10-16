@@ -20,7 +20,6 @@ fn workspaces_category_is_listed_after_appearance_and_matches_its_search_terms()
 fn appearance_theme_tiles_switch_main_windows_and_explain_workspace_overrides(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let mut workspace =
         gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/appearance-tiles-a")]);
     workspace.theme_mode = Some("tokyo_night".to_string());
@@ -111,7 +110,6 @@ fn appearance_theme_tiles_switch_main_windows_and_explain_workspace_overrides(
 fn appearance_page_hides_the_workspace_override_note_without_overrides(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let workspace =
         gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/appearance-tiles-b")]);
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
@@ -155,7 +153,6 @@ fn appearance_page_hides_the_workspace_override_note_without_overrides(
 fn workspace_theme_picker_offers_follow_app_when_the_app_theme_is_gone(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let mut workspace =
         gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/workspaces-page-c")]);
     workspace.theme_mode = Some("tokyo_night".to_string());
@@ -203,7 +200,6 @@ fn workspace_theme_picker_offers_follow_app_when_the_app_theme_is_gone(
 
 #[gpui::test]
 fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let mut workspace =
         gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/workspaces-page-a")]);
     workspace.last_activation_order = 5;
@@ -363,7 +359,6 @@ fn workspaces_page_edits_colour_theme_name_and_deletes(cx: &mut gpui::TestAppCon
 /// leaving it to re-create the workspace on its next sync.
 #[gpui::test]
 fn deleting_an_open_workspace_from_settings_closes_its_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let mut workspace = gitcomet_state::session::Workspace::new(Vec::new());
     workspace.custom_name = Some("Doomed".into());
     let id = workspace.id;
@@ -433,7 +428,6 @@ fn deleting_an_open_workspace_from_settings_closes_its_window(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn opening_settings_to_a_workspace_selects_its_page_and_row(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let first = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/ws-link-a")]);
     let second = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/ws-link-b")]);
     let (first_id, second_id) = (first.id, second.id);
@@ -488,7 +482,6 @@ fn opening_settings_to_a_workspace_selects_its_page_and_row(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn new_workspace_button_opens_an_empty_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

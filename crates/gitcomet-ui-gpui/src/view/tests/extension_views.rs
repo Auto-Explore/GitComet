@@ -45,7 +45,6 @@ fn open_view<'a>(
 
 #[gpui::test]
 fn a_selected_view_brings_its_own_action_bar_context(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let workdir = Path::new("/tmp/extension-action-bar");
     let registry = Registry::build(vec![Box::new(ReviewExtension)]).unwrap();
     let (_view, cx) = open_view(cx, registry, workdir);
@@ -149,7 +148,6 @@ impl gpui::Render for Steps {
 /// the mouse side buttons; History answers them again once it is back.
 #[gpui::test]
 fn back_and_forward_route_to_the_selected_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let back = Rc::new(Cell::new(0));
     let forward = Rc::new(Cell::new(0));
     let registry = Registry::build(vec![Box::new(Navigable {
@@ -200,7 +198,6 @@ fn back_and_forward_route_to_the_selected_view(cx: &mut gpui::TestAppContext) {
 /// underlined. No strip sits above the main area any more.
 #[gpui::test]
 fn the_views_are_tabs_in_the_action_bar(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let registry = Registry::build(vec![Box::new(ReviewExtension)]).unwrap();
     let (_view, cx) = open_view(cx, registry, Path::new("/tmp/extension-view-tabs"));
     cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
@@ -252,7 +249,6 @@ fn the_views_are_tabs_in_the_action_bar(cx: &mut gpui::TestAppContext) {
 /// groups of the bar still do not overlap at the narrowest window.
 #[gpui::test]
 fn compact_view_tabs_show_icons_alone(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let registry = Registry::build(vec![Box::new(ReviewExtension)]).unwrap();
     let (_view, cx) = open_view(cx, registry, Path::new("/tmp/extension-view-tabs-compact"));
     cx.simulate_resize(gpui::size(px(820.0), px(600.0)));
@@ -315,7 +311,6 @@ impl gpui::Render for Labelled {
 /// of them shows, the tab names it and carries the underline.
 #[gpui::test]
 fn views_under_more_share_one_tab_that_names_the_selected_one(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let registry = Registry::build(vec![Box::new(Listed)]).unwrap();
     let (_view, cx) = open_view(cx, registry, Path::new("/tmp/extension-view-more"));
     cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
@@ -416,7 +411,6 @@ impl Extension for KeyboardViews {
 
 #[gpui::test]
 fn switching_views_focuses_the_selected_view_once(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let registry = Registry::build(vec![Box::new(KeyboardViews)]).unwrap();
     let (view, cx) = open_view(cx, registry, Path::new("/tmp/extension-keyboard"));
     // Simulate a keyboard command invoked while History's commit box holds

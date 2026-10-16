@@ -132,8 +132,6 @@ fn titlebar_hamburger_opens_app_menu(cx: &mut gpui::TestAppContext) {
     if cfg!(target_os = "macos") {
         return;
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -183,8 +181,6 @@ fn titlebar_hamburger_opens_from_keyboard_and_restores_focus_on_escape(
     if cfg!(target_os = "macos") {
         return;
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {

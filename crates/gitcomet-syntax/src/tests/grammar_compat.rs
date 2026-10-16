@@ -190,6 +190,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             "tree-sitter-powershell",
             tree_sitter_powershell::LANGUAGE.into(),
         ),
+        (
+            "properties",
+            "tree-sitter-properties",
+            tree_sitter_properties::LANGUAGE.into(),
+        ),
         ("ron", "tree-sitter-ron", tree_sitter_ron::LANGUAGE.into()),
         (
             "ruby",
@@ -402,6 +407,65 @@ fn vendored_ruby_grammar_survives_a_heredoc_word_over_255_bytes() {
     let sexp = tree.root_node().to_sexp();
     assert!(!tree.root_node().has_error(), "{sexp}");
     assert!(sexp.contains("heredoc_body"), "{sexp}");
+}
+
+/// Concurrent `.properties` parses all finish with the single-threaded tree.
+///
+/// Upstream 0.3.0's scanner kept its `_eof` flag in a C global, so a racing
+/// parse could emit a second `_eof` at end of input and replay it from the
+/// token cache forever. See vendor/tree-sitter-properties.
+#[test]
+fn vendored_properties_grammar_parses_concurrently() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // A 3-byte parse takes microseconds; only the loop can miss this.
+    const PARSE_BUDGET: Duration = Duration::from_secs(1);
+    // Unfixed, this caught the loop in 10/10 runs pinned to 2 or to 4 CPUs.
+    const RUN_FOR: Duration = Duration::from_millis(300);
+    const THREADS: usize = 4;
+
+    let language: tree_sitter::Language = tree_sitter_properties::LANGUAGE.into();
+    let expected = parse_vendored(language.clone(), "a=b")
+        .root_node()
+        .to_sexp();
+    let stop = Arc::new(AtomicBool::new(false));
+    let deadline = Instant::now() + RUN_FOR;
+    let workers: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let language = language.clone();
+            let expected = expected.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || -> Result<(), String> {
+                let mut parser = tree_sitter::Parser::new();
+                parser
+                    .set_language(&language)
+                    .expect("the vendored grammar should load");
+                let mut parses = 0usize;
+                while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+                    // Ends right after a property, where `_eof` is valid.
+                    let Some(tree) =
+                        parse_treesitter_tree(&mut parser, b"a=b", None, Some(PARSE_BUDGET))
+                    else {
+                        stop.store(true, Ordering::Relaxed);
+                        return Err(format!(
+                            "a 3-byte parse ran past {PARSE_BUDGET:?} after {parses} parses"
+                        ));
+                    };
+                    let sexp = tree.root_node().to_sexp();
+                    if sexp != expected {
+                        stop.store(true, Ordering::Relaxed);
+                        return Err(format!("a parse produced {sexp} instead of {expected}"));
+                    }
+                    parses += 1;
+                }
+                Ok(())
+            })
+        })
+        .collect();
+    for worker in workers {
+        if let Err(problem) = worker.join().expect("parse worker panicked") {
+            panic!("{problem}, with {THREADS} threads parsing .properties at once");
+        }
+    }
 }
 
 /// An ordinary CSV field may hold a space, one character, or a leading digit.

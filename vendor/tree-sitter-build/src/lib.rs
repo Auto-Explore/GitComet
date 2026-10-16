@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 ///
 /// `std::env::var`, never `env!`: the latter would bake in this crate's own
 /// directory at the time *this* crate was compiled, which is the same wrong
-/// answer for all nine callers.
+/// answer for every caller.
 fn manifest_dir() -> PathBuf {
     PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"))
 }
@@ -26,8 +26,8 @@ fn manifest_dir() -> PathBuf {
 ///
 /// `tree-sitter generate` writes a private copy of `parser.h` -- and, for a
 /// grammar with an external scanner, `alloc.h` and `array.h` -- into each
-/// grammar's `src/tree_sitter/`. Nine vendored grammars meant nine identical
-/// copies, so they live once in `vendor/tree-sitter-headers` instead. See the
+/// grammar's `src/tree_sitter/`. Each vendored grammar carried its own identical
+/// copy, so they live once in `vendor/tree-sitter-headers` instead. See the
 /// README there, including what to do after regenerating a grammar.
 fn shared_tree_sitter_headers(manifest: &Path) -> PathBuf {
     manifest
@@ -181,11 +181,10 @@ fn grammar_dirs(manifest: &Path) -> Vec<PathBuf> {
 ///
 /// Most vendored grammars have no `queries/`: GitComet keeps its own in
 /// `crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/`, so the consts
-/// compile out. Nine grammars whose upstream queries GitComet reads directly --
-/// fsharp, haskell, kotlin-sg, objc, php, powershell, scala, sequel, swift -- do
-/// vendor theirs, and for those the cfgs are set. Either way they are all
-/// *declared*, because the vendored `bindings/rust/lib.rs` files reference them
-/// and without the `rustc-check-cfg` lines those files would warn about
+/// compile out. Grammars whose upstream query consts GitComet reads directly
+/// vendor their `queries/`, and for those the cfgs are set. Either way they are
+/// all *declared*, because the vendored `bindings/rust/lib.rs` files reference
+/// them and without the `rustc-check-cfg` lines those files would warn about
 /// unexpected cfgs. `folds` and `indents` are here for tree-sitter-objc, the only
 /// grammar that ships them.
 fn emit_query_cfgs(manifest: &Path) {

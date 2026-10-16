@@ -945,7 +945,6 @@ impl StickyRows {
 #[gpui::test]
 fn review_fractional_sidebar_rows_share_the_decoration_geometry(cx: &mut gpui::TestAppContext) {
     use crate::view::test_support::{self, TestBackend};
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -986,7 +985,6 @@ mod animation_tests {
     #[gpui::test]
     fn header_animation_retargets_and_manual_scrolling_cancels(cx: &mut gpui::TestAppContext) {
         use crate::view::test_support::{self, TestBackend};
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

@@ -17,7 +17,6 @@ impl Render for Harness {
 
 #[gpui::test]
 fn image_preview_regression_svg_conflict_keeps_encoded_fallback(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="300">
         <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
         <rect width="1100" height="300" fill="#c86432" filter="url(#blur)"/>

@@ -580,6 +580,18 @@ impl DocumentOwner {
         }
     }
 
+    /// The store's filesystem engine. Without a store nothing is saved, so
+    /// reads share the process engine.
+    pub(super) fn filesystem(
+        &self,
+    ) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        self.store
+            .upgrade()
+            .map_or_else(gitcomet_core::filesystem::global, |store| {
+                store.filesystem()
+            })
+    }
+
     pub(in crate::view) fn save(
         &self,
         document: &DocumentBuffer,

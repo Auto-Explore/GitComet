@@ -8,7 +8,6 @@ fn markdown_preview_draws_an_inline_picture_beside_its_heading(cx: &mut gpui::Te
     // The pictures are sized by `max_h` against a `flex_none` wrapper, which is
     // the kind of constraint that can collapse to zero without any parse-level
     // assertion noticing.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -66,7 +65,6 @@ fn markdown_diff_preview_draws_rows_that_carry_inline_pictures(cx: &mut gpui::Te
     // The diff preview paints a fixed row grid, so a picture written on a line
     // with text has to fit into the line rather than take a block of its own.
     // Its rows still have to draw.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -177,8 +175,6 @@ fn copying_across_a_picture_writes_its_description_once(cx: &mut gpui::TestAppCo
     // A picture's row carries its alt text, which is what copying a selection
     // across it writes: once. (It was cut into eight bands for a fixed-row
     // renderer, and copy repeated the description per band.)
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -239,7 +235,6 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
     // numbers, or reserving the room would just move the jump rather than
     // remove it. The decode itself is too fast to catch mid-flight in a test,
     // so the skeleton is measured through its own unit test instead.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -287,7 +282,6 @@ fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
     cx: &mut gpui::TestAppContext,
 ) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -416,7 +410,6 @@ fn markdown_image_access_snapshots_share_approved_url_storage(cx: &mut gpui::Tes
 #[gpui::test]
 fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -458,8 +451,6 @@ fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui
 #[gpui::test]
 fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -515,8 +506,6 @@ fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestApp
 #[gpui::test]
 fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -644,7 +633,6 @@ fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) 
     // starts showing one another pane is already decoding is never told the
     // decode finished and holds an empty slot. The pane waits on its own
     // pictures instead of relying on that.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -709,7 +697,6 @@ fn diff_scroll_offset_y(
 #[gpui::test]
 fn change_navigation_reaches_an_added_picture_or_rule(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -776,7 +763,6 @@ fn change_navigation_reaches_an_added_picture_or_rule(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn searching_a_picture_description_finds_it_once(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -825,7 +811,6 @@ fn a_frame_of_a_picture_heavy_preview_checks_only_the_pictures_it_draws(
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // Each local picture is a stat. A frame draws the ones near the viewport;
     // the rest of a long document's pictures are not its business.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -869,7 +854,6 @@ fn the_merge_tool_preview_draws_tables_and_local_pictures_like_the_file_preview(
     // The merge tool drew markdown as fixed-height text rows: tables as padded
     // text and, with nowhere to resolve them from, every local picture as
     // "Image unavailable".
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -937,7 +921,6 @@ fn an_aligned_html_picture_moves_across_the_document(cx: &mut gpui::TestAppConte
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // `<p align="center"><img …></p>` is how READMEs centre a logo: the
     // picture keeps its size and moves; its block stays full width.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -992,7 +975,6 @@ fn centred_text_beside_a_logo_wraps_inside_the_pane(cx: &mut gpui::TestAppContex
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // An aligned row with a picture hugs its text so the two can move as one,
     // and that text box must still take the width it needs to wrap.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1075,7 +1057,6 @@ fn pictures_alone_on_a_row_keep_their_own_size(cx: &mut gpui::TestAppContext) {
     // Screenshots written one per line in a `<p>` share a row. The inline
     // height cap keeps a picture from forcing a sentence open; with no
     // sentence around them they keep their own size, as on GitHub.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1114,7 +1095,6 @@ fn pictures_alone_on_a_row_keep_their_own_size(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn a_centred_row_of_badges_is_centred_exactly(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1220,7 +1200,6 @@ fn assert_inside(column: Bounds<Pixels>, picture: Bounds<Pixels>) {
 #[gpui::test]
 fn an_aligned_label_with_many_badges_wraps_inside_the_column(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1255,7 +1234,6 @@ fn an_aligned_label_with_many_badges_wraps_inside_the_column(cx: &mut gpui::Test
 #[gpui::test]
 fn pictures_alone_on_a_row_stay_inside_the_column(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1283,7 +1261,6 @@ fn pictures_alone_on_a_row_stay_inside_the_column(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn a_picture_written_before_its_caption_keeps_its_size(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1312,7 +1289,6 @@ fn a_picture_written_before_its_caption_keeps_its_size(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn a_centred_picture_wider_than_the_column_stays_inside_it(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1339,7 +1315,6 @@ fn a_centred_picture_wider_than_the_column_stays_inside_it(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn table_images_render_inside_their_cells_and_fit_a_narrow_pane(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1396,8 +1371,6 @@ fn table_images_render_inside_their_cells_and_fit_a_narrow_pane(cx: &mut gpui::T
 
 #[gpui::test]
 fn table_picture_selection_copies_descriptions_once(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1470,7 +1443,6 @@ fn table_picture_selection_copies_descriptions_once(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn remote_table_images_keep_approval_controls_in_their_cells(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1530,7 +1502,6 @@ fn remote_table_images_keep_approval_controls_in_their_cells(cx: &mut gpui::Test
 
 #[gpui::test]
 fn html_table_pictures_render_in_inline_and_split_diffs(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

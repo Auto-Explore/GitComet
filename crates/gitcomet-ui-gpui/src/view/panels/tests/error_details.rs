@@ -71,7 +71,6 @@ fn click(cx: &mut gpui::VisualTestContext, name: impl Into<String>) {
 
 #[gpui::test]
 fn an_error_stays_merges_repeats_and_shows_its_details(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     report(cx, &view, PUSH_FAILED);
     report(cx, &view, PUSH_FAILED);
@@ -121,7 +120,6 @@ fn an_error_stays_merges_repeats_and_shows_its_details(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn errors_pushed_out_of_the_stack_stay_reachable(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     for ix in 0..5 {
         report(cx, &view, &format!("Fetch {ix} failed"));
@@ -172,7 +170,6 @@ fn errors_pushed_out_of_the_stack_stay_reachable(cx: &mut gpui::TestAppContext) 
 
 #[gpui::test]
 fn closing_a_repo_drops_its_errors_only(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     let (first_id, second_id) = (RepoId(9601), RepoId(9602));
     let mut first = opening_repo_state(first_id, Path::new("/tmp/error-repo-a"));
@@ -214,19 +211,18 @@ fn closing_a_repo_drops_its_errors_only(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppContext) {
+fn review_errors_after_many_diagnostics_still_arrive(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::{DiagnosticEntry, DiagnosticKind};
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     let id = RepoId(9694);
     let mut repo = opening_repo_state(id, Path::new("/tmp/review-diagnostics"));
-    repo.feedback_mut().diagnostics = (0..200)
-        .map(|i| DiagnosticEntry {
+    for i in 0..200 {
+        repo.feedback_mut().push_diagnostic(DiagnosticEntry {
             time: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(i),
             kind: DiagnosticKind::Info,
             message: format!("old {i}"),
-        })
-        .collect();
+        });
+    }
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo.clone(), id));
     cx.update(|_, app| {
         view.read(app).store.dispatch(Msg::ReportError {
@@ -236,8 +232,9 @@ fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppCon
     });
     crate::view::test_support::drain_store_worker(&view, cx);
     let state = cx.update(|_, app| view.read(app).store.snapshot());
-    assert_eq!(state.repos[0].feedback.diagnostics.len(), 200);
-    assert_eq!(state.repos[0].feedback.diagnostics_seq, 1);
+    // The window acknowledged the old diagnostics; only the new one waits.
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+    assert_eq!(state.repos[0].feedback.diagnostics_seq, 201);
     super::shortcuts::apply_state(cx, &view, state.clone());
     assert_eq!(errors(cx, &view).len(), 1);
     super::shortcuts::apply_state(cx, &view, state);
@@ -251,7 +248,6 @@ fn review_errors_after_the_diagnostic_cap_still_arrive(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn unrelated_error_toasts_remain_visible_during_authentication(cx: &mut gpui::TestAppContext) {
     use gitcomet_state::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation};
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     report(cx, &view, "Failed to save settings: disk full");
     let id = errors(cx, &view)[0].0;
@@ -300,7 +296,6 @@ fn local_changes_blocking_pull_show_guidance_output_and_a_review_action(
 ) {
     use gitcomet_core::error::GitFailureId;
     use gitcomet_state::model::CommandLogEntry;
-    let _guard = lock_visual_test();
     let (view, cx) = open_view(cx);
     let repo_id = RepoId(9695);
     let mut repo = opening_repo_state(repo_id, Path::new("/tmp/pull-blocked-local-changes"));
@@ -310,7 +305,7 @@ fn local_changes_blocking_pull_show_guidance_output_and_a_review_action(
 error: Your local changes to the following files would be overwritten by merge:\n\
 \tREADME.md\n\tcrates/app.rs\n\
 Please commit your changes or stash them before you merge.\nAborting\n";
-    repo.feedback_mut().command_log.push(CommandLogEntry {
+    repo.feedback_mut().push_command_result(CommandLogEntry {
         time: std::time::SystemTime::UNIX_EPOCH,
         ok: false,
         command: "git pull --prune".into(),
@@ -374,8 +369,7 @@ Please commit your changes or stash them before you merge.\nAborting\n";
         assert!(!root.documents_active);
         assert!(state.auth_prompt.is_none());
         assert_eq!(
-            state.repos[0].feedback.command_log.len(),
-            1,
+            state.repos[0].feedback.command_log_seq, 1,
             "reviewing must not stash or retry"
         );
     });

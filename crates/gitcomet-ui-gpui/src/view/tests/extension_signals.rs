@@ -40,7 +40,6 @@ impl Extension for Providers {
 
 #[gpui::test]
 fn descriptor_revisions_and_slot_notifications_are_independent(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let sidebar_calls = Rc::new(Cell::new(0));
     let history_calls = Rc::new(Cell::new(0));
     let signal = SlotSignal::default();

@@ -41,7 +41,6 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
 
 #[gpui::test]
 fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let alpha = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/alpha")]);
     let beta = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/beta")]);
     let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
@@ -96,7 +95,6 @@ fn home_selected(
 
 #[gpui::test]
 fn new_window_focuses_the_home_search(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(cx, Vec::new(), Vec::new());
     let focused = cx.update(|window, app| {
         view.read(app)
@@ -112,7 +110,6 @@ fn new_window_focuses_the_home_search(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_selects_the_first_row_and_arrows_walk_both_columns(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(
         cx,
         vec![
@@ -145,7 +142,6 @@ fn home_selects_the_first_row_and_arrows_walk_both_columns(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(
         cx,
         vec![
@@ -184,7 +180,6 @@ fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let mut empty = gitcomet_state::session::Workspace::new(Vec::new());
     empty.custom_name = Some("Later".to_string());
     empty.restore_on_launch = false;
@@ -221,7 +216,6 @@ fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn home_lists_are_virtualized_and_capped(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let recents = (0..50)
         .map(|ix| PathBuf::from(format!("/work/repo-{ix:02}")))
         .collect::<Vec<_>>();
@@ -265,7 +259,6 @@ fn home_lists_are_virtualized_and_capped(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_selected_row_shows_the_enter_hint(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let alpha = named_saved_workspace("Alpha", "/work/a");
     let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
     let repo_row: &'static str = format!(
@@ -297,7 +290,6 @@ fn home_selected_row_shows_the_enter_hint(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_cross_removes_a_recent_repository(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(
         cx,
         Vec::new(),
@@ -317,7 +309,6 @@ fn home_cross_removes_a_recent_repository(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_cross_deletes_a_saved_workspace_but_not_an_open_one(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let saved = named_saved_workspace("Saved", "/work/a");
     let saved_id = saved.id;
     let mut open = named_saved_workspace("Open elsewhere", "/work/b");

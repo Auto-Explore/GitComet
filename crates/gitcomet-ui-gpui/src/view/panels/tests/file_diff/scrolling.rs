@@ -83,7 +83,6 @@ index 1111111..2222222 100644
 
 #[gpui::test]
 fn short_split_diff_has_region_confined_below_eof_surfaces(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

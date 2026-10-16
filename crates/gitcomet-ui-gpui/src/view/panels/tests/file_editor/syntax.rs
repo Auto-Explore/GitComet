@@ -210,7 +210,6 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
     // preview over a buffer that is plainly showing text and greys out Edit and
     // Blame. The highlight assertions pin the other half: the editor really is
     // running the markdown grammar, injections included.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -376,7 +375,6 @@ fn a_supported_language_is_never_latched_as_unparseable() {
 
 #[gpui::test]
 fn the_editor_renders_rust_highlights_as_the_engine_produced_them(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     assert_editor_renders_the_engines_highlights(
         cx,
         gitcomet_state::model::RepoId(962),
@@ -407,7 +405,6 @@ fn the_editor_renders_rust_highlights_as_the_engine_produced_them(cx: &mut gpui:
 
 #[gpui::test]
 fn the_editor_renders_shell_highlights_as_the_engine_produced_them(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     assert_editor_renders_the_engines_highlights(
         cx,
         gitcomet_state::model::RepoId(963),
@@ -450,7 +447,6 @@ fn the_editor_renders_shell_highlights_as_the_engine_produced_them(cx: &mut gpui
 /// under `cargo test`.
 #[gpui::test]
 async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -534,7 +530,6 @@ async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(cx: &mut gpu
 fn syntax_builds_coalesce_edits_and_file_switch_discards_obsolete_completion(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -706,7 +701,6 @@ fn syntax_builds_coalesce_edits_and_file_switch_discards_obsolete_completion(
 
 #[gpui::test]
 fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     assert_editor_renders_the_engines_highlights(
         cx,
         gitcomet_state::model::RepoId(964),

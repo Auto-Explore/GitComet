@@ -1,4 +1,3 @@
-use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
 use crate::view::test_support::TestBackend;
 use crate::{theme::AppTheme, ui_scale, view};

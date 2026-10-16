@@ -20,7 +20,8 @@ grammar that still has a `src/tree_sitter/` of its own keeps using it, because
 both `#include "tree_sitter/parser.h"` (relative to the including file) and the
 `-I` search order reach `src/` first.
 
-`tree-sitter-v` uses this override for its ABI-13 parser's older macro API.
+`tree-sitter-v` and `tree-sitter-properties` use this override for their
+pre-0.26 parsers' older macro API.
 `tree-sitter-vue` is another case worth knowing about: it is the only grammar here whose
 `grammar.js` was not vendored, so it cannot be regenerated, and the `array.h` it
 used to carry was an older implementation with a different macro contract

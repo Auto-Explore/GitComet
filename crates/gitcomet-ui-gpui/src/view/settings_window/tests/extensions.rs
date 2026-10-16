@@ -5,7 +5,6 @@ fn settings_snapshot_uses_the_shared_renderer_without_a_repository_window(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_extension_api::{DiffLayout, DiffPaneOptions, DiffSnapshot, Registry};
-    let _guard = lock_visual_test();
     cx.update(|app| {
         crate::view::extension_host::install(
             Registry::build(vec![Box::new(
@@ -72,7 +71,6 @@ fn settings_snapshot_uses_the_shared_renderer_without_a_repository_window(
 
 #[gpui::test]
 fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     cx.update(|app| {
         let registry = gitcomet_extension_api::Registry::build(vec![Box::new(
             gitcomet_extension_example::review::ReviewExtension,
@@ -108,7 +106,6 @@ fn settings_pages_are_listed_and_built_only_when_selected(cx: &mut gpui::TestApp
 /// confirming closes it, and its toasts keep their kind.
 #[gpui::test]
 fn settings_pages_open_dialogs_and_toasts_through_their_host(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     cx.update(|app| {
         let registry = gitcomet_extension_api::Registry::build(vec![Box::new(
             gitcomet_extension_example::review::ReviewExtension,
@@ -163,7 +160,6 @@ fn settings_extensions_have_a_host_revisioned_gates_and_window_lifetime(
         cell::{Cell, RefCell},
         rc::Rc,
     };
-    let _guard = lock_visual_test();
     struct Instance(Rc<Cell<usize>>);
     impl WindowExtension for Instance {}
     impl Drop for Instance {

@@ -4,7 +4,6 @@ use super::*;
 async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppContext) {
     // The editor used to leave Blame inert: the toggle was reachable but the
     // buffer had no annotation column, so turning it on did nothing visible.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -38,7 +37,6 @@ async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppCon
 async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContext) {
     // The editor drew the annotation column but mounted no drag handle, so the
     // column was stuck at whatever width the diff view had last left it at.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -113,7 +111,6 @@ async fn annotate_resize_handle_waits_for_the_column_it_resizes(cx: &mut gpui::T
     // The editor reserves the annotation column only once blame resolves, so
     // the handle has to follow the column rather than the toggle: gated on
     // `annotation_active()` it would sit at x=0 over a column nobody drew.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -219,7 +216,6 @@ fn blame_lines_shift_with_unsaved_edits_instead_of_vanishing() {
 
 #[gpui::test]
 async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -321,7 +317,6 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 async fn a_stashed_buffer_brings_its_blame_watermark_back(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

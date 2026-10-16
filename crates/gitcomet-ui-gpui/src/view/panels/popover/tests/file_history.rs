@@ -105,7 +105,6 @@ macro_rules! file_history_picker {
 /// picker says the rest is coming — and stops once the page is complete.
 #[gpui::test]
 fn file_history_reports_older_commits_still_loading(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -137,7 +136,6 @@ fn file_history_reports_older_commits_still_loading(cx: &mut gpui::TestAppContex
 /// used to build an element for each.
 #[gpui::test]
 fn a_long_file_history_renders_only_the_rows_in_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, popover_host);
 
     let matched = cx.update(|_window, app| {
@@ -163,7 +161,6 @@ fn a_long_file_history_renders_only_the_rows_in_view(cx: &mut gpui::TestAppConte
 /// works if the picker scrolls by its row geometry.
 #[gpui::test]
 fn arrowing_to_the_last_file_history_row_scrolls_it_into_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, popover_host);
 
     // `debug_bounds` takes a `&'static str`, so the last row is named by literal.
@@ -195,7 +192,6 @@ fn arrowing_to_the_last_file_history_row_scrolls_it_into_view(cx: &mut gpui::Tes
 /// paint at, scrolling would drift with it.
 #[gpui::test]
 fn file_history_row_geometry_matches_the_height_rows_paint_at(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, popover_host);
 
     let geometry = cx.update(|_window, app| {
@@ -227,7 +223,6 @@ fn file_history_row_geometry_matches_the_height_rows_paint_at(cx: &mut gpui::Tes
 /// its signature, or the list goes stale with nothing on screen to say so.
 #[gpui::test]
 fn file_history_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, popover_host);
 
     let rows = |cx: &mut gpui::VisualTestContext| {
@@ -301,7 +296,6 @@ fn draw_picker(cx: &mut gpui::VisualTestContext) {
 fn file_history_keyboard_jumps_scroll_to_both_ends_and_page_by_viewport(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(crate::app::bind_text_input_keys_for_test);
     file_history_picker!(cx, host);
     cx.simulate_keystrokes("ctrl-end");
@@ -341,7 +335,6 @@ fn file_history_keyboard_jumps_scroll_to_both_ends_and_page_by_viewport(
 fn file_history_rows_show_monospace_sha_author_dates_and_filter_in_history_order(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, host);
     cx.update(|_, app| {
         host.update(app, |host, cx| {
@@ -395,7 +388,6 @@ fn file_history_rows_show_monospace_sha_author_dates_and_filter_in_history_order
 
 #[gpui::test]
 fn file_history_ignores_a_page_for_a_different_file(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, host);
     cx.update(|_, app| {
         host.update(app, |host, cx| {
@@ -420,7 +412,6 @@ fn right_click_history_row(cx: &mut gpui::VisualTestContext) {
 
 #[gpui::test]
 fn file_history_row_menu_hides_apply_change_for_a_submodule(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, host);
     cx.update(|_, app| {
         host.update(app, |host, _cx| {
@@ -442,7 +433,6 @@ fn file_history_row_menu_hides_apply_change_for_a_submodule(cx: &mut gpui::TestA
 fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(crate::app::bind_text_input_keys_for_test);
     file_history_picker!(cx, host);
     right_click_history_row(cx);
@@ -498,8 +488,6 @@ fn file_history_row_menu_offers_file_and_commit_actions_and_routes_keyboard(
 
 #[gpui::test]
 fn copying_file_history_sha_keeps_picker_open(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     file_history_picker!(cx, host);
     right_click_history_row(cx);
     cx.update(|window, app| host.update(app, |host, cx| {
@@ -513,7 +501,6 @@ fn copying_file_history_sha_keeps_picker_open(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn file_history_row_revert_opens_the_revert_confirmation(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, host);
     right_click_history_row(cx);
     cx.update(|window, app| {
@@ -539,7 +526,6 @@ fn file_history_row_revert_opens_the_revert_confirmation(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(crate::app::bind_text_input_keys_for_test);
     file_history_picker!(cx, host);
     let store = cx.update(|_, app| {
@@ -570,7 +556,6 @@ fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn file_history_show_changes_opens_a_file_diff_and_closes_picker(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     file_history_picker!(cx, host);
     let store = cx.update(|_, app| {
         let host = host.read(app);

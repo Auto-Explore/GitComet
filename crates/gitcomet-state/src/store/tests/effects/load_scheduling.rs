@@ -1803,6 +1803,7 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         history_find_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
     };
 
     repos.bind_test_state(&thread_state.read().unwrap());
@@ -2184,6 +2185,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             history_find_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
+            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         };
 
         repos.bind_test_state(&thread_state.read().unwrap());
@@ -2937,6 +2939,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         history_find_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
     };
     for (effect, expected_messages) in effect_specs {
         let kind: &'static str = (&effect).into();
@@ -3028,6 +3031,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
         metadata_executor: &other,
         signature_executor: &other,
         history_find_executor: &find,
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
     };
     for effect in effects.into_iter().filter(|effect| {
         matches!(

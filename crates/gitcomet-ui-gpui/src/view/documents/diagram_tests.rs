@@ -4,7 +4,6 @@ use super::*;
 fn standalone_diagram_uses_code_while_editing_and_tracks_buffer_changes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("diagram.mmd");
     std::fs::write(&path, "flowchart LR\nA-->B").unwrap();

@@ -21,7 +21,6 @@ fn settings_dropdown_background_is_darker_than_card_surface() {
 
 #[gpui::test]
 fn expanded_settings_sections_render_scrollable_list_containers(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -99,7 +98,6 @@ fn expanded_settings_sections_render_scrollable_list_containers(cx: &mut gpui::T
 
 #[gpui::test]
 fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -163,8 +161,6 @@ fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestA
     if cfg!(target_os = "macos") {
         return;
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -206,8 +202,6 @@ fn hidden_window_controls_keep_only_close_in_settings_chrome(cx: &mut gpui::Test
     if cfg!(target_os = "macos") {
         return;
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -245,8 +239,6 @@ fn linux_settings_window_close_button_closes_only_the_settings_window(
     if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
         return;
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -304,7 +296,6 @@ fn linux_settings_window_close_button_closes_only_the_settings_window(
 
 #[gpui::test]
 fn show_timezone_toggle_defers_main_window_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -360,7 +351,6 @@ fn show_timezone_toggle_defers_main_window_update(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn change_tracking_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -420,7 +410,6 @@ fn change_tracking_setting_defers_main_window_update(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn diff_scroll_sync_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -482,7 +471,6 @@ fn diff_scroll_sync_setting_defers_main_window_update(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn diff_content_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -542,7 +530,6 @@ fn diff_content_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn diff_whitespace_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -599,7 +586,6 @@ fn diff_whitespace_mode_setting_defers_main_window_update(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -694,7 +680,6 @@ fn changed_file_list_options_cover_every_layout_and_sort() {
 #[gpui::test]
 fn changed_file_list_defaults_reach_the_main_window(cx: &mut gpui::TestAppContext) {
     use crate::view::rows::CommitFileSort;
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -752,7 +737,6 @@ fn changed_file_list_defaults_reach_the_main_window(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -793,7 +777,6 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn maintenance_toggle_reaches_the_store_and_withdraws_cards(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let mut seeded = (*store.snapshot()).clone();
     let mut repo = gitcomet_state::model::RepoState::new_opening(
@@ -845,7 +828,6 @@ fn maintenance_toggle_reaches_the_store_and_withdraws_cards(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn files_follow_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -900,7 +882,6 @@ fn files_follow_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let observed_store = store.clone();
     let (main_view, cx) =
@@ -968,7 +949,6 @@ fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpu
 
 #[gpui::test]
 fn diff_render_settings_update_main_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1043,8 +1023,86 @@ fn signature_verification_is_discoverable_in_settings_search() {
 }
 
 #[gpui::test]
+fn graph_gradient_toggle_updates_every_main_window(cx: &mut gpui::TestAppContext) {
+    for query in ["graph gradient", "fade", "glow"] {
+        assert!(SettingsCategory::GitLog.matches_query(query));
+    }
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (first, first_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    first_cx.update(|_, app| open_settings_window(app));
+    first_cx.run_until_parked();
+    let settings_window = first_cx.update(|_, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .unwrap()
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (second, second_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    second_cx.update(|_, app| {
+        for (view, opacity) in [(&first, 0.35), (&second, 0.0)] {
+            view.update(app, |view, cx| {
+                view.set_theme(
+                    AppTheme {
+                        graph_fade_opacity: opacity,
+                        ..view.theme
+                    },
+                    cx,
+                );
+            });
+        }
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), second_cx);
+    settings_cx.simulate_resize(size(px(720.0), px(1200.0)));
+    settings_window
+        .update(&mut settings_cx, |settings, _, cx| {
+            settings.select_category(SettingsCategory::GitLog, cx);
+            settings.set_history_show_graph_gradient(true, cx);
+        })
+        .unwrap();
+    settings_cx.run_until_parked();
+    for enabled in [false, true] {
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let toggle = settings_cx
+            .debug_bounds("settings_window_git_log_show_graph_gradient")
+            .expect("graph gradient toggle");
+        settings_cx.simulate_click(toggle.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_window
+            .update(&mut settings_cx, |settings, _, _| {
+                assert_eq!(settings.history_show_graph_gradient, enabled);
+                assert_eq!(
+                    settings.preference_settings().history_show_graph_gradient,
+                    Some(enabled)
+                );
+            })
+            .unwrap();
+        settings_cx.update(|_, app| {
+            for (view, opacity) in [(&first, 0.35), (&second, 0.0)] {
+                let root = view.read(app);
+                assert_eq!(
+                    root.ui_model
+                        .read(app)
+                        .preferences
+                        .history
+                        .show_graph_gradient,
+                    enabled
+                );
+                let history = root.main_pane.read(app).history_view.read(app);
+                assert_eq!(history.history_show_graph_gradient, enabled);
+                assert_eq!(history.theme.graph_fade_opacity, opacity);
+                assert!(history.history_show_graph);
+            }
+        });
+    }
+}
+
+#[gpui::test]
 fn history_branch_names_options_update_every_main_window(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (first, first_cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

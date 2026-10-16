@@ -444,6 +444,7 @@ fn schedule_save_worktree_file(
         completion,
     } = request;
     let command_path = path.clone();
+    let engine = msg_tx.filesystem;
     schedule_repo_command(
         executor,
         repos,
@@ -455,9 +456,7 @@ fn schedule_save_worktree_file(
         },
         move |repo| {
             let result = (|| {
-                let mut filesystem = gitcomet_core::filesystem::global()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut filesystem = engine.lock().unwrap_or_else(|e| e.into_inner());
                 let (relative_path, full) =
                     resolve_worktree_save_target(&repo.spec().workdir, &path)?;
                 guarded_worktree_save(
@@ -535,6 +534,7 @@ fn schedule_append_gitignore_patterns(
     patterns: Vec<String>,
 ) {
     let command_patterns = patterns.clone();
+    let engine = msg_tx.filesystem;
     schedule_repo_command(
         executor,
         repos,
@@ -543,7 +543,7 @@ fn schedule_append_gitignore_patterns(
         RepoCommandKind::AppendGitignorePatterns {
             patterns: command_patterns,
         },
-        move |repo| append_gitignore_patterns_in_workdir(&repo.spec().workdir, &patterns),
+        move |repo| append_gitignore_patterns_in_workdir(engine, &repo.spec().workdir, &patterns),
     );
 }
 
@@ -598,12 +598,11 @@ fn append_gitattributes_rule_in_workdir(
 }
 
 fn append_gitignore_patterns_in_workdir(
+    engine: &std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     workdir: &Path,
     patterns: &[String],
 ) -> Result<CommandOutput, Error> {
-    let mut filesystem = gitcomet_core::filesystem::global()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut filesystem = engine.lock().unwrap_or_else(|e| e.into_inner());
     let (_, full) = resolve_worktree_save_target(workdir, Path::new(GITIGNORE_FILE_NAME))?;
     let version = match gitcomet_core::filesystem::DiskVersion::read(&full) {
         Ok(version) => Some(version),
@@ -2202,8 +2201,12 @@ mod worktree_save_target_tests {
         std::fs::write(&victim, "original\n").expect("write victim");
         std::os::unix::fs::symlink(&victim, dir.path().join(".gitignore")).expect("symlink");
 
-        let err = append_gitignore_patterns_in_workdir(dir.path(), &["secret".to_string()])
-            .expect_err("symlinked .gitignore");
+        let err = append_gitignore_patterns_in_workdir(
+            &std::sync::Mutex::default(),
+            dir.path(),
+            &["secret".to_string()],
+        )
+        .expect_err("symlinked .gitignore");
         let ErrorKind::Backend(message) = err.kind() else {
             panic!("expected a backend refusal, got {err:?}");
         };
@@ -2348,6 +2351,7 @@ fn tracking_branch_context(
 
 pub(super) fn schedule(
     executor: &TaskExecutor,
+    filesystem_executor: &TaskExecutor,
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     backend: &Arc<dyn GitBackend>,
     repos: &RepositoryRuntimes,
@@ -2363,7 +2367,7 @@ pub(super) fn schedule(
             stage,
             completion,
         } => schedule_save_worktree_file(
-            super::super::executor::filesystem_executor(),
+            filesystem_executor,
             repos,
             msg_tx,
             repo_id,
@@ -2377,7 +2381,7 @@ pub(super) fn schedule(
         ),
         RepoCommandEffect::AppendGitignorePatterns { repo_id, patterns } => {
             schedule_append_gitignore_patterns(
-                super::super::executor::filesystem_executor(),
+                filesystem_executor,
                 repos,
                 msg_tx,
                 repo_id,
@@ -2390,13 +2394,7 @@ pub(super) fn schedule(
             auth,
         } => schedule_large_file_command(executor, repos, msg_tx, repo_id, command, auth),
         RepoCommandEffect::AppendGitattributesRule { repo_id, rule } => {
-            schedule_append_gitattributes_rule(
-                super::super::executor::filesystem_executor(),
-                repos,
-                msg_tx,
-                repo_id,
-                rule,
-            )
+            schedule_append_gitattributes_rule(filesystem_executor, repos, msg_tx, repo_id, rule)
         }
         RepoCommandEffect::CherryPickCommit {
             repo_id,

@@ -67,11 +67,14 @@ pub(super) struct TaskExecutor {
     _threads: Vec<thread::JoinHandle<()>>,
 }
 
-/// One submission queue across windows for disk writes and explorer mutations.
-pub(super) fn filesystem_executor() -> &'static TaskExecutor {
-    static EXECUTOR: std::sync::OnceLock<TaskExecutor> = std::sync::OnceLock::new();
-    EXECUTOR.get_or_init(|| TaskExecutor::named("gitcomet-filesystem", 1))
+/// Disk writes and explorer mutations run on one thread, in submission order.
+pub(super) fn filesystem_queue() -> TaskExecutor {
+    TaskExecutor::named("gitcomet-filesystem", 1)
 }
+
+/// The queue every window's store shares.
+pub(super) static FILESYSTEM_QUEUE: std::sync::LazyLock<TaskExecutor> =
+    std::sync::LazyLock::new(filesystem_queue);
 
 /// A panicking task must not take its worker thread with it. These pools are
 /// small — [`repo_load_worker_threads`] caps at two — so a thread lost to an

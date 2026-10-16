@@ -826,6 +826,11 @@ through `feedback_mut()`, which copies it only when a snapshot shares it. The
 same probe now reads 1.6 µs for one repository and 5.2 µs for eight, and a test
 asserts that a dispatch that leaves feedback alone keeps it shared.
 
+Since `dev` started dropping feedback once the window acknowledges it, the
+queues are short between acknowledgements; the shared `Arc` still keeps them and
+the hook-activity log out of every copy, and an acknowledgement that releases
+nothing leaves the feedback shared.
+
 The rest of the plan's 4.1 (a copy-on-write repository list behind
 `repo`/`repo_mut` accessors) would save the remaining 0.6 µs per repository at
 the cost of rewriting about 550 test constructions and 200 lookups, so it waits

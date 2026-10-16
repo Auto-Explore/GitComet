@@ -15,7 +15,6 @@ fn renaming_the_active_editor_refreshes_its_language_without_replacing_edits(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_core::filesystem::{DocumentIdentity, Filesystem, Operation, Request};
-    let _guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -157,7 +156,6 @@ fn pending_editor_reads_wait_for_all_filesystem_pauses_before_restarting(
 
 #[gpui::test]
 async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -201,7 +199,6 @@ async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui:
 fn oversized_repository_editor_files_fail_without_capturing_a_baseline(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -242,7 +239,6 @@ fn oversized_repository_editor_files_fail_without_capturing_a_baseline(
 
 #[gpui::test]
 async fn file_editor_refuses_a_binary_file(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -286,7 +282,6 @@ async fn a_pending_read_does_not_land_in_another_repos_buffer(cx: &mut gpui::Tes
     // second repo holding the same relative path before the read completed
     // seated the first repo's contents in the second repo's buffer — and a save
     // would then have written them to the wrong file.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -335,7 +330,6 @@ async fn returning_to_a_stashed_buffer_measures_it_against_its_own_file(
     // which by the time a stashed buffer came back held the *other* file's
     // fingerprint — so a restored buffer could never settle, or worse, could be
     // reported clean and then dropped.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -409,7 +403,6 @@ async fn returning_to_a_stashed_buffer_measures_it_against_its_own_file(
 async fn switching_files_mid_load_never_stashes_the_blank_placeholder(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -474,7 +467,6 @@ async fn switching_files_mid_load_never_stashes_the_blank_placeholder(
 
 fn navigate_during_filesystem_pause(cx: &mut gpui::TestAppContext, second_contents: &str) {
     use gitcomet_core::filesystem::{DocumentIdentity, OperationId};
-    let _guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -609,7 +601,6 @@ fn rename_during_editor_load(cx: &mut gpui::TestAppContext, parent: bool, overla
     use gitcomet_core::filesystem::{
         DocumentIdentity, Filesystem, Operation, OperationId, Request,
     };
-    let _guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -740,7 +731,6 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
         ConflictChoice, ConflictResolution, DiskVersion, DocumentIdentity, Filesystem, Operation,
         Request,
     };
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

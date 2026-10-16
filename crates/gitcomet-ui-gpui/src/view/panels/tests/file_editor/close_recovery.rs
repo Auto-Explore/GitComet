@@ -126,7 +126,6 @@ enum CloseCase {
 }
 
 fn close_repository_and_save_retained_buffer(cx: &mut gpui::TestAppContext, case: CloseCase) {
-    let _guard = lock_visual_test();
     cx.skip_drawing();
     let directory = tempfile::tempdir().unwrap();
     let paths: Vec<_> = ["edited", "unrelated"]

@@ -2,7 +2,6 @@ use super::*;
 
 #[gpui::test]
 fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -107,7 +106,6 @@ fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn terminal_button_target_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -174,7 +172,6 @@ fn terminal_button_target_setting_defers_main_window_update(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn external_terminal_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -243,7 +240,6 @@ fn external_terminal_mode_setting_defers_main_window_update(cx: &mut gpui::TestA
 fn terminal_external_draft_save_trims_multiline_args_before_persistence(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -332,7 +328,6 @@ fn terminal_external_draft_save_trims_multiline_args_before_persistence(
 
 #[gpui::test]
 fn terminal_external_draft_save_and_reset(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

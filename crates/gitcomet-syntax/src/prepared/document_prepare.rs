@@ -632,7 +632,7 @@ pub fn benchmark_cache_replacement_drop_step(
     };
     let mut cache = TreesitterDocumentCache::new();
     let mut h = FxHasher::default();
-    for (nonce, line_tokens) in payloads.into_iter().enumerate() {
+    for (variant, line_tokens) in payloads.into_iter().enumerate() {
         cache.insert_document_with_mode(
             PreparedSyntaxCacheKey {
                 #[cfg(any(test, feature = "test-support"))]
@@ -644,7 +644,7 @@ pub fn benchmark_cache_replacement_drop_step(
             drop_mode,
         );
         cache.by_cache_key.len().hash(&mut h);
-        nonce.hash(&mut h);
+        variant.hash(&mut h);
     }
     h.finish()
 }
@@ -683,11 +683,11 @@ pub(crate) fn benchmark_line_tokens_payload_batch(
     let tokens_per_line = tokens_per_line.max(1);
     let replacements = replacements.max(1);
     let mut payloads = Vec::with_capacity(replacements);
-    for nonce in 0..replacements {
+    for variant in 0..replacements {
         payloads.push(benchmark_line_tokens_payload(
             lines,
             tokens_per_line,
-            seed.wrapping_add(nonce),
+            seed.wrapping_add(variant),
         ));
     }
     payloads
@@ -697,14 +697,14 @@ pub(crate) fn benchmark_line_tokens_payload_batch(
 pub(crate) fn benchmark_line_tokens_payload(
     lines: usize,
     tokens_per_line: usize,
-    nonce: usize,
+    variant: usize,
 ) -> Vec<Vec<SyntaxToken>> {
     let mut payload = Vec::with_capacity(lines);
     for line_ix in 0..lines {
         let mut line = Vec::with_capacity(tokens_per_line);
         for token_ix in 0..tokens_per_line {
             let start = token_ix.saturating_mul(2);
-            let kind = if (line_ix.wrapping_add(nonce).wrapping_add(token_ix) & 1) == 0 {
+            let kind = if (line_ix.wrapping_add(variant).wrapping_add(token_ix) & 1) == 0 {
                 SyntaxTokenKind::Keyword
             } else {
                 SyntaxTokenKind::String

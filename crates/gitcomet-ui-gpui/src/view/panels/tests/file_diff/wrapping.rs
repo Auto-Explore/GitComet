@@ -89,7 +89,6 @@ fn collapsed_first_changed_source_visible_ix(
 
 #[gpui::test]
 fn diff_word_wrap_toggles_full_file_diff_wrapped_row_path(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -452,7 +451,6 @@ index 1111111..2222222 100644
 
 #[gpui::test]
 fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -688,7 +686,6 @@ fn collapsed_diff_word_wrap_continuation_rows_use_source_visible_row(
 
 #[gpui::test]
 fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -830,7 +827,6 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1157,7 +1153,6 @@ index 1111111..2222222 100644
 async fn diff_word_wrap_column_count_consistency_with_available_width(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1302,7 +1297,6 @@ fn wrap_display_columns(text: &str) -> usize {
 async fn diff_word_wrap_segments_are_maximal_for_their_column_budget(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1446,7 +1440,6 @@ async fn diff_word_wrap_segments_are_maximal_for_their_column_budget(
 /// glyph to the same advance, so no width-based test can catch this.
 #[gpui::test]
 async fn diff_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::TestAppContext) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

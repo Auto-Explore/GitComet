@@ -661,14 +661,13 @@ impl DiffRenderer {
                 (snapshot.model_id(), snapshot.revision())
             })
         });
+        let filesystem = self.store.filesystem();
         cx.spawn(async move |view: WeakEntity<DiffRenderer>, cx| {
             let read = {
                 let absolute = absolute.clone();
                 move || {
                     super::preview::preflight_worktree_file_for_editing(&absolute)?;
-                    let _guard = gitcomet_core::filesystem::global()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let _guard = filesystem.lock().unwrap_or_else(|e| e.into_inner());
                     let version =
                         super::preview::read_worktree_file_version_for_editing(&absolute)?;
                     let (text, stamp, hash, format) =
@@ -792,13 +791,12 @@ impl DiffRenderer {
         let Some(document) = self.editor_documents.find(&key) else {
             return;
         };
+        let filesystem = self.store.filesystem();
         cx.spawn(async move |view: WeakEntity<DiffRenderer>, cx| {
             let read = {
                 let path = key.0.clone();
                 move || {
-                    let _guard = gitcomet_core::filesystem::global()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let _guard = filesystem.lock().unwrap_or_else(|e| e.into_inner());
                     gitcomet_core::filesystem::DiskVersion::read_file(
                         &path,
                         super::preview::FILE_EDITOR_MAX_TEXT_BYTES as u64,

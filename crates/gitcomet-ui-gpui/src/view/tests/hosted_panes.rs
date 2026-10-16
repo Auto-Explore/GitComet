@@ -179,7 +179,6 @@ fn rows_with(cx: &mut gpui::VisualTestContext, pane: &DiffPane, needle: &str) ->
 
 #[gpui::test]
 fn worktree_lists_respect_the_index_and_untracked_option(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     crate::test_support::git(dir.path(), &["add", "a.rs"]);
     std::fs::write(dir.path().join("untracked.rs"), "untracked\n").unwrap();
@@ -222,7 +221,6 @@ fn worktree_lists_respect_the_index_and_untracked_option(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn two_panes_and_a_list_change_cancel_and_drop_independently(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
     let (host, repository) = cx.update(|_window, app| {
         let host = view.read(app).extension_window.as_ref().unwrap().host();
@@ -416,7 +414,6 @@ fn edit_hosted(
 fn hosted_parent_saves_keep_their_binding_when_a_nested_repository_is_open(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let nested = dir.path().join("nested");
     std::fs::create_dir(&nested).unwrap();
@@ -497,7 +494,6 @@ fn hosted_parent_saves_keep_their_binding_when_a_nested_repository_is_open(
 
 #[gpui::test]
 fn hosted_save_admission_follows_policy_and_keeps_admitted_receipts(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let (pane, renderer) = hosted_editor(cx, &view, &store);
     let path = dir.path().join("a.rs");
@@ -542,7 +538,6 @@ fn hosted_save_admission_follows_policy_and_keeps_admitted_receipts(cx: &mut gpu
 fn hosted_save_admission_checks_linked_worktree_before_renderer_sync(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let (pane, renderer) = hosted_editor(cx, &view, &store);
     let (_linked_dir, linked) = add_linked_worktree(dir.path());
@@ -604,7 +599,6 @@ fn hosted_save_admission_rejects_stale_binding(
     cx: &mut gpui::TestAppContext,
     remove_session: bool,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let (_pane, renderer) = hosted_editor(cx, &view, &store);
     let path = dir.path().join("a.rs");
@@ -644,7 +638,6 @@ fn hosted_save_admission_rejects_stale_binding(
 
 #[gpui::test]
 fn hosted_edits_are_saved_and_discarded_by_the_window_close_guard(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let (_pane, renderer) = hosted_editor(cx, &view, &store);
     edit_hosted(&renderer, "saved by close\n", cx);
@@ -702,7 +695,6 @@ fn hosted_edits_are_saved_and_discarded_by_the_window_close_guard(cx: &mut gpui:
 #[gpui::test]
 fn filesystem_resolution_and_rename_reach_hosted_editors(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::filesystem::{Operation, Request};
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let (_pane, renderer) = hosted_editor(cx, &view, &store);
     let path = canonicalize_or_original(dir.path().join("a.rs"));
@@ -768,7 +760,6 @@ fn filesystem_resolution_and_rename_reach_hosted_editors(cx: &mut gpui::TestAppC
 fn disposing_a_hosted_editor_transfers_dirty_text_and_releases_clean_records(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let (pane, renderer) = hosted_editor(cx, &view, &store);
     let path = canonicalize_or_original(dir.path().join("a.rs"));
@@ -820,7 +811,6 @@ fn disposing_a_hosted_editor_transfers_dirty_text_and_releases_clean_records(
 
 #[gpui::test]
 fn disposing_a_hosted_editor_keeps_its_pending_write_receipt(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let (pane, renderer) = hosted_editor(cx, &view, &store);
     let path = canonicalize_or_original(dir.path().join("a.rs"));
@@ -867,7 +857,6 @@ fn retargeting_ignores_old_notifications_and_clears_files_before_loading(
     };
     use gitcomet_state::diff_session::DiffViewId;
     use std::rc::Rc;
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
     let (host, repository) = cx.update(|_, app| {
         let host = view.read(app).extension_window.as_ref().unwrap().host();
@@ -1040,7 +1029,6 @@ fn open_changes_view(
 
 #[gpui::test]
 fn the_example_changes_view_shows_picks_in_two_panes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     let shown = |cx: &mut gpui::VisualTestContext| {
@@ -1160,7 +1148,6 @@ fn row_drawn(cx: &mut gpui::VisualTestContext, id: u64, row: usize) -> bool {
 /// diff does.
 #[gpui::test]
 fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository_of(cx, Arc::new(TestBackend), 400, [300, 250]);
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     let current = |cx: &mut gpui::VisualTestContext| {
@@ -1252,7 +1239,6 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
 /// own arrows do, and never move History's diff behind the view.
 #[gpui::test]
 fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
     cx.update(|_window, app| {
         crate::app::bind_app_keys_for_test(app);
@@ -1349,7 +1335,6 @@ fn the_file_keys_in_an_extension_view_step_its_pane_not_history(cx: &mut gpui::T
 
 #[gpui::test]
 fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     std::fs::write(
         dir.path().join("a.rs"),
@@ -1402,7 +1387,6 @@ fn alt_change_keys_reach_the_visible_pane_without_diff_focus(cx: &mut gpui::Test
 #[gpui::test]
 fn comparison_blame_toggles_retries_and_follows_the_file(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::domain::BlameSource;
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let from = head(dir.path());
     let (list_id, changes) = open_changes_view(cx, &view, &store);
@@ -1492,7 +1476,6 @@ fn hosted_renderer(
 fn image_preview_regression_hosted_panes_zoom_without_changing_window_scale(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let paths = ["first.png", "second.png"];
     for path in paths {
@@ -1515,16 +1498,23 @@ fn image_preview_regression_hosted_panes_zoom_without_changing_window_scale(
             "image fixture appears in the hosted list"
         );
         click_debug_selector(cx, file);
-        settle(cx, &view, &store, "hosted image preview", |cx| {
+        // The second pick moves the first into a new previous pane, which
+        // loads on its own; wait for both before wheeling over them.
+        settle(cx, &view, &store, "hosted image previews", |cx| {
             cx.update(|_, app| {
-                let current = changes.read(app).current().unwrap();
-                let pane = current
-                    .view()
-                    .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
-                    .unwrap();
-                pane.read(app)
-                    .renderer()
-                    .is_some_and(|renderer| renderer.read(app).image_preview_active)
+                let changes = changes.read(app);
+                changes
+                    .current()
+                    .into_iter()
+                    .chain(changes.previous())
+                    .all(|pane| {
+                        pane.view()
+                            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                            .unwrap()
+                            .read(app)
+                            .renderer()
+                            .is_some_and(|renderer| renderer.read(app).image_preview_active)
+                    })
             })
         });
     }
@@ -1647,7 +1637,6 @@ fn first_session(store: &AppStore) -> u64 {
 
 #[gpui::test]
 fn snapshot_panes_diff_texts_without_a_repository(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -1688,7 +1677,6 @@ fn hosted_raw_bytes_finish_across_metadata_updates_and_reject_replaced_content(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_extension_api::{DiffLayout, DiffPaneEvent};
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
     let loaded = std::rc::Rc::new(std::cell::Cell::new(0));
     let on_loaded = loaded.clone();
@@ -1822,7 +1810,6 @@ fn hosted_search_counts_raw_source_lines_without_changing_navigation(
 ) {
     use gitcomet_core::domain::Diff;
     use gitcomet_extension_api::DiffLayout;
-    let _guard = crate::test_support::lock_visual_test();
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -1940,7 +1927,6 @@ fn hosted_search_counts_raw_source_lines_without_changing_navigation(
 
 #[gpui::test]
 fn hosted_search_keeps_diff_source_while_editing_and_previewing(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     std::fs::write(dir.path().join("a.rs"), "needle needle\n").unwrap();
     let (pane, renderer) = hosted_editor(cx, &view, &store);
@@ -1970,7 +1956,6 @@ fn hosted_search_keeps_diff_source_while_editing_and_previewing(cx: &mut gpui::T
 fn hosted_search_keeps_raw_markdown_while_navigation_uses_rendered_text(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -2018,7 +2003,6 @@ fn snapshot_markdown_images_resolve_relative_and_absolute_document_paths(
     test_cx: &mut gpui::TestAppContext,
 ) {
     gitcomet_ui_kit::test_support::use_real_text_backend(test_cx);
-    let _guard = crate::test_support::lock_visual_test();
     let cwd = std::env::current_dir().unwrap();
     let directory = tempfile::tempdir_in(&cwd).unwrap();
     let docs = directory.path().join("docs");
@@ -2113,7 +2097,6 @@ fn whole_commit_panes_do_not_bind_contributions_to_ambiguous_file_lines(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_extension_api::{DiffAnnotation, DiffAnnotations, DiffInset, DiffLayout};
-    let _guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let pane = cx.update(|_, app| {
         let host = view.read(app).extension_window.as_ref().unwrap().host();
@@ -2177,7 +2160,6 @@ fn whole_commit_panes_do_not_bind_contributions_to_ambiguous_file_lines(
 fn a_pane_at_the_default_layout_follows_the_diff_setting(cx: &mut gpui::TestAppContext) {
     use crate::view::DiffViewMode;
     use gitcomet_extension_api::DiffLayout;
-    let _visual_guard = crate::test_support::lock_visual_test();
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, app_cx) =
@@ -2258,7 +2240,6 @@ fn commit_every_kind_of_change(root: &Path) -> String {
 fn panes_show_renames_additions_deletions_and_binaries_while_history_keeps_its_diff(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository(cx);
     let head = commit_every_kind_of_change(dir.path());
     let (host, repository) = cx.update(|_window, app| {
@@ -2400,7 +2381,6 @@ fn review_hosted_panes(
 
 #[gpui::test]
 fn hosted_layout_changes_leave_window_preferences_alone(test_cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(test_cx);
     cx.update(|_, app| {
         view.update(app, |root, cx| {
@@ -2435,7 +2415,6 @@ fn hosted_settings_follow_the_invoker_and_restore_the_primary_pane(
     test_cx: &mut gpui::TestAppContext,
 ) {
     use crate::view::panels::ContextMenuAction;
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(test_cx);
     let panes = review_hosted_panes(cx, &view, &store);
     for pane in panes {
@@ -2547,7 +2526,6 @@ fn hosted_settings_follow_the_invoker_and_restore_the_primary_pane(
 fn hosted_text_selection_obeys_the_live_policy_for_repository_and_snapshot_panes(
     test_cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository_of(test_cx, Arc::new(TestBackend), 2, [0, 1]);
     let panes = review_hosted_panes(cx, &view, &store);
     for pane in panes {
@@ -2609,7 +2587,6 @@ fn pane_contributions_annotate_act_and_inset_without_touching_file_lines(
         DiffAnnotation, DiffAnnotations, DiffInset, DiffLegendItem, DiffLineRange,
         DiffSelectionAction,
     };
-    let _visual_guard = crate::test_support::lock_visual_test();
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, app_cx) =
@@ -2756,7 +2733,6 @@ fn pane_contributions_annotate_act_and_inset_without_touching_file_lines(
 
 #[gpui::test]
 fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (dir, store, view, app_cx) = open_repository(cx);
     let root = dir.path();
     for n in 0..60 {
@@ -2903,7 +2879,6 @@ fn grouped_file_lists_pin_the_current_group_without_replanning(cx: &mut gpui::Te
 
 #[gpui::test]
 fn the_example_pops_its_pane_out_and_back(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     click_debug_selector(
@@ -3032,7 +3007,6 @@ fn clickable_pane(
 /// no line action, but its notes stay clickable.
 #[gpui::test]
 fn insets_and_annotations_run_their_actions(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, app_cx) =
@@ -3130,7 +3104,6 @@ impl Render for TwoPanes {
 fn a_linked_worktree_pane_offers_and_runs_no_staging_or_editing(cx: &mut gpui::TestAppContext) {
     use crate::view::hosted::diff_pane::DiffPaneView;
     use gitcomet_core::domain::{DiffArea, DiffTarget};
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (dir, store, view, app_cx) =
         open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
     let root = dir.path().to_path_buf();
@@ -3283,7 +3256,6 @@ fn a_linked_worktree_pane_offers_and_runs_no_staging_or_editing(cx: &mut gpui::T
 #[gpui::test]
 fn a_linked_worktree_list_reloads_when_its_worktree_changes(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::domain::DiffArea;
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
     let (_linked_dir, linked) = add_linked_worktree(dir.path());
     let (host, repository) = cx.update(|_window, app| {
@@ -3333,7 +3305,6 @@ fn a_linked_worktree_list_reloads_when_its_worktree_changes(cx: &mut gpui::TestA
 /// changes, read-only, watched while shown.
 #[gpui::test]
 fn the_example_lists_a_linked_worktree(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (dir, store, view, cx) = open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
     let (_linked_dir, linked) = add_linked_worktree(dir.path());
     let (_list_id, _changes) = open_changes_view(cx, &view, &store);
@@ -3536,7 +3507,6 @@ fn assert_linked_diff(
 
 #[gpui::test]
 fn clicking_linked_worktree_files_renders_staged_and_unstaged_diffs(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
     click_linked_file(cx, 0, gpui::MouseButton::Left);
     assert_linked_diff(
@@ -3582,7 +3552,6 @@ fn clicking_linked_worktree_files_renders_staged_and_unstaged_diffs(cx: &mut gpu
 
 #[gpui::test]
 fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
     cx.update(|_, app| {
         crate::app::bind_app_keys_for_test(app);
@@ -3669,7 +3638,6 @@ fn linked_worktree_change_keys_use_the_displayed_diff(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn linked_worktree_file_selection_repaints_without_mouse_movement(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, _linked, store, view, cx) = open_linked_worktree_changes(cx);
     cx.update(|_, app| {
         crate::app::bind_app_keys_for_test(app);
@@ -3813,8 +3781,6 @@ fn linked_worktree_file_selection_repaints_without_mouse_movement(cx: &mut gpui:
 fn linked_worktree_file_context_menu_opens_diff_and_uses_checkout_paths(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
-    let _clipboard = crate::test_support::lock_clipboard_test();
     let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
     click_linked_file(cx, 0, gpui::MouseButton::Right);
     assert!(cx.debug_bounds("app_popover").is_some());
@@ -3891,7 +3857,6 @@ fn linked_worktree_file_context_menu_opens_diff_and_uses_checkout_paths(
 fn sorted_linked_worktree_file_clicks_open_untracked_and_deleted_content(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_dir, linked, store, view, cx) = open_linked_worktree_changes(cx);
     for layout in [FileListLayout::Flat, FileListLayout::Tree] {
         cx.update(|_, app| {
@@ -3933,7 +3898,6 @@ fn sorted_linked_worktree_file_clicks_open_untracked_and_deleted_content(
 #[gpui::test]
 fn a_pane_draws_its_owners_bar(cx: &mut gpui::TestAppContext) {
     use gitcomet_extension_api::{DiffBar, DiffBarItem, DiffFileNavigation, DiffLineRange};
-    let _visual_guard = crate::test_support::lock_visual_test();
     install_example(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, app_cx) =
@@ -4051,7 +4015,6 @@ fn a_pane_draws_its_owners_bar(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn list_observers_follow_sort_layout_and_filter(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_dir, store, view, cx) = open_repository(cx);
     let (host, repository) = cx.update(|_, app| {
         let host = view.read(app).extension_window.as_ref().unwrap().host();

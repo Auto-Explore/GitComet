@@ -6,7 +6,6 @@ use super::*;
 fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -231,7 +230,6 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
 
 #[gpui::test]
 fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -326,7 +324,6 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
 fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -570,7 +567,6 @@ fn commit_file_projection_changes_notify_the_cached_main_pane(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -963,7 +959,6 @@ fn commit_details_state_with_paths(
 
 #[gpui::test]
 fn commit_file_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1014,7 +1009,6 @@ fn commit_file_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppCont
 /// prev/next arrows vanish the moment a folder is shut.
 #[gpui::test]
 fn collapsing_a_folder_keeps_every_file_navigable(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1088,7 +1082,6 @@ fn collapsing_a_folder_keeps_every_file_navigable(cx: &mut gpui::TestAppContext)
 /// The override is scoped to the commit it was made on.
 #[gpui::test]
 fn commit_file_layout_override_resets_on_commit_switch(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1145,7 +1138,6 @@ fn commit_file_layout_override_resets_on_commit_switch(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn status_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1184,7 +1176,6 @@ fn status_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) 
 /// order must not be trusted — it would silently select the wrong range.
 #[gpui::test]
 fn status_shift_click_range_follows_the_sorted_display_order(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1255,7 +1246,6 @@ fn status_shift_click_range_follows_the_sorted_display_order(cx: &mut gpui::Test
 fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1334,7 +1324,6 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
 /// skips files displayed between the clicks — and those files then get staged.
 #[gpui::test]
 fn status_shift_click_in_tree_layout_spans_the_displayed_rows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1405,7 +1394,6 @@ fn status_shift_click_in_tree_layout_spans_the_displayed_rows(cx: &mut gpui::Tes
 /// anchor captured under the old order must not be trusted.
 #[gpui::test]
 fn status_shift_click_drops_an_anchor_invalidated_by_a_sort_change(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1472,7 +1460,6 @@ fn status_shift_click_drops_an_anchor_invalidated_by_a_sort_change(cx: &mut gpui
 /// list under a header still counting changes.
 #[gpui::test]
 fn worktree_filter_resets_when_the_shown_worktree_changes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1536,7 +1523,6 @@ fn worktree_filter_resets_when_the_shown_worktree_changes(cx: &mut gpui::TestApp
 /// indexes rows — which a tree pads with directories and may be hiding.
 #[gpui::test]
 fn commit_file_scroll_resolves_a_file_position_to_its_row(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1610,7 +1596,6 @@ fn commit_file_scroll_resolves_a_file_position_to_its_row(cx: &mut gpui::TestApp
 /// and a tree reorders that.
 #[gpui::test]
 fn status_navigation_order_matches_the_drawn_rows_in_a_tree(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

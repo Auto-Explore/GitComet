@@ -42,6 +42,7 @@ pub(in crate::view) enum PreferenceChange {
         sha: bool,
     },
     HistoryHighlightCommitChain(bool),
+    HistoryShowGraphGradient(bool),
     FilesFollowSelectedCommit(bool),
     HistoryRelativeDates(bool),
     HistoryTags {

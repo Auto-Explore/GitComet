@@ -760,6 +760,20 @@ impl GitCometView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_history_show_graph_gradient(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.show_graph_gradient = enabled;
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_show_graph_gradient(enabled, cx);
+        });
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_history_relative_dates(
         &mut self,
         enabled: bool,
@@ -970,6 +984,9 @@ impl GitCometView {
             } => self.set_history_column_preferences(graph, author, date, sha, cx),
             PreferenceChange::HistoryHighlightCommitChain(enabled) => {
                 self.set_history_highlight_commit_chain(enabled, cx)
+            }
+            PreferenceChange::HistoryShowGraphGradient(enabled) => {
+                self.set_history_show_graph_gradient(enabled, cx)
             }
             PreferenceChange::FilesFollowSelectedCommit(enabled) => {
                 self.set_files_follow_selected_commit_preference(enabled, cx)

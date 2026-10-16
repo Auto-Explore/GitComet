@@ -35,6 +35,7 @@ impl DiffBinding {
 pub(crate) struct PaneStore {
     store: std::sync::Weak<AppStore>,
     read_only: bool,
+    filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     pub binding: Option<DiffBinding>,
     /// What the pane lets the user do now: the owner's policy, with staging
     /// and editing off while it shows a linked worktree. Set it with
@@ -47,6 +48,7 @@ pub(crate) struct PaneStore {
 impl From<Arc<AppStore>> for PaneStore {
     fn from(store: Arc<AppStore>) -> Self {
         Self {
+            filesystem: store.filesystem(),
             store: Arc::downgrade(&store),
             read_only: false,
             binding: None,
@@ -74,12 +76,20 @@ impl PaneStore {
         Self {
             store: std::sync::Weak::new(),
             read_only: true,
+            // Never written: a read-only pane saves nothing.
+            filesystem: gitcomet_core::filesystem::global(),
             binding: None,
             policy: DiffPanePolicy::read_only(),
             owner_policy: DiffPanePolicy::read_only(),
             linked: false,
         }
     }
+
+    /// The window store's filesystem engine, kept so it outlives the weak store.
+    pub fn filesystem(&self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        self.filesystem
+    }
+
     pub fn disable_commands(&mut self) {
         self.read_only = true;
     }

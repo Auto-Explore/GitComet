@@ -334,8 +334,6 @@ fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext)
     if cfg!(target_os = "macos") {
         return;
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -386,7 +384,6 @@ fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext)
 fn titlebar_only_reserves_visible_repository_controls_from_window_drag(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -625,7 +622,6 @@ fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAp
 fn the_title_bar_keeps_its_leading_control_clear_of_the_traffic_lights(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -668,8 +664,6 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
             .unwrap_or_else(|| panic!("missing {selector} at {at}% UI scale"))
             .size
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -737,7 +731,6 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
 
 #[gpui::test]
 fn repository_tabs_shrink_long_names_before_short_names(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {

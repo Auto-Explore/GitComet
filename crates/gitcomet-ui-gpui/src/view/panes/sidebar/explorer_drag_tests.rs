@@ -57,7 +57,6 @@ fn explorer_state() -> Arc<AppState> {
 
 #[gpui::test]
 fn explorer_drag_highlights_the_folder_under_the_pointer(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -164,7 +163,6 @@ fn long_explorer_state(count: usize) -> Arc<AppState> {
 
 #[gpui::test]
 fn explorer_drag_autoscroll_repaints_while_the_pointer_is_parked(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -303,7 +301,6 @@ fn collapsed_folder_state() -> Arc<AppState> {
 
 #[gpui::test]
 fn hovering_a_collapsed_folder_during_a_drag_expands_it(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_handle = store.clone();
     let (view, cx) =
@@ -363,7 +360,6 @@ fn hovering_a_collapsed_folder_during_a_drag_expands_it(cx: &mut gpui::TestAppCo
 fn drawing_the_tree_does_not_read_the_platform_clipboard_each_frame(cx: &mut gpui::TestAppContext) {
     // On Linux/X11 a clipboard read is a synchronous selection transfer, and
     // gpui re-renders on every mouse move while a drag is in flight.
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -412,7 +408,6 @@ fn start_file_drag(cx: &mut gpui::VisualTestContext, start: gpui::Point<Pixels>)
 
 #[gpui::test]
 fn explorer_preview_tracks_cursor_from_any_grab_position(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -479,7 +474,6 @@ fn explorer_preview_tracks_cursor_from_any_grab_position(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn explorer_autoscroll_survives_continuous_motion_and_cancels(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -556,7 +550,6 @@ fn explorer_autoscroll_survives_continuous_motion_and_cancels(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn pointer_only_drag_reuses_the_cached_explorer(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -611,7 +604,6 @@ fn pointer_only_drag_reuses_the_cached_explorer(cx: &mut gpui::TestAppContext) {
 fn explorer_drag_in_collapsed_files_popover_targets_rows_and_escape_cancels(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -651,7 +643,6 @@ fn explorer_drag_in_collapsed_files_popover_targets_rows_and_escape_cancels(
 fn explorer_external_drag_highlights_subtrees_root_and_excludes_controls(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -759,7 +750,6 @@ fn explorer_external_drag_highlights_subtrees_root_and_excludes_controls(
 
 #[gpui::test]
 fn explorer_inline_editor_fits_rows_and_focus_does_not_shift_labels(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -845,7 +835,6 @@ fn explorer_inline_editor_fits_rows_and_focus_does_not_shift_labels(cx: &mut gpu
 fn explorer_root_creation_follows_pinned_rows_and_pinned_rows_reject_drops(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -942,7 +931,6 @@ fn explorer_root_creation_follows_pinned_rows_and_pinned_rows_reject_drops(
 fn explorer_empty_repository_accepts_root_focus_and_external_highlight(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1086,7 +1074,6 @@ fn wait_for_path(cx: &mut gpui::VisualTestContext, path: &std::path::Path, exist
 fn explorer_inline_edit_enter_creates_the_file_and_returns_focus_to_the_tree(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let (_view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
@@ -1127,7 +1114,6 @@ fn explorer_inline_edit_enter_creates_the_file_and_returns_focus_to_the_tree(
 fn explorer_inline_edit_commits_on_focus_out_and_cancels_empty_or_unchanged_names(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let (view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
@@ -1189,7 +1175,6 @@ fn explorer_inline_edit_commits_on_focus_out_and_cancels_empty_or_unchanged_name
 
 #[gpui::test]
 fn explorer_inline_edit_survives_window_deactivation(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let (_view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
@@ -1221,7 +1206,6 @@ fn explorer_inline_edit_survives_window_deactivation(cx: &mut gpui::TestAppConte
 fn explorer_menu_rename_keeps_focus_in_the_name_field(cx: &mut gpui::TestAppContext) {
     use crate::view::panels::ContextMenuAction;
 
-    let _guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let (view, pane, cx) = explorer_window(cx, explorer_state_in(&root));
@@ -1279,7 +1263,6 @@ fn explorer_menu_rename_keeps_focus_in_the_name_field(cx: &mut gpui::TestAppCont
 fn dragging_a_folder_over_itself_or_its_descendants_offers_no_target(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_view, pane, cx) = explorer_window(cx, explorer_state());
     let alpha = cx.debug_bounds("file_browser_row_0").expect("alpha row");
     start_file_drag(cx, alpha.center());
@@ -1310,7 +1293,6 @@ fn dragging_a_folder_over_itself_or_its_descendants_offers_no_target(
 
 #[gpui::test]
 fn hovering_a_dragged_collapsed_folder_does_not_expand_it(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, _pane, cx) = explorer_window(cx, collapsed_folder_state());
     let store = cx.update(|_, app| view.read(app).store.clone());
     let alpha = cx
@@ -1337,7 +1319,6 @@ fn hovering_a_dragged_collapsed_folder_does_not_expand_it(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn dropping_a_folder_onto_itself_or_its_parent_is_a_silent_no_op(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let (view, pane, cx) = explorer_window(cx, explorer_state_in(&root));

@@ -46,6 +46,41 @@ use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
+/// Which filesystem engine and submission queue a store's file operations use.
+#[derive(Clone, Copy)]
+enum FilesystemScope {
+    /// Windows share the process's, so undo history and write order span windows.
+    Process,
+    /// Tests run concurrently in one process; one must not undo, or queue
+    /// behind, another's file operations.
+    #[cfg(any(test, feature = "test-support"))]
+    Store,
+}
+
+impl FilesystemScope {
+    fn engine(self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        match self {
+            Self::Process => gitcomet_core::filesystem::global(),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Store => isolated_filesystem(),
+        }
+    }
+
+    fn own_queue(self) -> Option<std::sync::LazyLock<TaskExecutor>> {
+        match self {
+            Self::Process => None,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Store => Some(std::sync::LazyLock::new(executor::filesystem_queue)),
+        }
+    }
+}
+
+/// Leaked like the process-wide engine, which is never dropped either.
+#[cfg(any(test, feature = "test-support"))]
+fn isolated_filesystem() -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+    Box::leak(Box::default())
+}
+
 /// Inactive repositories whose file monitors keep running, most recently
 /// active first. A macOS FSEvents stream is one recursive registration per
 /// root, so a warm monitor costs little; inotify registers every directory,
@@ -98,6 +133,17 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
     } else {
         Arc::make_mut(state)
     }
+}
+
+/// Feedback acknowledgements only release entries the window has shown. The
+/// worker applies them in the next reducer pass instead of copying and
+/// publishing the whole state for them alone; the window already finds new
+/// entries by sequence, so entries it has shown may linger until then.
+fn is_feedback_acknowledgement(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::AcknowledgeNotifications { .. } | Msg::AcknowledgeRepoFeedback { .. }
+    )
 }
 
 fn is_control_msg(msg: &Msg) -> bool {
@@ -228,8 +274,12 @@ struct WorkerLoopContext<'a> {
     signature_executor: &'a TaskExecutor,
     history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
     session_persist_executor: &'a TaskExecutor,
+    filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
     backend: &'a Arc<dyn GitBackend>,
     publication: &'a AtomicU64,
+    /// Feedback acknowledgements held for the next reducer pass; see
+    /// [`is_feedback_acknowledgement`].
+    deferred_acknowledgements: &'a mut Vec<(Msg, reducer::prepared::ReducerInputs)>,
 }
 
 impl WorkerLoopContext<'_> {
@@ -252,6 +302,9 @@ impl WorkerLoopContext<'_> {
             let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
             let mutable = make_mut_state_with_diagnostics(&mut app_state);
             let reduce_started = Instant::now();
+            for (acknowledgement, inputs) in self.deferred_acknowledgements.drain(..) {
+                reduce_prepared(&inputs, repos, id_alloc, mutable, acknowledgement);
+            }
             let effects = reduce_with(mutable, repos, id_alloc);
             let reduce_duration = reduce_started.elapsed();
             reducer_diagnostics::record_reducer_pass(reduce_duration);
@@ -458,6 +511,7 @@ impl WorkerLoopContext<'_> {
                     metadata_executor: self.metadata_executor,
                     signature_executor: self.signature_executor,
                     history_find_executor: self.history_find_executor,
+                    filesystem_executor: self.filesystem_executor,
                 },
                 self.thread_state,
                 self.backend,
@@ -595,6 +649,7 @@ impl AppStore {
             backend,
             AppState::default(),
             repository_preferences::PreferenceHub::shared(),
+            FilesystemScope::Process,
         )
     }
 
@@ -606,6 +661,7 @@ impl AppStore {
             repository_preferences::PreferenceHub::new(
                 crate::session::default_session_file_path_for_effect(),
             ),
+            FilesystemScope::Store,
         )
     }
 
@@ -618,6 +674,7 @@ impl AppStore {
             backend,
             AppState::test_default(),
             Arc::clone(&other.msg_tx.preferences),
+            FilesystemScope::Store,
         )
     }
 
@@ -625,14 +682,20 @@ impl AppStore {
         backend: Arc<dyn GitBackend>,
         initial: AppState,
         preferences: Arc<repository_preferences::PreferenceHub>,
+        scope: FilesystemScope,
     ) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let discovery_backend = Arc::clone(&backend);
         let state = Arc::new(RwLock::new(Arc::new(initial)));
         let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
         let store_id = StoreInstanceId::next();
         let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let msg_tx =
-            StoreWorkerSender::new(command_tx, Arc::clone(&store_alive), store_id, preferences);
+        let msg_tx = StoreWorkerSender::new(
+            command_tx,
+            Arc::clone(&store_alive),
+            store_id,
+            preferences,
+            scope.engine(),
+        );
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
@@ -675,11 +738,18 @@ impl AppStore {
                 std::sync::LazyLock::new(|| {
                     TaskExecutor::named(crate::history_find::HISTORY_FIND_THREAD, 1)
                 });
+            #[allow(unused_mut)]
+            let mut store_filesystem_executor = scope.own_queue();
+            let filesystem_executor = match store_filesystem_executor.as_ref() {
+                Some(own) => own,
+                None => &executor::FILESYSTEM_QUEUE,
+            };
             let mut repos: RepositoryRuntimes = Default::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
             let mut deferred_commands = VecDeque::new();
+            let mut deferred_acknowledgements = Vec::new();
 
             while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
                 let (mut msg, stamp) = match command {
@@ -724,6 +794,12 @@ impl AppStore {
                 };
 
                 if !thread_msg_tx.is_alive() {
+                    continue;
+                }
+                if is_feedback_acknowledgement(&msg) {
+                    deferred_acknowledgements.push(
+                        PreparedReduction::for_worker(msg, &thread_state, &repos).into_parts(),
+                    );
                     continue;
                 }
 
@@ -838,8 +914,10 @@ impl AppStore {
                     signature_executor: &signature_executor,
                     history_find_executor: &history_find_executor,
                     session_persist_executor: &session_persist_executor,
+                    filesystem_executor,
                     backend: &backend,
                     publication: &thread_publication,
+                    deferred_acknowledgements: &mut deferred_acknowledgements,
                 };
 
                 match msg {
@@ -1003,6 +1081,22 @@ impl AppStore {
                 if let Some(executor) = std::sync::LazyLock::get_mut(&mut history_find_executor) {
                     executor.join_workers();
                 }
+                if let Some(executor) = store_filesystem_executor
+                    .as_mut()
+                    .and_then(std::sync::LazyLock::get_mut)
+                {
+                    executor.join_workers();
+                }
+                match scope {
+                    // Production releases the shared engine at exit (cleanup_on_shutdown).
+                    FilesystemScope::Process => {}
+                    // Otherwise a test store's engine would leave its staging folders behind.
+                    FilesystemScope::Store => thread_msg_tx
+                        .filesystem
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .shutdown(),
+                }
             }
         });
         worker.expect("spawn store worker thread");
@@ -1113,6 +1207,11 @@ impl AppStore {
         self.public_lifetime
             .history_find_dispatches
             .load(Ordering::Relaxed)
+    }
+
+    /// The filesystem engine this store's file operations journal into.
+    pub fn filesystem(&self) -> &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem> {
+        self.msg_tx.filesystem
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {

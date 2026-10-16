@@ -99,7 +99,6 @@ fn config_for(mode: GitCometViewMode) -> GitCometViewConfig {
 
 #[gpui::test]
 fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     for mode in [
         GitCometViewMode::Normal,
         GitCometViewMode::FocusedDiff,
@@ -155,7 +154,6 @@ fn without_extensions_the_host_adds_nothing(cx: &mut gpui::TestAppContext) {
 /// sidebar rows render, and its window gate covers the window until lifted.
 #[gpui::test]
 fn the_examples_chrome_rows_and_gate_reach_a_main_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let workdir = tempfile::tempdir().unwrap();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -194,7 +192,6 @@ fn the_examples_chrome_rows_and_gate_reach_a_main_window(cx: &mut gpui::TestAppC
 #[gpui::test]
 fn hosts_open_urls_and_paths_after_the_update(cx: &mut gpui::TestAppContext) {
     use crate::view::platform_open::{Launch, take_recorded_launches};
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -236,7 +233,6 @@ fn hosts_open_urls_and_paths_after_the_update(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn status_bar_links_open_after_the_click(cx: &mut gpui::TestAppContext) {
     use crate::view::platform_open::{Launch, take_recorded_launches};
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -259,7 +255,6 @@ fn status_bar_links_open_after_the_click(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn contributions_run_per_window_persist_and_forget_closed_windows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let first_workspace = named_workspace("First");
     let second_workspace = named_workspace("Second");
     cx.update(|app| {
@@ -343,7 +338,6 @@ fn contributions_run_per_window_persist_and_forget_closed_windows(cx: &mut gpui:
 
 #[gpui::test]
 fn saved_workspace_state_is_restored_when_a_window_opens(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let repo = PathBuf::from("/tmp/extension-review-restored");
     let mut workspace = named_workspace("Restored");
     workspace
@@ -368,7 +362,6 @@ fn saved_workspace_state_is_restored_when_a_window_opens(cx: &mut gpui::TestAppC
 /// tab: the built-in one's own and each contribution's.
 #[gpui::test]
 fn view_and_details_tabs_show_their_icons(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -398,7 +391,6 @@ fn view_and_details_tabs_show_their_icons(cx: &mut gpui::TestAppContext) {
 /// icons (`extensions/<id>/…`), and runs its entries.
 #[gpui::test]
 fn extension_menus_draw_the_extensions_icons(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -434,7 +426,6 @@ fn extension_menus_draw_the_extensions_icons(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn repository_views_switch_with_history_and_are_kept(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -500,7 +491,6 @@ fn repository_views_switch_with_history_and_are_kept(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn commands_reach_the_palette_key_bindings_and_menus(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -567,7 +557,6 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_extension_api::{ChangeSource, DiffPaneOptions};
-    let _visual_guard = crate::test_support::lock_visual_test();
     let workspace = named_workspace("Store lifetime");
     cx.update(|app| {
         crate::workspaces::initialize_for_test(app, vec![workspace.clone()]);
@@ -641,7 +630,6 @@ fn retained_panes_and_bottom_panels_do_not_keep_a_closed_windows_store_alive(
 fn different_close_requests_replace_pending_and_visible_confirmations(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -698,7 +686,6 @@ fn different_close_requests_replace_pending_and_visible_confirmations(
 
 #[gpui::test]
 fn extension_bottom_panels_share_the_strip_with_the_reflog(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -780,7 +767,6 @@ fn extension_bottom_panels_share_the_strip_with_the_reflog(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn details_tabs_and_sidebar_sections_sit_beside_the_built_ins(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -840,7 +826,6 @@ fn details_tabs_and_sidebar_sections_sit_beside_the_built_ins(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn hosted_dialogs_open_in_the_popover_host_and_close(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -864,7 +849,6 @@ fn hosted_dialogs_open_in_the_popover_host_and_close(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn entry_gates_refuse_marked_repositories_with_a_notice(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let marked = tempfile::tempdir().unwrap();
     std::fs::write(marked.path().join(review::DENY_MARKER), "").unwrap();
@@ -914,7 +898,6 @@ fn entry_gates_refuse_marked_repositories_with_a_notice(cx: &mut gpui::TestAppCo
 /// gate that refuses the submodule stops it before a tab opens.
 #[gpui::test]
 fn opening_a_submodule_tab_passes_the_entry_gates(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let parent = tempfile::tempdir().unwrap();
     let submodule = parent.path().join("vendored");
@@ -955,7 +938,6 @@ fn opening_a_submodule_tab_passes_the_entry_gates(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn close_guards_ask_once_after_the_host_guards(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -1008,7 +990,6 @@ fn close_guards_ask_once_after_the_host_guards(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn running_git_operations_ask_before_the_window_closes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1038,7 +1019,6 @@ fn running_git_operations_ask_before_the_window_closes(cx: &mut gpui::TestAppCon
 /// that clone, so it asks like a push does.
 #[gpui::test]
 fn a_running_submodule_clone_asks_before_its_repository_closes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1070,7 +1050,6 @@ fn a_running_submodule_clone_asks_before_its_repository_closes(cx: &mut gpui::Te
 
 #[gpui::test]
 fn state_observers_are_notified_once_per_update_cycle(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -1116,7 +1095,6 @@ fn state_observers_are_notified_once_per_update_cycle(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn selective_observers_hear_only_changes_to_their_selection(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -1152,7 +1130,6 @@ fn selective_observers_hear_only_changes_to_their_selection(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn the_syntax_service_highlights_known_languages_only(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -1174,7 +1151,6 @@ fn the_syntax_service_highlights_known_languages_only(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn repository_watches_lease_the_watcher_until_dropped(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
@@ -1207,7 +1183,6 @@ fn repository_watches_lease_the_watcher_until_dropped(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn extension_branch_defaults_are_editable_and_scoped_to_one_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(install_example);
     let first = open_window_with_repo(
         cx,

@@ -30,7 +30,7 @@ fn dropped_existing_repo_focuses_its_tab_without_creating_a_duplicate() {
 }
 
 #[test]
-fn diagnostics_are_capped() {
+fn diagnostics_are_not_capped() {
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -47,8 +47,10 @@ fn diagnostics_are_capped() {
         );
     }
 
-    assert_eq!(repo_state.feedback.diagnostics.len(), 200);
-    assert_eq!(repo_state.feedback.diagnostics[0].message, "err-5");
+    // The window acknowledges diagnostics it has shown; until then none
+    // are dropped.
+    assert_eq!(repo_state.feedback.diagnostics.len(), 205);
+    assert_eq!(repo_state.feedback.diagnostics[0].message, "err-0");
     assert_eq!(
         repo_state.feedback.diagnostics.last().unwrap().message,
         "err-204"

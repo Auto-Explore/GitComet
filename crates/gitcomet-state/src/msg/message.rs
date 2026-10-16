@@ -292,6 +292,21 @@ pub enum Msg {
     AcknowledgeRepoOpenFailures {
         through_revision: u64,
     },
+    /// Release notifications the window has shown, retaining any pushed after
+    /// `through_seq` while the acknowledgement was queued. The store worker
+    /// applies it with its next state change rather than publishing for it.
+    AcknowledgeNotifications {
+        through_seq: u64,
+    },
+    /// Release the diagnostics and command results the window has shown for
+    /// this repository lifetime, retaining any appended after them. Applied
+    /// with the store's next state change, like `AcknowledgeNotifications`.
+    AcknowledgeRepoFeedback {
+        repo_id: RepoId,
+        lifetime: u64,
+        diagnostics_through_seq: u64,
+        command_log_through_seq: u64,
+    },
     RestoreSession {
         open_repos: Vec<PathBuf>,
         active_repo: Option<PathBuf>,

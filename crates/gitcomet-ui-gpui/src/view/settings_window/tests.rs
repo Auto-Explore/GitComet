@@ -1,5 +1,4 @@
 use super::*;
-use crate::test_support::lock_visual_test;
 use crate::view::test_support::TestBackend;
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent};

@@ -53,6 +53,8 @@ pub(super) struct EffectExecutors<'a> {
     /// Whole-history find scans, one worker per store: one window's scan
     /// must not hold up another's.
     pub(super) history_find_executor: &'a std::sync::LazyLock<TaskExecutor>,
+    /// Disk writes and explorer mutations, in submission order.
+    pub(super) filesystem_executor: &'a std::sync::LazyLock<TaskExecutor>,
 }
 
 fn selected_diff_target(
@@ -137,6 +139,7 @@ pub(super) fn schedule_effect(
         metadata_executor,
         signature_executor,
         history_find_executor,
+        filesystem_executor,
     } = executors;
 
     if effect.requires_available_git() {
@@ -171,9 +174,15 @@ pub(super) fn schedule_effect(
             msg_tx,
             work,
         ),
-        Effect::RepoCommand(work) => {
-            repo_commands::schedule(executor, thread_state, backend, repos, msg_tx, work)
-        }
+        Effect::RepoCommand(work) => repo_commands::schedule(
+            executor,
+            filesystem_executor,
+            thread_state,
+            backend,
+            repos,
+            msg_tx,
+            work,
+        ),
         Effect::ValidateAuthPrompt {
             generation,
             challenge,
@@ -197,7 +206,7 @@ pub(super) fn schedule_effect(
             });
         }
         Effect::Filesystem(request) => {
-            super::executor::filesystem_executor().spawn(move || {
+            filesystem_executor.spawn(move || {
                 // The engine ticks once per item and every dispatch deep-copies
                 // AppState, so an unthrottled thousand-file drop spends longer
                 // cloning state than moving files -- and starves the progress
@@ -206,7 +215,8 @@ pub(super) fn schedule_effect(
                 // one is held back and flushed so the bar ends where it should.
                 let mut last_sent: Option<std::time::Instant> = None;
                 let mut withheld: Option<gitcomet_core::filesystem::Progress> = None;
-                let result = gitcomet_core::filesystem::global()
+                let result = msg_tx
+                    .filesystem
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .execute(request, |progress| {

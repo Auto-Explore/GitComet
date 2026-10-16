@@ -143,7 +143,11 @@ pub struct AppState {
     /// Store-wide sequence; acknowledgements must not reset retry baselines.
     pub repo_open_failure_revision: u64,
     pub clone: Option<CloneOpState>,
+    /// Notifications the window has not acknowledged yet
+    /// (`Msg::AcknowledgeNotifications`).
     pub notifications: Vec<AppNotification>,
+    /// Number pushed, including notifications already acknowledged and dropped.
+    pub notifications_seq: u64,
     pub auth_prompt: Option<AuthPromptState>,
     /// Every new authentication request has a distinct identity, including
     /// repeated requests for the same key and operation.
@@ -191,6 +195,23 @@ impl AppState {
             },
             ..Self::default()
         }
+    }
+
+    /// Queues a notification for the window.
+    pub fn push_notification(&mut self, notification: AppNotification) {
+        self.notifications_seq = self.notifications_seq.wrapping_add(1);
+        self.notifications.push(notification);
+    }
+
+    /// Notifications queued after notification number `seq`.
+    pub fn notifications_after(&self, seq: u64) -> &[AppNotification] {
+        super::feedback_after(&self.notifications, self.notifications_seq, seq)
+    }
+
+    /// Releases the notifications the window has shown, up to number
+    /// `through_seq`.
+    pub fn acknowledge_notifications(&mut self, through_seq: u64) {
+        super::acknowledge_feedback(&mut self.notifications, self.notifications_seq, through_seq);
     }
 
     /// The signature formats to verify: none when the preference is off,

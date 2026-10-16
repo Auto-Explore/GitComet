@@ -25,8 +25,6 @@ fn diff_render_defaults_from_session_subprocess(cx: &mut gpui::TestAppContext) {
     if std::env::var_os(DIFF_DEFAULTS_SESSION_SUBTEST_ENV).is_none() {
         return;
     }
-
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

@@ -389,8 +389,8 @@ fn prepared_handle_rehydrates_after_thread_local_tree_eviction() {
 
     let text = "fn target() { let value = [1, 2]; }\n";
     let target = prepare_test_document(DiffSyntaxLanguage::Rust, text);
-    for nonce in 0..TS_DOCUMENT_CACHE_MAX_ENTRIES {
-        let source = format!("fn evict_{nonce}() {{ let value = [{nonce}]; }}\n");
+    for variant in 0..TS_DOCUMENT_CACHE_MAX_ENTRIES {
+        let source = format!("fn evict_{variant}() {{ let value = [{variant}]; }}\n");
         prepare_test_document(DiffSyntaxLanguage::Rust, &source);
     }
     assert!(

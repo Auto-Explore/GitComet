@@ -438,7 +438,7 @@ fn dedup_and_normalize_path_cover_duplicate_and_relative_branches() {
 }
 
 #[test]
-fn push_notification_and_diagnostic_cap_old_entries() {
+fn push_notification_and_diagnostic_count_every_entry_without_a_cap() {
     let mut state = AppState::test_default();
     for ix in 0..205 {
         push_notification(
@@ -448,8 +448,9 @@ fn push_notification_and_diagnostic_cap_old_entries() {
             format!("notification-{ix}"),
         );
     }
-    assert_eq!(state.notifications.len(), 200);
-    assert_eq!(state.notifications[0].message, "notification-5");
+    assert_eq!(state.notifications.len(), 205);
+    assert_eq!(state.notifications_seq, 205);
+    assert_eq!(state.notifications[0].message, "notification-0");
 
     let mut repo = repo_state(3);
     for ix in 0..205 {
@@ -460,12 +461,13 @@ fn push_notification_and_diagnostic_cap_old_entries() {
             format!("diagnostic-{ix}"),
         );
     }
-    assert_eq!(repo.feedback.diagnostics.len(), 200);
-    assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-5");
+    assert_eq!(repo.feedback.diagnostics.len(), 205);
+    assert_eq!(repo.feedback.diagnostics_seq, 205);
+    assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-0");
 }
 
 #[test]
-fn command_and_action_logs_use_expected_stderr_and_trim_history() {
+fn command_and_action_logs_use_expected_stderr_and_keep_history() {
     let mut repo = repo_state(4);
     repo.feedback_mut().command_log = (0..200).map(dummy_log_entry).collect();
     push_command_log(
@@ -477,8 +479,9 @@ fn command_and_action_logs_use_expected_stderr_and_trim_history() {
         None,
         false,
     );
-    assert_eq!(repo.feedback.command_log.len(), 200);
-    assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
+    assert_eq!(repo.feedback.command_log.len(), 201);
+    assert_eq!(repo.feedback.command_log_seq, 1);
+    assert_eq!(repo.feedback.command_log[0].command, "cmd-0");
     assert_eq!(
         repo.feedback
             .command_log
@@ -500,8 +503,9 @@ fn command_and_action_logs_use_expected_stderr_and_trim_history() {
         ))),
         false,
     );
-    assert_eq!(repo.feedback.command_log.len(), 200);
-    assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
+    assert_eq!(repo.feedback.command_log.len(), 201);
+    assert_eq!(repo.feedback.command_log_seq, 2);
+    assert_eq!(repo.feedback.command_log[0].command, "cmd-0");
 }
 
 #[test]

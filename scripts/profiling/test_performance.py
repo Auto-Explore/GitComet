@@ -4,8 +4,10 @@ from contextlib import closing
 import http.client
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -19,6 +21,33 @@ import perf_workloads
 
 live = perf_workloads.module("test_live_ui", "live-ui.py")
 multi_window = perf_workloads.module("test_multi_window", "multi-window.py")
+GIT_REPOSITORY_ENVIRONMENT = patch.dict(os.environ)
+
+
+def setUpModule():
+    # Hooks and `git rebase --exec` export GIT_DIR and friends; fixtures run git in their own repositories.
+    GIT_REPOSITORY_ENVIRONMENT.start()
+    local = subprocess.run(["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True)
+    for name in local.stdout.split():
+        os.environ.pop(name, None)
+
+
+def tearDownModule():
+    GIT_REPOSITORY_ENVIRONMENT.stop()
+
+
+class GitIsolationTests(unittest.TestCase):
+    def test_fixture_git_ignores_an_outer_git_dir(self):
+        # `git rebase --exec` and hooks export GIT_DIR; fixture git calls must still read their own repositories.
+        with tempfile.TemporaryDirectory() as directory:
+            outer = Path(directory) / "outer"
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", str(outer)], check=True)
+            child = subprocess.run(
+                [sys.executable, "-B", "-m", "unittest",
+                 "test_performance.FixtureTests.test_worktree_identity_detects_changes_without_changing_refs"],
+                cwd=Path(__file__).parent, capture_output=True, text=True,
+                env={**os.environ, "GIT_DIR": str(outer / ".git")})
+            self.assertEqual(child.returncode, 0, child.stderr[-2000:])
 
 
 class ReportingTests(unittest.TestCase):

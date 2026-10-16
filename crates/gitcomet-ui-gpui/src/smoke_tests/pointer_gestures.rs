@@ -2,7 +2,6 @@ use super::*;
 
 #[gpui::test]
 fn release_outside_a_text_input_does_not_click_where_it_lands(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = cx.add_window_view(PressGestureHostView::new);
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -73,7 +72,6 @@ fn release_outside_a_text_input_does_not_click_where_it_lands(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn a_press_under_an_occluding_overlay_still_clears_the_claim(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (_view, cx) = cx.add_window_view(PressGestureHostView::new);
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -110,7 +108,6 @@ fn a_press_under_an_occluding_overlay_still_clears_the_claim(cx: &mut gpui::Test
 
 #[gpui::test]
 fn a_button_less_pointer_move_clears_a_stranded_claim(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (_view, cx) = cx.add_window_view(PressGestureHostView::new);
     cx.update(|window, app| {
         let _ = window.draw(app);

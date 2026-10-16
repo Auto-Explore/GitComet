@@ -3,7 +3,6 @@ use super::*;
 #[cfg(unix)]
 #[gpui::test]
 fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -72,7 +71,6 @@ fn repository_editor_rejects_saves_through_a_symlinked_directory(cx: &mut gpui::
 fn failed_autosaves_reach_the_unsaved_edits_prompt_without_retrying_forever(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -163,7 +161,6 @@ fn releasing_filesystem_pauses_keeps_manual_stashed_edits_unsaved(cx: &mut gpui:
 
 #[gpui::test]
 async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -231,7 +228,6 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
 
 #[gpui::test]
 async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -312,7 +308,6 @@ async fn file_editor_keeps_an_unsaved_buffer_across_a_file_switch(cx: &mut gpui:
 async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -400,7 +395,6 @@ async fn typing_and_undoing_returns_the_buffer_to_clean(cx: &mut gpui::TestAppCo
     // rope's chunk boundaries depend on edit history — so text that was once
     // byte-identical to disk hashed differently and the buffer could never
     // settle. It has to be big enough to span several chunks (512 bytes each).
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -474,7 +468,6 @@ async fn the_load_placeholder_is_never_saved_over_the_file(cx: &mut gpui::TestAp
     // that window wrote an empty string over the file just opened. The window is
     // a scheduling accident, so this reconstructs the state it produced rather
     // than trying to race it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -536,7 +529,6 @@ async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext
     // repo's revisions), and an earlier version of that follow-up blanked the
     // input before re-reading, so every save re-seated the buffer — resetting
     // the caret to 0 and clearing undo, once per auto-save.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -612,7 +604,6 @@ async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext
 async fn review_regression_moving_a_repository_prompts_before_detaching_dirty_editor_buffers(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -682,7 +673,6 @@ async fn review_regression_moving_a_repository_prompts_before_detaching_dirty_ed
 
 #[gpui::test]
 async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -721,8 +711,9 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
         });
     });
     cx.run_until_parked();
-    // The exit goes through the store, so pull the reduced snapshot back into
-    // the view the way a real frame would.
+    // The exit goes through the store, so wait for its worker to reduce it and
+    // pull that snapshot back into the view the way a real frame would.
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)
@@ -759,7 +750,6 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_core::filesystem::{DocumentIdentity, Filesystem, Operation, Request};
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -855,7 +845,6 @@ fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
 
 #[gpui::test]
 async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -919,7 +908,6 @@ async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext)
 }
 
 fn save_completion_after_navigation(cx: &mut gpui::TestAppContext, autosave: bool, paused: bool) {
-    let _visual_guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

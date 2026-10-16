@@ -14,7 +14,6 @@ impl Extension for MenuExtension {
 fn settings_menu_preserves_disabled_release_and_close_before_callback_ordering(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.update(|app| {
         crate::view::extension_host::install(
             Registry::build(vec![Box::new(MenuExtension)]).unwrap(),

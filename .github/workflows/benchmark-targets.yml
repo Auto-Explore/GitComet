@@ -51,7 +51,6 @@ jobs:
           context: ${{ matrix.name }}-benchmarks-${{ env.CI_BENCHMARK_PROFILE }}
           cold-cache: ${{ inputs.cold-cache }}
           nextest: "false"
-          compiled: "false"
       - name: Compile and link Criterion and support targets
         shell: bash
         run: |
@@ -61,7 +60,3 @@ jobs:
         if: always()
         with:
           name: benchmark-${{ matrix.name }}
-          cache-key: ${{ steps.setup.outputs.cache-key }}
-          cache-hit: ${{ steps.setup.outputs.cache-hit }}
-          cold-cache: ${{ inputs.cold-cache }}
-          compiled: "false"

@@ -5,8 +5,6 @@ use super::*;
 /// here: the test text system measures every font identically.)
 #[gpui::test]
 fn wrap_char_width_follows_the_editor_font_and_zoom(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
-
     struct Probe;
     impl gpui::Render for Probe {
         fn render(

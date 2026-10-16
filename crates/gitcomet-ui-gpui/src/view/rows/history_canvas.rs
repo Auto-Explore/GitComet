@@ -1393,6 +1393,7 @@ pub(super) fn history_commit_row_canvas(
     show_date: bool,
     show_sha: bool,
     show_graph_color_marker: bool,
+    graph_fade_opacity: f32,
     is_stash_node: bool,
     selected: bool,
     connect_from_top_col: Option<usize>,
@@ -1684,6 +1685,7 @@ pub(super) fn history_commit_row_canvas(
                     node_color,
                     graph_bounds,
                     scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+                    graph_fade_opacity,
                     window,
                 );
             }

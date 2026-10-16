@@ -353,7 +353,6 @@ impl Render for Harness {
 
 #[gpui::test]
 fn viewport_wheel_zoom_pan_drag_and_keyboard(cx: &mut gpui::TestAppContext) {
-    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let input = source(1000, 1000);
     let (view, cx) = cx.add_window_view(|_, cx| Harness {
         group: cx.new(|cx| {
@@ -486,7 +485,6 @@ fn clamped_pan_keeps_fit(cx: &mut gpui::TestAppContext) {
 /// went from 100% to 6400%.
 #[gpui::test]
 fn trackpad_ctrl_scroll_steps_by_distance(cx: &mut gpui::TestAppContext) {
-    let _guard = gitcomet_ui_kit::test_support::lock_visual_test();
     let input = source(1000, 1000);
     let (view, cx) = cx.add_window_view(|_, cx| Harness {
         group: cx.new(|cx| {

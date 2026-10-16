@@ -43,7 +43,6 @@ fn git_reprobe_preserves_system_and_graphics_environment() {
 
 #[gpui::test]
 fn environment_copy_matches_displayed_rows_and_refreshes_windows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = cx.add_window_view(SettingsWindowView::new);
     cx.run_until_parked();
     cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
@@ -83,8 +82,6 @@ fn environment_copy_matches_displayed_rows_and_refreshes_windows(cx: &mut gpui::
 
 #[gpui::test]
 fn environment_values_select_with_the_mouse_and_copy(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     let (_view, cx) = open_environment_page(cx);
     cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
 
@@ -116,8 +113,6 @@ fn environment_values_select_with_the_mouse_and_copy(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn environment_copy_button_sits_compact_in_the_card_header(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     let (view, cx) = open_environment_page(cx);
     cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
 
@@ -231,7 +226,6 @@ fn git_executable_scope_note_mentions_browser_only_scope() {
 
 #[gpui::test]
 fn custom_git_executable_mode_renders_detail_container(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -274,7 +268,6 @@ fn custom_git_executable_mode_renders_detail_container(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn custom_external_editor_renders_detail_container(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -329,7 +322,6 @@ fn custom_external_editor_renders_detail_container(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn external_editor_detection_waits_for_the_row_to_expand(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -387,7 +379,6 @@ fn external_editor_detection_waits_for_the_row_to_expand(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn browsed_external_editor_path_updates_custom_setting_and_notifies(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
@@ -462,7 +453,6 @@ fn custom_external_editor_browse_prompt_allows_app_bundle_directories() {
 fn external_editor_setting_seeds_from_pending_override_and_can_clear(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
     let pending_setting = ExternalCodeEditorSetting::Custom {
         executable: PathBuf::from("/tmp/gitcomet-pending-editor"),
@@ -546,7 +536,6 @@ fn external_editor_preference_persist_queue_skips_stale_custom_draft_writes() {
 
 #[gpui::test]
 fn generic_preference_persistence_omits_external_editor_snapshot(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -637,7 +626,6 @@ fn the_executables_page_is_found_by_its_tools() {
 
 #[gpui::test]
 fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -683,7 +671,6 @@ fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppConte
 #[gpui::test]
 fn large_file_tools_recheck_reaches_the_main_windows(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::large_file_tools::{LargeFileToolsState, ToolAvailability};
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let main_store = store.clone();
     let (_main_view, cx) =

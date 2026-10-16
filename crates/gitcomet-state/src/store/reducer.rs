@@ -820,6 +820,35 @@ fn reduce_inner(
             }
             Vec::new()
         }
+        Msg::AcknowledgeNotifications { through_seq } => {
+            state.acknowledge_notifications(through_seq);
+            Vec::new()
+        }
+        Msg::AcknowledgeRepoFeedback {
+            repo_id,
+            lifetime,
+            diagnostics_through_seq,
+            command_log_through_seq,
+        } => {
+            if let Some(repo_state) = state
+                .repos
+                .iter_mut()
+                .find(|r| r.id == repo_id && r.lifetime() == lifetime)
+            {
+                // Copying shared feedback only pays off when entries drop.
+                let feedback = &repo_state.feedback;
+                if feedback.diagnostics_after(diagnostics_through_seq).len()
+                    < feedback.diagnostics.len()
+                    || feedback.command_log_after(command_log_through_seq).len()
+                        < feedback.command_log.len()
+                {
+                    repo_state
+                        .feedback_mut()
+                        .acknowledge(diagnostics_through_seq, command_log_through_seq);
+                }
+            }
+            Vec::new()
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,

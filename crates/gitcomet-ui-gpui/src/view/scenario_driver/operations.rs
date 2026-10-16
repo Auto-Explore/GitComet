@@ -5,7 +5,9 @@ use gitcomet_core::large_files::LargeFileCommand;
 use gitcomet_core::services::PullMode;
 use gitcomet_state::model::{CloneOpStatus, GitHookOperationStatus, RepoId};
 use gitcomet_state::msg::FetchMsg;
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 use std::time::SystemTime;
 
 pub(super) struct Operation {
@@ -20,6 +22,9 @@ pub(super) struct Operation {
     started_wall: SystemTime,
     cancel_at: Option<Instant>,
     terminal_reported: bool,
+    /// Results the window showed for this repository while the operation ran.
+    command_results: Rc<RefCell<Vec<gitcomet_state::model::CommandLogEntry>>>,
+    _command_results: gpui::Subscription,
 }
 
 impl Driver {
@@ -146,6 +151,15 @@ impl Driver {
                 _ => return Err(format!("unknown scenario operation: {name}")),
             }
         };
+        let command_results = Rc::new(RefCell::new(Vec::new()));
+        let command_results_subscription = cx.update(|cx| {
+            let command_results = Rc::clone(&command_results);
+            cx.subscribe(&self.view, move |_, event: &CommandResultShown, _| {
+                if event.repo_id == repo_id {
+                    command_results.borrow_mut().push(event.entry.clone());
+                }
+            })
+        });
         let op = op_trace::next_op();
         self.operation = Some(Operation {
             op,
@@ -159,6 +173,8 @@ impl Driver {
             started_wall: SystemTime::now(),
             cancel_at: None,
             terminal_reported: false,
+            command_results,
+            _command_results: command_results_subscription,
         });
         record(
             "scenario_operation",
@@ -215,17 +231,22 @@ impl Driver {
                         .map_or_else(|| !operation.before.contains(&item.id), |id| item.id == id)
             });
             // Silent commands can discard their transient hook activity on
-            // completion. Their user-visible command log still witnesses the
-            // result; never interpret mere disappearance as success.
+            // completion. Their command result still witnesses it; never
+            // interpret mere disappearance as success.
             let Some(item) = item else {
-                return repo.feedback.command_log.iter().rev().find_map(|entry| {
-                    completion_from_log(
-                        entry,
-                        operation.label,
-                        operation.started_wall,
-                        operation.cancel_at.is_some(),
-                    )
-                });
+                return operation
+                    .command_results
+                    .borrow()
+                    .iter()
+                    .rev()
+                    .find_map(|entry| {
+                        completion_from_log(
+                            entry,
+                            operation.label,
+                            operation.started_wall,
+                            operation.cancel_at.is_some(),
+                        )
+                    });
             };
             operation.id = Some(item.id);
             Some(match item.status {

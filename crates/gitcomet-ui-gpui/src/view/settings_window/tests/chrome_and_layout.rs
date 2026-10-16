@@ -3,7 +3,6 @@ use super::*;
 #[gpui::test]
 fn restart_cancellation_only_applies_to_application_close_prompts(cx: &mut gpui::TestAppContext) {
     use gitcomet_extension_api::CloseScope;
-    let _visual_guard = lock_visual_test();
     cx.update(|app| {
         crate::view::extension_host::install(
             gitcomet_extension_api::Registry::build(vec![Box::new(
@@ -128,7 +127,6 @@ fn settings_window_options_request_client_chrome_and_resize_behavior() {
 
 #[gpui::test]
 fn settings_window_blur_requires_deliberate_input_focus(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = cx.add_window_view(SettingsWindowView::new);
     cx.update(|window, _| window.activate());
     cx.run_until_parked();
@@ -158,7 +156,6 @@ fn settings_window_blur_requires_deliberate_input_focus(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -190,7 +187,6 @@ fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
 fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -240,7 +236,6 @@ fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
 
 #[gpui::test]
 fn expanded_history_columns_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -283,7 +278,6 @@ fn expanded_history_columns_section_renders_detail_container(cx: &mut gpui::Test
 fn expanded_git_log_default_mode_section_renders_modes_in_order_and_updates_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -374,7 +368,6 @@ fn expanded_git_log_default_mode_section_renders_modes_in_order_and_updates_sele
 fn expanded_git_log_default_mode_section_renders_before_history_columns_row(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -420,7 +413,6 @@ fn expanded_git_log_default_mode_section_renders_before_history_columns_row(
 
 #[gpui::test]
 fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -462,7 +454,6 @@ fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::Test
 
 #[gpui::test]
 fn settings_window_open_source_licenses_row_switches_content(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -574,7 +565,6 @@ fn settings_window_open_source_licenses_row_switches_content(cx: &mut gpui::Test
 fn settings_window_professional_edition_waitlist_row_opens_editions_page(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -628,7 +618,6 @@ fn settings_window_professional_edition_waitlist_row_opens_editions_page(
 
 #[gpui::test]
 fn settings_window_root_view_renders_visible_scrollbar(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -692,7 +681,6 @@ fn settings_window_root_view_renders_visible_scrollbar(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -825,7 +813,6 @@ fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAp
 fn settings_window_containers_fill_available_width_when_content_wraps(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -961,7 +948,6 @@ fn settings_window_renders_every_category_within_a_bounded_stack() {
         .name("settings_render_stack_budget".into())
         .stack_size(1024 * 1024)
         .spawn(|| {
-            let _visual_guard = lock_visual_test();
             let mut app = gpui::TestAppContext::single();
             app.update(open_settings_window);
             let window = app.update(|app| {

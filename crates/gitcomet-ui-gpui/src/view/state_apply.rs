@@ -269,13 +269,14 @@ impl GitCometView {
         // Reported once each after the diff: some failures are recorded both
         // as a notification and as a diagnostic, and one event is one error.
         let mut error_reports: Vec<ErrorReport> = Vec::new();
-        let old_notification_len = self.state.notifications.len();
         let new_notifications = next
-            .notifications
-            .iter()
-            .skip(old_notification_len.min(next.notifications.len()))
-            .cloned()
-            .collect::<Vec<_>>();
+            .notifications_after(self.state.notifications_seq)
+            .to_vec();
+        if !new_notifications.is_empty() {
+            follow_up_msgs.push(Msg::AcknowledgeNotifications {
+                through_seq: next.notifications_seq,
+            });
+        }
         for notification in new_notifications {
             let kind = match notification.kind {
                 AppNotificationKind::Warning => components::ToastKind::Warning,
@@ -291,34 +292,29 @@ impl GitCometView {
         }
 
         for next_repo in &next.repos {
-            let (old_diag_len, old_diag_seq, old_cmd_len) = self
+            let feedback = &next_repo.feedback;
+            // The numbering restarts with each lifetime of the repository.
+            let (old_diagnostics_seq, old_command_log_seq) = self
                 .state
                 .repos
                 .iter()
-                .find(|r| r.id == next_repo.id)
-                .map(|r| {
-                    (
-                        r.feedback.diagnostics.len(),
-                        r.feedback.diagnostics_seq,
-                        r.feedback.command_log.len(),
-                    )
-                })
-                .unwrap_or((0, 0, 0));
-            let diagnostics = &next_repo.feedback.diagnostics;
-            let appended = usize::try_from(
-                next_repo
-                    .feedback
-                    .diagnostics_seq
-                    .wrapping_sub(old_diag_seq),
-            )
-            .unwrap_or(usize::MAX)
-            .max(diagnostics.len().saturating_sub(old_diag_len));
+                .find(|r| r.id == next_repo.id && r.lifetime() == next_repo.lifetime())
+                .map_or((0, 0), |r| {
+                    (r.feedback.diagnostics_seq, r.feedback.command_log_seq)
+                });
+            let new_diagnostics = feedback.diagnostics_after(old_diagnostics_seq);
+            let new_command_entries = feedback.command_log_after(old_command_log_seq);
+            if !new_diagnostics.is_empty() || !new_command_entries.is_empty() {
+                follow_up_msgs.push(Msg::AcknowledgeRepoFeedback {
+                    repo_id: next_repo.id,
+                    lifetime: next_repo.lifetime(),
+                    diagnostics_through_seq: feedback.diagnostics_seq,
+                    command_log_through_seq: feedback.command_log_seq,
+                });
+            }
 
-            let new_diag_messages = next_repo
-                .feedback
-                .diagnostics
+            let new_diag_messages = new_diagnostics
                 .iter()
-                .skip(diagnostics.len().saturating_sub(appended))
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
@@ -331,13 +327,11 @@ impl GitCometView {
                 error_reports.push(ErrorReport::message(Some(next_repo.id), msg));
             }
 
-            let new_command_entries = next_repo
-                .feedback
-                .command_log
-                .iter()
-                .skip(old_cmd_len.min(next_repo.feedback.command_log.len()))
-                .collect::<Vec<_>>();
-            for entry in &new_command_entries {
+            for entry in new_command_entries {
+                cx.emit(CommandResultShown {
+                    repo_id: next_repo.id,
+                    entry: entry.clone(),
+                });
                 if entry.command.starts_with("telemetry.") || entry.handled_by_auth_prompt {
                     continue;
                 }

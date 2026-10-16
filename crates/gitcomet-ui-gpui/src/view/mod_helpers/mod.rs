@@ -909,6 +909,16 @@ impl DiffTextOffsetMap {
     }
 }
 
+/// A command result this window took from the store's queue. The store drops
+/// results once the window acknowledges them, so anything waiting for one
+/// subscribes to these instead of polling the command log.
+pub(crate) struct CommandResultShown {
+    pub(crate) repo_id: RepoId,
+    pub(crate) entry: gitcomet_state::model::CommandLogEntry,
+}
+
+impl gpui::EventEmitter<CommandResultShown> for GitCometView {}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,

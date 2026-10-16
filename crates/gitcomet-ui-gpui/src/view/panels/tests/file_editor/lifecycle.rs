@@ -2,7 +2,6 @@ use super::*;
 
 #[gpui::test]
 fn discarding_an_inactive_pending_save_never_restores_empty_edits(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -32,7 +31,7 @@ fn discarding_an_inactive_pending_save_never_restores_empty_edits(cx: &mut gpui:
         })
     });
     cx.run_until_parked();
-    let held = hold_editor_saves();
+    let held = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
     cx.update(|_, app| pane.update(app, |pane, cx| pane.save_file_editor_buffer(cx)));
     cx.update(|_, app| {
         view.read(app).ui_model.clone().update(app, |model, cx| {
@@ -78,7 +77,6 @@ fn a_save_receipt_before_the_discard_read_cannot_turn_the_placeholder_into_an_ed
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_core::filesystem::{ItemOutcome, ItemResult, OperationResult};
-    let _guard = lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -104,7 +102,7 @@ fn a_save_receipt_before_the_discard_read_cannot_turn_the_placeholder_into_an_ed
         })
     });
     cx.run_until_parked();
-    let held = hold_editor_saves();
+    let held = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
     cx.update(|_, app| {
         pane.update(app, |pane, cx| {
             pane.save_file_editor_buffer(cx);
@@ -162,7 +160,6 @@ async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
     // The quit dialog listed it, "Save all" could not write it (the store drops
     // messages for a repo it no longer has), and the retry raised the dialog
     // again — the window could never be closed.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -241,7 +238,6 @@ async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
 async fn review_regression_confirmed_noop_move_skips_destructive_guards(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let repo_id = gitcomet_state::model::RepoId(965);
     let workdir = unique_workdir("file_editor_noop_move_target");
     let file = std::path::PathBuf::from("main.rs");
@@ -300,7 +296,6 @@ async fn review_regression_confirmed_noop_move_skips_destructive_guards(
 async fn review_regression_followup_saving_before_a_move_only_writes_the_moved_repository(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -482,7 +477,6 @@ fn review_regression_discard_after_save_timeout_still_waits_before_move(
 
 #[gpui::test]
 async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -606,7 +600,6 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
 async fn review_regression_unrelated_repo_action_does_not_block_close(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -656,7 +649,6 @@ async fn review_regression_unrelated_repo_action_does_not_block_close(
 async fn review_regression_confirmed_failed_save_aborts_repository_move(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
@@ -699,7 +691,7 @@ async fn review_regression_confirmed_failed_save_aborts_repository_move(
         target_workspace: None,
     };
     // The file changes before the worker gets to the save, which refuses it.
-    let held = hold_editor_saves();
+    let held = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.resolve_unsaved_file_edits(action, true, cx);
@@ -801,7 +793,6 @@ fn advance_file_edit_drain(
 }
 
 fn check_shutdown_requested_during_move_drain(cx: &mut gpui::TestAppContext, quit: bool) {
-    let _guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
@@ -860,7 +851,6 @@ fn check_move_waits_for_existing_saves(
     auto_save: bool,
     succeeds: bool,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
@@ -909,7 +899,7 @@ fn check_move_waits_for_existing_saves(
 
     // Both writes stay queued while held. Pushing test state replaces the
     // store's results too, so every push happens before the writes can land.
-    let held = hold_editor_saves();
+    let held = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
     let dispatch = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_, app| {
             view.update(app, |view, cx| {
@@ -996,7 +986,6 @@ fn check_discard_after_save_timeout(
         &gpui::App,
     ) -> UnsavedFileEditsAction,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::clone(&backend));

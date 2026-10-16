@@ -135,7 +135,6 @@ fn wait_for_inline_selection(
 fn large_submodule_summaries_render_a_bounded_window_and_reuse_their_rows(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -295,7 +294,6 @@ fn large_submodule_summaries_render_a_bounded_window_and_reuse_their_rows(
 fn submodule_summary_rows_keep_section_specific_navigation_and_menus(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -429,7 +427,6 @@ fn restoring_scroll_clamps_past_the_end_of_a_shorter_rebuild() {
 /// Frame-invariant: rebuilding it costs a `PathBuf` per visible row.
 #[gpui::test]
 fn summary_redraws_reuse_the_cached_repo_path(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -481,7 +478,6 @@ fn summary_redraws_reuse_the_cached_repo_path(cx: &mut gpui::TestAppContext) {
 /// other place that drops them - so it cannot be the only place.
 #[gpui::test]
 fn leaving_the_diff_panel_releases_the_summary_cache(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -525,7 +521,6 @@ fn leaving_the_diff_panel_releases_the_summary_cache(cx: &mut gpui::TestAppConte
 /// target's rows, never another's.
 #[gpui::test]
 fn a_failed_load_releases_another_targets_summary_cache(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -586,7 +581,6 @@ fn a_failed_load_releases_another_targets_summary_cache(cx: &mut gpui::TestAppCo
 /// a summary against any target at all.
 #[gpui::test]
 fn a_commit_range_target_draws_no_submodule_summary(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

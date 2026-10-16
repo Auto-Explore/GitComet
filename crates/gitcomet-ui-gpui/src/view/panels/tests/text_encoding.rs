@@ -108,8 +108,6 @@ fn koi8() -> TextEncoding {
 #[gpui::test]
 fn whole_file_diagram_previews_use_decoded_utf16_and_legacy_text(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::{TextFormat, encode};
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = open_window(cx);
     let directory = tempfile::tempdir().unwrap();
     for (case, encoding) in [TextEncoding::UTF_16LE, TextEncoding::WINDOWS_1252]
@@ -205,7 +203,6 @@ fn whole_file_diagram_previews_use_decoded_utf16_and_legacy_text(cx: &mut gpui::
 #[gpui::test]
 fn read_only_line_ending_conversion_preserves_buffer_and_format(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::LineEnding;
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
@@ -240,7 +237,6 @@ fn read_only_line_ending_conversion_preserves_buffer_and_format(cx: &mut gpui::T
 #[gpui::test]
 fn display_attributes_keep_the_preview_decode_key(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::{SideKind, TabWidth, TabWidthSource};
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     std::fs::write(workdir.path().join(FILE), "café\n").unwrap();
@@ -286,7 +282,6 @@ fn display_attributes_keep_the_preview_decode_key(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn absolute_file_target_produces_repo_relative_attribute_pattern(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     std::fs::write(workdir.path().join(FILE), "café\n").unwrap();
@@ -321,7 +316,6 @@ fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
     use gitcomet_core::domain::{DiffArea, FileConflictKind, FileStatusKind};
     use gitcomet_core::text_format::SideKind;
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9520);
@@ -392,7 +386,6 @@ fn focused_restore_keeps_decoded_stage_bytes_without_a_worktree_format(
 
 #[gpui::test]
 fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9511);
@@ -540,7 +533,6 @@ fn changing_encoding_preserves_unsaved_conflict_output(cx: &mut gpui::TestAppCon
 fn conflict_save_uses_output_encoding_without_reopening_sources(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
     use gitcomet_core::text_format::{LineEndingStats, SideKind, SideTextFormat};
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9594);
@@ -613,7 +605,6 @@ fn conflict_save_uses_output_encoding_without_reopening_sources(cx: &mut gpui::T
 
 #[gpui::test]
 fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     for close_window in [false, true] {
         for (prefix, writable) in [("Ā", false), ("header ", true)] {
             let (view, cx) = open_window(cx);
@@ -693,7 +684,6 @@ fn auto_save_close_waits_only_for_dispatched_writes(cx: &mut gpui::TestAppContex
 fn save_all_encoding_failure_cancels_quit_and_preserves_stashed_edits(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9593);
@@ -759,7 +749,6 @@ fn save_all_encoding_failure_cancels_quit_and_preserves_stashed_edits(
 
 #[gpui::test]
 fn tab_width_changes_refresh_patch_search_with_unchanged_rows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = gitcomet_state::model::RepoId(9513);
@@ -909,7 +898,6 @@ fn check_unsaved_buffer_roundtrip(cx: &mut gpui::TestAppContext, auto_save: bool
 async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     std::fs::write(workdir.path().join(FILE), b"caf\xe9\n").unwrap();
@@ -996,7 +984,6 @@ async fn restored_edits_resume_encoding_refresh_after_attributes_arrive(
 
 #[gpui::test]
 async fn failed_encoding_autosave_preserves_edits_across_navigation(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     check_unsaved_buffer_roundtrip(cx, true);
 }
 
@@ -1004,7 +991,6 @@ async fn failed_encoding_autosave_preserves_edits_across_navigation(cx: &mut gpu
 async fn stashed_edits_restore_writability_after_visiting_read_only_files(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     check_unsaved_buffer_roundtrip(cx, false);
 }
 
@@ -1012,7 +998,6 @@ async fn stashed_edits_restore_writability_after_visiting_read_only_files(
 async fn a_latin1_file_previews_decoded_and_the_strip_names_its_encoding(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_preview");
     std::fs::write(workdir.join(FILE), b"Caf\xe9 cr\xe8me\r\n").expect("write fixture");
@@ -1041,7 +1026,6 @@ async fn a_latin1_file_previews_decoded_and_the_strip_names_its_encoding(
 async fn the_preview_waits_for_attributes_and_follows_an_encoding_attribute(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_attribute");
     // "Привет" in KOI8-R.
@@ -1091,7 +1075,6 @@ async fn the_preview_waits_for_attributes_and_follows_an_encoding_attribute(
 
 #[gpui::test]
 async fn choosing_an_encoding_rereads_the_preview(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_override");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1124,7 +1107,6 @@ async fn choosing_an_encoding_rereads_the_preview(cx: &mut gpui::TestAppContext)
 async fn the_editor_edits_a_latin1_file_and_refuses_to_save_what_it_cannot_encode(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_editor");
     let original = b"caf\xe9\n".to_vec();
@@ -1177,7 +1159,6 @@ async fn the_editor_edits_a_latin1_file_and_refuses_to_save_what_it_cannot_encod
 
 #[gpui::test]
 async fn text_that_does_not_decode_opens_read_only(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_malformed");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1212,7 +1193,6 @@ async fn text_that_does_not_decode_opens_read_only(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 async fn a_new_encoding_choice_rereads_a_clean_editor(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_reopen");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1239,7 +1219,6 @@ async fn a_new_encoding_choice_rereads_a_clean_editor(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 async fn save_with_encoding_converts_on_the_next_save(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_save_with");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1299,7 +1278,6 @@ async fn save_with_encoding_converts_on_the_next_save(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 async fn the_editor_rereads_when_the_files_attributes_change(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_attributes_change");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1427,7 +1405,6 @@ fn sync_and_read_editor_state(
 async fn save_button_stays_in_editor_when_the_text_cannot_be_encoded(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_save_stays");
     let original = b"caf\xe9\n".to_vec();
@@ -1457,7 +1434,6 @@ async fn save_button_stays_in_editor_when_the_text_cannot_be_encoded(
 async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_autosave_escape");
     let original = b"caf\xe9\n".to_vec();
@@ -1513,7 +1489,6 @@ async fn escape_with_auto_save_stays_and_offers_discard_when_encoding_fails(
 async fn picking_an_encoding_with_unsaved_edits_sets_the_save_format(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_pick_while_dirty");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1543,7 +1518,6 @@ async fn picking_an_encoding_with_unsaved_edits_sets_the_save_format(
 async fn converting_away_from_a_reopen_override_reads_back_in_the_new_encoding(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_convert_override");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1619,7 +1593,6 @@ async fn converting_away_from_a_reopen_override_reads_back_in_the_new_encoding(
 
 #[gpui::test]
 async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = unique_workdir("encoding_error_actions");
     std::fs::write(workdir.join(FILE), b"caf\xe9\n").expect("write fixture");
@@ -1721,7 +1694,6 @@ async fn the_error_dialog_goes_to_the_character_and_saves_as_utf8(cx: &mut gpui:
 #[gpui::test]
 fn review_editor_returning_to_lossy_encoding_stays_read_only(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::TextFormat;
-    let _guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let original = b"\x87\x90\n";
@@ -1767,7 +1739,6 @@ fn review_editor_returning_to_lossy_encoding_stays_read_only(cx: &mut gpui::Test
 #[gpui::test]
 fn review_conflict_returning_to_lossy_encoding_cannot_save(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::{SideKind, TextFormat, decode_bytes};
-    let _guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = RepoId(9691);
@@ -1819,7 +1790,6 @@ fn review_conflict_returning_to_lossy_encoding_cannot_save(cx: &mut gpui::TestAp
 fn review_conflict_encoding_choice_is_cleared_with_conflict_lifecycle(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = RepoId(9692);
@@ -1891,7 +1861,6 @@ fn review_conflict_encoding_choice_is_cleared_with_conflict_lifecycle(
 
 #[gpui::test]
 fn review_detect_encoding_with_edits_is_a_warning(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     std::fs::write(workdir.path().join(FILE), "text\n").unwrap();
@@ -1938,7 +1907,6 @@ fn review_detect_encoding_with_edits_is_a_warning(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::text_format::TextFormat;
-    let _guard = lock_visual_test();
     let (view, cx) = open_window(cx);
     let workdir = tempfile::tempdir().unwrap();
     let repo_id = RepoId(9695);
@@ -1982,7 +1950,7 @@ fn review_converted_save_keeps_decode_key_while_attributes_load(cx: &mut gpui::T
             ),
             true,
         );
-        let write = hold_editor_saves();
+        let write = hold_editor_saves(cx.update(|_, app| view.read(app).store.filesystem()));
         cx.update(|_, app| {
             view.read(app)
                 .diff_renderer

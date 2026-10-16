@@ -4,7 +4,6 @@ use super::*;
 async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
     // The editor was built at content width, so long lines ran off to the right
     // whatever the word-wrap preference said.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -66,7 +65,6 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 async fn file_editor_mounts_a_vertical_scrollbar(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -115,7 +113,6 @@ async fn an_svg_opened_from_the_explorer_can_show_its_code_and_be_edited(
     // Pictures opened from the explorer used to land in the A/B image diff.
     // Rendered is still the picture; Code is the source, and the source is
     // editable text like any other file.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -219,7 +216,6 @@ async fn the_gutter_projects_through_wrap_so_numbers_track_their_lines(
     // Regression: the gutter was one row per *logical* line while the buffer
     // laid out one per *visual* row, so from the first wrap onward the numbers
     // labelled the wrong lines.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -286,7 +282,6 @@ async fn the_gutter_projects_through_wrap_so_numbers_track_their_lines(
 fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -358,7 +353,6 @@ fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
 async fn file_editor_search_counts_every_occurrence_in_the_live_buffer(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -397,7 +391,6 @@ async fn file_editor_search_counts_every_occurrence_in_the_live_buffer(
 /// on screen.
 #[gpui::test]
 async fn file_editor_search_reads_the_buffer_not_the_stale_preview(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -437,7 +430,6 @@ async fn file_editor_search_reads_the_buffer_not_the_stale_preview(cx: &mut gpui
 async fn file_editor_search_selects_the_current_match_and_washes_the_rest(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -493,7 +485,6 @@ async fn file_editor_search_selects_the_current_match_and_washes_the_rest(
 /// Stepping visits repeats within a line, then wraps.
 #[gpui::test]
 async fn file_editor_search_next_match_steps_within_a_line(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -541,7 +532,6 @@ async fn file_editor_search_next_match_steps_within_a_line(cx: &mut gpui::TestAp
 async fn file_editor_search_keeps_navigation_relative_to_the_match_before_edits(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -603,7 +593,6 @@ async fn file_editor_search_keeps_navigation_relative_to_the_match_before_edits(
 /// `scroll_to_item` to inherit.
 #[gpui::test]
 async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -654,7 +643,6 @@ async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::Tes
 async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -719,7 +707,6 @@ async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
 /// keystroke to the buffer.
 #[gpui::test]
 async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         window.activate();
@@ -817,7 +804,6 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 async fn recent_repository_shortcut_does_not_select_the_file_editor(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

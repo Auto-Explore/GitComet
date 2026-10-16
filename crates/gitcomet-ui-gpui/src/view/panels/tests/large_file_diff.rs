@@ -2135,7 +2135,6 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
 ) {
     const PAYLOAD_BYTES: usize = 256 * 1024;
 
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2323,7 +2322,6 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
 ) {
     const PAYLOAD_BYTES: usize = 256 * 1024;
 
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

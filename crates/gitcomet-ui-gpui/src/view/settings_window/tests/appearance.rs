@@ -126,7 +126,6 @@ fn theme_tiles_list_automatic_first_then_every_theme_once_by_appearance() {
 fn appearance_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -210,7 +209,6 @@ fn appearance_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
 
 #[gpui::test]
 fn appearance_page_renders_theme_utilities_and_opens_theme_guide(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -285,7 +283,6 @@ fn appearance_page_renders_theme_utilities_and_opens_theme_guide(cx: &mut gpui::
 
 #[gpui::test]
 fn settings_window_links_card_includes_theme_guide_row(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -334,7 +331,6 @@ fn settings_window_links_card_includes_theme_guide_row(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
     let (_main_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -536,7 +532,6 @@ fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(cx: &mut gpui::
 fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independent(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (first_store, first_events) = AppStore::new_test(Arc::new(TestBackend));
     let (first, first_cx) = cx.add_window_view(|window, cx| {
         GitCometView::new(first_store, first_events, None, window, cx)
@@ -615,7 +610,6 @@ fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independen
 
 #[gpui::test]
 fn zoom_is_per_window_and_the_default_moves_only_unzoomed_windows(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (first_store, first_events) = AppStore::new_test(Arc::new(TestBackend));
     let (first, first_cx) = cx.add_window_view(|window, cx| {
         GitCometView::new(first_store, first_events, None, window, cx)
@@ -814,7 +808,6 @@ fn appearance_search_finds_every_theme_by_name() {
 /// not count it.
 #[gpui::test]
 fn appearance_page_does_not_count_an_override_whose_theme_is_gone(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let mut workspace =
         gitcomet_state::session::Workspace::new(vec![PathBuf::from("/tmp/appearance-tiles-c")]);
     workspace.theme_mode = Some("deleted_custom_theme".to_string());
@@ -858,7 +851,6 @@ fn appearance_page_does_not_count_an_override_whose_theme_is_gone(cx: &mut gpui:
 /// all its tiles, labels and overrides from one read per draw.
 #[gpui::test]
 fn theme_pages_read_the_themes_folder_once_per_draw(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let workspaces = ["tokyo_night", "nord", "deleted_custom_theme"].map(|key| {
         let mut workspace = gitcomet_state::session::Workspace::new(vec![PathBuf::from(format!(
             "/tmp/theme-lookups-{key}"
