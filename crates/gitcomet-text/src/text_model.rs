@@ -36,8 +36,9 @@ impl Clone for TextModelCore {
             revision: self.revision,
             // O(1): the tree is persistent and shares every node.
             rope: self.rope.clone(),
-            // A copy-on-write clone exists because a mutation is coming, which
-            // would invalidate both caches anyway.
+            // A clone exists because a mutation is coming, which would
+            // invalidate both caches anyway, or to be kept as history, which
+            // must not pin them.
             line_starts: OnceLock::new(),
             materialized: OnceLock::new(),
         }
@@ -142,6 +143,15 @@ impl TextModel {
     pub fn snapshot(&self) -> TextModelSnapshot {
         TextModelSnapshot {
             core: Arc::clone(&self.core),
+        }
+    }
+
+    /// A snapshot sharing the text but none of the whole-document caches, for
+    /// history kept across many edits. A stack of [`TextModel::snapshot`]s pins
+    /// every revision's flattened copy and line-start table.
+    pub fn snapshot_without_caches(&self) -> TextModelSnapshot {
+        TextModelSnapshot {
+            core: Arc::new(TextModelCore::clone(&self.core)),
         }
     }
 
@@ -973,6 +983,23 @@ mod edit_cost_tests {
         assert_eq!(before.line_text(0).as_ref(), "line of text");
         assert_eq!(model.snapshot().line_text(0).as_ref(), "prefix");
         assert_ne!(before, model.snapshot());
+    }
+
+    /// History keeps these across many edits: the text and its identity, none
+    /// of the caches the live model warmed.
+    #[test]
+    fn snapshots_without_caches_keep_only_the_text_and_identity() {
+        let model = TextModel::from_large_text("alpha\nbeta");
+        model.as_str();
+        model.line_starts();
+
+        let history = model.snapshot_without_caches();
+
+        assert_eq!(history, model.snapshot());
+        assert_eq!(history.line_text(1).as_ref(), "beta");
+        assert!(!history.is_materialized());
+        assert!(!history.is_line_index_built());
+        assert!(model.snapshot().is_materialized());
     }
 
     /// `longest_row` backs the horizontal scroll bound, and it must stay a

@@ -657,7 +657,7 @@ impl TextInput {
 
     pub(super) fn current_undo_snapshot(&self) -> UndoSnapshot {
         UndoSnapshot {
-            content: self.content.snapshot(),
+            content: self.content.snapshot_without_caches(),
             selected_range: self.selection.range.clone(),
             selection_reversed: self.selection.reversed,
         }
