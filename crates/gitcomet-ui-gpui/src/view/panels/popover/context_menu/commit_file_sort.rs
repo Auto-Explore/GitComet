@@ -9,29 +9,6 @@ pub(super) fn model(
     model_for_sort(list, current)
 }
 
-/// Untracked entries carry no line diff, so the edit-size and edit modes have
-/// nothing to order by and are left out of their menu. Path and file type
-/// read off the path alone, so they stay.
-fn sorts_for(list: crate::view::rows::FileListId) -> &'static [crate::view::rows::CommitFileSort] {
-    use crate::view::rows::CommitFileSort;
-    const WITHOUT_EDIT_SIZE: [CommitFileSort; 4] = [
-        CommitFileSort::PathAscending,
-        CommitFileSort::PathDescending,
-        CommitFileSort::FileTypeAscending,
-        CommitFileSort::FileTypeDescending,
-    ];
-    match list {
-        // Untracked files are in neither index lane, so git reports no counts
-        // or edits for them — those modes there would silently sort by path.
-        crate::view::rows::FileListId::Status(section)
-            if !crate::view::status_section_has_line_stats(section) =>
-        {
-            &WITHOUT_EDIT_SIZE
-        }
-        _ => &CommitFileSort::ALL,
-    }
-}
-
 fn model_for_sort(
     list: crate::view::rows::FileListId,
     current: crate::view::rows::CommitFileSort,
@@ -50,7 +27,7 @@ fn model_for_sort(
         ContextMenuItem::Header(header.into()),
         ContextMenuItem::Separator,
     ];
-    for sort in sorts_for(list).iter().copied() {
+    for sort in crate::view::rows::CommitFileSort::ALL {
         items.push(ContextMenuItem::Entry {
             label: sort.label().into(),
             icon: check(sort == current),
@@ -132,33 +109,27 @@ mod tests {
             .collect()
     }
 
-    /// Untracked files are in neither index lane, so git reports no counts for
-    /// them — an edit-size mode there would silently sort by path instead. File
-    /// type reads off the path, so it survives the trim.
+    /// Untracked files have counts and edits too, so every section offers
+    /// the edit-size and edit sorts.
     #[test]
-    fn the_untracked_section_drops_only_the_edit_size_sorts() {
+    fn every_status_section_offers_every_sort() {
         use crate::view::StatusSection;
         use crate::view::rows::{CommitFileSort, FileListId};
 
-        assert_eq!(
-            sort_labels(FileListId::Status(StatusSection::Untracked)),
-            vec![
-                CommitFileSort::PathAscending.label().to_string(),
-                CommitFileSort::PathDescending.label().to_string(),
-                CommitFileSort::FileTypeAscending.label().to_string(),
-                CommitFileSort::FileTypeDescending.label().to_string(),
-            ]
-        );
-
+        let every_sort: Vec<String> = CommitFileSort::ALL
+            .iter()
+            .map(|sort| sort.label().to_string())
+            .collect();
         for section in [
-            StatusSection::Staged,
+            StatusSection::Untracked,
             StatusSection::Unstaged,
             StatusSection::CombinedUnstaged,
+            StatusSection::Staged,
         ] {
             assert_eq!(
-                sort_labels(FileListId::Status(section)).len(),
-                CommitFileSort::ALL.len(),
-                "{section:?} has line counts, so it offers every sort"
+                sort_labels(FileListId::Status(section)),
+                every_sort,
+                "{section:?}"
             );
         }
     }

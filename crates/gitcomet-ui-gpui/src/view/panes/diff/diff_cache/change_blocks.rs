@@ -145,7 +145,7 @@ impl DiffRenderer {
     /// walking a large block does not redo the mode checks per row.
     fn diff_row_change_sides_lookup(&self) -> impl Fn(usize) -> DiffChangeSides + '_ {
         let collapsed = self.is_collapsed_diff_projection_active();
-        let file_rows = collapsed || self.is_file_diff_view_active();
+        let file_rows = self.lists_file_diff_rows();
         move |source_visible_ix| {
             let mapped_ix = if collapsed {
                 self.collapsed_diff_visible_rows

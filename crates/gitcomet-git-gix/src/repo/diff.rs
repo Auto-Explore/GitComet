@@ -4,7 +4,7 @@ use super::{
         ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
-use crate::util::{run_git_parsed_stdout, run_git_parsed_stdout_cancellable};
+use crate::util::{push_literal_paths, run_git_parsed_stdout, run_git_parsed_stdout_cancellable};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
 };
@@ -102,7 +102,7 @@ impl GixRepo {
                 if matches!(area, DiffArea::Staged) {
                     cmd.arg("--cached");
                 }
-                cmd.arg("--").arg(path);
+                push_literal_paths(&mut cmd, [path]);
             }
             DiffTarget::Commit {
                 commit_id,
@@ -150,7 +150,7 @@ impl GixRepo {
         if old_path.is_some() {
             cmd.arg("--find-copies-harder");
         }
-        cmd.arg("--").args(old_path).arg(path);
+        push_literal_paths(cmd, old_path.into_iter().chain([path]));
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {
@@ -449,9 +449,7 @@ impl GixRepo {
             )))
         })?;
         let converted;
-        let normalized = if attributes.working_tree_encoding().is_some() && !attributes.has_filter {
-            // gix only knows WHATWG labels (and reads `latin-1` as cp1252);
-            // git uses iconv's. Decode with ours, then normalize EOL and ident.
+        let normalized = if super::text_attributes::decodes_working_tree_encoding(&attributes) {
             converted = worktree_encoding_to_git(repo, &index, path, &full, &attributes)?;
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(&converted)
         } else {
@@ -1387,7 +1385,7 @@ fn conflict_file_stages_from_stage_data(
 
 /// `convert_to_git` for a `working-tree-encoding` file: decode to UTF-8, then
 /// apply the path's line-ending and ident normalization.
-fn worktree_encoding_to_git(
+pub(super) fn worktree_encoding_to_git(
     repo: &gix::Repository,
     index: &gix::index::State,
     path: &Path,
@@ -1977,6 +1975,14 @@ impl GixRepo {
     }
 }
 
+/// The config the worktree->git conversion reads.
+pub(super) const WORKTREE_CONVERSION_CONFIG: [&str; 4] = [
+    "core.autocrlf",
+    "core.eol",
+    "core.safecrlf",
+    "core.checkRoundtripEncoding",
+];
+
 /// Resolve attributes with the same source precedence as the filter pipeline.
 /// This includes system/user attributes, info/attributes, and index-backed
 /// .gitattributes when worktree copies are absent. Re-resolving these small
@@ -2002,28 +2008,21 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         .matching_attributes(&mut outcome);
     let mut hasher = FxHasher::default();
     let config = repo.config_snapshot();
-    for key in [
-        "core.autocrlf",
-        "core.eol",
-        "core.safecrlf",
-        "core.checkRoundtripEncoding",
-    ] {
+    for key in WORKTREE_CONVERSION_CONFIG {
         config.string(key).hash(&mut hasher);
     }
     for matched in outcome.iter() {
         let assignment = matched.assignment;
         if assignment.name.as_str() == "filter" {
             match assignment.state {
-                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"annex" => {}
-                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"lfs" => {
-                    for key in [
-                        "filter.lfs.clean",
-                        "filter.lfs.process",
-                        "filter.lfs.required",
-                    ] {
+                gix::attrs::StateRef::Value(value)
+                    if value.as_bstr() == super::large_files::ANNEX_FILTER_DRIVER => {}
+                gix::attrs::StateRef::Value(value)
+                    if value.as_bstr() == super::large_files::LFS_FILTER_DRIVER =>
+                {
+                    for key in ["clean", "process", "required"] {
                         config
-                            .string(key)
-                            .map(|value| value.to_vec())
+                            .string_by("filter", super::large_files::LFS_FILTER_DRIVER, key)
                             .hash(&mut hasher);
                     }
                 }

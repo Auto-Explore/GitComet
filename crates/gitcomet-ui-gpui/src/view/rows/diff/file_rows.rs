@@ -459,7 +459,7 @@ pub(super) fn render_collapsed_diff_rows(
                             header_display: None,
                             styled,
                             streamed_spec,
-                            raw_text: Some(row.text.as_ref()),
+                            raw_text: Some(diff_canvas::DiffRowText::Line(&row.text)),
                             context_menu_active: false,
                             wrap,
                             row_blame: blame_ctx.as_ref().and_then(|ctx| {
@@ -806,8 +806,8 @@ pub(super) fn render_file_diff_rows(
                     streamed_spec,
                     raw_text: render_data
                         .as_ref()
-                        .map(|row| row.text.as_ref())
-                        .or_else(|| Some(diff_content_text(&line))),
+                        .map(|row| diff_canvas::DiffRowText::Line(&row.text))
+                        .or_else(|| Some(diff_canvas::DiffRowText::Str(diff_content_text(&line)))),
                     context_menu_active: false,
                     wrap,
                     row_blame: blame_ctx.as_ref().and_then(|ctx| {

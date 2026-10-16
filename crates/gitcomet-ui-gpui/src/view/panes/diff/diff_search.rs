@@ -33,6 +33,25 @@ pub(in crate::view) fn take_search_matchers_built_for_tests() -> usize {
     gitcomet_core::text_search::take_text_search_matchers_built_for_tests()
 }
 
+/// Batches a pass over rows' source-backed text: one handle per file when the
+/// pass visits only a collapsed view's rows, whole files otherwise.
+pub(in crate::view) fn row_pass_batch(collapsed: bool) -> gitcomet_core::file_diff::FileSliceBatch {
+    if collapsed {
+        gitcomet_core::file_diff::batch_file_slice_handles()
+    } else {
+        gitcomet_core::file_diff::batch_file_slice_reads()
+    }
+}
+
+/// The matcher a non-empty query searches with. The query is kept verbatim:
+/// leading and trailing spaces are part of what the user searches for.
+pub(in crate::view) fn diff_search_query_matcher(
+    query: &str,
+    options: DiffSearchOptions,
+) -> Option<DiffSearchMatcher> {
+    (!query.is_empty()).then(|| DiffSearchMatcher::new(query, options))
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::view) struct AsciiCaseInsensitiveNeedle<'a> {
     bytes: &'a [u8],
@@ -1425,6 +1444,7 @@ impl DiffRenderer {
     }
 
     fn diff_search_scan_current_view_with_matcher(&mut self, matcher: &DiffSearchMatcher) {
+        let _batch = self.batch_visible_row_reads();
         // Ahead of everything else: the arms below dispatch on
         // `is_file_preview_active()`, which stays true in edit mode, and that is
         // what had the search counting the stale pre-edit preview text.
@@ -1664,8 +1684,7 @@ impl DiffRenderer {
             }
         } else {
             if self.diff_view == DiffViewMode::Inline
-                && !self.is_file_diff_view_active()
-                && !self.is_collapsed_diff_projection_active()
+                && !self.lists_file_diff_rows()
                 && !self.diff_word_wrap
                 && self.diff_search_scan_inline_patch_diff_with_needle(query)
             {
@@ -1788,8 +1807,7 @@ impl DiffRenderer {
         }
 
         if self.diff_view == DiffViewMode::Inline
-            && !self.is_file_diff_view_active()
-            && !self.is_collapsed_diff_projection_active()
+            && !self.lists_file_diff_rows()
             && !self.diff_word_wrap
             && self.diff_search_scan_inline_patch_diff_general(matcher)
         {
@@ -2153,8 +2171,7 @@ impl DiffRenderer {
             || self.is_file_preview_active()
             || self.active_conflict_target().is_some()
             || self.diff_view != DiffViewMode::Inline
-            || self.is_file_diff_view_active()
-            || self.is_collapsed_diff_projection_active()
+            || self.lists_file_diff_rows()
             || self.diff_word_wrap
         {
             return false;

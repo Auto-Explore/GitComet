@@ -74,7 +74,7 @@ impl Render for SettingsWindowView {
             })
             .text_size(theme.ui_text(16.0))
             .font(gpui::Font {
-                family: crate::font_preferences::applied_ui_font_family(&self.ui_font_family)
+                family: crate::font_preferences::applied_ui_font_family(&self.ui_font_family, cx)
                     .into(),
                 features: crate::font_preferences::applied_font_features(self.use_font_ligatures),
                 fallbacks: None,

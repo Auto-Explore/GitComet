@@ -154,7 +154,7 @@ impl<V: 'static> Controls<V> {
                 "image_zoom_out",
                 "−".into(),
                 "Zoom out (−)",
-                Control::Zoom(Zoom::Out),
+                Control::Zoom(Zoom::Step(ZoomStep::Out)),
                 cx,
             ))
             .child(self.chip(
@@ -168,7 +168,7 @@ impl<V: 'static> Controls<V> {
                 "image_zoom_in",
                 "+".into(),
                 "Zoom in (+)",
-                Control::Zoom(Zoom::In),
+                Control::Zoom(Zoom::Step(ZoomStep::In)),
                 cx,
             ));
         let size_controls = div()

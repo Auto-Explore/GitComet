@@ -8,8 +8,8 @@ use super::{
     collect_split_stream_match_visible_rows, collect_stream_match_visible_rows,
     collect_stream_match_visible_rows_with_mode, conflict_resolver_visible_match_indices,
     conflict_resolver_visible_match_indices_with_matcher, contains_ascii_case_insensitive,
-    diff_search_inline_patch_query_uses_trigram_index, diff_search_query_reuse,
-    diff_search_resume_match_ix, diff_search_split_row_texts_match_query,
+    diff_search_inline_patch_query_uses_trigram_index, diff_search_query_matcher,
+    diff_search_query_reuse, diff_search_resume_match_ix, diff_search_split_row_texts_match_query,
     empty_conflict_resolver_search_two_way_rows, three_way_visible_item_matches_query,
 };
 use crate::view::conflict_resolver;
@@ -60,6 +60,22 @@ fn editor_search_capped(
     let model = crate::kit::text_model::TextModel::from_large_text(text);
     let matcher = DiffSearchMatcher::new(query, options);
     file_editor_search_ranges(&model.snapshot(), &matcher, cap)
+}
+
+#[test]
+fn diff_search_query_matcher_preserves_significant_whitespace() {
+    let space_matcher =
+        diff_search_query_matcher(" ", DiffSearchOptions::default()).expect("space query");
+    assert_eq!(space_matcher.query(), " ");
+    assert!(space_matcher.is_match("a b"));
+
+    let padded_matcher =
+        diff_search_query_matcher(" foo ", DiffSearchOptions::default()).expect("padded query");
+    assert_eq!(padded_matcher.query(), " foo ");
+    assert!(padded_matcher.is_match("x foo y"));
+    assert!(!padded_matcher.is_match("foo"));
+
+    assert!(diff_search_query_matcher("", DiffSearchOptions::default()).is_none());
 }
 
 /// The whole point of the editor's own scan: three hits on one line are

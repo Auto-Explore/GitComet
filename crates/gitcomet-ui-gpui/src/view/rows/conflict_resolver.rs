@@ -125,13 +125,6 @@ fn row_emphasis(
     }
 }
 
-fn conflict_diff_query_matcher(
-    query: &str,
-    query_options: DiffSearchOptions,
-) -> Option<DiffSearchMatcher> {
-    (!query.is_empty()).then(|| DiffSearchMatcher::new(query, query_options))
-}
-
 fn build_conflict_row_base_styled(
     tab_width: usize,
     theme: AppTheme,
@@ -479,7 +472,7 @@ impl DiffRenderer {
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
-        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        let query_matcher = this.diff_search_query_matcher_shared();
         let current_match_row = this.diff_search_current_match_row();
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
@@ -579,7 +572,7 @@ impl DiffRenderer {
                     word_ranges,
                     query,
                     query_options,
-                    query_matcher.as_ref(),
+                    query_matcher.as_deref(),
                     row_emphasis(current_match_row, visible_row_ix),
                     syntax_lang,
                     syntax_mode,
@@ -780,7 +773,7 @@ impl DiffRenderer {
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
-        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        let query_matcher = this.diff_search_query_matcher_shared();
         let current_match_row = this.diff_search_current_match_row();
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
@@ -1013,7 +1006,7 @@ impl DiffRenderer {
                         word_ranges,
                         query,
                         query_options,
-                        query_matcher.as_ref(),
+                        query_matcher.as_deref(),
                         row_emphasis(current_match_row, vi),
                         syntax_lang,
                         syntax_mode,
@@ -1830,7 +1823,7 @@ impl DiffRenderer {
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
-        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        let query_matcher = this.diff_search_query_matcher_shared();
         let syntax_lang = this.conflict_row_syntax_language();
         // Streamed conflicts may or may not have prepared side documents; Auto
         // remains the safe fallback when a row is not backed by one.
@@ -1858,7 +1851,7 @@ impl DiffRenderer {
                     row,
                     syntax_lang,
                     syntax_mode,
-                    query_matcher.as_ref(),
+                    query_matcher.as_deref(),
                     cx,
                 )
             })
@@ -2495,22 +2488,6 @@ mod tests {
         let display = conflict_display_text(&text, None, true);
 
         assert_eq!(display.as_ref(), "a·b→↵");
-    }
-
-    #[test]
-    fn conflict_diff_query_matcher_preserves_significant_whitespace() {
-        let space_matcher =
-            conflict_diff_query_matcher(" ", DiffSearchOptions::default()).expect("space query");
-        assert_eq!(space_matcher.query(), " ");
-        assert!(space_matcher.is_match("a b"));
-
-        let padded_matcher = conflict_diff_query_matcher(" foo ", DiffSearchOptions::default())
-            .expect("padded query");
-        assert_eq!(padded_matcher.query(), " foo ");
-        assert!(padded_matcher.is_match("x foo y"));
-        assert!(!padded_matcher.is_match("foo"));
-
-        assert!(conflict_diff_query_matcher("", DiffSearchOptions::default()).is_none());
     }
 
     #[test]

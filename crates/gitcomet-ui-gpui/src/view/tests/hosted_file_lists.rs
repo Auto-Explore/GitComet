@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::view::hosted::file_list::{FileListView, HostedFileList};
-use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
+use gitcomet_core::domain::{CommitFileChange, FileStatusKind, LineStats};
 use gitcomet_extension_api::panes::FileListImpl;
 use gitcomet_extension_api::{
     FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible, Registry,
@@ -95,9 +95,13 @@ fn mount_changes(
 fn edited(path: &str, text: &str) -> CommitFileChange {
     let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();
     edit.added(text.as_bytes());
-    CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified)
-        .with_line_counts(Some(1), Some(0))
-        .with_edit(edit.finish())
+    CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified).with_line_stats(
+        LineStats {
+            additions: Some(1),
+            deletions: Some(0),
+            edit: edit.finish(),
+        },
+    )
 }
 
 /// The shell window, drawn, for the menus a hosted list opens there.

@@ -171,19 +171,35 @@ fn file_browser_refresh_for_external_change(
     super::effects::request_file_browser_load(repo_state)
 }
 
+/// Whether `change` can alter `target`'s diff. Index, HEAD and attribute
+/// changes reach every live target; worktree edits reach the files they name
+/// in a diff that reads the worktree. Commits never change.
 pub(super) fn external_change_reloads_diff(
     target: &DiffTarget,
     change: &RepoExternalChange,
 ) -> bool {
-    match target {
-        DiffTarget::WorkingTree { area, .. } => {
-            change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
-        }
-        DiffTarget::Commit { .. } => false,
-        DiffTarget::CommitRange { to_commit_id, .. } => {
-            to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
-        }
+    let reads_worktree = match target {
+        DiffTarget::Commit { .. }
+        | DiffTarget::CommitRange {
+            to_commit_id: Some(_),
+            ..
+        } => return false,
+        DiffTarget::WorkingTree { area, .. } => *area == DiffArea::Unstaged,
+        DiffTarget::CommitRange {
+            to_commit_id: None, ..
+        } => true,
+    };
+    if change.index || change.git_state || change.text_attributes {
+        return true;
     }
+    reads_worktree
+        && change.worktree
+        && (target
+            .file_path()
+            .is_none_or(|path| change.paths.may_have_changed(path))
+            || target
+                .old_file_path()
+                .is_some_and(|path| change.paths.may_have_changed(path)))
 }
 
 pub(super) fn repo_externally_changed(
@@ -295,22 +311,12 @@ pub(super) fn repo_externally_changed(
         effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
     }
 
-    let should_reload_diff = repo_state
+    if let Some(target) = repo_state
         .diff_state
         .diff_target
         .as_ref()
-        .is_some_and(|target| external_change_reloads_diff(target, &change));
-
-    if should_reload_diff
-        && let Some(target) = repo_state.diff_state.diff_target.clone()
-        && matches!(
-            target,
-            DiffTarget::WorkingTree { .. }
-                | DiffTarget::CommitRange {
-                    to_commit_id: None,
-                    ..
-                }
-        )
+        .filter(|target| external_change_reloads_diff(target, &change))
+        .cloned()
     {
         // A moved HEAD (external commit / checkout / rebase) can leave the patch
         // byte-identical while every line's attribution changes ("Not Committed

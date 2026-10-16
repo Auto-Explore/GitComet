@@ -2,7 +2,13 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::git_dir_for_workdir;
 use std::path::Path;
 
-/// Open the repository backing the worktree at `workdir`.
+/// [`open_worktree_repo_with`] with gix's default permissions.
+pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
+    open_worktree_repo_with(workdir, gix::open::Permissions::default())
+}
+
+/// Open the repository backing the worktree at `workdir`, reading config,
+/// environment and attribute files only from the sources `permissions` allow.
 ///
 /// This is the single point in the crate that turns a worktree path into an
 /// open [`gix::Repository`]. It routes through [`git_dir_for_workdir`] so that a
@@ -17,13 +23,17 @@ use std::path::Path;
 ///
 /// The raw [`gix::Error`] is returned so callers can map it to their own
 /// error type or treat "not a repository" as absence.
-pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
-    let mut repo = gix::open(git_dir_for_workdir(workdir))?;
+pub(crate) fn open_worktree_repo_with(
+    workdir: &Path,
+    permissions: gix::open::Permissions,
+) -> gix::Result<gix::Repository> {
+    let options = gix::open::Options::default().permissions(permissions);
+    let mut repo = gix::open_opts(git_dir_for_workdir(workdir), options)?;
     crate::refs::reload_conditional_includes(&mut repo)?;
     Ok(repo)
 }
 
-/// Translate a failed [`open_worktree_repo`] into the crate's error type.
+/// Translate a failed [`open_worktree_repo_with`] into the crate's error type.
 ///
 /// The operation and path remain diagnostic facts; "not a repository" and I/O
 /// retain their existing classifications. Callers that treat a missing

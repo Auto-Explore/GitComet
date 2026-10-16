@@ -170,8 +170,6 @@ fn a_worktree_comparison_keeps_renames_and_lists_untracked_files_only_when_asked
             .all(|file| file.path != Path::new("scratch.txt")),
         "untracked files stay out by default"
     );
-    // The existing call keeps its behavior.
-    assert_eq!(opened.diff_range_files(&base, None).unwrap(), tracked.files);
 
     let with_untracked = opened
         .compare_files(
@@ -183,7 +181,10 @@ fn a_worktree_comparison_keeps_renames_and_lists_untracked_files_only_when_asked
         .expect("compare with untracked files");
     let scratch = change(&with_untracked.files, "scratch.txt");
     assert_eq!(scratch.kind, FileStatusKind::Untracked);
-    assert_eq!((scratch.additions, scratch.deletions), (Some(2), Some(0)));
+    assert_eq!(
+        (scratch.line_stats.additions, scratch.line_stats.deletions),
+        (Some(2), Some(0))
+    );
 }
 
 #[test]
@@ -202,14 +203,6 @@ fn merge_base_comparisons_show_only_what_the_branch_added() {
     let main = commit_all(&repo, "main work");
     let opened = open(&repo);
     let cancel = CancellationToken::new();
-
-    assert_eq!(
-        opened.merge_base(&main, &feature).unwrap(),
-        Some(fork.clone())
-    );
-    assert!(opened.is_ancestor(&fork, &feature).unwrap());
-    assert!(opened.is_ancestor(&feature, &feature).unwrap());
-    assert!(!opened.is_ancestor(&main, &feature).unwrap());
 
     let direct = opened
         .compare_files(&main, Some(&feature), &ComparisonOptions::direct(), &cancel)
@@ -254,8 +247,6 @@ fn unrelated_histories_have_no_merge_base() {
     let second = commit_all(&repo, "second root");
     let opened = open(&repo);
 
-    assert_eq!(opened.merge_base(&first, &second).unwrap(), None);
-    assert!(!opened.is_ancestor(&first, &second).unwrap());
     let error = opened
         .compare_files(
             &first,

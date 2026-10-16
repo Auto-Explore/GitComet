@@ -122,7 +122,6 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             let history = &mut repo.history_state.indexed;
             if seq == history.seq && history.loading && history.epoch == repo.load_epoch {
                 history.progress = Some(progress);
-                history.rev = history.rev.wrapping_add(1);
                 history.status_rev = history.status_rev.wrapping_add(1);
             }
         }
@@ -360,7 +359,8 @@ mod tests {
     use crate::msg::CommitSelectMode;
     use gitcomet_core::domain::{Commit, LogScope, RepoSpec};
     use gitcomet_core::history_index::{
-        HistoryIndexBuilder, HistoryIndexHandle, HistoryProjection, HistoryRange,
+        HistoryIndexBuilder, HistoryIndexHandle, HistoryIndexProgress, HistoryProjection,
+        HistoryRange,
     };
     use gitcomet_core::services::HistorySnapshot;
 
@@ -807,6 +807,34 @@ mod tests {
         );
         assert_eq!(state.repos[0].history_state.indexed.rev, rev);
         assert!(state.repos[0].history_state.indexed.loading);
+    }
+
+    #[test]
+    fn progress_moves_the_status_revision_and_leaves_rows_alone() {
+        let (mut state, _) = fixture();
+        state.repos[0].history_state.indexed.index = None;
+        let work = reduce(&mut state, Event::Ensure { repo_id: RepoId(1) }).remove(0);
+        let Effect::IndexedHistory(Work::Build { seq, .. }) = work else {
+            panic!()
+        };
+        let indexed = &state.repos[0].history_state.indexed;
+        let (rev, status_rev) = (indexed.rev, indexed.status_rev);
+        let progress = HistoryIndexProgress {
+            scanned: 2048,
+            matched: 2000,
+        };
+        reduce(
+            &mut state,
+            Event::Progress {
+                repo_id: RepoId(1),
+                seq,
+                progress: progress.clone(),
+            },
+        );
+        let indexed = &state.repos[0].history_state.indexed;
+        assert_eq!(indexed.progress, Some(progress));
+        assert_eq!(indexed.status_rev, status_rev.wrapping_add(1));
+        assert_eq!(indexed.rev, rev);
     }
 }
 

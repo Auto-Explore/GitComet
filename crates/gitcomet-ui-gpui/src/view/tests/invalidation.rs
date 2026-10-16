@@ -255,24 +255,34 @@ fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
     cx.run_until_parked();
 }
 
+/// Untracked rows carry counts too, so every section reading the unstaged
+/// lane moves with its line stats.
 #[test]
-fn untracked_content_revision_ignores_line_stats() {
+fn unstaged_lane_sections_follow_their_line_stats() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
             workdir: PathBuf::new(),
         },
     );
-    let untracked = status_section_content_rev(&repo, StatusSection::Untracked);
-    let unstaged = status_section_content_rev(&repo, StatusSection::Unstaged);
+    let sections = [
+        StatusSection::CombinedUnstaged,
+        StatusSection::Untracked,
+        StatusSection::Unstaged,
+    ];
+    let before = sections.map(|section| status_section_content_rev(&repo, section));
+    let staged = status_section_content_rev(&repo, StatusSection::Staged);
     repo.unstaged_line_stats_rev += 1;
+    for (section, before) in sections.into_iter().zip(before) {
+        assert_ne!(
+            status_section_content_rev(&repo, section),
+            before,
+            "{section:?}"
+        );
+    }
     assert_eq!(
-        status_section_content_rev(&repo, StatusSection::Untracked),
-        untracked
-    );
-    assert_ne!(
-        status_section_content_rev(&repo, StatusSection::Unstaged),
-        unstaged
+        status_section_content_rev(&repo, StatusSection::Staged),
+        staged
     );
 }
 

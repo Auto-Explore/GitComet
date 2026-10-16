@@ -302,14 +302,21 @@ impl DetailsPaneView {
                 .map(|snapshot| snapshot.revision)
                 .hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
-            repo.history_state.selected_commit_rev.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
-            repo.history_state.indexed.rev.hash(&mut hasher);
-            repo.history_state.commit_details_rev.hash(&mut hasher);
+            let history = &repo.history_state;
+            history.selected_commit_rev.hash(&mut hasher);
+            // Loaded history rows show up only as a comparison's cards.
+            if Self::shows_comparison(repo) {
+                repo.log_rev.hash(&mut hasher);
+                history.indexed.rev.hash(&mut hasher);
+            }
+            history.commit_details_rev.hash(&mut hasher);
             repo.stashes_rev.hash(&mut hasher);
-            repo.history_state.commit_signatures_rev.hash(&mut hasher);
-            repo.history_state.worktree_selection_rev.hash(&mut hasher);
-            repo.history_state.range_files_rev.hash(&mut hasher);
+            // Only the shown commit's signature, not each verified batch.
+            if let Loadable::Ready(details) = &history.commit_details {
+                history.commit_signatures.get(&details.id).hash(&mut hasher);
+            }
+            history.worktree_selection_rev.hash(&mut hasher);
+            history.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.suggested_commit_message_rev.hash(&mut hasher);
@@ -1264,8 +1271,8 @@ impl DetailsPaneView {
                             .get(*source_ix)
                             .map(|file| crate::view::rows::FileTreeItem {
                                 path: file.path.as_path(),
-                                additions: file.additions,
-                                deletions: file.deletions,
+                                additions: file.line_stats.additions,
+                                deletions: file.line_stats.deletions,
                             })
                     }),
                     sort,
@@ -1431,21 +1438,13 @@ impl DetailsPaneView {
             .find(|repo| repo.id == repo_id)
             .and_then(|repo| repo.shared_preferences.as_ref())
             .map(|snapshot| {
-                let sort = snapshot
+                snapshot
                     .preferences
                     .file_sorts
                     .get(&list.preference_key())
                     .copied()
                     .map(crate::view::rows::CommitFileSort::from)
-                    .unwrap_or(self.default_file_list_sort);
-                if let crate::view::rows::FileListId::Status(section) = list
-                    && sort.needs_line_stats()
-                    && !crate::view::status_section_has_line_stats(section)
-                {
-                    crate::view::rows::CommitFileSort::default()
-                } else {
-                    sort
-                }
+                    .unwrap_or(self.default_file_list_sort)
             })
     }
 
@@ -1581,7 +1580,7 @@ impl DetailsPaneView {
                     _ => Default::default(),
                 };
                 gitcomet_core::domain::CommitFileChange::new(entry.path.clone(), entry.kind)
-                    .with_line_counts(stats.additions, stats.deletions)
+                    .with_line_stats(stats)
             })
             .collect();
 
@@ -1704,6 +1703,9 @@ impl DetailsPaneView {
         &self,
         list: crate::view::rows::FileListId,
     ) -> crate::view::rows::CommitFileSort {
+        if let crate::view::rows::FileListId::Status(section) = list {
+            return self.status_file_sort_for(section);
+        }
         if let Some(sort) = self
             .active_repo_id()
             .and_then(|id| self.shared_file_sort_for(id, list))
@@ -1711,7 +1713,6 @@ impl DetailsPaneView {
             return sort;
         }
         match list {
-            crate::view::rows::FileListId::Status(section) => self.status_file_sort_for(section),
             crate::view::rows::FileListId::CommitFiles => self.commit_file_sort,
             other => self
                 .active_repo_id()
@@ -1727,15 +1728,15 @@ impl DetailsPaneView {
         sort: crate::view::rows::CommitFileSort,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.publish_file_sort(list, sort) {
-            return;
-        }
         match list {
             crate::view::rows::FileListId::Status(section) => {
                 self.set_status_file_sort(section, sort, cx)
             }
             crate::view::rows::FileListId::CommitFiles => self.set_commit_file_sort(sort, cx),
             other => {
+                if self.publish_file_sort(other, sort) {
+                    return;
+                }
                 let Some(repo_id) = self.active_repo_id() else {
                     return;
                 };
@@ -1796,17 +1797,7 @@ impl DetailsPaneView {
         self.status_file_sort
             .get(&section)
             .copied()
-            .unwrap_or_else(|| {
-                let sort = self.default_file_list_sort;
-                // Untracked files have no line diff, so a default that reads one
-                // would leave the section in path order under a mode it does not
-                // offer.
-                if sort.needs_line_stats() && !crate::view::status_section_has_line_stats(section) {
-                    crate::view::rows::CommitFileSort::default()
-                } else {
-                    sort
-                }
-            })
+            .unwrap_or(self.default_file_list_sort)
     }
 
     pub(in super::super) fn set_status_file_sort(
@@ -1838,7 +1829,7 @@ impl DetailsPaneView {
         let sort = self.status_file_sort_for(section);
         let key = crate::view::rows::file_list_projection_key(
             repo.id.0,
-            self.file_source_key(repo.id, status_section_content_rev(repo, section), None),
+            self.file_source_key(repo.id, status_section_order_rev(repo, section, sort), None),
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
@@ -1858,7 +1849,8 @@ impl DetailsPaneView {
             entries,
             &base,
             sort,
-            status_section_line_stats(repo, section),
+            repo.line_stats_for_area(section.diff_area())
+                .filter(|_| sort.needs_line_stats()),
         );
         cache[slot] = Some((key, Arc::clone(&ordered)));
         Some(ordered)
@@ -1944,9 +1936,10 @@ impl DetailsPaneView {
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let list = crate::view::rows::FileListId::Status(section);
+        let sort = self.status_file_sort_for(section);
         let mut hasher = rustc_hash::FxHasher::default();
-        status_section_content_rev(repo, section).hash(&mut hasher);
-        self.file_list_sort_for(list).hash(&mut hasher);
+        status_section_order_rev(repo, section, sort).hash(&mut hasher);
+        sort.hash(&mut hasher);
         self.file_list_layout_for(repo.id, list)
             .key()
             .hash(&mut hasher);
@@ -2365,7 +2358,7 @@ impl DetailsPaneView {
             StatusSection::Staged => repo.staged_status_entries(),
             _ => repo.worktree_status_entries(),
         };
-        let line_stats = status_section_line_stats(repo, section);
+        let line_stats = repo.line_stats_for_area(section.diff_area());
         let controller = self.file_controller(repo.id, list);
         let mut controller = controller.borrow_mut();
         let collapsed_groups = controller.collapsed_groups().to_vec();

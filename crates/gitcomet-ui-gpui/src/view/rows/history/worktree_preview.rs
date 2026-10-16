@@ -268,7 +268,7 @@ impl DiffRenderer {
                     line_no,
                     styled,
                     streamed_spec,
-                    Some(raw_text.as_ref()),
+                    Some(diff_canvas::DiffRowText::Line(&raw_text)),
                     this.reveal_whitespace_chars,
                     wrap,
                 )

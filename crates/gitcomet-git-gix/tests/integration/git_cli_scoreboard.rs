@@ -58,6 +58,64 @@ fn production_git_cli_call_scoreboard_with_budget_gate() {
     );
 }
 
+/// A user's file path is a pathspec even after `--`, so `[a].txt` also
+/// matches `a.txt`. Only `push_literal_paths` and `push_literal_pathspec_file`
+/// may switch literal pathspecs on; a second way to do it lets the next
+/// command that takes a path forget it, as the discard, stage, submodule and
+/// history commands once did.
+#[test]
+fn literal_pathspecs_are_switched_on_only_by_the_path_helpers() {
+    let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders = Vec::new();
+    for file in rust_source_files(&src_root) {
+        let relative = file.strip_prefix(&src_root).unwrap().to_path_buf();
+        if relative.as_path() == std::path::Path::new("util/process.rs") {
+            continue;
+        }
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
+        let parsed: File = syn::parse_file(&source)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", file.display()));
+        let mut finder = LiteralPathspecSwitchFinder::default();
+        finder.visit_file(&parsed);
+        if finder.found {
+            offenders.push(relative);
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "pass user paths through push_literal_paths/push_literal_pathspec_file instead: {offenders:#?}"
+    );
+}
+
+#[derive(Default)]
+struct LiteralPathspecSwitchFinder {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for LiteralPathspecSwitchFinder {
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        if !has_test_cfg(&node.attrs) {
+            visit::visit_item_mod(self, node);
+        }
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+        if !has_test_cfg(&node.attrs) {
+            visit::visit_item_fn(self, node);
+        }
+    }
+
+    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
+        if matches!(
+            node.value().as_str(),
+            "GIT_LITERAL_PATHSPECS" | "--literal-pathspecs"
+        ) {
+            self.found = true;
+        }
+    }
+}
+
 #[derive(Default)]
 struct GitCommandCounter {
     count: usize,

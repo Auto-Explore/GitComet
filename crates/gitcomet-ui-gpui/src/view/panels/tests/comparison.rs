@@ -37,7 +37,7 @@ impl Files {
                             std::path::PathBuf::from(format!("src/file_{ix}.rs")),
                             FileStatusKind::Modified,
                         )
-                        .with_line_counts(Some(1), Some(0))
+                        .with_line_stats((Some(1), Some(0)).into())
                     })
                     .collect(),
             )),
@@ -390,6 +390,53 @@ mod worktree_uncommitted {
             let _ = window.draw(app);
         });
         cx
+    }
+
+    /// A linked worktree's rows carry the edit its scan computed, which the
+    /// Edits sort orders by, not just the counts.
+    #[gpui::test]
+    fn worktree_file_rows_keep_their_edit(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(98);
+        let mut signed = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+        let additions = signed.added_lines(b"fn added() {}\n");
+        let stats = gitcomet_core::domain::LineStats {
+            additions: Some(additions),
+            deletions: Some(0),
+            edit: signed.finish(),
+        };
+        let mut line_stats = gitcomet_core::domain::UncommittedLineStats::default();
+        line_stats
+            .unstaged
+            .insert(std::path::PathBuf::from("a.rs"), stats);
+        let summary = WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/linked-worktree-edits"),
+            head: Some(CommitId(sha(0).into())),
+            branch: Some("side".into()),
+            detached: false,
+            added: 0,
+            modified: 1,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: vec![file("a.rs", FileStatusKind::Modified)],
+            line_stats,
+        };
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+
+        let edit = cx.update(|_window, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .cached_worktree_file_inputs(repo_id, 0, &summary)
+                .files[0]
+                .line_stats
+                .edit
+        });
+
+        assert!(stats.edit.is_some());
+        assert_eq!(edit, stats.edit);
     }
 
     /// `selected_ix` indexes the entry list the reducer re-derives from the

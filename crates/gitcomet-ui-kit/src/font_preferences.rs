@@ -1,6 +1,6 @@
 use crate::bundled_fonts;
-use gpui::{BorrowAppContext, FontFeatures, Window};
-use std::collections::{BTreeMap, BTreeSet};
+use gpui::{App, BorrowAppContext, FontFeatures, TextSystem, Window};
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 pub const UI_SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
@@ -12,59 +12,6 @@ const LEGACY_EDITOR_MONOSPACE_FONT_FAMILY: &str = "monospace";
 
 static FONT_OPTION_CATALOG: OnceLock<FontOptionCatalog> = OnceLock::new();
 static SYSTEM_FONT_CATALOG: OnceLock<SystemFontCatalog> = OnceLock::new();
-
-// These follow the Monaco workbench defaults, but use resolvable real families where the
-// CSS stack starts with a platform token such as -apple-system or system-ui.
-#[cfg(target_os = "macos")]
-const DEFAULT_UI_FONT_CANDIDATES: &[&str] = &[
-    bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY,
-    "SF Pro Text",
-    "SF Pro Display",
-    "Helvetica Neue",
-    "PingFang SC",
-    "Hiragino Sans GB",
-    "PingFang TC",
-    "Hiragino Kaku Gothic Pro",
-    "Apple SD Gothic Neo",
-    "Nanum Gothic",
-    "AppleGothic",
-];
-#[cfg(target_os = "windows")]
-const DEFAULT_UI_FONT_CANDIDATES: &[&str] = &[
-    bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY,
-    "Segoe WPC",
-    "Segoe UI",
-    "Microsoft YaHei",
-    "Microsoft Jhenghei",
-    "Yu Gothic UI",
-    "Meiryo UI",
-    "Malgun Gothic",
-    "Dotom",
-];
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-const DEFAULT_UI_FONT_CANDIDATES: &[&str] = &[
-    bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY,
-    "Ubuntu",
-    "Droid Sans",
-    "Source Han Sans SC",
-    "Source Han Sans CN",
-    "Source Han Sans",
-    "Source Han Sans TC",
-    "Source Han Sans TW",
-    "Source Han Sans J",
-    "Source Han Sans JP",
-    "Source Han Sans K",
-    "Source Han Sans JR",
-    "UnDotum",
-    "FBaekmuk Gulim",
-];
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "linux",
-    target_os = "freebsd"
-)))]
-const DEFAULT_UI_FONT_CANDIDATES: &[&str] = &[bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY];
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 const SYSTEM_UI_FONT_CANDIDATES: &[&str] = &[
@@ -87,43 +34,6 @@ const SYSTEM_UI_FONT_CANDIDATES: &[&str] = &[
     "Source Han Sans KR",
     "UnDotum",
     "FBaekmuk Gulim",
-];
-
-#[cfg(target_os = "macos")]
-const DEFAULT_EDITOR_FONT_CANDIDATES: &[&str] = &[
-    bundled_fonts::LILEX_FONT_FAMILY,
-    bundled_fonts::FIRA_CODE_FONT_FAMILY,
-    "SF Mono",
-    "Monaco",
-    "Menlo",
-    "Courier",
-];
-#[cfg(target_os = "windows")]
-const DEFAULT_EDITOR_FONT_CANDIDATES: &[&str] = &[
-    bundled_fonts::LILEX_FONT_FAMILY,
-    bundled_fonts::FIRA_CODE_FONT_FAMILY,
-    "Consolas",
-    "Courier New",
-];
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-const DEFAULT_EDITOR_FONT_CANDIDATES: &[&str] = &[
-    bundled_fonts::LILEX_FONT_FAMILY,
-    bundled_fonts::FIRA_CODE_FONT_FAMILY,
-    "Ubuntu Mono",
-    "Liberation Mono",
-    "DejaVu Sans Mono",
-    "Courier New",
-];
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "windows",
-    target_os = "linux",
-    target_os = "freebsd"
-)))]
-const DEFAULT_EDITOR_FONT_CANDIDATES: &[&str] = &[
-    bundled_fonts::LILEX_FONT_FAMILY,
-    bundled_fonts::FIRA_CODE_FONT_FAMILY,
-    "Courier New",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -156,7 +66,6 @@ struct FontOptionCatalog {
 #[derive(Clone, Debug)]
 struct SystemFontCatalog {
     all_families: Arc<[String]>,
-    monospace_families: Arc<[String]>,
     resolved_system_ui_family: String,
 }
 
@@ -175,15 +84,15 @@ pub fn editor_font_options(window: &Window) -> Arc<[String]> {
     Arc::clone(&font_option_catalog(window).editor_options)
 }
 
-pub fn applied_ui_font_family(selection: &str) -> String {
+pub fn applied_ui_font_family(selection: &str, cx: &App) -> String {
     applied_font_family(selection, || {
-        &system_font_catalog(None).resolved_system_ui_family
+        &system_font_catalog(cx.text_system()).resolved_system_ui_family
     })
 }
 
-pub fn applied_editor_font_family(selection: &str) -> String {
+pub fn applied_editor_font_family(selection: &str, cx: &App) -> String {
     applied_font_family(selection, || {
-        &system_font_catalog(None).resolved_system_ui_family
+        &system_font_catalog(cx.text_system()).resolved_system_ui_family
     })
 }
 
@@ -197,16 +106,16 @@ fn applied_font_family(selection: &str, system_family: impl FnOnce() -> &'static
     }
 }
 
-pub fn normalize_ui_font_family(candidate: Option<&str>, options: &[String]) -> String {
-    normalize_font_family(candidate, options).unwrap_or_else(|| default_ui_font_family(options))
+fn normalize_ui_font_family(candidate: Option<&str>, options: &[String]) -> String {
+    normalize_font_family(candidate, options).unwrap_or_else(|| DEFAULT_UI_FONT_FAMILY.to_string())
 }
 
-pub fn normalize_editor_font_family(candidate: Option<&str>, options: &[String]) -> String {
-    normalize_editor_font_family_with_monospace_options(
-        candidate,
+fn normalize_editor_font_family(candidate: Option<&str>, options: &[String]) -> String {
+    normalize_font_family(
+        candidate.filter(|candidate| *candidate != LEGACY_EDITOR_MONOSPACE_FONT_FAMILY),
         options,
-        system_font_catalog(None).monospace_families.as_ref(),
     )
+    .unwrap_or_else(|| EDITOR_MONOSPACE_FONT_FAMILY.to_string())
 }
 
 pub fn applied_font_features(use_font_ligatures: bool) -> FontFeatures {
@@ -224,12 +133,9 @@ where
     cx.update_default_global::<AppFontPreferences, _>(|prefs, _cx| prefs.clone())
 }
 
-pub fn current_editor_font_family<C>(cx: &mut C) -> String
-where
-    C: BorrowAppContext,
-{
+pub fn current_editor_font_family(cx: &mut App) -> String {
     let selection = current(cx).editor_font_family;
-    applied_editor_font_family(&selection)
+    applied_editor_font_family(&selection, cx)
 }
 
 /// Stored font choices, as a settings store keeps them.
@@ -281,10 +187,9 @@ where
     let (ui_font_family, editor_font_family) = if let Some(catalog) = FONT_OPTION_CATALOG.get() {
         (
             normalize_ui_font_family(Some(ui_font_family.as_str()), &catalog.ui_options),
-            normalize_editor_font_family_with_monospace_options(
+            normalize_editor_font_family(
                 Some(editor_font_family.as_str()),
                 &catalog.editor_options,
-                system_font_catalog(None).monospace_families.as_ref(),
             ),
         )
     } else {
@@ -302,68 +207,25 @@ where
 
 fn build_font_options(window: &Window, specials: &[&str]) -> Vec<String> {
     build_font_options_from_names(
-        system_font_catalog(Some(window)).all_families.as_ref(),
+        system_font_catalog(window.text_system())
+            .all_families
+            .as_ref(),
         specials,
     )
 }
 
-fn system_font_catalog(window: Option<&Window>) -> &'static SystemFontCatalog {
-    if let Some(catalog) = SYSTEM_FONT_CATALOG.get() {
-        return catalog;
-    }
-
-    if let Some(window) = window {
-        return SYSTEM_FONT_CATALOG.get_or_init(|| collect_system_font_catalog(window));
-    }
-
-    SYSTEM_FONT_CATALOG.get_or_init(collect_fontdb_system_font_catalog)
+fn system_font_catalog(text_system: &TextSystem) -> &'static SystemFontCatalog {
+    SYSTEM_FONT_CATALOG.get_or_init(|| collect_system_font_catalog(text_system))
 }
 
-fn collect_system_font_catalog(window: &Window) -> SystemFontCatalog {
-    let (_, fontdb_monospace_families) = collect_fontdb_families();
-    let all_families = normalize_font_names(window.text_system().all_font_names());
-    let available_family_keys = all_families
-        .iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
-    let monospace_families = fontdb_monospace_families
-        .into_iter()
-        .filter(|name| available_family_keys.contains(&name.to_ascii_lowercase()))
-        .collect::<Vec<_>>();
+fn collect_system_font_catalog(text_system: &TextSystem) -> SystemFontCatalog {
+    let all_families = normalize_font_names(text_system.all_font_names());
     let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
 
     SystemFontCatalog {
         all_families: all_families.into(),
-        monospace_families: monospace_families.into(),
         resolved_system_ui_family,
     }
-}
-
-fn collect_fontdb_system_font_catalog() -> SystemFontCatalog {
-    let (all_families, monospace_families) = collect_fontdb_families();
-    let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
-
-    SystemFontCatalog {
-        all_families: all_families.into(),
-        monospace_families: monospace_families.into(),
-        resolved_system_ui_family,
-    }
-}
-
-fn collect_fontdb_families() -> (Vec<String>, Vec<String>) {
-    let mut db = fontdb::Database::new();
-    bundled_fonts::load_into_fontdb(&mut db);
-    db.load_system_fonts();
-    let all_families = normalize_font_names(
-        db.faces()
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone())),
-    );
-    let monospace_families = normalize_font_names(
-        db.faces()
-            .filter(|face| face.monospaced)
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone())),
-    );
-    (all_families, monospace_families)
 }
 
 fn normalize_font_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -403,30 +265,7 @@ fn normalize_font_family(candidate: Option<&str>, options: &[String]) -> Option<
         .map(ToOwned::to_owned)
 }
 
-fn normalize_editor_font_family_with_monospace_options(
-    candidate: Option<&str>,
-    options: &[String],
-    monospace_options: &[String],
-) -> String {
-    normalize_font_family(
-        candidate.filter(|candidate| *candidate != LEGACY_EDITOR_MONOSPACE_FONT_FAMILY),
-        options,
-    )
-    .unwrap_or_else(|| default_editor_font_family(options, monospace_options))
-}
-
-fn default_ui_font_family(options: &[String]) -> String {
-    first_matching_font_family(options, DEFAULT_UI_FONT_CANDIDATES)
-        .unwrap_or_else(|| UI_SYSTEM_FONT_FAMILY.to_string())
-}
-
-fn default_editor_font_family(options: &[String], monospace_options: &[String]) -> String {
-    first_matching_font_family(options, DEFAULT_EDITOR_FONT_CANDIDATES)
-        .or_else(|| first_installed_font_family(monospace_options))
-        .or_else(|| first_installed_font_family(options))
-        .unwrap_or_else(|| EDITOR_MONOSPACE_FONT_FAMILY.to_string())
-}
-
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn first_matching_font_family(options: &[String], candidates: &[&str]) -> Option<String> {
     candidates.iter().find_map(|candidate| {
         options
@@ -434,13 +273,6 @@ fn first_matching_font_family(options: &[String], candidates: &[&str]) -> Option
             .find(|option| option.as_str() == *candidate)
             .cloned()
     })
-}
-
-fn first_installed_font_family(options: &[String]) -> Option<String> {
-    options
-        .iter()
-        .find(|option| option.as_str() != UI_SYSTEM_FONT_FAMILY)
-        .cloned()
 }
 
 fn resolve_applied_font_family(selection: &str, resolved_system_ui_family: &str) -> String {
@@ -611,39 +443,10 @@ mod tests {
     }
 
     #[test]
-    fn default_ui_font_family_prefers_platform_candidates() {
-        let expected = DEFAULT_UI_FONT_CANDIDATES
-            .first()
-            .copied()
-            .unwrap_or(UI_SYSTEM_FONT_FAMILY);
+    fn normalize_ui_font_family_keeps_listed_choices_else_the_bundled_default() {
         let options = vec![
             UI_SYSTEM_FONT_FAMILY.to_string(),
-            "JetBrains Mono".to_string(),
-            DEFAULT_UI_FONT_CANDIDATES
-                .get(1)
-                .unwrap_or(&"Inter")
-                .to_string(),
-            DEFAULT_UI_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&"Inter")
-                .to_string(),
-        ];
-
-        assert_eq!(default_ui_font_family(&options), expected.to_string());
-    }
-
-    #[test]
-    fn normalize_ui_font_family_preserves_explicit_selection_and_falls_back_to_platform_default() {
-        let expected = DEFAULT_UI_FONT_CANDIDATES
-            .first()
-            .copied()
-            .unwrap_or(UI_SYSTEM_FONT_FAMILY);
-        let options = vec![
-            UI_SYSTEM_FONT_FAMILY.to_string(),
-            DEFAULT_UI_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&"Inter")
-                .to_string(),
+            DEFAULT_UI_FONT_FAMILY.to_string(),
             "JetBrains Mono".to_string(),
         ];
 
@@ -653,11 +456,11 @@ mod tests {
         );
         assert_eq!(
             normalize_ui_font_family(Some("Missing Font"), &options),
-            expected.to_string()
+            DEFAULT_UI_FONT_FAMILY.to_string()
         );
         assert_eq!(
             normalize_ui_font_family(None, &options),
-            expected.to_string()
+            DEFAULT_UI_FONT_FAMILY.to_string()
         );
         assert_eq!(
             normalize_ui_font_family(Some(UI_SYSTEM_FONT_FAMILY), &options),
@@ -666,86 +469,16 @@ mod tests {
     }
 
     #[test]
-    fn default_editor_font_family_prefers_platform_code_fonts() {
-        let options = vec![
-            UI_SYSTEM_FONT_FAMILY.to_string(),
-            "JetBrains Mono".to_string(),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .get(1)
-                .unwrap_or(&bundled_fonts::FIRA_CODE_FONT_FAMILY)
-                .to_string(),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string(),
-        ];
-        let monospace_options = vec![
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .get(1)
-                .unwrap_or(&bundled_fonts::FIRA_CODE_FONT_FAMILY)
-                .to_string(),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string(),
-        ];
-
-        assert_eq!(
-            default_editor_font_family(&options, &monospace_options),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string()
-        );
-    }
-
-    #[test]
-    fn default_editor_font_family_falls_back_to_first_installed_monospace_font() {
-        let options = vec![
-            UI_SYSTEM_FONT_FAMILY.to_string(),
-            "Inter".to_string(),
-            bundled_fonts::LILEX_FONT_FAMILY.to_string(),
-            "JetBrains Mono".to_string(),
-        ];
-        let monospace_options = vec![
-            bundled_fonts::LILEX_FONT_FAMILY.to_string(),
-            "JetBrains Mono".to_string(),
-        ];
-
-        assert_eq!(
-            default_editor_font_family(&options, &monospace_options),
-            bundled_fonts::LILEX_FONT_FAMILY.to_string()
-        );
-    }
-
-    #[test]
     fn normalize_editor_font_family_migrates_legacy_monospace_alias_to_real_font() {
         let options = vec![
             UI_SYSTEM_FONT_FAMILY.to_string(),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string(),
-            "JetBrains Mono".to_string(),
-        ];
-        let monospace_options = vec![
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string(),
+            EDITOR_MONOSPACE_FONT_FAMILY.to_string(),
             "JetBrains Mono".to_string(),
         ];
 
         assert_eq!(
-            normalize_editor_font_family_with_monospace_options(
-                Some(LEGACY_EDITOR_MONOSPACE_FONT_FAMILY),
-                &options,
-                &monospace_options,
-            ),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string()
+            normalize_editor_font_family(Some(LEGACY_EDITOR_MONOSPACE_FONT_FAMILY), &options),
+            EDITOR_MONOSPACE_FONT_FAMILY.to_string()
         );
     }
 
@@ -753,53 +486,25 @@ mod tests {
     fn normalize_editor_font_family_preserves_explicit_selection() {
         let options = vec![
             UI_SYSTEM_FONT_FAMILY.to_string(),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string(),
-            "JetBrains Mono".to_string(),
-        ];
-        let monospace_options = vec![
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string(),
+            EDITOR_MONOSPACE_FONT_FAMILY.to_string(),
             "JetBrains Mono".to_string(),
         ];
 
         assert_eq!(
-            normalize_editor_font_family_with_monospace_options(
-                Some("JetBrains Mono"),
-                &options,
-                &monospace_options,
-            ),
+            normalize_editor_font_family(Some("JetBrains Mono"), &options),
             "JetBrains Mono".to_string()
         );
         assert_eq!(
-            normalize_editor_font_family_with_monospace_options(
-                Some(UI_SYSTEM_FONT_FAMILY),
-                &options,
-                &monospace_options,
-            ),
+            normalize_editor_font_family(Some(UI_SYSTEM_FONT_FAMILY), &options),
             UI_SYSTEM_FONT_FAMILY.to_string()
         );
         assert_eq!(
-            normalize_editor_font_family_with_monospace_options(
-                Some("Missing Font"),
-                &options,
-                &monospace_options,
-            ),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string()
+            normalize_editor_font_family(Some("Missing Font"), &options),
+            EDITOR_MONOSPACE_FONT_FAMILY.to_string()
         );
         assert_eq!(
-            normalize_editor_font_family_with_monospace_options(None, &options, &monospace_options,),
-            DEFAULT_EDITOR_FONT_CANDIDATES
-                .first()
-                .unwrap_or(&bundled_fonts::LILEX_FONT_FAMILY)
-                .to_string()
+            normalize_editor_font_family(None, &options),
+            EDITOR_MONOSPACE_FONT_FAMILY.to_string()
         );
     }
 

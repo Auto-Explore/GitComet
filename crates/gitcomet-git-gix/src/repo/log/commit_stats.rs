@@ -7,7 +7,7 @@ pub(crate) const COMMIT_STATS_MAX_FILES: usize = 400;
 /// Large-file badges cost ~1-2.5 us per file (measured on 20k-file commits),
 /// far less than line stats, so asset imports keep them.
 pub(crate) const COMMIT_POINTER_MAX_FILES: usize = 10_000;
-/// Blobs larger than this are treated as "stats unknown" instead of diffed.
+/// Blobs and worktree files larger than this are not read for line stats.
 pub(crate) const COMMIT_STATS_MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
 /// Git's binary heuristic: a NUL byte within the leading window.
 pub(crate) const COMMIT_STATS_BINARY_SNIFF_BYTES: usize = 8000;
@@ -50,15 +50,6 @@ pub(crate) fn commit_stats_looks_binary(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(COMMIT_STATS_BINARY_SNIFF_BYTES)].contains(&0)
 }
 
-pub(crate) fn commit_stats_line_count(bytes: &[u8]) -> u32 {
-    if bytes.is_empty() {
-        return 0;
-    }
-    let newlines = memchr::memchr_iter(b'\n', bytes).count();
-    let trailing = usize::from(*bytes.last().expect("checked non-empty") != b'\n');
-    u32::try_from(newlines + trailing).unwrap_or(u32::MAX)
-}
-
 /// Added/removed line counts and the edit between two blob versions; unknown
 /// when either side is binary, too large, or unreadable.
 pub(crate) fn commit_file_line_stats(
@@ -87,11 +78,11 @@ pub(crate) fn line_stats_from_bytes(old: &[u8], new: &[u8]) -> LineStats {
     let mut edit = EditSignatureBuilder::default();
     // One side empty means every line of the other side changed; skip the diff.
     if old.is_empty() || new.is_empty() {
-        edit.removed_lines(old);
-        edit.added_lines(new);
+        let deletions = edit.removed_lines(old);
+        let additions = edit.added_lines(new);
         return LineStats {
-            additions: Some(commit_stats_line_count(new)),
-            deletions: Some(commit_stats_line_count(old)),
+            additions: Some(additions),
+            deletions: Some(deletions),
             edit: edit.finish(),
         };
     }

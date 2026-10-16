@@ -1,3 +1,5 @@
+use gitcomet_ui_kit::zoom_wheel::ZoomStep;
+
 pub(super) const STEPS: &[f64] = &[
     0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 8.0, 16.0, 32.0, 64.0,
 ];
@@ -59,20 +61,19 @@ impl Camera {
         self.scale = next;
         self.fit = false;
     }
-    pub fn step(self, up: bool) -> f64 {
-        if up {
-            STEPS
+    pub fn step(self, step: ZoomStep) -> f64 {
+        match step {
+            ZoomStep::In => STEPS
                 .iter()
                 .copied()
                 .find(|s| *s > self.scale + 1e-8)
-                .unwrap_or(64.0)
-        } else {
-            STEPS
+                .unwrap_or(64.0),
+            ZoomStep::Out => STEPS
                 .iter()
                 .rev()
                 .copied()
                 .find(|s| *s < self.scale - 1e-8)
-                .unwrap_or(self.scale)
+                .unwrap_or(self.scale),
         }
     }
 }
@@ -88,7 +89,7 @@ mod tests {
                 scale,
                 center: (50000.0, 50000.0),
             };
-            camera.zoom(camera.step(false), (250.0, 250.0), (500.0, 500.0));
+            camera.zoom(camera.step(ZoomStep::Out), (250.0, 250.0), (500.0, 500.0));
             assert!(
                 camera.scale <= scale,
                 "zooming out from {scale} increased the scale to {}",

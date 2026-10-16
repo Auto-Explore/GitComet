@@ -278,7 +278,7 @@ def manage_caches(repository, prune):
     print(json.dumps(report, indent=2))
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-            stream.write(f"\nValidation caches: {total / 1e9:.2f} GB / {CACHE_ALLOWANCE_BYTES / 1e9:.0f} GB"
+            stream.write(f"\nValidation caches: {total / 1e9:.2f} GB / {CACHE_ALLOWANCE_BYTES / 1e9:.1f} GB"
                          f" in {len(owned)} entries.\n")
     if total > report["budget_bytes"]:
         raise RuntimeError("Validation cache budget exceeded; reduce cache quotas before adding contexts")

@@ -335,6 +335,13 @@ impl Filesystem {
         }
         staged.as_file().sync_all()?;
         let version = DiskVersion::read(staged.path())?;
+        // Installed with the same no-replace rename as the park, so a mount
+        // without the kernel flag takes the same fallback for both. `keep`
+        // clears Windows' temporary attribute while the staged path exists;
+        // the new TempPath still removes it on an early return.
+        let mut staged = tempfile::TempPath::try_from_path(
+            staged.into_temp_path().keep().map_err(|e| e.error)?,
+        )?;
         let mut recovery = JournalEntry::new(&self.storage, None);
         if let Some(original) = original {
             let parked = recovery.reserve(path.parent().unwrap())?;
@@ -346,10 +353,7 @@ impl Filesystem {
                     if !overwrite && let Some(expected) = expected {
                         expected.matches(&parked, &Cancellation::default())?;
                     }
-                    staged
-                        .persist_noclobber(&path)
-                        .map(|_| ())
-                        .map_err(|e| e.error)
+                    rename_exclusive(&staged, &path)
                 });
             if let Err(error) = install {
                 if let Err(restore) = rename_exclusive(&parked, &path) {
@@ -363,8 +367,9 @@ impl Filesystem {
                 return Err(error);
             }
         } else {
-            staged.persist_noclobber(&path).map_err(|e| e.error)?;
+            rename_exclusive(&staged, &path)?;
         }
+        staged.disable_cleanup(true);
         self.publish(&[PathChange {
             old: None,
             new: Some(path.clone()),

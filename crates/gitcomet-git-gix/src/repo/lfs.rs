@@ -2,8 +2,8 @@
 //! user's transfer configuration all apply.
 
 use crate::util::{
-    run_git_background_capture, run_git_with_output, run_git_with_output_until_done,
-    validate_ref_like_arg,
+    push_literal_paths, run_git_background_capture, run_git_with_output,
+    run_git_with_output_until_done, validate_ref_like_arg,
 };
 use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -344,8 +344,8 @@ impl super::GixRepo {
                 "git add .gitattributes",
             )?);
             let mut add = self.git_workdir_cmd();
-            add.args(["--literal-pathspecs", "add", "--renormalize", "--"])
-                .args(renormalize);
+            add.args(["add", "--renormalize"]);
+            push_literal_paths(&mut add, renormalize);
             outputs.push(run_git_with_output_until_done(
                 add,
                 "git add --renormalize",

@@ -34,7 +34,7 @@ pub(crate) fn reload_conditional_includes(repo: &mut gix::Repository) -> gix::Re
                 branch_name: branch.as_ref().map(|name| name.as_ref()),
             },
         ),
-        // open_worktree_repo uses gix::open's lenient default.
+        // open_worktree_repo_with keeps gix's lenient default.
         ignore_io_errors: true,
         ..Default::default()
     };

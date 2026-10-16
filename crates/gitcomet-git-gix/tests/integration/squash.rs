@@ -745,6 +745,154 @@ fn interactive_rebase_reword_works_in_repo_path_with_spaces() {
     );
 }
 
+/// Git runs the reword editor with `--cleanup=strip`, which deletes every line
+/// starting with the comment character, so a planned `#123 Fix crash` subject
+/// and a `# Details` heading were dropped from the rewritten commit.
+#[test]
+fn interactive_rebase_reword_keeps_lines_starting_with_hash() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "a\n", "Reword me");
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Reword;
+    entries[0].new_message = Some("#123 Fix crash\n\n# Details\nbody".to_string());
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("interactive rebase");
+
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "#123 Fix crash\n\n# Details\nbody"
+    );
+}
+
+/// The continue path installs the persisted editor, so it has to keep the
+/// planned lines that start with `#` as well.
+#[test]
+fn interactive_rebase_reword_keeps_lines_starting_with_hash_across_conflict() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _p, _t) = conflict_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Drop;
+    entries[1].action = InteractiveRebaseAction::Reword;
+    entries[1].new_message = Some("#77 Reworded\n\n# Notes\nkept".to_string());
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase");
+    assert!(
+        backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+    let continue_output = backend
+        .rebase_continue_with_output()
+        .expect("continue interactive rebase");
+
+    assert!(
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
+        "rebase still in progress after continue: {continue_output:?}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "#77 Reworded\n\n# Notes\nkept"
+    );
+}
+
+/// A squash with no planned message keeps git's own combined message, whose
+/// instruction lines git comments out and must still strip.
+#[test]
+fn interactive_rebase_squash_without_planned_message_strips_git_instructions() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _a, _b, _c, _d) = linear_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[1].action = InteractiveRebaseAction::Squash;
+    entries[2].action = InteractiveRebaseAction::Reword;
+    entries[2].new_message = Some("#9 Later reword".to_string());
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("interactive rebase");
+
+    let exclude_base = format!("^{root}");
+    let rewritten = git_stdout(&repo, &["rev-list", "--reverse", "HEAD", &exclude_base]);
+    let rewritten: Vec<&str> = rewritten.lines().collect();
+    assert_eq!(rewritten.len(), 3, "A+B squashed, C reworded, D replayed");
+    let squashed = git_stdout(&repo, &["log", "-1", "--format=%B", rewritten[0]]);
+    assert!(
+        !squashed.contains("This is a combination"),
+        "git's instruction lines must be stripped:\n{squashed}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", rewritten[1]]),
+        "#9 Later reword"
+    );
+}
+
+/// A configured `core.commentChar=;` keeps a squashed commit's `#123` line.
+/// Overriding it for every plan with a planned message (to `#`, which no
+/// planned line started with) stripped that line from an unplanned squash.
+#[test]
+fn interactive_rebase_keeps_the_configured_comment_char_when_no_planned_line_collides() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    run_git(&repo, &["config", "core.commentChar", ";"]);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "a\n", "Target");
+    commit_file(&repo, "file.txt", "b\n", "Squashed\n\n#123 keep me");
+    commit_file(&repo, "file.txt", "c\n", "Other");
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[1].action = InteractiveRebaseAction::Squash;
+    entries[2].action = InteractiveRebaseAction::Reword;
+    entries[2].new_message = Some("Reworded".to_string());
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("interactive rebase");
+
+    let exclude_base = format!("^{root}");
+    let rewritten = git_stdout(&repo, &["rev-list", "--reverse", "HEAD", &exclude_base]);
+    let rewritten: Vec<&str> = rewritten.lines().collect();
+    assert_eq!(rewritten.len(), 2, "Target+Squashed folded, Other reworded");
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", rewritten[0]]),
+        "Target\n\nSquashed\n\n#123 keep me"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", rewritten[1]]),
+        "Reworded"
+    );
+}
+
 /// Captures an expected Git failure while preparing a paused rebase.
 #[cfg(unix)]
 fn run_git_allow_fail(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {

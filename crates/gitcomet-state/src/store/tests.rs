@@ -202,6 +202,7 @@ mod diff_sessions;
 mod effects;
 mod external_and_history;
 mod file_browser_follow;
+mod filesystem;
 mod filesystem_engine;
 mod maintenance;
 mod prepared_inputs;

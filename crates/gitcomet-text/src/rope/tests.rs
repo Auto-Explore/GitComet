@@ -258,13 +258,14 @@ fn clip_point_clamps_row_and_column() {
 }
 
 #[test]
-fn chunks_in_range_covers_exactly_the_requested_bytes() {
+fn chunk_ranges_cover_exactly_the_requested_bytes_both_ways() {
     let text = "0123456789\n".repeat(200);
     let rope = Rope::from_text(&text);
     assert!(
         rope.len() > MAX_CHUNK_BYTES * 2,
         "fixture must be multi-chunk"
     );
+    let seam = rope.chunk_sizes_for_test()[0];
 
     for (start, end) in [
         (0, 0),
@@ -272,13 +273,27 @@ fn chunks_in_range_covers_exactly_the_requested_bytes() {
         (5, 5),
         (0, 1),
         (text.len() - 1, text.len()),
-        (MAX_CHUNK_BYTES, MAX_CHUNK_BYTES),
-        (MAX_CHUNK_BYTES - 1, MAX_CHUNK_BYTES + 1),
+        (seam, seam),
+        (seam - 1, seam + 1),
+        (seam, text.len()),
+        (0, seam),
         (7, text.len() - 7),
     ] {
         let actual: String = rope.chunks_in_range(start..end).collect();
         assert_eq!(actual, text[start..end], "chunks_in_range({start}..{end})");
         assert_eq!(rope.text_for_range(start..end), text[start..end]);
+
+        let reversed: Vec<&str> = rope.reversed_chunks_in_range(start..end).collect();
+        assert!(
+            reversed.iter().all(|chunk| !chunk.is_empty()),
+            "{start}..{end}"
+        );
+        let actual: String = reversed.into_iter().rev().collect();
+        assert_eq!(
+            actual,
+            text[start..end],
+            "reversed_chunks_in_range({start}..{end})"
+        );
     }
 }
 
@@ -396,6 +411,13 @@ fn fuzz_seed(seed: u64, operations: usize) {
                 read,
                 expected[start..end],
                 "seed {seed} op {op}: chunks_in_range({start}..{end})"
+            );
+            let mut back: Vec<&str> = actual.reversed_chunks_in_range(start..end).collect();
+            back.reverse();
+            assert_eq!(
+                back.concat(),
+                expected[start..end],
+                "seed {seed} op {op}: reversed_chunks_in_range({start}..{end})"
             );
 
             let offset = floor_boundary(&expected, rng.up_to(expected.len()));

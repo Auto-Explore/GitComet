@@ -121,6 +121,17 @@ fn unified_patch_capacity<T: UnifiedDiffLine>(
         )
 }
 
+/// The file header without `old mode`/`new mode`: the mode is a file-level
+/// change, so a hunk or line patch must neither stage nor reset it.
+fn push_hunk_patch_file_header(out: &mut Vec<u8>, header: &[impl UnifiedDiffLine]) {
+    for line in header {
+        let raw = line.raw();
+        if !raw.starts_with(b"old mode ") && !raw.starts_with(b"new mode ") {
+            push_patch_line(out, raw);
+        }
+    }
+}
+
 pub fn build_unified_patch_for_hunk(
     diff: &[impl UnifiedDiffLine],
     hunk_src_ix: usize,
@@ -131,9 +142,7 @@ pub fn build_unified_patch_for_hunk(
 
     let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
     let mut out = Vec::with_capacity(capacity);
-    for line in &lines[file_start..header_end] {
-        push_patch_line(&mut out, line.raw());
-    }
+    push_hunk_patch_file_header(&mut out, &lines[file_start..header_end]);
     for line in &lines[hunk_src_ix..hunk_end] {
         push_patch_line(&mut out, line.raw());
     }
@@ -169,22 +178,69 @@ enum UnselectedHunkLineBehavior {
     KeepAsContext,
 }
 
-fn append_unselected_hunk_line(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectionPatchRole {
+    Context,
+    Remove,
+    Add,
+}
+
+impl SelectionPatchRole {
+    fn in_old_side(self) -> bool {
+        matches!(self, Self::Context | Self::Remove)
+    }
+
+    fn in_new_side(self) -> bool {
+        matches!(self, Self::Context | Self::Add)
+    }
+}
+
+struct SelectionPatchLine<'a> {
+    role: SelectionPatchRole,
+    content: &'a [u8],
+    /// The diff followed this line with `\ No newline at end of file`.
+    no_newline: bool,
+}
+
+pub const NO_NEWLINE_MARKER: &str = "\\ No newline at end of file";
+
+fn push_selection_patch_line(
     out: &mut Vec<u8>,
-    line: &[u8],
-    expected_prefix: u8,
-    behavior: UnselectedHunkLineBehavior,
-    prev_included: &mut bool,
+    prefix: u8,
+    content: &[u8],
+    no_newline_marker: bool,
 ) {
-    match behavior {
-        UnselectedHunkLineBehavior::Drop => {
-            *prev_included = false;
-        }
-        UnselectedHunkLineBehavior::KeepAsContext => {
-            let content = line.strip_prefix(&[expected_prefix]).unwrap_or(line);
-            out.push(b' ');
-            push_patch_line(out, content);
-            *prev_included = true;
+    out.push(prefix);
+    push_patch_line(out, content);
+    if no_newline_marker {
+        push_patch_line(out, NO_NEWLINE_MARKER.as_bytes());
+    }
+}
+
+/// A missing final newline belongs to whichever line ends a side. A selection
+/// can move that end: keeping an unselected `-b` as context puts the staged
+/// `+B` after it, so `b` ends the old side but not the new one. Such a line is
+/// split into `-b`/`+b` so each side gets its own newline state.
+fn push_selection_patch_body(out: &mut Vec<u8>, lines: &[SelectionPatchLine<'_>]) {
+    let old_last = lines.iter().rposition(|line| line.role.in_old_side());
+    let new_last = lines.iter().rposition(|line| line.role.in_new_side());
+    for (ix, line) in lines.iter().enumerate() {
+        let old_marker = line.no_newline && old_last == Some(ix);
+        let new_marker = line.no_newline && new_last == Some(ix);
+        match line.role {
+            SelectionPatchRole::Context if old_marker == new_marker => {
+                push_selection_patch_line(out, b' ', line.content, old_marker);
+            }
+            SelectionPatchRole::Context => {
+                push_selection_patch_line(out, b'-', line.content, old_marker);
+                push_selection_patch_line(out, b'+', line.content, new_marker);
+            }
+            SelectionPatchRole::Remove => {
+                push_selection_patch_line(out, b'-', line.content, old_marker);
+            }
+            SelectionPatchRole::Add => {
+                push_selection_patch_line(out, b'+', line.content, new_marker);
+            }
         }
     }
 }
@@ -206,68 +262,56 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
 
     let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
     let mut out = Vec::with_capacity(capacity);
-    for line in &lines[file_start..header_end] {
-        push_patch_line(&mut out, line.raw());
-    }
+    push_hunk_patch_file_header(&mut out, &lines[file_start..header_end]);
 
     // Keep the original hunk header; `git apply --recount` will adjust counts.
     push_patch_line(&mut out, lines[hunk_src_ix].raw());
 
+    use crate::domain::DiffLineKind as K;
     let mut has_change = false;
-    let mut prev_included = false;
+    let mut body: Vec<SelectionPatchLine<'_>> = Vec::with_capacity(hunk_end - hunk_src_ix);
     for (ix, line) in lines
         .iter()
         .enumerate()
         .take(hunk_end)
         .skip(hunk_src_ix + 1)
     {
-        if line.raw().starts_with(b"\\") {
-            if prev_included {
-                push_patch_line(&mut out, line.raw());
-            }
+        let raw = line.raw();
+        if raw.starts_with(b"\\") {
             continue;
         }
-
-        match line.kind {
-            crate::domain::DiffLineKind::Add => {
-                if selected_src_ixs.contains(&ix) {
-                    push_patch_line(&mut out, line.raw());
-                    has_change = true;
-                    prev_included = true;
+        let role = match line.kind {
+            K::Add | K::Remove if selected_src_ixs.contains(&ix) => {
+                has_change = true;
+                if line.kind == K::Add {
+                    SelectionPatchRole::Add
                 } else {
-                    append_unselected_hunk_line(
-                        &mut out,
-                        line.raw(),
-                        b'+',
-                        unselected_add,
-                        &mut prev_included,
-                    );
+                    SelectionPatchRole::Remove
                 }
             }
-            crate::domain::DiffLineKind::Remove => {
-                if selected_src_ixs.contains(&ix) {
-                    push_patch_line(&mut out, line.raw());
-                    has_change = true;
-                    prev_included = true;
+            K::Add | K::Remove => {
+                let unselected = if line.kind == K::Add {
+                    unselected_add
                 } else {
-                    append_unselected_hunk_line(
-                        &mut out,
-                        line.raw(),
-                        b'-',
-                        unselected_remove,
-                        &mut prev_included,
-                    );
+                    unselected_remove
+                };
+                match unselected {
+                    UnselectedHunkLineBehavior::Drop => continue,
+                    UnselectedHunkLineBehavior::KeepAsContext => SelectionPatchRole::Context,
                 }
             }
-            crate::domain::DiffLineKind::Context
-            | crate::domain::DiffLineKind::Header
-            | crate::domain::DiffLineKind::Hunk => {
-                push_patch_line(&mut out, line.raw());
-                prev_included = true;
-            }
-        }
+            K::Context | K::Header | K::Hunk => SelectionPatchRole::Context,
+        };
+        body.push(SelectionPatchLine {
+            role,
+            content: raw.get(1..).unwrap_or_default(),
+            no_newline: lines
+                .get(ix + 1)
+                .is_some_and(|next| next.raw().starts_with(b"\\")),
+        });
     }
 
+    push_selection_patch_body(&mut out, &body);
     has_change.then_some(out)
 }
 

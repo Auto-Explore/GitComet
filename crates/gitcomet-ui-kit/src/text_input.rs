@@ -24,7 +24,6 @@ use std::hash::Hasher;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use unicode_segmentation::UnicodeSegmentation as _;
 
 actions!(
     text_input,

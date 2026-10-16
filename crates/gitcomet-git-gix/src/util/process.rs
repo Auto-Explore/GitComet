@@ -48,6 +48,42 @@ pub(crate) fn credentials_without_prompts(cmd: &mut Command) {
     cmd.env("GCM_INTERACTIVE", "Never");
 }
 
+/// Appends `--` and a user's file paths. Paths after `--` are still
+/// pathspecs, so without literal pathspecs `[a].txt` also matches `a.txt`
+/// and `*` matches everything: every git pathspec built from a user's file
+/// goes through here or [`push_literal_pathspec_file`].
+pub(crate) fn push_literal_paths<P: AsRef<std::ffi::OsStr>>(
+    cmd: &mut Command,
+    paths: impl IntoIterator<Item = P>,
+) {
+    cmd.env("GIT_LITERAL_PATHSPECS", "1").arg("--").args(paths);
+}
+
+/// A path for `git submodule`, a shell script on Git for Windows. Git starts
+/// its MSYS2 `sh` without quoting `[`, and the runtime globs unquoted
+/// arguments against the working tree, so `[z]` reached Git as a tracked `z`.
+/// A `\` gets the argument quoted, and Git normalizes `.\[z]` back to `[z]`.
+/// (`MSYS=noglob` would also drop the runtime's `\"` unescaping.)
+pub(crate) fn submodule_script_path(path: &Path) -> std::borrow::Cow<'_, std::ffi::OsStr> {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    if cfg!(windows) && path.is_relative() && bytes.contains(&b'[') && !bytes.contains(&b'\\') {
+        let mut quoted = std::ffi::OsString::from(".\\");
+        quoted.push(path);
+        std::borrow::Cow::Owned(quoted)
+    } else {
+        std::borrow::Cow::Borrowed(path.as_os_str())
+    }
+}
+
+/// [`push_literal_paths`] for a NUL-separated `--pathspec-from-file` list.
+pub(crate) fn push_literal_pathspec_file(cmd: &mut Command, pathspec_file: &Path) {
+    let mut arg = std::ffi::OsString::from("--pathspec-from-file=");
+    arg.push(pathspec_file);
+    cmd.env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("--pathspec-file-nul")
+        .arg(arg);
+}
+
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
     #[cfg(any(test, feature = "test-support"))]
@@ -1111,10 +1147,7 @@ pub(crate) fn run_git_simple_with_paths(
         let mut cmd = git_workdir_cmd_for(workdir);
         cmd.args(args);
         if !batch.is_empty() {
-            cmd.arg("--");
-            for p in batch {
-                cmd.arg(p);
-            }
+            push_literal_paths(&mut cmd, batch);
         }
         run_git_simple(cmd, label)
     };

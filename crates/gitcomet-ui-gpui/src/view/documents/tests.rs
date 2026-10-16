@@ -1295,3 +1295,107 @@ fn repository_windows_keep_their_panes_around_documents_until_the_repository_nav
         "opening a file in the repository takes the main slot back"
     );
 }
+
+/// Caret blinks and moves notify the editor's input as often as typing does;
+/// only a change to the text may fingerprint the whole document again.
+#[gpui::test]
+fn standalone_caret_notifies_do_not_refingerprint_the_document(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("caret.txt");
+    std::fs::write(&path, "original").unwrap();
+    cx.update(|_, app| {
+        let docs = root.read(app).documents.clone();
+        docs.update(app, |docs, cx| docs.open(path.clone(), true, cx));
+    });
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = root.read(app).documents.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| {
+            b.editing = true;
+            b.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("first edit", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+
+    let _ = super::text::take_text_fingerprints_for_tests();
+    for _ in 0..5 {
+        cx.update(|_, app| buffer.update(app, |b, cx| b.input.update(cx, |_, cx| cx.notify())));
+        cx.run_until_parked();
+    }
+    assert_eq!(super::text::take_text_fingerprints_for_tests(), 0);
+
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| {
+            b.input
+                .update(cx, |input, cx| input.set_text("original", cx));
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        !buffer.read_with(cx, |b, _| b.dirty()),
+        "typing back the saved text is still reported"
+    );
+}
+
+/// A theme change resets the syntax provider, which a loading buffer defers.
+/// A reload that brings back the same text emits no text change, so the end
+/// of the read itself has to apply the new provider.
+#[gpui::test]
+fn a_theme_change_during_a_reload_restyles_unchanged_text(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("restyle.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let docs = cx.update(|_, app| root.read(app).documents.clone());
+    cx.update(|_, app| docs.update(app, |docs, cx| docs.open(path.clone(), true, cx)));
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = docs.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| b.reload(cx));
+        docs.update(app, |docs, cx| {
+            docs.set_theme(crate::theme::AppTheme::gitcomet_light(), cx)
+        });
+    });
+    drain(&root, cx);
+
+    let assert_restyled = |cx: &mut gpui::VisualTestContext, case: &str| {
+        cx.update(|_, app| {
+            let b = buffer.read(app);
+            let snapshot = b.input.read(app).text_snapshot();
+            assert_eq!(b.input.read(app).text(), "fn main() {}\n", "{case}");
+            assert_eq!(
+                b.syntax_key,
+                Some((snapshot.model_id(), snapshot.revision())),
+                "{case}: the restyle waits for the read and must happen once it ends"
+            );
+        });
+    };
+    assert_restyled(cx, "read the same text");
+
+    // A read that fails keeps the text on screen, which still needs restyling.
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| b.reload(cx));
+        docs.update(app, |docs, cx| {
+            docs.set_theme(crate::theme::AppTheme::gitcomet_dark(), cx)
+        });
+    });
+    std::fs::remove_file(&path).unwrap();
+    drain(&root, cx);
+    assert!(cx.update(|_, app| buffer.read(app).error().is_some()));
+    assert_restyled(cx, "read failed");
+}

@@ -41,7 +41,9 @@ pub(super) fn finish_editor_saves(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    // A save is real disk I/O on two worker threads; loaded Windows CI runners
+    // have taken over 1 s, so this is a hang guard, not a speed check.
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
     loop {
         cx.run_until_parked();
         let drained = cx.update(|_, app| {
@@ -54,12 +56,41 @@ pub(super) fn finish_editor_saves(
         if drained {
             return;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "filesystem save did not finish"
-        );
+        if std::time::Instant::now() >= deadline {
+            let report = cx.update(|_, app| unfinished_saves_report(view, app));
+            panic!(
+                "filesystem save did not finish within {DEFAULT_MAIN_PANE_WAIT_TIMEOUT:?}: {report}"
+            );
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+/// Where each unfinished save stands: still in the store's engine, finished but
+/// never taken by the pane, or never seen by the store.
+fn unfinished_saves_report(view: &gpui::Entity<GitCometView>, app: &gpui::App) -> String {
+    let main = view.read(app).diff_renderer.read(app);
+    let snapshot = main.store.snapshot().expect("window store");
+    let waiting: Vec<_> = main
+        .editor_documents
+        .pending()
+        .iter()
+        .filter_map(|buffer| {
+            let state = buffer.read();
+            let save = state.saving().as_ref()?;
+            Some((save.operation, save.destination.clone()))
+        })
+        .collect();
+    let completed: Vec<_> = snapshot
+        .filesystem
+        .completed
+        .iter()
+        .map(|result| result.id)
+        .collect();
+    format!(
+        "pane waits on {waiting:?}; store in flight {:?}, completed {completed:?}",
+        snapshot.filesystem.pending
+    )
 }
 
 pub(super) fn simulate_counted_click(
@@ -1192,6 +1223,32 @@ pub(super) fn opening_repo_state(
             workdir: workdir.to_path_buf(),
         },
     )
+}
+
+/// Loads the unstaged lane's counts as a finished scan does: the map and a
+/// new revision, which every cache of the counts keys on.
+pub(super) fn load_unstaged_line_stats(
+    repo: &mut gitcomet_state::model::RepoState,
+    counts: &[(&str, u32, u32)],
+) {
+    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::UncommittedLineStats {
+            staged: Default::default(),
+            unstaged: counts
+                .iter()
+                .map(|(path, additions, deletions)| {
+                    (
+                        std::path::PathBuf::from(path),
+                        gitcomet_core::domain::LineStats::from((
+                            Some(*additions),
+                            Some(*deletions),
+                        )),
+                    )
+                })
+                .collect(),
+        },
+    ));
+    repo.unstaged_line_stats_rev += 1;
 }
 
 /// Publish `state` the way production does: into the store first, then into the

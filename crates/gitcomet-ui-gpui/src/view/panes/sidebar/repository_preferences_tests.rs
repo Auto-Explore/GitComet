@@ -106,10 +106,7 @@ fn repository_lists_use_configured_defaults_until_an_explicit_sort_is_saved(
         cx.update(|_, app| {
             let pane = view.read(app).details_pane.read(app);
             for list in lists {
-                let expected = if list == FileListId::CommitFiles
-                    || (list == FileListId::Status(StatusSection::Untracked)
-                        && default.needs_line_stats())
-                {
+                let expected = if list == FileListId::CommitFiles {
                     CommitFileSort::PathAscending
                 } else {
                     default

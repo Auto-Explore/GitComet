@@ -408,6 +408,46 @@ fn change_lists_load_by_generation_and_give_each_file_its_target() {
 }
 
 #[test]
+fn watcher_edits_inside_a_submodule_reload_its_gitlink_session() {
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("vendor/sub"),
+        }),
+    );
+    for (path, queued) in [
+        ("vendor/subtle.rs", false),
+        ("vendor/sub-old/lib.rs", false),
+        ("vendor/sub/src/lib.rs", true),
+    ] {
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id,
+                change: RepoExternalChange {
+                    paths: crate::msg::ChangedPaths::known(vec![path.into()]),
+                    ..RepoExternalChange::worktree()
+                },
+            },
+        );
+        assert_eq!(
+            state.repos[0].diff_sessions[&view].refresh_queued, queued,
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn watcher_edits_do_not_cancel_a_session_load_or_reload_unrelated_files() {
     let (mut repos, ids, mut state, repo_id) = setup();
     let lifetime = state.repos[0].lifetime();

@@ -7,7 +7,7 @@ use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus,
 };
 use gitcomet_core::large_files::{AnnexAdjustMode, LargeFileCommand, LargeFileContent};
-use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
+use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitBackend, GitRepository};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -981,7 +981,15 @@ fn special_remote_types_come_from_the_annex_branch() {
     let parent = CommitId(git(&clone, &["rev-parse", "HEAD^"]).trim().into());
     for rows in [
         opened.commit_details(&head).unwrap().files,
-        opened.diff_range_files(&parent, Some(&head)).unwrap(),
+        opened
+            .compare_files(
+                &parent,
+                Some(&head),
+                &ComparisonOptions::direct(),
+                &CancellationToken::new(),
+            )
+            .unwrap()
+            .files,
     ] {
         let state = rows
             .iter()

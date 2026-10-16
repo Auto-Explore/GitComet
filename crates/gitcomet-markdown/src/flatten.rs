@@ -523,9 +523,8 @@ impl<'a> Flattener<'a> {
                     && let Some(kind) = gitcomet_diagrams::DiagramKind::for_fence(&info, &text)
                 {
                     let diagram = Arc::new(super::MarkdownDiagramSource {
-                        kind,
+                        key: gitcomet_diagrams::source::DiagramKey::new(kind, text.into()),
                         info: info.into(),
-                        source: text.into(),
                         fence_lines: block,
                     });
                     for row in &mut self.rows[row_start..] {

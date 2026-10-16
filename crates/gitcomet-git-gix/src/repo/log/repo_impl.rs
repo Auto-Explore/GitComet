@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::push_literal_paths;
 
 impl GixRepo {
     pub(super) fn log_page_cache_key(
@@ -268,9 +269,8 @@ impl GixRepo {
             .arg("-M")
             // Record separator (0x1e) before each commit hash so records can be
             // split unambiguously from the name-status lines that follow.
-            .arg("--format=%x1e%H")
-            .arg("--")
-            .arg(path);
+            .arg("--format=%x1e%H");
+        push_literal_paths(&mut cmd, [path]);
         let output = run_git_capture(cmd, "git log --follow --name-status")?;
 
         let target = commit.as_ref();
@@ -395,7 +395,7 @@ impl GixRepo {
         if let Some(max_count) = max_count {
             cmd.arg(format!("-n{max_count}"));
         }
-        cmd.arg("--").arg(path);
+        push_literal_paths(&mut cmd, [path]);
 
         run_git_parsed_stdout(cmd, "git log --follow", false, |stdout| {
             parse_git_log_pretty_records_from_reader(stdout).map(|page| page.commits)
@@ -968,33 +968,6 @@ impl GixRepo {
             None,
         )?
         .ok_or_else(|| Error::new(ErrorKind::Backend(format!("gix resolve commit {spec}"))))
-    }
-
-    pub(in super::super) fn diff_range_files_impl(
-        &self,
-        from: &CommitId,
-        to: Option<&CommitId>,
-    ) -> Result<Vec<CommitFileChange>> {
-        match to {
-            Some(to) => {
-                let repo = self.repo();
-                diff_range_files(self, &repo, from, to)
-            }
-            // Working-tree tip: the newer side is the live worktree, which has no
-            // tree object, so shell out to `git diff <from>` for the file list
-            // (consistent with the unified diff shown in the main pane).
-            None => {
-                let cancellation = CancellationToken::new();
-                let mut files = super::super::comparison::commit_to_worktree_files(
-                    &self.spec.workdir,
-                    from,
-                    false,
-                    &cancellation,
-                )?;
-                self.add_worktree_edits(&mut files, &cancellation)?;
-                Ok(files)
-            }
-        }
     }
 
     pub(in super::super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {

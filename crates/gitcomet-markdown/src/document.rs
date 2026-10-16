@@ -397,11 +397,11 @@ pub(crate) fn markdown_inline_diff_rows_can_merge(
         && old_row.text == new_row.text
         && match (&old_row.diagram, &new_row.diagram) {
             (Some(old), Some(new)) => {
-                old.kind == new.kind && old.info == new.info
+                old.key.kind() == new.key.kind() && old.info == new.info
                     // Groups contain complete diagrams. Compare the full body
                     // once at the opening row, rather than once per code line.
                     && (!matches!(old_row.kind, MarkdownPreviewRowKind::CodeLine { is_first: true, .. })
-                        || old.source == new.source)
+                        || old.key.source() == new.key.source())
             }
             (None, None) => true,
             _ => false,

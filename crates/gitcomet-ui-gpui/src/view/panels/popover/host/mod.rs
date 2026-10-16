@@ -927,6 +927,7 @@ impl PopoverHost {
             submodule_picker_rows_cache: rows_cache::RowsCache::default(),
             worktree_picker_rows_cache: rows_cache::RowsCache::default(),
             branch_ref_rows_cache: rows_cache::RowsCache::default(),
+            history_author_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
@@ -1843,6 +1844,7 @@ impl PopoverHost {
         self.submodule_picker_rows_cache.clear();
         self.worktree_picker_rows_cache.clear();
         self.branch_ref_rows_cache.clear();
+        self.history_author_rows_cache.clear();
         if is_context_menu {
             self.popover = Some(kind);
             self.context_menu_selected_ix = self

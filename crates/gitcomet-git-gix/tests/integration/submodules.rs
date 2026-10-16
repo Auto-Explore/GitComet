@@ -1506,6 +1506,68 @@ fn remove_submodule_cleans_custom_logical_name_metadata() {
     assert!(!parent_repo.join(".git/modules/custom").exists());
 }
 
+/// `[z]` was a glob to the submodule commands: adding a submodule there
+/// failed because the tracked `z` "already exists in the index", and removing
+/// it ran `git rm -f -- [z]`, which also deleted `z`.
+#[test]
+fn remove_submodule_reads_glob_characters_in_its_path_literally() {
+    let _guard = setup_submodule_test();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "z", "keep me\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let url = sub_repo.to_string_lossy().into_owned();
+    let SubmoduleTrustDecision::Prompt { sources } = opened
+        .check_submodule_add_trust(
+            &url,
+            Path::new("[z]"),
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
+        .expect("check local submodule trust")
+    else {
+        panic!("expected a trust prompt for a local submodule");
+    };
+    opened
+        .add_submodule_with_output(
+            &url,
+            Path::new("[z]"),
+            None,
+            None,
+            false,
+            &sources,
+            gitcomet_core::remote_url::RemoteUrlPolicy::default(),
+        )
+        .expect("add the submodule at [z] next to the tracked z");
+    run_git(
+        &parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+    opened
+        .remove_submodule_with_output(Path::new("[z]"))
+        .expect("remove submodule");
+
+    assert_eq!(
+        fs::read_to_string(parent_repo.join("z")).expect("z is still on disk"),
+        "keep me\n"
+    );
+    assert_eq!(git_stdout(&parent_repo, &["ls-files", "--", "z"]), "z");
+}
+
 #[test]
 fn submodule_update_refuses_remote_helper_urls_from_gitmodules() {
     let _guard = setup_submodule_test();

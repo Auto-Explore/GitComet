@@ -745,7 +745,7 @@ pub(super) fn diff_text_paint_payload(
     tab_width: usize,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<&StreamedDiffTextPaintSpec>,
-    raw_text: Option<&str>,
+    raw_text: Option<super::DiffRowText<'_>>,
     reveal_whitespace_chars: bool,
     region: DiffTextRegion,
     wrap: Option<DiffTextWrapSlice>,
@@ -764,6 +764,7 @@ pub(super) fn diff_text_paint_payload(
 
         let mut offset_map: Option<DiffTextOffsetMap> = None;
         let styled = if let Some(styled) = styled {
+            let raw_text = raw_text.map(super::DiffRowText::as_str);
             let (visible, map) = whitespace_visible_cached(tab_width, styled, raw_text);
             offset_map = Some(map);
             Some(visible)

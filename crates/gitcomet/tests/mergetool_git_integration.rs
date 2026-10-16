@@ -567,6 +567,61 @@ fn git_mergetool_resolves_overlapping_conflict() {
     );
 }
 
+/// A failed Wayland preflight relaunches the GUI tool under X11. The parent
+/// exited 0 as soon as the child spawned, so git (trusting the exit code)
+/// staged the file with its markers while the child, here without an X
+/// server, failed and resolved nothing.
+#[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
+#[test]
+fn git_mergetool_gui_x11_fallback_reports_the_relaunched_tools_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let runtime_dir = tempfile::tempdir().unwrap();
+
+    setup_overlapping_conflict(repo);
+    let bin_q = shell_quote(&gitcomet_bin().to_string_lossy());
+    let cmd = format!(
+        "{bin_q} mergetool --gui --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+    );
+    append_config(
+        repo,
+        &[
+            ("merge.tool", "gitcomet-gui"),
+            ("mergetool.gitcomet-gui.cmd", &cmd),
+            ("mergetool.gitcomet-gui.trustExitCode", "true"),
+            ("mergetool.prompt", "false"),
+            ("mergetool.keepBackup", "false"),
+        ],
+    );
+
+    let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
+    apply_isolated_git_config_env(&mut cmd);
+    cmd.arg("-C")
+        .arg(repo)
+        .args(["mergetool", "--no-prompt"])
+        .env("XDG_RUNTIME_DIR", runtime_dir.path())
+        .env("WAYLAND_DISPLAY", "gitcomet-test-missing-wayland")
+        .env("DISPLAY", ":9999")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("GITCOMET_SKIP_LINUX_X11_RELAUNCH")
+        .env_remove("GITCOMET_DISABLE_LINUX_X11_FALLBACK");
+    let output = cmd.output().expect("git mergetool to run");
+    let text = output_text(&output);
+
+    assert!(
+        text.contains("Relaunching") && text.contains("X11 fallback"),
+        "the Wayland preflight must have failed over to X11\n{text}"
+    );
+    assert!(
+        !output.status.success(),
+        "git must see the relaunched tool's failure\n{text}"
+    );
+    assert!(
+        has_unmerged_entries_for_path(repo, "file.txt"),
+        "a failed tool must leave the conflict unresolved\n{text}"
+    );
+}
+
 #[test]
 fn git_mergetool_custom_cmd_copies_remote_to_merged() {
     let tmp = tempfile::tempdir().unwrap();

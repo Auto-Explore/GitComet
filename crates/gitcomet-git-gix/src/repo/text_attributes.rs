@@ -36,6 +36,33 @@ impl GixRepo {
 /// attribute files or config degrade to defaults, as git does for invalid
 /// values, rather than failing the load that asked.
 pub(super) fn resolve_text_attributes(repo: &gix::Repository, path: &Path) -> TextAttributes {
+    let index = repo.index_or_empty().ok();
+    let matches = index.as_ref().and_then(|index| {
+        let mut stack = repo
+            .attributes_only(
+                index,
+                gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+            )
+            .ok()?;
+        selected_attribute_values(&mut stack, path)
+    });
+    text_attributes_from(repo, matches)
+}
+
+/// [`resolve_text_attributes`] on an attribute stack the caller keeps
+/// across paths, so each path costs a lookup instead of a new stack.
+pub(super) fn resolve_text_attributes_on(
+    repo: &gix::Repository,
+    stack: &mut gix::AttributeStack<'_>,
+    path: &Path,
+) -> TextAttributes {
+    text_attributes_from(repo, selected_attribute_values(stack, path))
+}
+
+fn text_attributes_from(
+    repo: &gix::Repository,
+    matches: Option<[AttrValue; TEXT_ATTRIBUTES.len()]>,
+) -> TextAttributes {
     let config = repo.config_snapshot();
     let config_string = |key: &str| config.string(key).map(|value| value.to_string());
     let auto_crlf = parse_auto_crlf(config_string("core.autocrlf").as_deref());
@@ -60,7 +87,7 @@ pub(super) fn resolve_text_attributes(repo: &gix::Repository, path: &Path) -> Te
     };
 
     let mut eol_attr = None;
-    if let Some(matches) = selected_attribute_values(repo, path) {
+    if let Some(matches) = matches {
         let [
             text,
             crlf,
@@ -111,17 +138,17 @@ enum AttrValue {
     Value(String),
 }
 
+/// Whether a file's git form comes from our decoder, then EOL and ident
+/// normalization, instead of gix's pipeline: gix only knows WHATWG labels
+/// (and reads `latin-1` as cp1252), git uses iconv's.
+pub(super) fn decodes_working_tree_encoding(attributes: &TextAttributes) -> bool {
+    attributes.working_tree_encoding().is_some() && !attributes.has_filter
+}
+
 fn selected_attribute_values(
-    repo: &gix::Repository,
+    stack: &mut gix::AttributeStack<'_>,
     path: &Path,
 ) -> Option<[AttrValue; TEXT_ATTRIBUTES.len()]> {
-    let index = repo.index_or_empty().ok()?;
-    let mut stack = repo
-        .attributes_only(
-            &index,
-            gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-        )
-        .ok()?;
     let mut outcome = stack.selected_attribute_matches(TEXT_ATTRIBUTES);
     stack
         .at_path(path, None)

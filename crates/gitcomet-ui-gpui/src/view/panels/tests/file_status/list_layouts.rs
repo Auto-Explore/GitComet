@@ -4,7 +4,7 @@
 use super::*;
 use crate::view::FileListLayout;
 use crate::view::rows::FileListId;
-use gitcomet_core::domain::FileStatusKind;
+use gitcomet_core::domain::{FileStatusKind, LineStats};
 
 /// A commit whose files are of mixed kinds, under one folder.
 fn commit_with_kinds(
@@ -17,7 +17,7 @@ fn commit_with_kinds(
             .iter()
             .map(|(path, kind)| {
                 gitcomet_core::domain::CommitFileChange::new((*path).into(), *kind)
-                    .with_line_counts(Some(1), Some(1))
+                    .with_line_stats((Some(1), Some(1)).into())
             })
             .collect(),
     )
@@ -315,9 +315,11 @@ fn groups_and_the_edits_sort_mix_in_one_list(cx: &mut gpui::TestAppContext) {
     let edited = |path: &str, kind, text: &str| {
         let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();
         edit.added(text.as_bytes());
-        gitcomet_core::domain::CommitFileChange::new(path.into(), kind)
-            .with_line_counts(Some(1), Some(0))
-            .with_edit(edit.finish())
+        gitcomet_core::domain::CommitFileChange::new(path.into(), kind).with_line_stats(LineStats {
+            additions: Some(1),
+            deletions: Some(0),
+            edit: edit.finish(),
+        })
     };
     let repo = commit_with(
         repo_id,

@@ -2,6 +2,10 @@ use super::shaping::*;
 use super::state::*;
 use super::wrap::*;
 use super::*;
+use crate::text_selection::is_word_char;
+use gitcomet_text::rope::Rope;
+use gpui::sum_tree::Bias;
+use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
 impl TextInput {
     /// Collapses the selection once another surface has taken the window's.
@@ -245,12 +249,9 @@ impl TextInput {
     }
 
     pub(super) fn logical_row_boundaries(&self, offset: usize) -> (usize, usize) {
-        let s = self.content.as_ref();
-        let offset = offset.min(s.len());
-        let start = s[..offset].rfind('\n').map(|ix| ix + 1).unwrap_or(0);
-        let rel_end = s[offset..].find('\n').unwrap_or(s.len() - offset);
-        let end = offset + rel_end;
-        (start, end)
+        let content = self.content.snapshot();
+        let row = content.line_range(content.row_for_offset(offset));
+        (row.start, row.end)
     }
 
     pub(super) fn row_boundaries(&self, offset: usize) -> (usize, usize) {
@@ -747,105 +748,125 @@ impl TextInput {
     }
 
     pub(super) fn clamp_to_char_boundary(&self, offset: usize) -> usize {
-        let mut offset = offset.min(self.content.len());
-        while offset > 0 && !self.content.is_char_boundary(offset) {
-            offset -= 1;
-        }
-        offset
+        self.content.clamp_to_char_boundary(offset)
     }
 
+    /// The grapheme boundary before `offset`. The segmenter reads the rope's
+    /// chunks back from the caret only as far as the cluster needs, so a step
+    /// costs the same however long the row is.
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .rev()
-            .find_map(|(idx, _)| (idx < offset).then_some(idx))
-            .unwrap_or(0)
+        let rope = self.content.snapshot().rope();
+        // Inside a character, step from its end: no boundary lies between.
+        let offset = rope.clip_offset(offset, Bias::Right);
+        let mut cursor = GraphemeCursor::new(offset, rope.len(), true);
+        let mut chunk_end = offset;
+        for chunk in rope.reversed_chunks_in_range(0..offset) {
+            let chunk_start = chunk_end - chunk.len();
+            loop {
+                match cursor.prev_boundary(chunk, chunk_start) {
+                    Ok(boundary) => return boundary.unwrap_or(0),
+                    Err(GraphemeIncomplete::PreContext(end)) => {
+                        provide_grapheme_context(&mut cursor, &rope, end)
+                    }
+                    Err(GraphemeIncomplete::PrevChunk) => break,
+                    Err(GraphemeIncomplete::NextChunk | GraphemeIncomplete::InvalidOffset) => {
+                        unreachable!("the chunk ends at or after the grapheme cursor")
+                    }
+                }
+            }
+            chunk_end = chunk_start;
+        }
+        0
     }
 
+    /// The grapheme boundary after `offset`, read forward the same way.
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .find_map(|(idx, _)| (idx > offset).then_some(idx))
-            .unwrap_or(self.content.len())
+        let rope = self.content.snapshot().rope();
+        let len = rope.len();
+        // Inside a character, step from its start: no boundary lies between.
+        let offset = rope.clip_offset(offset, Bias::Left);
+        let mut cursor = GraphemeCursor::new(offset, len, true);
+        let mut chunk_start = offset;
+        for chunk in rope.chunks_in_range(offset..len) {
+            loop {
+                match cursor.next_boundary(chunk, chunk_start) {
+                    Ok(boundary) => return boundary.unwrap_or(len),
+                    Err(GraphemeIncomplete::PreContext(end)) => {
+                        provide_grapheme_context(&mut cursor, &rope, end)
+                    }
+                    Err(GraphemeIncomplete::NextChunk) => break,
+                    Err(GraphemeIncomplete::PrevChunk | GraphemeIncomplete::InvalidOffset) => {
+                        unreachable!("the chunk starts at or before the grapheme cursor")
+                    }
+                }
+            }
+            chunk_start += chunk.len();
+        }
+        len
     }
 
-    pub(super) fn is_word_char(ch: char) -> bool {
-        crate::text_selection::is_word_char(ch)
-    }
-
-    pub(super) fn skip_left_while(
-        s: &str,
-        mut offset: usize,
+    /// Walks left over characters matching `predicate`, reading only the ones
+    /// it passes; a whitespace run crosses rows, since a newline is whitespace.
+    fn skip_left_while(
+        content: &TextModelSnapshot,
+        offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        offset = offset.min(s.len());
-        while offset > 0 {
-            let Some((idx, ch)) = s[..offset].char_indices().next_back() else {
-                return 0;
-            };
-            if !predicate(ch) {
-                break;
-            }
-            offset = idx;
-        }
-        offset
+        let skipped: usize = content
+            .reversed_chars_at(offset)
+            .take_while(|ch| predicate(*ch))
+            .map(char::len_utf8)
+            .sum();
+        offset - skipped
     }
 
-    pub(super) fn skip_right_while(
-        s: &str,
-        mut offset: usize,
+    /// Walks right over characters matching `predicate`, the same way.
+    fn skip_right_while(
+        content: &TextModelSnapshot,
+        offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        offset = offset.min(s.len());
-        while offset < s.len() {
-            let Some(ch) = s[offset..].chars().next() else {
-                break;
-            };
-            if !predicate(ch) {
-                break;
-            }
-            offset += ch.len_utf8();
-        }
-        offset
+        let skipped: usize = content
+            .chars_at(offset)
+            .take_while(|ch| predicate(*ch))
+            .map(char::len_utf8)
+            .sum();
+        offset + skipped
     }
 
     pub(super) fn previous_word_start(&self, offset: usize) -> usize {
-        let s = self.content.as_ref();
-        let mut offset = offset.min(s.len());
+        let content = self.content.snapshot();
+        let mut offset = self.clamp_to_char_boundary(offset);
 
         // Skip any whitespace to the left of the cursor.
-        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
+        offset = Self::skip_left_while(&content, offset, |ch| ch.is_whitespace());
 
         // Skip punctuation/symbols (e.g. '.' '/' '-') so word navigation doesn't get stuck on them.
-        offset = Self::skip_left_while(s, offset, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
+        offset = Self::skip_left_while(&content, offset, |ch| {
+            !ch.is_whitespace() && !is_word_char(ch)
         });
 
         // Skip any whitespace again, then skip the word itself.
-        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
-        Self::skip_left_while(s, offset, Self::is_word_char)
+        offset = Self::skip_left_while(&content, offset, |ch| ch.is_whitespace());
+        Self::skip_left_while(&content, offset, is_word_char)
     }
 
     pub(super) fn next_word_end(&self, offset: usize) -> usize {
-        let s = self.content.as_ref();
-        let offset = offset.min(s.len());
-        if offset >= s.len() {
-            return s.len();
-        }
-
-        let Some(ch) = s[offset..].chars().next() else {
-            return s.len();
+        let content = self.content.snapshot();
+        let offset = self.clamp_to_char_boundary(offset);
+        let Some(ch) = content.chars_at(offset).next() else {
+            return content.len();
         };
 
         if ch.is_whitespace() {
-            return Self::skip_right_while(s, offset, |ch| ch.is_whitespace());
+            return Self::skip_right_while(&content, offset, |ch| ch.is_whitespace());
         }
-        if Self::is_word_char(ch) {
-            return Self::skip_right_while(s, offset, Self::is_word_char);
+        if is_word_char(ch) {
+            return Self::skip_right_while(&content, offset, is_word_char);
         }
 
-        Self::skip_right_while(s, offset, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
+        Self::skip_right_while(&content, offset, |ch| {
+            !ch.is_whitespace() && !is_word_char(ch)
         })
     }
 
@@ -1336,4 +1357,14 @@ impl TextInput {
             }
         }
     }
+}
+
+/// Hands `cursor` the text ending at `end`, which it asks for when its own
+/// chunk cannot settle a boundary: a flag pair, ZWJ sequence or Indic conjunct
+/// that started in an earlier chunk.
+fn provide_grapheme_context(cursor: &mut GraphemeCursor, rope: &Rope, end: usize) {
+    let Some(context) = rope.reversed_chunks_in_range(0..end).next() else {
+        unreachable!("pre-context is only requested after a nonzero chunk start");
+    };
+    cursor.provide_context(context, end - context.len());
 }
