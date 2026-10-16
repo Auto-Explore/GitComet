@@ -35,7 +35,7 @@ pub const NODE_TYPES: &str = include_str!("../../src/node-types.json");
 
 // GitComet: upstream's `HIGHLIGHTS_QUERY` is removed with the `queries/`
 // directory it reads. GitComet keeps its own asm query in
-// crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/asm_highlights.scm,
+// crates/gitcomet-syntax/src/queries/asm_highlights.scm,
 // which is where the `mnemonic` node this grammar adds is captured.
 // pub const INJECTIONS_QUERY: &str = include_str!("../../queries/injections.scm");
 // pub const LOCALS_QUERY: &str = include_str!("../../queries/locals.scm");

@@ -266,7 +266,8 @@ written here because upstream's published crate omits it.
 
 Confirm the result before committing: `LARGE_STATE_COUNT` in the new `parser.c`
 should have dropped, every other count should match upstream's own `parser.c`
-(see "Why this is safe"), and `cargo test -p gitcomet-ui-gpui --lib syntax`
+(see "Why this is safe"), and
+`cargo test -p gitcomet-syntax --lib vendored_grammars_keep_the_small_state_retune`
 should still pass — `vendored_grammars_keep_the_small_state_retune` holds the
 `LARGE_STATE_COUNT` bounds, so a regeneration that moves one updates that list.
 

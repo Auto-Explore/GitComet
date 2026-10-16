@@ -42,7 +42,7 @@ pub const NODE_TYPES: &str = include_str!("../../src/node-types.json");
 // GitComet: these consts are guarded so the crate still builds with `queries/`
 // unvendored. `vendor/tree-sitter-build` declares and never sets the cfgs, so they
 // compile out; GitComet keeps its own queries under
-// crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+// crates/gitcomet-syntax/src/queries/.
 #[cfg(with_highlights_query)]
 /// The syntax highlighting query for this language.
 pub const HIGHLIGHT_QUERY: &str = include_str!("../../queries/highlights.scm");

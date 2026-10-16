@@ -9,7 +9,7 @@
 # Compatibility with the workspace tree-sitter (see `tree-sitter` in the root
 # Cargo.toml) is a hard requirement, enforced by the
 # `vendored_grammars_are_abi_compatible_with_workspace_tree_sitter` test in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax.rs.
+# crates/gitcomet-syntax/src/tests/grammar_compat.rs.
 [package]
 name = "tree-sitter-cil"
 description = "CIL (MSIL) grammar for the tree-sitter parsing library"
