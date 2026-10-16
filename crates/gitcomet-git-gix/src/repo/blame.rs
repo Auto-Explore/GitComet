@@ -604,7 +604,7 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo::test_support::git_command;
+    use crate::test_support::git_command;
 
     /// Opens with the repository's own config only, as `git_command` runs git.
     fn open(dir: &Path) -> gix::Repository {

@@ -319,7 +319,7 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::{GixRepo, local_tags_to_prune, parse_ls_remote_tag_names, parse_ls_remote_tags};
-    use crate::repo::test_support::init_test_repo;
+    use crate::test_support::init_test_repo;
     use gitcomet_core::error::ErrorKind;
     use gitcomet_core::services::CancellationToken;
     use rustc_hash::FxHashSet;
@@ -327,7 +327,7 @@ mod tests {
 
     fn open_repo(workdir: &Path) -> GixRepo {
         init_test_repo(workdir);
-        crate::repo::test_support::open_repo(workdir)
+        crate::test_support::open_repo(workdir)
     }
 
     #[test]

@@ -275,9 +275,7 @@ fn collect_tree_entries(
 
 #[cfg(test)]
 mod tests {
-    use crate::repo::test_support::{
-        git_stdout, git_success, init_test_repo, open_repo, write_file,
-    };
+    use crate::test_support::{git_stdout, git_success, init_test_repo, open_repo, write_file};
     use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
     use std::fs;
     use std::path::Path;

@@ -1453,7 +1453,7 @@ pub(crate) mod tests {
         map_entry_status, map_porcelain_v2_status_char, remove_conflicted_paths_from_staged,
         should_supplement_unmerged_conflicts, sort_and_dedup_status_entries, tree_id_for_commit,
     };
-    use crate::repo::test_support::{
+    use crate::test_support::{
         git_expect_failure, git_output, git_success, init_test_repo, open_repo, write_file,
     };
     use gitcomet_core::domain::{FileConflictKind, FileStatus, FileStatusKind};

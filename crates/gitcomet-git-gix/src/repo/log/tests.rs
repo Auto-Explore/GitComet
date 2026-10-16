@@ -1,5 +1,5 @@
 use super::*;
-use crate::repo::test_support::{
+use crate::test_support::{
     git_command, git_stdout, git_success, init_test_repo, open_repo, write_file,
 };
 use gitcomet_core::domain::UpstreamDivergence;

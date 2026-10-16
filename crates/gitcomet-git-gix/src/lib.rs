@@ -5,6 +5,8 @@ mod ignore;
 mod open;
 mod refs;
 mod repo;
+#[cfg(test)]
+mod test_support;
 mod util;
 
 pub use backend::GixBackend;
