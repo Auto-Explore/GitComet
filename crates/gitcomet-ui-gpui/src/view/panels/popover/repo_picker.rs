@@ -785,7 +785,7 @@ pub(super) fn activate(
     // Deferred: activation can run inside a root-view update.
     let root_view = this.root_view.clone();
     cx.defer(move |cx| {
-        let _ = root_view.update(cx, |root, cx| root.show_repository_canvas(cx));
+        let _ = root_view.request(RootRequest::ShowRepositoryCanvas, None, cx);
     });
     match entry {
         RepoPickerEntry::Workspace(workspace_id) => activate_workspace(this, workspace_id, cx),
@@ -797,9 +797,7 @@ pub(super) fn activate(
             this.close_popover(cx);
             let root_view = this.root_view.clone();
             cx.defer(move |cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_repo_path(path, cx);
-                });
+                let _ = root_view.request(RootRequest::OpenRepoPath(path), None, cx);
             });
         }
     }

@@ -59,9 +59,8 @@ pub(super) fn panel(
             .on_click(theme, cx, move |this, _e, window, cx| {
                 let root_view = this.root_view.clone();
                 let action = prompt.action.clone();
-                let _ = root_view.update(cx, |root, cx| {
-                    root.perform_close_action(action, window, cx);
-                });
+                let _ =
+                    root_view.request(RootRequest::PerformCloseAction(action), Some(window), cx);
                 this.close_resolved_popover(cx);
             }),
         cx,

@@ -873,6 +873,7 @@ pub(crate) use crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY;
 mod gitcomet_view;
 mod gitcomet_view_commands;
 mod gitcomet_view_render;
+mod gitcomet_view_requests;
 mod runtime_probe;
 
 #[cfg(test)]

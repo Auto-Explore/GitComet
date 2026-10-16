@@ -853,3 +853,16 @@ window applies it in `GitCometView::apply_preference_change`. The settings
 window's only remaining reads of the root are the window list and the active
 repository's terminal launch context, which is the seam a later
 `gitcomet-ui-settings` crate needs.
+
+### 3.4 Popovers send root requests (first part)
+
+Popovers called about 40 root methods and wrote three root fields through
+`root_view.update` closures. They now send a `RootRequest` value
+(`view/gitcomet_view_requests.rs`) through `RootRequests::request` on the same
+weak handle, synchronously as before, passing the window only to requests that
+act on it; the root handles them in one place. The popover-closed bookkeeping
+(unsaved-edits prompt, hook-activity dialog, file-operation prompt, hover menu)
+is one `PopoverClosed` request. What remains direct is reading: the window id,
+the active context-menu invoker, error-details state and two terminal calls
+that return values. Replacing the weak root handle with a request sink, and
+the sibling entities `PopoverHostInit` hands the host, are the rest of 3.4.

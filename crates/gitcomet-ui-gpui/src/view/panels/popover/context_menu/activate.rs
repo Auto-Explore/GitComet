@@ -6,6 +6,7 @@ use super::{
     app_menu, branch_group, components, context_menu_entry_action_at, push_request, repo_picker,
     resolve_checkout_file_path, session,
 };
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 
 impl PopoverHost {
     pub(in crate::view) fn context_menu_activate_action(
@@ -53,9 +54,14 @@ impl PopoverHost {
             }
             ContextMenuAction::RunExtensionCommand { id, repo_id } => {
                 self.close_popover_and_restore_focus(window, cx);
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.run_extension_command_for(&id, Some(repo_id), cx);
-                });
+                let _ = self.root_view.request(
+                    RootRequest::RunExtensionCommand {
+                        id: id.to_string(),
+                        repo: Some(repo_id),
+                    },
+                    None,
+                    cx,
+                );
                 return;
             }
             ContextMenuAction::AddRepoMenu(action) => {
@@ -105,7 +111,7 @@ impl PopoverHost {
             } => {
                 let _ = self
                     .root_view
-                    .update(cx, |root, cx| root.show_repository_canvas(cx));
+                    .request(RootRequest::ShowRepositoryCanvas, None, cx);
                 self.store.dispatch(Msg::OpenFileContent {
                     repo_id,
                     source,
@@ -115,7 +121,7 @@ impl PopoverHost {
             ContextMenuAction::EditFile { repo_id, path } => {
                 let _ = self
                     .root_view
-                    .update(cx, |root, cx| root.show_repository_canvas(cx));
+                    .request(RootRequest::ShowRepositoryCanvas, None, cx);
                 self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
             }
             ContextMenuAction::DiscardFileEdits { repo_id, path } => {
@@ -351,14 +357,14 @@ impl PopoverHost {
 
                 // The root view owns this sequence (existence check, resolve,
                 // background launch, toast); routing through it keeps one copy.
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.open_path_in_external_code_editor(full_path, cx);
-                });
+                let _ =
+                    self.root_view
+                        .request(RootRequest::OpenInExternalEditor(full_path), None, cx);
             }
             ContextMenuAction::OpenRepo { path } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.open_repo_path(path, cx);
-                });
+                let _ = self
+                    .root_view
+                    .request(RootRequest::OpenRepoPath(path), None, cx);
             }
             ContextMenuAction::ActivateRepo { repo_id } => {
                 if !self.repo_is_open(repo_id) {
@@ -367,7 +373,7 @@ impl PopoverHost {
                 }
                 let _ = self
                     .root_view
-                    .update(cx, |root, cx| root.show_repository_canvas(cx));
+                    .request(RootRequest::ShowRepositoryCanvas, None, cx);
                 self.store.dispatch(Msg::SetActiveRepo { repo_id });
             }
             ContextMenuAction::CloseRepo { repo_id } if !self.repo_is_open(repo_id) => {
@@ -387,9 +393,14 @@ impl PopoverHost {
                 // Deferred: the guards may open a prompt in this host.
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.request_close_repos(vec![repo_id], None, cx);
-                    });
+                    let _ = root_view.request(
+                        RootRequest::CloseRepos {
+                            repo_ids: vec![repo_id],
+                            activate_after: None,
+                        },
+                        None,
+                        cx,
+                    );
                 });
             }
             ContextMenuAction::MoveRepoToWorkspace {
@@ -404,9 +415,15 @@ impl PopoverHost {
                 // menu close first, then start the guarded move.
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.request_move_repo_to_workspace(repo_id, path, target_workspace, cx);
-                    });
+                    let _ = root_view.request(
+                        RootRequest::MoveRepoToWorkspace {
+                            repo_id,
+                            path,
+                            target: target_workspace,
+                        },
+                        None,
+                        cx,
+                    );
                 });
             }
             ContextMenuAction::ActivateWorkspace { workspace_id } => {
@@ -451,9 +468,14 @@ impl PopoverHost {
             } => {
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.request_close_repos(repo_ids, activate_after, cx);
-                    });
+                    let _ = root_view.request(
+                        RootRequest::CloseRepos {
+                            repo_ids,
+                            activate_after,
+                        },
+                        None,
+                        cx,
+                    );
                 });
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
@@ -609,9 +631,8 @@ impl PopoverHost {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
             }
             ContextMenuAction::DeleteBranch { repo_id, name } => {
-                let _ = self.root_view.update(cx, |root, _| {
-                    root.pending_force_delete_branch_centered = false;
-                });
+                self.root_view
+                    .request(RootRequest::SetForceDeleteBranchCentered(false), None, cx);
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
             }
             ContextMenuAction::ToggleBranchGroupPin { repo_id, group_key } => {
@@ -759,9 +780,7 @@ impl PopoverHost {
                 self.change_tracking_view = view;
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.set_change_tracking_view(view, cx);
-                    });
+                    let _ = root_view.request(RootRequest::SetChangeTrackingView(view), None, cx);
                 });
             }
             ContextMenuAction::SetUiScale { percent } => {
@@ -775,9 +794,7 @@ impl PopoverHost {
                 self.commit_amend_enabled = enabled;
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.set_commit_amend_enabled(enabled, cx);
-                    });
+                    let _ = root_view.request(RootRequest::SetCommitAmend(enabled), None, cx);
                 });
             }
             ContextMenuAction::SetCommitPushAfterEnabled { enabled } => {
@@ -785,9 +802,7 @@ impl PopoverHost {
                 self.commit_push_after_enabled = enabled;
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.set_commit_push_after_enabled(enabled, cx);
-                    });
+                    let _ = root_view.request(RootRequest::SetCommitPushAfter(enabled), None, cx);
                 });
             }
             ContextMenuAction::UseCommitMessage { message } => {
@@ -1074,17 +1089,15 @@ impl PopoverHost {
                     let wh = window.window_handle();
                     cx.defer(move |cx| {
                         let _ = wh.update(cx, |_, window, cx| {
-                            let _ = root_view.update(cx, |root, cx| {
-                                root.open_popover_centered(
-                                    PopoverKind::RebaseReword {
-                                        ix,
-                                        original_action,
-                                        original_message: msg,
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            });
+                            let _ = root_view.request(
+                                RootRequest::OpenPopoverCentered(PopoverKind::RebaseReword {
+                                    ix,
+                                    original_action,
+                                    original_message: msg,
+                                }),
+                                Some(window),
+                                cx,
+                            );
                         });
                     });
                 }

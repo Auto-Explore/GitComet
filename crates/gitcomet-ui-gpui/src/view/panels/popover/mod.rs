@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::components::ControlInteractionExt;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::services::InteractiveRebaseAction;
 use std::rc::Rc;
 

@@ -160,9 +160,11 @@ impl PopoverHost {
                 purpose: BranchPickerPurpose::Delete,
             }) => {
                 let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
-                let _ = self.root_view.update(cx, |root, _| {
-                    root.pending_force_delete_branch_centered = is_centered;
-                });
+                self.root_view.request(
+                    RootRequest::SetForceDeleteBranchCentered(is_centered),
+                    None,
+                    cx,
+                );
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
                 self.close_popover(cx);
             }

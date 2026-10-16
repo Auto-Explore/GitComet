@@ -79,12 +79,14 @@ impl PopoverHost {
         let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
         let repo_picker_open = matches!(self.popover, Some(PopoverKind::RepoPicker { .. }));
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                root.title_bar.update(cx, |title_bar, cx| {
-                    title_bar.set_app_menu_open(app_menu_open, cx);
-                    title_bar.set_repo_picker_open(repo_picker_open, cx);
-                });
-            });
+            root_view.request(
+                RootRequest::SyncTitlebarMenus {
+                    app_menu_open,
+                    repo_picker_open,
+                },
+                None,
+                cx,
+            );
         });
     }
 
@@ -95,9 +97,7 @@ impl PopoverHost {
             let next = host
                 .upgrade()
                 .and_then(|host| host.read(cx).active_invoker.clone());
-            let _ = root_view.update(cx, |root, cx| {
-                root.set_active_context_menu_invoker(next, cx)
-            });
+            let _ = root_view.request(RootRequest::SetActiveContextMenuInvoker(next), None, cx);
         });
     }
 
@@ -1103,9 +1103,14 @@ impl PopoverHost {
             .filter(|operation| operation.is_reportable() && operation.status.is_active())
             .map(|operation| (repo_id, operation.id))
             .collect::<Vec<_>>();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.minimize_hook_activity_repo(repo_id, active_chains, cx);
-        });
+        let _ = self.root_view.request(
+            RootRequest::MinimizeHookActivity {
+                repo_id,
+                active_chains: active_chains.into_iter().collect(),
+            },
+            None,
+            cx,
+        );
         self.close_popover(cx);
     }
 
@@ -1114,9 +1119,9 @@ impl PopoverHost {
             return;
         };
         let repo_id = *repo_id;
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.resume_hook_activity_auto_open(repo_id, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::ResumeHookActivityAutoOpen(repo_id), None, cx);
         self.close_popover(cx);
     }
 
@@ -1342,21 +1347,15 @@ impl PopoverHost {
         self.clear_active_context_menu_invoker(cx);
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
-            let _ = root_view.update(cx, |root, cx| {
-                if dismissing_unsaved_prompt {
-                    root.clear_pending_unsaved_file_edits_prompt(cx);
-                }
-                if dismissing_hook_activity {
-                    root.set_hook_activity_dialog_repo(None, cx);
-                }
-                // Esc and the scrim cancel; buttons resolved before closing.
-                if let Some(prompt_id) = dismissed_filesystem_prompt {
-                    root.filesystem_dialog_dismissed(prompt_id, cx);
-                }
-                root.set_history_refs_hover_item_menu_open(false, cx);
-                // A file-operation dialog may be waiting for this one to close.
-                root.notify_if_filesystem_dialog_queued(cx);
-            });
+            root_view.request(
+                RootRequest::PopoverClosed {
+                    dismissing_unsaved_prompt,
+                    dismissing_hook_activity,
+                    dismissed_filesystem_prompt,
+                },
+                None,
+                cx,
+            );
         });
         cx.notify();
     }
@@ -1703,9 +1702,11 @@ impl PopoverHost {
             if let Some(prompt_id) = self.open_filesystem_prompt_id() {
                 let root_view = self.root_view.clone();
                 cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.filesystem_dialog_displaced(prompt_id, cx);
-                    });
+                    let _ = root_view.request(
+                        RootRequest::FilesystemDialogDisplaced(prompt_id),
+                        None,
+                        cx,
+                    );
                 });
             }
         }
@@ -2346,9 +2347,9 @@ impl PopoverHost {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub(super) fn install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.install_linux_desktop_integration(cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::InstallLinuxDesktopIntegration, None, cx);
     }
 
     /// The search input of whichever picker is open, so a row menu floating over
@@ -2403,8 +2404,8 @@ impl PopoverHost {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.push_toast(kind, message, cx);
-        });
+        let _ = self
+            .root_view
+            .request(RootRequest::Toast(kind, message), None, cx);
     }
 }

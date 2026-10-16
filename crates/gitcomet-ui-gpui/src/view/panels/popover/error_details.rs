@@ -446,9 +446,9 @@ fn run_action(
     match action {
         ErrorAction::ReviewLocalChanges { repo_id } => {
             this.close_popover(cx);
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.review_local_changes(repo_id, window, cx);
-            });
+            let _ =
+                this.root_view
+                    .request(RootRequest::ReviewLocalChanges(repo_id), Some(window), cx);
         }
         ErrorAction::Hosted(action) => {
             this.close_popover_and_restore_focus(window, cx);
@@ -478,12 +478,14 @@ fn run_action(
                 move || crate::view::platform_open::open_url_blocking(&url),
                 move |_this, result, cx| {
                     if let Err(err) = result {
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.report_error(
-                                ErrorReport::message(None, format!("Failed to open link: {err}")),
-                                cx,
-                            );
-                        });
+                        let _ = root_view.request(
+                            RootRequest::ReportError(ErrorReport::message(
+                                None,
+                                format!("Failed to open link: {err}"),
+                            )),
+                            None,
+                            cx,
+                        );
                     }
                 },
             );
