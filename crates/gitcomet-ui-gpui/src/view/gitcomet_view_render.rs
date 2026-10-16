@@ -1,5 +1,5 @@
 use super::*;
-use chrome::{cursor_style_for_resize_edge, resize_edge};
+use crate::kit::window_chrome::{cursor_style_for_resize_edge, resize_edge};
 
 #[cfg(test)]
 use tooltip::clear_visible_tooltip_text_for_test;
@@ -218,7 +218,7 @@ impl Render for GitCometView {
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (
                 Some(tiling),
-                chrome::client_side_decoration_inset(self.ui_scale_percent),
+                crate::kit::window_chrome::client_side_decoration_inset(self.ui_scale_percent),
             ),
             Decorations::Server => (None, px(0.0)),
         };
@@ -268,7 +268,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                chrome::TITLE_BAR_HEIGHT,
+                crate::kit::window_chrome::TITLE_BAR_HEIGHT,
             ));
         }
 
@@ -381,12 +381,10 @@ impl Render for GitCometView {
             let is_validating = prompt.status == AuthPromptStatus::Validating
                 || self.auth_prompt_submitted_generation == Some(prompt.generation);
             self.auth_prompt_username_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
                 input.set_read_only(is_validating, cx);
             });
             let is_host_verification = prompt.kind == AuthPromptKind::HostVerification;
             self.auth_prompt_secret_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
                 input.set_masked(!is_host_verification, cx);
                 input.set_read_only(is_validating, cx);
             });
@@ -702,17 +700,13 @@ impl Render for GitCometView {
             }))
             .on_action(cx.listener(
                 |this, _: &TextInputDiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_prev_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 },
             ))
             .on_action(cx.listener(
                 |this, _: &TextInputDiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_next_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 },
             ))
@@ -742,17 +736,13 @@ impl Render for GitCometView {
             }))
             .on_action(
                 cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_prev_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(false, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
-                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
-                        pane.navigate_next_search_match_or_diff_change(cx)
-                    });
+                    this.defer_search_match_navigation(true, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -801,7 +791,7 @@ impl Render for GitCometView {
             let size = window.viewport_size();
             let next = resize_edge(
                 e.position,
-                chrome::client_side_decoration_inset(this.ui_scale_percent),
+                crate::kit::window_chrome::client_side_decoration_inset(this.ui_scale_percent),
                 size,
                 tiling,
             );
@@ -837,7 +827,9 @@ impl Render for GitCometView {
                     let size = window.viewport_size();
                     let edge = resize_edge(
                         e.position,
-                        chrome::client_side_decoration_inset(this.ui_scale_percent),
+                        crate::kit::window_chrome::client_side_decoration_inset(
+                            this.ui_scale_percent,
+                        ),
                         size,
                         tiling,
                     );
@@ -846,7 +838,7 @@ impl Render for GitCometView {
                     };
 
                     cx.stop_propagation();
-                    crate::app::begin_window_resize(window, edge);
+                    crate::kit::window_chrome::begin_window_resize(window, edge);
                 }),
             );
         } else if self.hover_resize_edge.is_some() {
@@ -869,7 +861,7 @@ impl Render for GitCometView {
             .child(stable_cached_overlay_view(self.toast_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));
 
-        root = root.child(chrome::window_frame(
+        root = root.child(crate::kit::window_chrome::window_frame(
             theme,
             decorations,
             framed_content.into_any_element(),
@@ -895,5 +887,142 @@ impl Render for GitCometView {
         }
 
         root
+    }
+}
+
+impl GitCometView {
+    pub(super) fn pane_resize_handle(
+        &self,
+        theme: AppTheme,
+        id: &'static str,
+        handle: PaneResizeHandle,
+        cx: &gpui::Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let collapsed = match handle {
+            PaneResizeHandle::Sidebar => self.sidebar_collapsed,
+            PaneResizeHandle::Details => self.details_collapsed,
+        };
+        if collapsed {
+            return div().id(id).w(px(0.0)).h_full();
+        }
+
+        // Only the details divider shows an idle hairline: it separates two
+        // regions inside the content card. The sidebar handle sits on the
+        // bare canvas and stays invisible until hovered or dragged.
+        let idle_line = matches!(handle, PaneResizeHandle::Details);
+        let dragging = self.pane_resize.is_some_and(|state| state.handle == handle);
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .group(id)
+            .w(self.pane_resize_handle_width())
+            .h_full()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .child(components::resize_grip(
+                theme,
+                self.ui_scale_percent,
+                id,
+                components::ResizeGripAxis::Vertical,
+                dragging,
+                idle_line.then_some(theme.colors.stroke.subtle),
+            ))
+            .on_drag(handle, |_handle, _offset, _window, cx| {
+                cx.new(|_cx| PaneResizeDragGhost)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                    crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
+                    match handle {
+                        PaneResizeHandle::Sidebar => {
+                            this.sidebar_width_anim_seq =
+                                this.sidebar_width_anim_seq.wrapping_add(1);
+                            this.sidebar_width_animating = false;
+                            this.sidebar_render_width = this.sidebar_width;
+                        }
+                        PaneResizeHandle::Details => {
+                            this.details_width_anim_seq =
+                                this.details_width_anim_seq.wrapping_add(1);
+                            this.details_width_animating = false;
+                            this.details_render_width = this.details_width;
+                        }
+                    }
+                    this.pane_resize = Some(PaneResizeState::new(
+                        handle,
+                        e.position.x,
+                        this.sidebar_width,
+                        this.details_width,
+                        this.last_window_size.width,
+                        this.sidebar_collapsed,
+                        this.details_collapsed,
+                    ));
+                    cx.notify();
+                }),
+            )
+            .on_drag_move(cx.listener(
+                move |this, e: &gpui::DragMoveEvent<PaneResizeHandle>, _w, cx| {
+                    let Some(state) = this.pane_resize else {
+                        return;
+                    };
+                    if state.handle != *e.drag(cx) {
+                        return;
+                    }
+
+                    let total_w = this.last_window_size.width;
+                    let next_width = next_pane_resize_drag_width(
+                        &state,
+                        e.event.position.x,
+                        total_w,
+                        this.sidebar_collapsed,
+                        this.details_collapsed,
+                    );
+                    let mut changed = false;
+                    match state.handle {
+                        PaneResizeHandle::Sidebar => {
+                            if this.sidebar_width != next_width {
+                                this.set_sidebar_width_from_pixels(next_width);
+                                changed = true;
+                            }
+                            if this.sidebar_render_width != next_width {
+                                this.sidebar_render_width = next_width;
+                                changed = true;
+                            }
+                        }
+                        PaneResizeHandle::Details => {
+                            if this.details_width != next_width {
+                                this.set_details_width_from_pixels(next_width);
+                                changed = true;
+                            }
+                            if this.details_render_width != next_width {
+                                this.details_render_width = next_width;
+                                changed = true;
+                            }
+                        }
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    if this.pane_resize.take().is_some() {
+                        this.schedule_ui_settings_persist(cx);
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    if this.pane_resize.take().is_some() {
+                        this.schedule_ui_settings_persist(cx);
+                        cx.notify();
+                    }
+                }),
+            )
     }
 }

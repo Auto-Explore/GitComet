@@ -911,9 +911,9 @@ fn opening_a_submodule_tab_passes_the_entry_gates(cx: &mut gpui::TestAppContext)
             test_support::push_test_state(this, state_with_repo(RepoId(1), parent.path()), cx);
         });
     });
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.open_submodule_inner_diff(
                 submodule.clone(),
                 DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),

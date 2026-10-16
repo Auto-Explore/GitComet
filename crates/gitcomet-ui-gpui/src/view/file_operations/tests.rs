@@ -345,3 +345,19 @@ fn a_displaced_dialog_comes_back_when_the_screen_is_free(cx: &mut gpui::TestAppC
         .has_pending()));
     assert!(!path.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn service_identity_spells_a_symlinked_source_as_completions_report_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let real = directory.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("a.txt"), "a").unwrap();
+    let link = directory.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert_eq!(
+        super::service_identity(&link.join("a.txt")),
+        std::fs::canonicalize(&real).unwrap().join("a.txt"),
+        "a moved source dropped through a symlink must match its completion"
+    );
+}

@@ -4,6 +4,8 @@ use crate::model::{
     RepositoryFileSort, RepositoryKey, RepositoryListKind, RepositoryPreferenceUpdate,
     RepositoryPreferencesSnapshot, SharedRepositoryPreferences,
 };
+use crate::msg::PersistenceEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::HistoryMode;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -504,7 +506,7 @@ fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading()
         state.repos.push(repo);
     }
     state.active_repo = Some(RepoId(1));
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = std::sync::atomic::AtomicU64::new(3);
     let first = reduce(
         &mut repos,
@@ -529,16 +531,23 @@ fn same_history_selection_overrides_a_queued_worktree_choice_without_reloading()
     );
     assert!(matches!(
         second.as_slice(),
-        [Effect::UpdateRepositoryPreferences {
-            repo_id: RepoId(2),
-            update: RepositoryPreferenceUpdate::HistoryMode(HistoryMode::FullReachable),
-            ..
-        }]
+        [Effect::Persistence(
+            PersistenceEffect::UpdateRepositoryPreferences {
+                repo_id: RepoId(2),
+                update: RepositoryPreferenceUpdate::HistoryMode(HistoryMode::FullReachable),
+                ..
+            }
+        )]
     ));
     assert_eq!(state.repos[1].log_rev, linked_log_rev);
     assert!(matches!(state.repos[1].log, Loadable::Ready(_)));
     for effect in first.iter().chain(&second) {
-        if let Effect::UpdateRepositoryPreferences { key, update, .. } = effect {
+        if let Effect::Persistence(PersistenceEffect::UpdateRepositoryPreferences {
+            key,
+            update,
+            ..
+        }) = effect
+        {
             hub.update(key.clone(), update).unwrap();
         }
     }
@@ -592,7 +601,7 @@ fn stale_preference_broadcasts_cannot_reset_navigation_or_newer_values() {
     stale.revision = 8;
     stale.preferences = Arc::new(SharedRepositoryPreferences::default());
     let effects = crate::store::reducer::reduce(
-        &mut FxHashMap::default(),
+        &mut Default::default(),
         &std::sync::atomic::AtomicU64::new(2),
         &mut state,
         Msg::ApplyRepositoryPreferences(stale),
@@ -643,7 +652,7 @@ fn history_update_retires_inactive_walks_until_activation() {
     repo.set_log(Loadable::Loading);
     let mut state = AppState::test_default();
     state.repos.push(repo);
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = std::sync::atomic::AtomicU64::new(2);
     let effects = reduce(
         &mut repos,

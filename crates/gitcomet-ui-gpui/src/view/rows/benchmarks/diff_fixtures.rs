@@ -597,7 +597,7 @@ impl DiffRefreshFixture {
     /// that would occur when the content actually changes.
     pub fn run_rebuild_step(&self) -> u64 {
         #[cfg(feature = "benchmarks")]
-        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         )
@@ -639,7 +639,7 @@ impl DiffRefreshFixture {
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn measure_rebuild(&self) -> DiffRefreshMetrics {
         #[cfg(feature = "benchmarks")]
-        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         )
@@ -687,8 +687,8 @@ pub struct FileDiffOpenMetrics {
 /// of split (side-by-side) or inline rows — the dominant cost when a user
 /// opens a file diff.
 pub struct FileDiffOpenFixture {
-    split: std::sync::Arc<crate::view::panes::main::diff_cache::PagedFileDiffRows>,
-    inline: std::sync::Arc<crate::view::panes::main::diff_cache::PagedFileDiffInlineRows>,
+    split: std::sync::Arc<crate::view::panes::diff::diff_cache::PagedFileDiffRows>,
+    inline: std::sync::Arc<crate::view::panes::diff::diff_cache::PagedFileDiffInlineRows>,
 }
 
 impl FileDiffOpenFixture {
@@ -839,7 +839,7 @@ impl PaneResizeDragStepFixture {
     }
 
     pub fn run_hash_and_clamp_counts(&mut self) -> (u64, u64, u64) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
 
         let handle = self.handle();
         let total_width = self.total_width;
@@ -906,7 +906,7 @@ impl PaneResizeDragStepFixture {
     }
 
     pub fn run_with_metrics(&mut self) -> (u64, PaneResizeDragMetrics) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
 
         let handle = self.handle();
         let total_width = self.total_width;
@@ -1219,7 +1219,7 @@ impl WindowResizeLayoutFixture {
     }
 
     pub fn run_with_metrics(&self) -> (u64, WindowResizeLayoutMetrics) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
 
         let step_delta = (self.end_total_w - self.start_total_w) / self.steps.max(1) as f32;
         let sidebar_px = px(self.sidebar_w);
@@ -1398,7 +1398,7 @@ impl WindowResizeLayoutExtremeFixture {
     }
 
     fn run_internal(&self) -> (u64, f64, f64, u64, u64, u64) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
         use crate::view::{diff_split_column_widths, diff_split_drag_params};
 
         let step_delta = (self.end_total_w - self.start_total_w) / self.steps.max(1) as f32;
@@ -1998,7 +1998,7 @@ pub struct PatchDiffSearchQueryUpdateFixture {
     stable_cache: Vec<Option<CachedDiffStyledText>>,
     query_cache: Vec<Option<PatchDiffSearchQueryCacheEntry>>,
     query_cache_query: SharedString,
-    query_cache_matcher: Option<crate::view::panes::main::diff_search::DiffSearchMatcher>,
+    query_cache_matcher: Option<crate::view::panes::diff::diff_search::DiffSearchMatcher>,
     query_cache_generation: u64,
 }
 
@@ -2124,7 +2124,7 @@ impl PatchDiffSearchQueryUpdateFixture {
         if self.query_cache_query.as_ref() != query {
             self.query_cache_query = query.to_string().into();
             self.query_cache_matcher = (!query.is_empty()).then(|| {
-                crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+                crate::view::panes::diff::diff_search::DiffSearchMatcher::new(
                     query,
                     Default::default(),
                 )

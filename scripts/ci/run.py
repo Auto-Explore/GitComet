@@ -30,7 +30,8 @@ UI = "gitcomet-ui-gpui"
 # Packages whose tests mount GPUI windows. GPUI test contexts share
 # process-global platform state, so each of these harnesses runs as one libtest
 # process on every platform instead of nextest's process per test.
-GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-extension-example")
+GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-ui-media", "gitcomet-ui-terminal",
+                 "gitcomet-extension-example")
 NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first", "ci-watch-limited-4", "ci-watch-limited-8", "ci-throughput")
 WATCHER_FILTER = ('package(=gitcomet-fs-watch) | (package(=gitcomet-state) & '
                   '(test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | '
@@ -40,8 +41,8 @@ WATCHER_FILTER = ('package(=gitcomet-fs-watch) | (package(=gitcomet-state) & '
 # Audited in-memory tests: no process-global environment, filesystem, or native
 # resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
 PURE_BATCHES = {
-    "gitcomet-core": ("conflict_session::", "text_search::", "text_format::"),
-    UI: ("view::word_diff::tests::", "view::history_graph::walk::tests::"),
+    "gitcomet-core": ("conflict_session::", "text_search::", "text_format::", "word_diff::"),
+    UI: ("view::history_graph::walk::tests::",),
 }
 # The example product builds alone, so it never relies on (or leaks) the
 # workspace's feature unification: it enables the application's GUI, which the
@@ -1018,7 +1019,7 @@ def main():
             # UI's default features and its complete test suite.
             for target in ("mergetool_git_integration", "difftool_git_integration"):
                 smoke("app", target, "gui_default", env=env)
-            smoke("workspace", "gitcomet_ui_gpui", "smoke_tests::smoke_view_renders_without_panicking", exact=True, env=env)
+            smoke("workspace", "gitcomet_ui_gpui", "smoke_tests::component_rendering::smoke_view_renders_without_panicking", exact=True, env=env)
     elif args.phase == "cmd-smoke":
         smoke("app", "standalone_tool_mode_integration", "help_flag_exits_zero", exact=True)
     else:

@@ -93,7 +93,7 @@ pub(crate) fn parse_git_log_pretty_records_from_reader(reader: impl io::Read) ->
         raw_record.clear();
         let bytes_read = reader
             .read_until(b'\x1e', &mut raw_record)
-            .map_err(io_err)?;
+            .map_err(|error| Error::from(error).with_context("read Git history output", None))?;
         if bytes_read == 0 {
             break;
         }

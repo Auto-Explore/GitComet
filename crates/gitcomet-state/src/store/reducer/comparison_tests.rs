@@ -1,6 +1,7 @@
 use super::*;
 use crate::model::{AppState, Loadable, RepoState};
 use crate::msg::{CommitSelectMode, Effect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{
     Commit, CommitFileChange, CommitId, FileStatusKind, LogPage, RepoSpec,
 };
@@ -47,7 +48,7 @@ fn state_with_log(repo_id: RepoId) -> AppState {
 }
 
 fn dispatch_effects(state: &mut AppState, msg: Msg) -> Vec<Effect> {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(99);
     reduce(&mut repos, &id_alloc, state, msg)
 }

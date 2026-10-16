@@ -9,7 +9,7 @@ fn side_size_label(size: Option<usize>) -> SharedString {
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// Render the binary/non-UTF8 conflict resolver panel.
     ///
     /// Shows file size info for each conflict side and provides "Use Base" /

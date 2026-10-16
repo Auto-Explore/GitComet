@@ -89,7 +89,7 @@ impl GitCometView {
                         crate::clipboard::write_files_owned(
                             cx,
                             receipt.paths.clone(),
-                            TransferIntent::Move,
+                            gpui::FileTransferOperation::Move,
                             id.0,
                         );
                         cx.update_default_global::<NativeTransfers, _>(|transfers, _| {

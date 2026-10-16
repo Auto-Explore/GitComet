@@ -211,6 +211,18 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub(crate) fn finished(
+        self,
+        repo_id: crate::model::RepoId,
+        result: gitcomet_core::services::Result<gitcomet_core::services::CommandOutput>,
+    ) -> super::InternalMsg {
+        super::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: self,
+            result,
+        }
+    }
+
     /// Whether the command can rewrite files in the checkout, so a file that
     /// changed under the view when it finished was GitComet's doing. Our own
     /// editor save is not here: the view recognizes those bytes itself.

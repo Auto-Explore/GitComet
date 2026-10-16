@@ -225,7 +225,6 @@ fn assert_graph_gradient_changes_only_the_fade(cx: &mut gpui::TestAppContext, in
 fn graph_gradient_toggle_repaints_cached_rows_without_changing_the_graph(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     assert_graph_gradient_changes_only_the_fade(cx, false);
 }
 
@@ -233,6 +232,5 @@ fn graph_gradient_toggle_repaints_cached_rows_without_changing_the_graph(
 fn indexed_graph_gradient_toggle_repaints_cached_rows_without_changing_the_graph(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     assert_graph_gradient_changes_only_the_fade(cx, true);
 }

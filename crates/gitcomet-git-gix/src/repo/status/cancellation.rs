@@ -42,6 +42,8 @@ impl StatusCancellation {
                 Error::new(ErrorKind::Backend(format!(
                     "start status cancellation watcher: {error}"
                 )))
+                .with_source(error)
+                .with_context("start status cancellation watcher", None)
             })?;
         Ok(Self {
             interrupt,

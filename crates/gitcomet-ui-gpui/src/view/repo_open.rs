@@ -424,7 +424,7 @@ impl GitCometView {
         // The window no longer claims the deleted id, in its syncs or the
         // window registry. A stale snapshot that still lists repositories can
         // briefly create an anonymous workspace; it goes once they close.
-        self.workspace_id = None;
+        self.set_workspace_id(None, cx);
         self.pending_repo_open_reservations.clear();
         self.pending_repo_open_active = None;
         let repo_ids: Vec<RepoId> = self
@@ -470,7 +470,7 @@ impl GitCometView {
         self.set_sidebar_collapsed(layout.sidebar_collapsed, cx);
         self.clamp_pane_widths_to_window();
 
-        self.workspace_id = Some(workspace.id);
+        self.set_workspace_id(Some(workspace.id), cx);
         self.persisted_workspace_repo_paths
             .clone_from(&workspace.repositories);
         self.persisted_workspace_active_repository

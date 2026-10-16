@@ -459,7 +459,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// The display order of the section the open working-tree diff belongs to.
     /// The pane owns the sort, so navigation has to ask it rather than re-derive
     /// an order of its own.
@@ -476,14 +476,10 @@ impl MainPaneView {
             return None;
         };
         let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
-        self.root_view
-            .update(cx, |root, cx| {
-                root.details_pane
-                    .read(cx)
-                    .active_status_section_order(repo_id, section)
-            })
-            .ok()
-            .flatten()
+        self.commands
+            .navigation
+            .as_ref()?
+            .status_order(repo_id, section, cx)
     }
 
     /// The drawn order of the commit-diff file list the open diff belongs to:
@@ -498,17 +494,10 @@ impl MainPaneView {
             self.bound_diff_state(repo).diff_target,
             Some(DiffTarget::CommitRange { .. })
         );
-        self.root_view
-            .update(cx, |root, cx| {
-                let details = root.details_pane.read(cx);
-                if is_range {
-                    details.active_range_file_source_indices(repo_id)
-                } else {
-                    details.active_commit_file_source_indices(repo_id)
-                }
-            })
-            .ok()
-            .flatten()
+        self.commands
+            .navigation
+            .as_ref()?
+            .file_order(repo_id, is_range, cx)
     }
 
     /// Where the open file sits in the list it came from, for the bottom bar.
@@ -518,7 +507,7 @@ impl MainPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) -> Option<DiffFilePlace> {
-        if self.store.binding.is_some() {
+        if self.hosted_decor.is_some() {
             return None;
         }
         if let Some(inline) = self.active_inline_submodule_diff() {
@@ -530,14 +519,10 @@ impl MainPaneView {
             let path = inline.submodule_repo_path.clone();
             let drawn_order = worktree
                 .then(|| {
-                    self.root_view
-                        .update(cx, |root, cx| {
-                            root.details_pane
-                                .read(cx)
-                                .active_worktree_file_source_indices(repo_id, &path)
-                        })
-                        .ok()
-                        .flatten()
+                    self.commands
+                        .navigation
+                        .as_ref()?
+                        .worktree_order(repo_id, &path, cx)
                 })
                 .flatten();
             let (index, count) =
@@ -585,14 +570,10 @@ impl MainPaneView {
         )
         .then(|| inline.submodule_repo_path.clone());
         let drawn_order = worktree_path.and_then(|path| {
-            self.root_view
-                .update(cx, |root, cx| {
-                    root.details_pane
-                        .read(cx)
-                        .active_worktree_file_source_indices(repo_id, &path)
-                })
-                .ok()
-                .flatten()
+            self.commands
+                .navigation
+                .as_ref()?
+                .worktree_order(repo_id, &path, cx)
         });
         Some((
             adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), -1),
@@ -608,7 +589,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        if self.store.binding.is_some() {
+        if self.hosted_decor.is_some() {
             if !self.store.policy.file_navigation {
                 return false;
             }

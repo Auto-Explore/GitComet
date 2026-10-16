@@ -1,6 +1,56 @@
 //! Errors: unavailable Git, missing handles, stale worktree routing.
 
 use super::*;
+use crate::msg::{PersistenceEffect, RepoCommandEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
+
+#[test]
+fn history_author_filter_persistence_does_not_depend_on_available_git() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_file = directory.path().join("session.json");
+    let workdir = directory.path().join("repository");
+    let _session_path =
+        crate::session::push_test_session_file_path_override(Some(session_file.clone()));
+    let executor = super::super::executor::TaskExecutor::new(1);
+    let session_executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let state = AppState {
+        git_runtime: gitcomet_core::process::GitRuntimeState {
+            preference: gitcomet_core::process::GitExecutablePreference::SystemPath,
+            availability: gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                detail: "git missing".into(),
+            },
+        },
+        ..AppState::test_default()
+    };
+
+    schedule_effect_with_state_for_test(
+        &executor,
+        &session_executor,
+        &backend,
+        &mut RepositoryRuntimes::default(),
+        state,
+        tx,
+        Effect::Persistence(PersistenceEffect::PersistRepoHistoryAuthorFilter {
+            repo_id: Some(RepoId(7)),
+            workdir: workdir.clone(),
+            author: Some("alice".into()),
+            action: "remember author filter",
+        }),
+    );
+    session_executor.join();
+    executor.join();
+
+    assert!(rx.try_iter().collect::<Vec<_>>().is_empty());
+    let preferences = crate::session::load_repo_session_preferences_from_path(&session_file);
+    assert_eq!(
+        preferences
+            .repo_history_author_filters
+            .get(&crate::session::path_storage_key(&workdir)),
+        Some(&Some("alice".into()))
+    );
+}
 
 #[test]
 fn unavailable_git_effect_emits_synthetic_repo_command_error() {
@@ -13,7 +63,7 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     let state = AppState {
@@ -30,14 +80,14 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         state,
         msg_tx,
-        Effect::FetchAll {
+        Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(7),
             prune: true,
             auth: None,
-        },
+        }),
     );
 
     let msg = msg_rx
@@ -73,7 +123,7 @@ fn unavailable_git_revert_emits_synthetic_revert_command_error() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
     let state = AppState {
         git_runtime: gitcomet_core::process::GitRuntimeState {
@@ -90,17 +140,17 @@ fn unavailable_git_revert_emits_synthetic_revert_command_error() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         state,
         msg_tx,
-        Effect::RevertCommit {
+        Effect::RepoCommand(RepoCommandEffect::RevertCommit {
             repo_id: RepoId(7),
             commit_id: commit_id.clone(),
             commit: false,
             mainline: Some(1),
             summary: "revert me".into(),
             auth: None,
-        },
+        }),
     );
 
     let msg = msg_rx
@@ -144,14 +194,14 @@ fn worktree_and_submodule_effects_report_missing_repo_handle() {
     let repo_id = RepoId(77);
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx.clone(),
         Effect::LoadWorktrees { repo_id },
     );
@@ -159,7 +209,7 @@ fn worktree_and_submodule_effects_report_missing_repo_handle() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadSubmodules { repo_id },
     );
@@ -202,9 +252,10 @@ fn worktree_and_submodule_effects_report_missing_repo_handle() {
 #[test]
 fn branch_action_in_other_worktree_fails_when_it_no_longer_holds_the_branch() {
     let repo_id = RepoId(717);
-    let fixture = worktree_redirect_fixture(repo_id, "gitcomet-redirect-moved-on", "main", false);
+    let mut fixture =
+        worktree_redirect_fixture(repo_id, "gitcomet-redirect-moved-on", "main", false);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::CreateBranchAndCheckout {
             repo_id,
             name: "feature".to_string(),
@@ -237,9 +288,9 @@ fn branch_action_in_other_worktree_fails_when_it_no_longer_holds_the_branch() {
 #[test]
 fn branch_action_in_other_worktree_fails_when_backend_opens_own_workdir() {
     let repo_id = RepoId(718);
-    let fixture = worktree_redirect_fixture(repo_id, "gitcomet-redirect-self", "feature", true);
+    let mut fixture = worktree_redirect_fixture(repo_id, "gitcomet-redirect-self", "feature", true);
     let msg_rx = run_effect_with_fixture(
-        &fixture,
+        &mut fixture,
         Effect::RenameBranch {
             repo_id,
             old_name: "old".to_string(),
@@ -298,7 +349,7 @@ fn worktree_effect_fixture_waits_for_worker_completion() {
     let (returned_tx, returned_rx) = std::sync::mpsc::channel();
     let runner = std::thread::spawn(move || {
         let msg_rx = run_effect_with_fixture(
-            &fixture,
+            &mut fixture,
             Effect::RenameBranch {
                 repo_id,
                 old_name: "old".to_string(),

@@ -73,7 +73,7 @@ fn split_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppC
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("clicking `[` in the split diff should light its pair");
@@ -117,7 +117,7 @@ fn split_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_text_occurrences
                     .entry((1, DiffTextRegion::SplitRight))
                     .or_default()
@@ -127,7 +127,7 @@ fn split_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppC
     });
     set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_text_pair_match_for_tests().is_none(),
             "changing the row projection must discard pair spans keyed by the old rows"
@@ -175,7 +175,7 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 cx.notify();
             });
@@ -217,7 +217,7 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("clicking `[` in the inline diff should light its pair");
@@ -230,13 +230,13 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
     });
 
     let previous_signature = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.file_diff_cache_content_signature
             .expect("the first file-diff generation should be installed")
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_text_occurrences
                     .entry((1, DiffTextRegion::Inline))
                     .or_default()
@@ -283,7 +283,7 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
         },
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_text_pair_match_for_tests().is_none(),
             "an accepted source generation must discard its predecessor's pair spans"
@@ -369,7 +369,7 @@ fn collapsed_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::Test
     // Find the visible row showing the `"items"` context line and click its `[`.
     let (row_ix, col) = cx
         .update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (0..pane.diff_visible_len()).find_map(|ix| {
                 let text = pane.diff_text_line_for_region(ix, DiffTextRegion::SplitRight);
                 text.find('[').map(|col| (ix, col))
@@ -388,7 +388,7 @@ fn collapsed_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::Test
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("collapsed mode must pair too -- it renders the same file-diff rows");
@@ -432,7 +432,7 @@ fn assert_hunk_header_text_right_click_opens_hunk_menu(
         new_text,
     );
     let (visible_ix, src_ix) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let visible_ix = pane.collapsed_diff_hunk_visible_indices[0];
         (visible_ix, pane.collapsed_diff_hunks[0].src_ix)
     });
@@ -559,7 +559,7 @@ fn collapsed_diff_hunk_header_click_does_not_create_row_selection(cx: &mut gpui:
 
     let hunk_visible_ix = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .collapsed_diff_hunk_visible_indices[0]
     });
@@ -576,7 +576,7 @@ fn collapsed_diff_hunk_header_click_does_not_create_row_selection(cx: &mut gpui:
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_selection_anchor, None,
             "collapsed hunk header click should not create a row selection anchor"
@@ -646,7 +646,7 @@ fn assert_collapsed_diff_reveal_click_preserves_horizontal_scroll(
     );
 
     let (hunk_src_ix, hidden_up_before) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hunk = pane
             .collapsed_diff_hunks
             .first()
@@ -661,8 +661,8 @@ fn assert_collapsed_diff_reveal_click_preserves_horizontal_scroll(
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
             let left_offset = left_handle.offset();
             let left_max = left_handle.max_offset();
@@ -679,7 +679,7 @@ fn assert_collapsed_diff_reveal_click_preserves_horizontal_scroll(
     draw_and_drain_test_window(cx);
 
     let (left_before_x, right_before_x) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
         let right_x: f32 = pane
             .diff_split_right_scroll
@@ -711,7 +711,7 @@ fn assert_collapsed_diff_reveal_click_preserves_horizontal_scroll(
     draw_and_drain_test_window(cx);
 
     let (hidden_up_after, left_after_x, right_after_x) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
         let right_x: f32 = pane
             .diff_split_right_scroll

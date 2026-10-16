@@ -1,11 +1,12 @@
 use super::*;
 use crate::history_find::{HistoryFindEffect, HistoryFindMsg};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 /// Runs on the store's own find worker: a complete history scan must not
 /// occupy interactive range-load workers, nor wait on another window's scan.
 pub(super) fn schedule(
     executor: &TaskExecutor,
-    repos: &util::RepoMap,
+    repos: &RepositoryRuntimes,
     tx: StoreWorkerSender,
     work: HistoryFindEffect,
     parent: CancellationToken,

@@ -550,7 +550,7 @@ impl super::GixRepo {
             // Ignore malformed records, including non-UTF-8 output from a
             // remote helper, while continuing to drain the transfer's pipe.
             for line in std::io::BufReader::new(stdout).split(b'\n') {
-                let line = line.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                let line = line.map_err(Error::from)?;
                 // Preserve item failures even if a filename or diagnostic
                 // inside its JSON string is not valid UTF-8.
                 let line = String::from_utf8_lossy(&line);
@@ -894,8 +894,11 @@ impl super::GixRepo {
                     "git annex unused",
                     |mut stdout| {
                         let mut json = String::new();
-                        std::io::Read::read_to_string(&mut stdout, &mut json)
-                            .map_err(|error| backend(format!("git annex unused: {error}")))?;
+                        std::io::Read::read_to_string(&mut stdout, &mut json).map_err(|error| {
+                            backend(format!("git annex unused: {error}"))
+                                .with_source(error)
+                                .with_context("read git annex unused output", None)
+                        })?;
                         parse_unused(&json)
                     },
                 )?;
@@ -959,15 +962,17 @@ impl super::GixRepo {
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| backend(format!("could not start git annex webapp: {e}")))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            backend(format!("could not start git annex webapp: {e}"))
+                .with_source(e)
+                .with_context("start git annex webapp", Some(Path::new(cmd.get_program())))
+        })?;
         std::thread::Builder::new()
             .name("git-annex-webapp".into())
             .spawn(move || {
                 let _ = child.wait();
             })
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         Ok(CommandOutput {
             command: "git annex webapp".to_string(),
             stdout: "Started the git-annex webapp; it opens in your browser.".to_string(),

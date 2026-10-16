@@ -54,9 +54,7 @@ pub(super) fn panel(
         )
         .on_click(theme, cx, |this, _e, _window, cx| {
             let root_view = this.root_view.clone();
-            let _ = root_view.update(cx, |root, cx| {
-                root.clear_pending_unsaved_file_edits_prompt(cx);
-            });
+            let _ = root_view.request(RootRequest::ClearPendingUnsavedFileEditsPrompt, None, cx);
             this.close_popover(cx);
         }),
         div()
@@ -73,9 +71,14 @@ pub(super) fn panel(
                     .on_click(theme, cx, move |this, _e, _window, cx| {
                         let root_view = this.root_view.clone();
                         let action = discard_action.clone();
-                        let _ = root_view.update(cx, move |root, cx| {
-                            root.resolve_unsaved_file_edits(action, false, cx);
-                        });
+                        let _ = root_view.request(
+                            RootRequest::ResolveUnsavedFileEdits {
+                                action,
+                                save: false,
+                            },
+                            None,
+                            cx,
+                        );
                         this.close_resolved_popover(cx);
                     }),
             )
@@ -86,9 +89,11 @@ pub(super) fn panel(
                         .on_click(theme, cx, move |this, _e, _window, cx| {
                             let root_view = this.root_view.clone();
                             let action = save_action.clone();
-                            let _ = root_view.update(cx, move |root, cx| {
-                                root.resolve_unsaved_file_edits(action, true, cx);
-                            });
+                            let _ = root_view.request(
+                                RootRequest::ResolveUnsavedFileEdits { action, save: true },
+                                None,
+                                cx,
+                            );
                             this.close_resolved_popover(cx);
                         }),
                 )

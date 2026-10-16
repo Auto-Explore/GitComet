@@ -38,7 +38,9 @@ that the captured value drops exactly once.
 
 ## GPUI text storage
 
-The root workspace manifest pins GPUI to a Havunen/gpui-ce revision. Since
+The root workspace manifest pins GPUI to a Havunen/gpui-ce revision, and
+`crates/gitcomet-ui-kit/gpui-revision` repeats it for the kit's public
+`GPUI_REVISION` (a kit test fails when they differ). Since
 `d0e01e8854` it stores shaped-line decorations in the shared layout instead of
 reserving 32 decoration runs in every shaped line. That superseded the compact
 text-storage patch previously vendored in `gpui/`, so that crate and the Cargo

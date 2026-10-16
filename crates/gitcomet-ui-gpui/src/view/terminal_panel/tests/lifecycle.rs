@@ -193,7 +193,6 @@ fn shell_exit_of_the_last_tab_closes_the_terminal_panel(cx: &mut gpui::TestAppCo
             assert!(!this.terminal_sessions.contains_key(&repo_id));
             let theme = this.theme;
             assert!(this.render_terminal_panel(theme, window, cx).is_none());
-            assert!(!this.terminal_cursor_blink_active);
         });
     });
 }

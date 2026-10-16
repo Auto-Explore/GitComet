@@ -595,7 +595,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx.update(|window, app| {
         let focus = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();
@@ -627,7 +627,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
 
     let diff_focus = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone()
@@ -721,9 +721,12 @@ fn window_grab_suppresses_the_activation_it_caused() {
     // pair. Treating that as a return to the app refreshed the whole repo on
     // every window move/resize.
     let now = Instant::now();
-    crate::app::note_window_grab_started();
+    crate::kit::window_chrome::note_window_grab_started();
 
-    let armed = crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE);
+    let armed = crate::kit::window_chrome::take_window_grab_started_within(
+        now,
+        WINDOW_GRAB_DEACTIVATE_GRACE,
+    );
     assert!(armed, "a fresh grab must claim the deactivation it caused");
 
     let mut suppressed_at = Some(now);
@@ -742,14 +745,17 @@ fn stale_window_grab_does_not_suppress_a_later_activation() {
     // A grab the compositor ignored (bad serial, unsupported protocol) must not
     // leave suppression armed for an unrelated alt-tab minutes later.
     let now = Instant::now();
-    crate::app::note_window_grab_started();
+    crate::kit::window_chrome::note_window_grab_started();
 
-    assert!(!crate::app::take_window_grab_started_within(
+    assert!(!crate::kit::window_chrome::take_window_grab_started_within(
         now + WINDOW_GRAB_DEACTIVATE_GRACE + Duration::from_millis(1),
         WINDOW_GRAB_DEACTIVATE_GRACE,
     ));
     assert!(
-        !crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE),
+        !crate::kit::window_chrome::take_window_grab_started_within(
+            now,
+            WINDOW_GRAB_DEACTIVATE_GRACE
+        ),
         "the stale marker must have been cleared, not left armed"
     );
 }

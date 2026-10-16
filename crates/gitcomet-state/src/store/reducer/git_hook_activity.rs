@@ -28,7 +28,7 @@ pub(super) fn started(
     {
         return;
     }
-    repo.feedback.hook_activity.push(GitHookOperation {
+    repo.feedback_mut().hook_activity.push(GitHookOperation {
         id: operation_id,
         label,
         context,
@@ -46,7 +46,7 @@ pub(super) fn started(
         progress_lane,
         progress: None,
     });
-    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
+    repo.feedback_mut().hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
 
 pub(super) fn apply_event(
@@ -55,7 +55,7 @@ pub(super) fn apply_event(
     event: GitOperationEvent,
 ) {
     let Some(operation) = repo
-        .feedback
+        .feedback_mut()
         .hook_activity
         .iter_mut()
         .find(|operation| operation.id == operation_id)
@@ -135,7 +135,7 @@ pub(super) fn apply_event(
         trim_metadata(repo);
     }
     enforce_repo_output_budget(repo);
-    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
+    repo.feedback_mut().hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
 
 /// The newest complete meter in the output's tail. A meter can straddle two
@@ -159,7 +159,7 @@ fn latest_progress_in(
 
 pub(super) fn request_cancel(repo: &mut RepoState, operation_id: GitOperationId) -> bool {
     let Some(operation) = repo
-        .feedback
+        .feedback_mut()
         .hook_activity
         .iter_mut()
         .find(|operation| operation.id == operation_id && operation.status.is_active())
@@ -167,7 +167,7 @@ pub(super) fn request_cancel(repo: &mut RepoState, operation_id: GitOperationId)
         return false;
     };
     operation.status = GitHookOperationStatus::Cancelling;
-    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
+    repo.feedback_mut().hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
     true
 }
 
@@ -187,12 +187,12 @@ pub(super) fn finished(
     };
 
     if !repo.feedback.hook_activity[index].is_reportable() {
-        repo.feedback.hook_activity.remove(index);
-        repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
+        repo.feedback_mut().hook_activity.remove(index);
+        repo.feedback_mut().hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
         return;
     }
 
-    let operation = &mut repo.feedback.hook_activity[index];
+    let operation = &mut repo.feedback_mut().hook_activity[index];
     operation.duration = Some(duration);
     for hook in &mut operation.hooks {
         if hook.status == GitHookRunStatus::Running {
@@ -230,7 +230,7 @@ pub(super) fn finished(
     };
     trim_metadata(repo);
     enforce_repo_output_budget(repo);
-    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
+    repo.feedback_mut().hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
 
 fn trim_metadata(repo: &mut RepoState) {
@@ -250,7 +250,7 @@ fn trim_metadata(repo: &mut RepoState) {
         else {
             break;
         };
-        repo.feedback.hook_activity.remove(index);
+        repo.feedback_mut().hook_activity.remove(index);
     }
 }
 
@@ -292,7 +292,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
     if total <= MAX_REPO_OUTPUT_BYTES {
         return;
     }
-    for operation in &mut repo.feedback.hook_activity {
+    for operation in &mut repo.feedback_mut().hook_activity {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
@@ -308,7 +308,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
     if total <= MAX_REPO_OUTPUT_BYTES {
         return;
     }
-    for operation in &mut repo.feedback.hook_activity {
+    for operation in &mut repo.feedback_mut().hook_activity {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }

@@ -257,17 +257,20 @@ impl RealRepoFixture {
             load_split_repo_status(self.repo.as_ref(), "real_repo monorepo status benchmark");
         let branches = self
             .repo
-            .list_branches()
+            .list_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("real_repo monorepo branches benchmark");
         let remotes = self
             .repo
-            .list_remotes()
+            .list_remotes(&gitcomet_core::services::CancellationToken::new())
             .expect("real_repo monorepo remotes benchmark");
         let remote_branches = self
             .repo
-            .list_remote_branches()
+            .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
             .expect("real_repo monorepo remote branches benchmark");
-        let head_branch = self.repo.current_branch().ok();
+        let head_branch = self
+            .repo
+            .current_branch(&gitcomet_core::services::CancellationToken::new())
+            .ok();
         let (commits, next_cursor_present, log_pages_loaded) = load_log_commits(
             self.repo.as_ref(),
             self.history_limit,
@@ -414,23 +417,30 @@ impl RealRepoFixture {
             .expect("real_repo large diff target");
         let diff = self
             .repo
-            .diff_parsed(target)
+            .diff_parsed(
+                target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("real_repo large diff parsed benchmark");
         let file = self
             .repo
-            .diff_file_text(target)
+            .diff_file_text(
+                target,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("real_repo large diff file text benchmark")
             .unwrap_or_else(|| panic!("real_repo large diff benchmark requires file text"));
 
-        let old_text = file.old.as_deref().unwrap_or("");
-        let new_text = file.new.as_deref().unwrap_or("");
-        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::diff::diff_cache::build_file_diff_cache_rebuild(
             &file,
             self._repo_root.path(),
         )
         .expect("real_repo large diff file text should index");
         let split = rebuild.row_provider;
         let inline = rebuild.inline_row_provider;
+        let (old_bytes, new_bytes) = split.source_byte_lengths();
         let split_rows_painted = split
             .slice(0, DEFAULT_HISTORY_WINDOW)
             .take(DEFAULT_HISTORY_WINDOW)
@@ -455,8 +465,8 @@ impl RealRepoFixture {
             RealRepoMetrics {
                 worktree_file_count: bench_counter_u64(self.worktree_file_count),
                 diff_lines: bench_counter_u64(diff.lines.len()),
-                file_old_bytes: bench_counter_u64(old_text.len()),
-                file_new_bytes: bench_counter_u64(new_text.len()),
+                file_old_bytes: bench_counter_u64(old_bytes),
+                file_new_bytes: bench_counter_u64(new_bytes),
                 split_rows_painted: bench_counter_u64(split_rows_painted),
                 inline_rows_painted: bench_counter_u64(inline_rows_painted),
                 ..RealRepoMetrics::default()
@@ -467,7 +477,7 @@ impl RealRepoFixture {
     fn conflict_session_from_repo(&self, status: &RepoStatus, path: &Path) -> ConflictSession {
         if let Some(session) = self
             .repo
-            .conflict_session(path)
+            .conflict_session(path, None)
             .expect("real_repo conflict session benchmark")
         {
             return session;
@@ -658,7 +668,11 @@ fn load_log_commits(
     while commits.len() < limit {
         let remaining = limit.saturating_sub(commits.len()).max(1);
         let page = repo
-            .log_head_page(page_size.min(remaining), cursor.as_ref())
+            .log_head_page(
+                page_size.min(remaining),
+                cursor.as_ref(),
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("real_repo log load benchmark");
         pages = pages.saturating_add(1);
         let exhausted = page.commits.is_empty();
@@ -815,8 +829,8 @@ fn conflict_session_bytes(session: &ConflictSession) -> usize {
 }
 
 fn hash_file_diff_window(
-    split: &crate::view::panes::main::diff_cache::PagedFileDiffRows,
-    inline: &crate::view::panes::main::diff_cache::PagedFileDiffInlineRows,
+    split: &crate::view::panes::diff::diff_cache::PagedFileDiffRows,
+    inline: &crate::view::panes::diff::diff_cache::PagedFileDiffInlineRows,
     window: usize,
     hasher: &mut FxHasher,
 ) {
@@ -922,6 +936,8 @@ mod tests {
         let (hash, metrics) = fixture.run_with_metrics();
         assert_ne!(hash, 0);
         assert!(metrics.diff_lines >= 200);
+        assert_eq!(metrics.file_old_bytes, 3_218);
+        assert_eq!(metrics.file_new_bytes, 4_050);
         assert!(metrics.file_new_bytes > metrics.file_old_bytes);
         assert!(metrics.split_rows_painted >= 1);
         assert!(metrics.inline_rows_painted >= 1);

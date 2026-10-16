@@ -22,7 +22,9 @@ fn reviewed_apply_excludes_repository_mutations_and_editor_saves() {
     repo.prepared_barrier = Some(PreparedPatchBarrier { started, release });
     let repo: Arc<dyn GitRepository> = Arc::new(repo);
     let repo_id = RepoId(9541);
-    let repos = FxHashMap::from_iter([(repo_id, repo.clone())]);
+    let mut repos = RepositoryRuntimes::default();
+    let repo_state = RepoState::new_opening(repo_id, repo.spec().clone());
+    repos.opened(repo_id, repo_state.lifetime_id(), repo.clone());
     let prepared = gitcomet_core::patch_action::prepare(DiffActionSnapshot {
         diff: gitcomet_core::domain::Diff::from_unified(DiffTarget::working_tree("file.rs".into(), DiffArea::Unstaged),
             "diff --git a/file.rs b/file.rs\n--- a/file.rs\n+++ b/file.rs\n@@ -1 +1 @@\n-old\n+new\n"),
@@ -35,9 +37,11 @@ fn reviewed_apply_excludes_repository_mutations_and_editor_saves() {
         std::sync::LazyLock::new(|| super::super::executor::TaskExecutor::new(1));
     let (tx, rx) = std::sync::mpsc::channel();
     let sender = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
-    let state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::test_default())));
+    let state = Arc::new(std::sync::RwLock::new(Arc::new(AppState {
+        repos: vec![repo_state],
+        ..AppState::test_default()
+    })));
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
-    let mut tokens = FxHashMap::default();
     let mut schedule = |effect| {
         super::super::effects::schedule_effect(
             super::super::effects::EffectExecutors {
@@ -52,16 +56,17 @@ fn reviewed_apply_excludes_repository_mutations_and_editor_saves() {
             },
             &state,
             &backend,
-            &repos,
-            &mut tokens,
+            &mut repos,
             sender.clone(),
             effect,
         )
     };
-    schedule(Effect::ApplyPreparedDiffPatch {
-        repo_id,
-        prepared: Arc::new(prepared),
-    });
+    schedule(Effect::RepoCommand(
+        crate::msg::RepoCommandEffect::ApplyPreparedDiffPatch {
+            repo_id,
+            prepared: Arc::new(prepared),
+        },
+    ));
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     let gate = super::super::mutation_gate::for_repo(repo.as_ref());
     assert!(gate.try_read().is_err());

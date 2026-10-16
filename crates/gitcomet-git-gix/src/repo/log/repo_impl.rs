@@ -24,7 +24,7 @@ impl GixRepo {
 
     /// Serves a cached page and refreshes its successor's LRU position.
     pub(super) fn cached_log_page(&self, key: &super::LogPageCacheKey) -> Option<Arc<LogPage>> {
-        let mut cache = self.log_page_cache.lock().expect("log page cache");
+        let mut cache = self.history_cache.pages.lock().expect("log page cache");
         let index = cache.iter().position(|entry| &entry.key == key)?;
         let entry = cache.remove(index);
         let page = Arc::clone(&entry.page);
@@ -69,11 +69,11 @@ impl GixRepo {
     }
 
     pub(super) fn store_log_page(&self, key: super::LogPageCacheKey, page: &Arc<LogPage>) {
-        let row_limit = super::super::LOG_PAGE_CACHE_ROW_LIMIT;
+        let row_limit = super::LOG_PAGE_CACHE_ROW_LIMIT;
         if page.commits.len() > row_limit {
             return;
         }
-        let mut cache = self.log_page_cache.lock().expect("log page cache");
+        let mut cache = self.history_cache.pages.lock().expect("log page cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
             cache.remove(index);
         }
@@ -107,7 +107,8 @@ impl GixRepo {
         key: &super::LogFileFollowCacheKey,
     ) -> Option<Arc<Vec<Commit>>> {
         let mut cache = self
-            .log_file_follow_cache
+            .history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache");
         let index = cache.iter().position(|entry| &entry.key == key)?;
@@ -123,7 +124,8 @@ impl GixRepo {
         commits: Arc<Vec<Commit>>,
     ) {
         let mut cache = self
-            .log_file_follow_cache
+            .history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
@@ -145,7 +147,8 @@ impl GixRepo {
         generation: u64,
     ) -> Option<super::LogPagedWalkState> {
         let mut cache = self
-            .log_paged_walk_cache
+            .history_cache
+            .walks
             .lock()
             .expect("log paged walk cache");
         // A walk from a replaced store would keep that store's packs mapped.
@@ -172,7 +175,8 @@ impl GixRepo {
         generation: u64,
     ) -> Arc<str> {
         let mut cache = self
-            .log_paged_walk_cache
+            .history_cache
+            .walks
             .lock()
             .expect("log paged walk cache");
         let current = self.store_generation();
@@ -396,14 +400,6 @@ impl GixRepo {
         run_git_parsed_stdout(cmd, "git log --follow", false, |stdout| {
             parse_git_log_pretty_records_from_reader(stdout).map(|page| page.commits)
         })
-    }
-
-    pub(in super::super) fn log_head_page_impl(
-        &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
-    ) -> Result<Arc<LogPage>> {
-        self.log_history_mode_page_impl(HistoryMode::FirstParent, limit, cursor)
     }
 
     pub(in super::super) fn log_head_page_cancellable_impl(
@@ -677,14 +673,6 @@ impl GixRepo {
         self.finish_log_page(cache_key, page, cancellation)
     }
 
-    pub(in super::super) fn log_all_branches_page_impl(
-        &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
-    ) -> Result<Arc<LogPage>> {
-        self.log_all_branches_page_impl_inner(limit, cursor, None, None, None)
-    }
-
     pub(in super::super) fn log_all_branches_page_cancellable_impl(
         &self,
         limit: usize,
@@ -704,7 +692,9 @@ impl GixRepo {
 
         let refs =
             crate::refs::view_cancellable(repo, cancellation.unwrap_or(&CancellationToken::new()))
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+                })?;
 
         // Refs the product leaves out of History. Every all-branches reader
         // (pages, authors, the index, snapshots) starts from these tips, so
@@ -723,13 +713,13 @@ impl GixRepo {
         let mut ref_count = 0usize;
         let iter = refs
             .all()
-            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", &e))?;
+            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", e))?;
         for reference in iter {
             if let Some(cancellation) = cancellation {
                 cancellation.check_cancelled()?;
             }
             let mut reference =
-                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", &e))?;
+                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", e))?;
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)
@@ -750,7 +740,8 @@ impl GixRepo {
         let fingerprint = hasher.finish();
 
         if let Some(cached) = self
-            .all_branches_tips
+            .history_cache
+            .tips
             .lock()
             .expect("all branches tips cache")
             .as_ref()
@@ -770,13 +761,13 @@ impl GixRepo {
 
         let iter = refs
             .all()
-            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", &e))?;
+            .map_err(|e| crate::repo::object_store::gix_error("gix references(all)", e))?;
         for reference in iter {
             if let Some(cancellation) = cancellation {
                 cancellation.check_cancelled()?;
             }
             let reference =
-                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", &e))?;
+                reference.map_err(|e| crate::repo::object_store::gix_error("gix ref iter", e))?;
             if matches!(
                 reference.name().category(),
                 Some(gix::reference::Category::Tag)
@@ -801,7 +792,8 @@ impl GixRepo {
         tips.sort_unstable();
 
         let mut cached = self
-            .all_branches_tips
+            .history_cache
+            .tips
             .lock()
             .expect("all branches tips cache");
         // Keep the previous allocation when the tips are unchanged so page
@@ -812,7 +804,7 @@ impl GixRepo {
             }
             _ => Arc::from(tips),
         };
-        *cached = Some(crate::repo::AllBranchesTipsCacheEntry {
+        *cached = Some(super::AllBranchesTipsCacheEntry {
             fingerprint,
             tips: Arc::clone(&tips),
         });
@@ -1172,7 +1164,9 @@ fn find_commit_by_id<'repo>(
             Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
         })?,
         None => crate::refs::resolve_required(repo, spec)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))).with_source(e)
+            })?
             .object()
             .map_err(|e| {
                 Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))

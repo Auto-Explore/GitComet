@@ -555,10 +555,7 @@ pub fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
 /// a release build sets `windows_subsystem = "windows"`, so a GitComet launched
 /// from Explorer has no stderr at all and a panic here would kill the very
 /// worker the recovery exists to keep alive.
-pub fn write_stderr_line(args: std::fmt::Arguments<'_>) {
-    use std::io::Write as _;
-    let _ = writeln!(std::io::stderr(), "{args}");
-}
+pub use gitcomet_base::write_stderr_line;
 
 #[cfg(test)]
 pub fn lock_git_runtime_test() -> std::sync::MutexGuard<'static, ()> {

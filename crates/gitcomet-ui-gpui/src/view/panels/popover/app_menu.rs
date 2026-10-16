@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::Shortcut;
+use crate::kit::components::Shortcut;
 
 fn push_entry(
     items: &mut Vec<ContextMenuItem>,
@@ -246,9 +246,9 @@ pub(super) fn activate(
         }
         AppMenuAction::LocateFileInExplorer => {
             this.close_popover_and_restore_focus(window, cx);
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.locate_open_file_in_explorer(cx);
-            });
+            let _ = this
+                .root_view
+                .request(RootRequest::LocateOpenFileInExplorer, None, cx);
         }
         AppMenuAction::OpenRemoteInBrowser => {
             this.close_popover_and_restore_focus(window, cx);
@@ -276,9 +276,9 @@ pub(super) fn activate(
         }
         AppMenuAction::OpenInCodeEditor { path } => {
             if let Some(path) = path {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.open_path_in_external_code_editor(path, cx);
-                });
+                let _ = this
+                    .root_view
+                    .request(RootRequest::OpenInExternalEditor(path), None, cx);
             }
             this.close_popover_and_restore_focus(window, cx);
         }
@@ -287,9 +287,9 @@ pub(super) fn activate(
             let Some(repo_id) = repo_id else {
                 return;
             };
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.open_reflog_panel(repo_id, cx);
-            });
+            let _ = this
+                .root_view
+                .request(RootRequest::OpenReflogPanel(repo_id), None, cx);
         }
         AppMenuAction::ApplyPatch { repo_id } => {
             let Some(repo_id) = repo_id else {
@@ -322,9 +322,9 @@ pub(super) fn activate(
         }
         AppMenuAction::CheckForUpdates => {
             this.close_popover_and_restore_focus(window, cx);
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.check_for_updates_manually(cx);
-            });
+            let _ = this
+                .root_view
+                .request(RootRequest::CheckForUpdates, None, cx);
         }
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         AppMenuAction::InstallDesktopIntegration => {
@@ -340,9 +340,14 @@ pub(super) fn activate(
         }
         AppMenuAction::ExtensionCommand { id } => {
             this.close_popover_and_restore_focus(window, cx);
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.run_extension_command(&id, cx);
-            });
+            let _ = this.root_view.request(
+                RootRequest::RunExtensionCommand {
+                    id: id.to_string(),
+                    repo: None,
+                },
+                None,
+                cx,
+            );
         }
         AppMenuAction::CloseWindow => {
             this.close_popover_and_restore_focus(window, cx);

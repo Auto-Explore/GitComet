@@ -11,9 +11,15 @@ fn resolve(
     move |this, _e, window, cx| {
         let apply_to_all =
             choice != ConflictChoice::Cancel && this.filesystem_conflict_apply_to_all;
-        let _ = this.root_view.update(cx, |root, cx| {
-            root.resolve_filesystem_conflict(prompt_id, choice, apply_to_all, window, cx);
-        });
+        let _ = this.root_view.request(
+            RootRequest::ResolveFilesystemConflict {
+                prompt_id,
+                choice,
+                apply_to_all,
+            },
+            Some(window),
+            cx,
+        );
         this.close_popover_and_restore_focus(window, cx);
     }
 }

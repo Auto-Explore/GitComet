@@ -1,10 +1,10 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn model(
-    repo_id: RepoId,
+    repo_id: Option<RepoId>,
     area: DiffArea,
     path: &Option<std::path::PathBuf>,
     hunk_patch: &Option<gitcomet_state::msg::ContentBytes>,
@@ -33,119 +33,123 @@ pub(super) fn model(
     }
     items.push(ContextMenuItem::Separator);
 
-    let (line_label, line_icon, line_shortcut, line_reverse) = match area {
-        DiffArea::Unstaged => ("Stage line", "icons/plus.svg", Some("S"), false),
-        DiffArea::Staged => ("Unstage line", "icons/minus.svg", Some("U"), true),
-    };
-    items.push(ContextMenuItem::Entry {
-        label: if lines_count > 1 {
-            format!("{line_label}s ({lines_count})").into()
-        } else {
-            line_label.into()
-        },
-        icon: Some(line_icon.into()),
-        shortcut: line_shortcut.map(Into::into),
-        disabled: lines_patch.is_none(),
-        action: Box::new(ContextMenuAction::ApplyIndexPatch {
-            repo_id,
-            patch: lines_patch.clone().unwrap_or_default(),
-            reverse: line_reverse,
-        }),
-    });
-
-    if area == DiffArea::Unstaged {
+    // Repository actions require a real repository. Snapshots still own their
+    // text selection and expose Copy through this same menu.
+    if let Some(repo_id) = repo_id {
+        let (line_label, line_icon, line_shortcut, line_reverse) = match area {
+            DiffArea::Unstaged => ("Stage line", "icons/plus.svg", Some("S"), false),
+            DiffArea::Staged => ("Unstage line", "icons/minus.svg", Some("U"), true),
+        };
         items.push(ContextMenuItem::Entry {
             label: if lines_count > 1 {
-                format!("Discard lines ({lines_count})").into()
+                format!("{line_label}s ({lines_count})").into()
             } else {
-                "Discard line".into()
+                line_label.into()
             },
-            icon: Some("icons/refresh.svg".into()),
-            shortcut: Some("D".into()),
-            disabled: discard_lines_patch.is_none(),
-            action: Box::new(ContextMenuAction::ApplyWorktreePatch {
+            icon: Some(line_icon.into()),
+            shortcut: line_shortcut.map(Into::into),
+            disabled: lines_patch.is_none(),
+            action: Box::new(ContextMenuAction::ApplyIndexPatch {
                 repo_id,
-                patch: discard_lines_patch.clone().unwrap_or_default(),
-                reverse: true,
+                patch: lines_patch.clone().unwrap_or_default(),
+                reverse: line_reverse,
             }),
         });
-    }
 
-    items.push(ContextMenuItem::Separator);
-
-    let (hunk_label, hunk_icon, hunk_reverse) = match area {
-        DiffArea::Unstaged => ("Stage hunk", "icons/plus.svg", false),
-        DiffArea::Staged => ("Unstage hunk", "icons/minus.svg", true),
-    };
-    items.push(ContextMenuItem::Entry {
-        label: if hunks_count > 1 {
-            format!("{}s ({hunks_count})", hunk_label).into()
-        } else {
-            hunk_label.into()
-        },
-        icon: Some(hunk_icon.into()),
-        shortcut: None,
-        disabled: hunk_patch.is_none(),
-        action: Box::new(ContextMenuAction::ApplyIndexPatch {
-            repo_id,
-            patch: hunk_patch.clone().unwrap_or_default(),
-            reverse: hunk_reverse,
-        }),
-    });
-
-    if area == DiffArea::Unstaged {
-        items.push(ContextMenuItem::Entry {
-            label: if hunks_count > 1 {
-                format!("Discard hunks ({hunks_count})").into()
-            } else {
-                "Discard hunk".into()
-            },
-            icon: Some("icons/refresh.svg".into()),
-            shortcut: None,
-            disabled: hunk_patch.is_none(),
-            action: Box::new(ContextMenuAction::ApplyWorktreePatch {
-                repo_id,
-                patch: hunk_patch.clone().unwrap_or_default(),
-                reverse: true,
-            }),
-        });
-    }
-
-    items.push(ContextMenuItem::Separator);
-    if let Some(path) = path {
-        items.push(ContextMenuItem::Entry {
-            label: "Open file".into(),
-            icon: Some("icons/file.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::OpenFile {
-                repo_id,
-                path: path.clone(),
-            }),
-        });
-        items.push(ContextMenuItem::Entry {
-            label: "Open file location".into(),
-            icon: Some("icons/folder.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::OpenFileLocation {
-                repo_id,
-                path: path.clone(),
-            }),
-        });
-        if editor_available {
+        if area == DiffArea::Unstaged {
             items.push(ContextMenuItem::Entry {
-                label: "Open in code editor".into(),
-                icon: Some("icons/open_external.svg".into()),
-                shortcut: Some(secondary_shortcut("E").into()),
-                disabled: false,
-                action: Box::new(ContextMenuAction::OpenInCodeEditor {
-                    repo_id: Some(repo_id),
-                    path: path.clone(),
+                label: if lines_count > 1 {
+                    format!("Discard lines ({lines_count})").into()
+                } else {
+                    "Discard line".into()
+                },
+                icon: Some("icons/refresh.svg".into()),
+                shortcut: Some("D".into()),
+                disabled: discard_lines_patch.is_none(),
+                action: Box::new(ContextMenuAction::ApplyWorktreePatch {
+                    repo_id,
+                    patch: discard_lines_patch.clone().unwrap_or_default(),
+                    reverse: true,
                 }),
             });
         }
+
         items.push(ContextMenuItem::Separator);
+
+        let (hunk_label, hunk_icon, hunk_reverse) = match area {
+            DiffArea::Unstaged => ("Stage hunk", "icons/plus.svg", false),
+            DiffArea::Staged => ("Unstage hunk", "icons/minus.svg", true),
+        };
+        items.push(ContextMenuItem::Entry {
+            label: if hunks_count > 1 {
+                format!("{}s ({hunks_count})", hunk_label).into()
+            } else {
+                hunk_label.into()
+            },
+            icon: Some(hunk_icon.into()),
+            shortcut: None,
+            disabled: hunk_patch.is_none(),
+            action: Box::new(ContextMenuAction::ApplyIndexPatch {
+                repo_id,
+                patch: hunk_patch.clone().unwrap_or_default(),
+                reverse: hunk_reverse,
+            }),
+        });
+
+        if area == DiffArea::Unstaged {
+            items.push(ContextMenuItem::Entry {
+                label: if hunks_count > 1 {
+                    format!("Discard hunks ({hunks_count})").into()
+                } else {
+                    "Discard hunk".into()
+                },
+                icon: Some("icons/refresh.svg".into()),
+                shortcut: None,
+                disabled: hunk_patch.is_none(),
+                action: Box::new(ContextMenuAction::ApplyWorktreePatch {
+                    repo_id,
+                    patch: hunk_patch.clone().unwrap_or_default(),
+                    reverse: true,
+                }),
+            });
+        }
+
+        items.push(ContextMenuItem::Separator);
+        if let Some(path) = path {
+            items.push(ContextMenuItem::Entry {
+                label: "Open file".into(),
+                icon: Some("icons/file.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenFile {
+                    repo_id,
+                    path: path.clone(),
+                }),
+            });
+            items.push(ContextMenuItem::Entry {
+                label: "Open file location".into(),
+                icon: Some("icons/folder.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenFileLocation {
+                    repo_id,
+                    path: path.clone(),
+                }),
+            });
+            if editor_available {
+                items.push(ContextMenuItem::Entry {
+                    label: "Open in code editor".into(),
+                    icon: Some("icons/open_external.svg".into()),
+                    shortcut: Some(secondary_shortcut("E").into()),
+                    disabled: false,
+                    action: Box::new(ContextMenuAction::OpenInCodeEditor {
+                        repo_id: Some(repo_id),
+                        path: path.clone(),
+                    }),
+                });
+            }
+            items.push(ContextMenuItem::Separator);
+        }
     }
     items.push(ContextMenuItem::Entry {
         label: "Copy".into(),

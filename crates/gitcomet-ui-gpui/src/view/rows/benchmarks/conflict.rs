@@ -1,8 +1,9 @@
 use super::*;
 use crate::view::conflict_resolver::{
-    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment,
-    ConflictSplitStyledTextCache, ThreeWayVisibleItem, TwoWayWordHighlights, WordHighlights,
+    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment, ThreeWayVisibleItem,
+    TwoWayWordHighlights, WordHighlights,
 };
+use crate::view::conflict_style_cache::ConflictSplitStyledTextCache;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceRenderingMode, MergetoolTraceSideStats,
@@ -97,7 +98,7 @@ impl ConflictThreeWayScrollFixture {
 
         let (base_document, ours_document, theirs_document) = if prepare_documents {
             let lang = language.unwrap_or(DiffSyntaxLanguage::Rust);
-            let budget = DiffSyntaxBudget::default();
+            let budget = default_diff_syntax_budget();
             (
                 prepare_bench_diff_syntax_document(lang, budget, &base_text, None),
                 prepare_bench_diff_syntax_document(lang, budget, &ours_text, None),
@@ -965,7 +966,7 @@ pub struct ConflictSearchQueryUpdateFixture {
     stable_cache: ConflictSplitStyledTextCache,
     query_cache: ConflictSplitStyledTextCache,
     query_cache_query: SharedString,
-    query_cache_matcher: Option<crate::view::panes::main::diff_search::DiffSearchMatcher>,
+    query_cache_matcher: Option<crate::view::panes::diff::diff_search::DiffSearchMatcher>,
 }
 
 impl ConflictSearchQueryUpdateFixture {
@@ -1043,7 +1044,7 @@ impl ConflictSearchQueryUpdateFixture {
         if self.query_cache_query.as_ref() != query {
             self.query_cache_query = query.to_string().into();
             self.query_cache_matcher = (!query.is_empty()).then(|| {
-                crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+                crate::view::panes::diff::diff_search::DiffSearchMatcher::new(
                     query,
                     Default::default(),
                 )
@@ -1062,7 +1063,7 @@ impl ConflictSearchQueryUpdateFixture {
         text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
         word_ranges: &[Range<usize>],
         query: &str,
-        query_matcher: Option<&crate::view::panes::main::diff_search::DiffSearchMatcher>,
+        query_matcher: Option<&crate::view::panes::diff::diff_search::DiffSearchMatcher>,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
     ) -> Option<ConflictSearchQueryStyledSource> {
@@ -3321,7 +3322,9 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
         let start = row_start(start_line);
         let end = row_start(start_line.saturating_add(rows));
         let highlights = document
-            .snapshot(self.theme)
+            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(
+                self.theme,
+            ))
             .highlights_for_byte_range(start..end);
         highlights.len() as u64
     }
@@ -3443,9 +3446,9 @@ impl LiveSyntaxEditTraceFixture {
         let theme = AppTheme::gitcomet_dark();
         assert_eq!(
             self.document
-                .snapshot(theme)
+                .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme))
                 .highlights_for_byte_range(0..self.rope.len()),
-            cold.snapshot(theme)
+            cold.snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme))
                 .highlights_for_byte_range(0..self.rope.len())
         );
     }

@@ -26,7 +26,7 @@ path = "junit.xml"
 store-success-output = true
 
 [[profile.ci.overrides]]
-filter = 'binary(git_cli_scoreboard)'
+filter = 'test(/^git_cli_scoreboard::/)'
 success-output = "immediate"
 
 # Optional experiment: leave watcher waits room to run while limiting the

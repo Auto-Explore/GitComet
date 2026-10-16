@@ -247,14 +247,22 @@ impl<T: Clone + PartialEq> NavStack<T> {
         self.cursor = 0;
     }
 
+    fn step_index(&self, dir: ViewNavDir) -> Option<usize> {
+        match dir {
+            ViewNavDir::Back if self.can_back() => Some(self.cursor - 1),
+            ViewNavDir::Forward if self.can_forward() => Some(self.cursor + 1),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn peek_step(&self, dir: ViewNavDir) -> Option<&T> {
+        self.entries.get(self.step_index(dir)?)
+    }
+
     /// Move the cursor one step in `dir` and return the entry to replay, or
     /// `None` if already at the corresponding end.
     pub fn step(&mut self, dir: ViewNavDir) -> Option<T> {
-        match dir {
-            ViewNavDir::Back if self.can_back() => self.cursor -= 1,
-            ViewNavDir::Forward if self.can_forward() => self.cursor += 1,
-            _ => return None,
-        }
+        self.cursor = self.step_index(dir)?;
         self.entries.get(self.cursor).cloned()
     }
 

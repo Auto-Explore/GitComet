@@ -14,7 +14,7 @@ use crate::view::markdown_preview::{
     MarkdownPreviewDiff, MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
     MarkdownPreviewRowStyledTextCache, markdown_document_blocks,
 };
-use crate::view::panes::main::diff_cache::render_svg_image_diff_preview;
+use crate::view::panes::diff::diff_cache::render_svg_image_diff_preview;
 pub struct FileDiffSyntaxPrepareSource {
     text: SharedString,
     line_starts: Arc<[usize]>,
@@ -86,7 +86,7 @@ impl SyntaxPairLookupFixture {
         let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
         let document = prepare_bench_diff_syntax_document_from_shared(
             language,
-            DiffSyntaxBudget::default(),
+            default_diff_syntax_budget(),
             text.clone(),
             line_starts,
             None,
@@ -184,7 +184,7 @@ impl FileDiffSyntaxPrepareFixture {
             warm_line_starts,
             language,
             theme: AppTheme::gitcomet_dark(),
-            budget: DiffSyntaxBudget::default(),
+            budget: default_diff_syntax_budget(),
         }
     }
 
@@ -468,7 +468,9 @@ fn shared_source_text_and_line_starts(lines: &[String]) -> (SharedString, Arc<[u
     } else {
         lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1)
     };
-    crate::view::panes::main::preview_source_text_and_line_starts_from_lines(lines, source_len)
+    crate::view::panes::diff::helpers::line_index::preview_source_text_and_line_starts_from_lines(
+        lines, source_len,
+    )
 }
 
 pub struct FileDiffSyntaxReparseFixture {
@@ -488,7 +490,7 @@ impl FileDiffSyntaxReparseFixture {
             lines: build_synthetic_source_lines(lines, line_bytes),
             language,
             theme: AppTheme::gitcomet_dark(),
-            budget: DiffSyntaxBudget::default(),
+            budget: default_diff_syntax_budget(),
             nonce: 0,
             prepared_document: None,
         }
@@ -678,7 +680,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
             }
         }
 
-        let budget = DiffSyntaxBudget::default();
+        let budget = default_diff_syntax_budget();
         let old_text = old_lines.join("\n");
         let old_document =
             prepare_bench_diff_syntax_document(language, budget, old_text.as_str(), None);
@@ -1030,7 +1032,7 @@ impl LargeHtmlSyntaxFixture {
     fn prepare_document(text: &str) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
         prepare_bench_diff_syntax_document(
             DiffSyntaxLanguage::Html,
-            DiffSyntaxBudget::default(),
+            default_diff_syntax_budget(),
             text,
             None,
         )
@@ -1209,6 +1211,33 @@ pub struct WorktreePreviewRenderFixture {
 }
 
 impl WorktreePreviewRenderFixture {
+    #[cfg(test)]
+    pub(super) fn prepare_window_syntax(&self, start: usize, window: usize) {
+        if self.lines.is_empty() || window == 0 {
+            return;
+        }
+
+        let document = self
+            .prepared_document
+            .expect("preview document should be prepared");
+        let start = start % self.lines.len();
+        let end = start.saturating_add(window).min(self.lines.len());
+        let byte_start = self.line_starts[start];
+        let byte_end = self
+            .line_starts
+            .get(end)
+            .copied()
+            .unwrap_or(self.source_text.len());
+        super::diff_text::syntax_highlights_for_prepared_document_byte_range(
+            self.theme,
+            self.source_text.as_ref(),
+            &self.line_starts,
+            document,
+            byte_start..byte_end,
+        )
+        .expect("preview window syntax should be ready");
+    }
+
     pub fn new(lines: usize, line_bytes: usize) -> Self {
         let generated_lines = build_synthetic_source_lines(lines, line_bytes);
         let (source_text, line_starts) = shared_source_text_and_line_starts(&generated_lines);
@@ -1217,7 +1246,7 @@ impl WorktreePreviewRenderFixture {
         let prepared_document = language.and_then(|language| {
             prepare_bench_diff_syntax_document_from_shared(
                 language,
-                DiffSyntaxBudget::default(),
+                default_diff_syntax_budget(),
                 source_text.clone(),
                 Arc::clone(&line_starts),
                 None,
@@ -1250,7 +1279,7 @@ impl WorktreePreviewRenderFixture {
         self.language.and_then(|language| {
             prepare_bench_diff_syntax_document_from_shared(
                 language,
-                DiffSyntaxBudget::default(),
+                default_diff_syntax_budget(),
                 self.source_text.clone(),
                 Arc::clone(&self.line_starts),
                 None,

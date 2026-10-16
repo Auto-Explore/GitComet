@@ -6,8 +6,10 @@ mod commit_link_menu;
 mod large_file_chip;
 #[cfg(test)]
 mod resize_grip_tests;
+mod search_toggles;
 
 pub use commit_link_menu::{CommitLinkMenu, LinkTarget, MessageLink};
 pub use large_file_chip::large_file_chip;
 #[allow(unused_imports)]
 pub use large_file_chip::{LargeFileChipTone, large_file_chip_label};
+pub use search_toggles::{search_options, search_toggles};

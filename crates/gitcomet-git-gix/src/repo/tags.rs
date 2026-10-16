@@ -60,10 +60,6 @@ fn delete_local_tag(repo: &gix::Repository, name: &str) -> Result<()> {
 }
 
 impl GixRepo {
-    pub(super) fn list_tags_impl(&self) -> Result<Vec<Tag>> {
-        self.list_tags_cancellable_impl(&CancellationToken::new())
-    }
-
     pub(super) fn list_tags_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
@@ -71,20 +67,24 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let repo = self.repo();
 
-        let refs = crate::refs::view_cancellable(&repo, cancellation)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+        let refs = crate::refs::view_cancellable(&repo, cancellation).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
 
         let iter = refs
             .tags()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tags: {e}"))))?
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tags: {e}"))).with_source(e))?
             .peeled()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))).with_source(e)
+            })?;
 
         let mut tags = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {
             cancellation.check_cancelled()?;
-            let reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
             let name = reference.name().shorten().to_str_lossy().into_owned();
             let target = CommitId(oid_to_arc_str(&reference.id()));
             tags.push(Tag { name, target });
@@ -93,10 +93,6 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         tags.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         Ok(tags)
-    }
-
-    pub(super) fn list_remote_tags_impl(&self) -> Result<Vec<RemoteTag>> {
-        self.list_remote_tags_cancellable_impl(&CancellationToken::new())
     }
 
     pub(super) fn list_remote_tags_cancellable_impl(

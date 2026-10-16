@@ -465,15 +465,15 @@ impl Driver {
     ) -> (smol::channel::Receiver<()>, Vec<gpui::Subscription>) {
         let (tx, changed) = smol::channel::bounded(1);
         let observers = cx.update(|cx| {
-            let (ui_model, main_pane, details_pane) = {
+            let (ui_model, diff_renderer, details_pane) = {
                 let view = view.read(cx);
                 (
                     view.ui_model.clone(),
-                    view.main_pane.clone(),
+                    view.diff_renderer.clone(),
                     view.details_pane.clone(),
                 )
             };
-            let history = main_pane.read(cx).history_view.clone();
+            let history = view.read(cx).main_pane.read(cx).history_view.clone();
             let notify = move |tx: &smol::channel::Sender<()>| {
                 let _ = tx.try_send(());
             };
@@ -488,7 +488,7 @@ impl Driver {
                     let tx = tx.clone();
                     move |_, _| notify(&tx)
                 }),
-                cx.observe(&main_pane, {
+                cx.observe(&diff_renderer, {
                     let tx = tx.clone();
                     move |_, _| notify(&tx)
                 }),
@@ -1076,7 +1076,7 @@ impl Driver {
                     )
                 }
                 WitnessKind::SearchSettled => {
-                    Baseline::Query(view.main_pane.read(cx).diff_search_query.clone())
+                    Baseline::Query(view.diff_renderer.read(cx).diff_search_query.clone())
                 }
                 WitnessKind::RepoPickerFiltered => view
                     .popover_host
@@ -1191,7 +1191,7 @@ impl Driver {
                     }
                 }
                 WitnessKind::SearchSettled => {
-                    let main = view.main_pane.read(cx);
+                    let main = view.diff_renderer.read(cx);
                     let changed = match baseline {
                         Baseline::Query(before) => main.diff_search_query != *before,
                         _ => true,
@@ -1370,7 +1370,7 @@ impl Driver {
                         .history_scroll_position()
                 ),
                 WitnessKind::SearchSettled => {
-                    let main = view.main_pane.read(cx);
+                    let main = view.diff_renderer.read(cx);
                     format!(
                         "active={} query={:?} running={} pending={:?} matches={}",
                         main.diff_search_active,

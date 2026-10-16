@@ -468,8 +468,8 @@ fn apply_state_snapshot_routes_command_errors_into_error_toasts(cx: &mut gpui::T
             workdir: PathBuf::from("repo"),
         },
     );
-    repo.feedback.last_error = Some(error.clone());
-    repo.feedback
+    repo.feedback_mut().last_error = Some(error.clone());
+    repo.feedback_mut()
         .push_command_result(gitcomet_state::model::CommandLogEntry {
             time: std::time::SystemTime::now(),
             ok: false,
@@ -546,7 +546,7 @@ fn toasts_follow_feedback_sequences_after_shown_entries_are_dropped(cx: &mut gpu
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let mut repo = open_repo_state_with_workdir("/tmp/acknowledged-feedback");
     for ix in 1..=3 {
-        repo.feedback
+        repo.feedback_mut()
             .push_command_result(announced_command(&format!("Pushed {ix}")));
     }
     let mut state = AppState {
@@ -562,7 +562,7 @@ fn toasts_follow_feedback_sequences_after_shown_entries_are_dropped(cx: &mut gpu
     // arrived meanwhile: both queues got shorter, yet each holds news.
     state.notifications = vec![warning("Warning 2")];
     state.notifications_seq = 2;
-    let feedback = &mut state.repos[0].feedback;
+    let feedback = state.repos[0].feedback_mut();
     feedback.command_log = vec![announced_command("Pushed 4")];
     feedback.command_log_seq = 4;
     apply_notification_snapshot(cx, &view, &state);
@@ -599,9 +599,9 @@ fn shown_feedback_is_released_with_the_next_store_change(cx: &mut gpui::TestAppC
             workdir: PathBuf::from("/tmp/released-feedback"),
         },
     );
-    repo.feedback
+    repo.feedback_mut()
         .push_command_result(announced_command("Pushed"));
-    repo.feedback
+    repo.feedback_mut()
         .push_diagnostic(gitcomet_state::model::DiagnosticEntry {
             time: std::time::SystemTime::now(),
             kind: DiagnosticKind::Error,
@@ -717,7 +717,8 @@ fn auth_pull_attempt(kind: AuthPromptKind) -> gitcomet_state::model::CommandLogE
 
 fn auth_pull_state(kind: AuthPromptKind) -> AppState {
     let mut repo = open_repo_state_with_workdir("/tmp/auth-pull-notifications");
-    repo.feedback.push_command_result(auth_pull_attempt(kind));
+    repo.feedback_mut()
+        .push_command_result(auth_pull_attempt(kind));
     AppState {
         active_repo: Some(repo.id),
         auth_prompt: Some(AuthPromptState {
@@ -785,7 +786,7 @@ fn focus_diff_panel(
     cx.update(|window, app| {
         let focus = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();
@@ -852,7 +853,7 @@ fn authentication_prompt_preserves_user_focus_on_redraw_and_unrelated_snapshot(
         );
 
         state.repos[0]
-            .feedback
+            .feedback_mut()
             .push_command_result(successful_pull_attempt());
         apply_notification_snapshot(cx, &view, &state);
         test_support::redraw(cx);
@@ -983,7 +984,7 @@ fn pull_authentication_announces_only_the_successful_retry(cx: &mut gpui::TestAp
         );
 
         state.repos[0]
-            .feedback
+            .feedback_mut()
             .push_command_result(successful_pull_attempt());
         apply_notification_snapshot(cx, &view, &state);
         apply_notification_snapshot(cx, &view, &state);
@@ -1021,7 +1022,7 @@ fn coalesced_authentication_and_success_snapshots_do_not_revive_the_challenge(
         let mut state = auth_pull_state(kind);
         state.auth_prompt = None;
         state.repos[0]
-            .feedback
+            .feedback_mut()
             .push_command_result(successful_pull_attempt());
 
         // The UI never received the prompt or retry-in-flight snapshots.
@@ -1052,7 +1053,7 @@ fn rejected_credentials_and_prompt_cancellation_do_not_accumulate_error_toasts(
 
         let mut rejected = auth_pull_attempt(kind);
         rejected.time += Duration::from_secs(1);
-        state.repos[0].feedback.push_command_result(rejected);
+        state.repos[0].feedback_mut().push_command_result(rejected);
         prompt.generation += 1;
         prompt.status = AuthPromptStatus::Rejected;
         prompt.reason = auth_rejection(kind).into();
@@ -1230,15 +1231,15 @@ fn genuine_retry_failures_still_produce_error_toasts(cx: &mut gpui::TestAppConte
                 "Push failed: ! [rejected] main -> main (fetch first)",
             ),
         ] {
-            state.repos[0]
-                .feedback
-                .push_command_result(gitcomet_state::model::CommandLogEntry {
+            state.repos[0].feedback_mut().push_command_result(
+                gitcomet_state::model::CommandLogEntry {
                     command: command.into(),
                     summary: summary.into(),
                     stderr: summary.into(),
                     handled_by_auth_prompt: false,
                     ..auth_pull_attempt(kind)
-                });
+                },
+            );
             apply_notification_snapshot(cx, &view, &state);
             assert_eq!(
                 error_toasts(cx, &view)[0],
@@ -1263,7 +1264,7 @@ fn pull_blocked_after_authentication_has_one_actionable_failure_and_no_stale_pro
 
     state.auth_prompt = None;
     state.repos[0]
-        .feedback
+        .feedback_mut()
         .push_command_result(gitcomet_state::model::CommandLogEntry {
             summary: "Pull failed".into(),
             stderr: "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md\nAborting".into(),
@@ -1295,12 +1296,12 @@ fn authentication_owned_hook_attempts_are_quiet_even_without_the_prompt_snapshot
     let mut state = auth_pull_state(AuthPromptKind::Passphrase);
     state.auth_prompt = None;
     let operation_id = GitOperationId(1);
-    state.repos[0].feedback.command_log[0].hook_operation_id = Some(operation_id);
-    state.repos[0].feedback.command_log[0].command = "git push".into();
-    state.repos[0].feedback.command_log[0].summary =
+    state.repos[0].feedback_mut().command_log[0].hook_operation_id = Some(operation_id);
+    state.repos[0].feedback_mut().command_log[0].command = "git push".into();
+    state.repos[0].feedback_mut().command_log[0].summary =
         format!("Push failed:\n\n{WINDOWS_SSH_PASSPHRASE_CHALLENGE}");
     state.repos[0]
-        .feedback
+        .feedback_mut()
         .hook_activity
         .push(GitHookOperation {
             id: operation_id,
@@ -1347,7 +1348,7 @@ fn one_failure_recorded_twice_is_one_error(cx: &mut gpui::TestAppContext) {
     let message = "Failed to persist session state while opening: disk full".to_string();
     let mut next = AppState::test_default();
     let mut repo = open_repo_state_with_workdir("/tmp/persist-repo");
-    repo.feedback
+    repo.feedback_mut()
         .push_diagnostic(gitcomet_state::model::DiagnosticEntry {
             time: std::time::SystemTime::now(),
             kind: DiagnosticKind::Error,

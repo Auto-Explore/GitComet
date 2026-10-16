@@ -100,7 +100,7 @@ fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 assert!(
                     pane.conflict_resolver.two_way_horizontal_measure_row(
@@ -124,14 +124,14 @@ fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
 
     cx.update(|window, app| {
         let _ = window.draw(app);
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_horizontal_overflow(&pane.conflict_resolver_diff_scroll, "two-way ours list");
         assert_horizontal_overflow(&pane.conflict_preview_theirs_scroll, "two-way theirs list");
     });
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 assert!(
                     pane.conflict_resolver
@@ -161,7 +161,7 @@ fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
 
     cx.update(|window, app| {
         let _ = window.draw(app);
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_horizontal_overflow(&pane.conflict_resolver_diff_scroll, "three-way base list");
         assert_horizontal_overflow(&pane.conflict_preview_ours_scroll, "three-way ours list");
         assert_horizontal_overflow(
@@ -286,7 +286,7 @@ fn conflict_resolver_three_way_remote_horizontal_overflow_with_divergent_context
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 let remote_line = theirs_text
                     .lines()
@@ -308,7 +308,7 @@ fn conflict_resolver_three_way_remote_horizontal_overflow_with_divergent_context
     for canvas_rows_enabled in [true, false] {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_canvas_rows_enabled = canvas_rows_enabled;
                     cx.notify();
                 });
@@ -320,7 +320,7 @@ fn conflict_resolver_three_way_remote_horizontal_overflow_with_divergent_context
         cx.run_until_parked();
         cx.update(|window, app| {
             let _ = window.draw(app);
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert_horizontal_overflow(
                 &pane.conflict_preview_theirs_scroll,
                 if canvas_rows_enabled { "canvas" } else { "div" },
@@ -388,7 +388,7 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 cx.notify();
             });
@@ -424,7 +424,7 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_conflict_scroll_matrix_offsets(pane);
                 set_scroll_handle_offset(
                     &pane.conflict_resolved_output_editor_scroll,
@@ -437,7 +437,7 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll),
             point(px(-72.0), px(-48.0)),
@@ -467,7 +467,7 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let editor_max =
                     scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height;
                 set_scroll_handle_offset(
@@ -481,7 +481,7 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let editor_offset = scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).y;
         let gutter_offset = uniform_list_offset(&pane.conflict_resolved_preview_gutter_scroll).y;
         assert_eq!(
@@ -570,7 +570,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 cx.notify();
             });
@@ -617,7 +617,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
          view: &gpui::Entity<super::super::super::GitCometView>| {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         reset_conflict_scroll_matrix_offsets(pane);
                         cx.notify();
                     });
@@ -634,7 +634,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
             reset_offsets(cx, &view);
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         set_scroll_handle_offset(
                             &pane.conflict_resolved_output_editor_scroll,
                             output_offset,
@@ -646,7 +646,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
             draw_and_drain_test_window(cx);
 
             cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 // The resolved output is a different document from the
                 // aligned columns and is only coupled to them horizontally,
                 // where the correspondence is exact (same pixel column).
@@ -698,7 +698,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
             reset_offsets(cx, &view);
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, base_offset);
                         cx.notify();
                     });
@@ -707,7 +707,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
             draw_and_drain_test_window(cx);
 
             cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 let columns_expected = if axis.includes(mode) {
                     axis.component(base_offset)
                 } else {
@@ -830,7 +830,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 cx.notify();
             });
@@ -873,7 +873,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
          view: &gpui::Entity<super::super::super::GitCometView>| {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         reset_conflict_scroll_matrix_offsets(pane);
                         cx.notify();
                     });
@@ -890,7 +890,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
     for output_sync_on in [true, false] {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     // Set the field directly: this test exercises the sync-group
                     // logic, not persistence, and the `_and_persist` variant
                     // re-enters the root view we're already updating.
@@ -920,7 +920,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 reset_offsets(cx, &view);
                 cx.update(|_window, app| {
                     view.update(app, |this, cx| {
-                        this.main_pane.update(cx, |pane, cx| {
+                        this.diff_renderer.update(cx, |pane, cx| {
                             set_scroll_handle_offset(
                                 &pane.conflict_resolved_output_editor_scroll,
                                 output_offset,
@@ -932,7 +932,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 draw_and_drain_test_window(cx);
 
                 cx.update(|_window, app| {
-                    let pane = view.read(app).main_pane.read(app);
+                    let pane = view.read(app).diff_renderer.read(app);
                     let expected = if output_coupled {
                         axis.component(output_offset)
                     } else {
@@ -969,7 +969,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 reset_offsets(cx, &view);
                 cx.update(|_window, app| {
                     view.update(app, |this, cx| {
-                        this.main_pane.update(cx, |pane, cx| {
+                        this.diff_renderer.update(cx, |pane, cx| {
                             set_uniform_list_offset(
                                 &pane.conflict_preview_theirs_scroll,
                                 right_offset,
@@ -981,7 +981,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 draw_and_drain_test_window(cx);
 
                 cx.update(|_window, app| {
-                    let pane = view.read(app).main_pane.read(app);
+                    let pane = view.read(app).diff_renderer.read(app);
                     let pair_expected = if coupled {
                         axis.component(right_offset)
                     } else {
@@ -1028,7 +1028,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
     // passes instead of letting the clamped output pull the sources backward.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.mergetool_output_scroll_sync = true;
                 reset_conflict_scroll_matrix_offsets(pane);
                 cx.notify();
@@ -1040,7 +1040,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
     let (right_max, right_bounds) = cx.update(|window, app| {
         let _ = window.draw(app);
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let handle = pane.conflict_preview_theirs_scroll.0.borrow();
         (
             handle.base_handle.max_offset().y.max(px(0.0)),
@@ -1049,7 +1049,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_uniform_list_offset(
                     &pane.conflict_preview_theirs_scroll,
                     point(px(0.0), -(right_max - px(40.0)).max(px(0.0))),
@@ -1069,7 +1069,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
     draw_and_drain_test_window(cx);
 
     let after_wheel = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
             uniform_list_offset(&pane.conflict_preview_theirs_scroll).y,
@@ -1078,7 +1078,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
     });
     draw_and_drain_test_window(cx);
     let after_idle_render = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
             uniform_list_offset(&pane.conflict_preview_theirs_scroll).y,
@@ -1155,7 +1155,7 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
 
     crate::view::test_support::inspect_render(cx, |window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.conflict_diff_segments_cache_split.clear();
                 pane.conflict_diff_query_segments_cache_split.clear();
@@ -1175,7 +1175,7 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
                     "compare split style cache should start empty for this focused render",
                 );
 
-                let elements = MainPaneView::render_conflict_compare_diff_rows(
+                let elements = DiffRenderer::render_conflict_compare_diff_rows(
                     pane,
                     visible_ix..visible_ix + 1,
                     window,
@@ -1302,7 +1302,7 @@ fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
 
     crate::view::test_support::inspect_render(cx, |window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let first_block = pane
                     .conflict_resolver
                     .marker_segments
@@ -1338,7 +1338,7 @@ fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
                     )
                     .expect("hide-resolved compare view should remap at least one split row");
 
-                let elements = MainPaneView::render_conflict_compare_diff_rows(
+                let elements = DiffRenderer::render_conflict_compare_diff_rows(
                     pane,
                     visible_ix..visible_ix + 1,
                     window,
@@ -1421,7 +1421,7 @@ fn giant_two_way_paged_provider_generates_rows_on_demand(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 let total = assert_streamed_whole_file_two_way_state(pane, fixture.line_count);
 
@@ -1527,7 +1527,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 cx.notify();
             });
@@ -1562,7 +1562,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
     // the pane records the output as this gesture's master.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_conflict_scroll_matrix_offsets(pane);
                 set_scroll_handle_offset(
                     &pane.conflict_resolved_output_editor_scroll,
@@ -1590,7 +1590,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
     // synchronizer already ran.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_conflict_scroll_matrix_offsets(pane);
                 cx.notify();
             });
@@ -1600,7 +1600,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_scroll_all_columns(90, gpui::ScrollStrategy::Center);
                 cx.notify();
             });
@@ -1629,7 +1629,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
     // through the conflict anchors rather than copied 1:1.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_conflict_scroll_matrix_offsets(pane);
                 set_uniform_list_offset(
                     &pane.conflict_resolver_diff_scroll,
@@ -1657,7 +1657,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
     // going. The clamped follower must not then be promoted to master.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let deep = uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height;
                 set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, point(px(0.0), -deep));
                 pane.record_conflict_vertical_wheel_master(0);
@@ -1681,7 +1681,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
     // editor's text, so the two are no longer the same number of rows.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 // Pre-match the persisted default so the toggle does not
                 // schedule a settings persist (which re-enters the view).
                 pane.mergetool_collapse_unchanged = true;
@@ -1696,7 +1696,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_scroll_handle_offset(
                     &pane.conflict_resolved_output_editor_scroll,
                     point(px(0.0), px(-240.0)),
@@ -1754,7 +1754,7 @@ fn conflict_canvas_clicks_cannot_transfer_between_rows(cx: &mut gpui::TestAppCon
     cx.update(|_, app| {
         view.update(app, |this, cx| {
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_canvas_rows_enabled = true;
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
             });
@@ -1782,7 +1782,7 @@ fn conflict_canvas_clicks_cannot_transfer_between_rows(cx: &mut gpui::TestAppCon
         },
     );
     let [first, second] = cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         [1, 2].map(|row| {
             pane.conflict_text_hitboxes[&(row, ThreeWayColumn::Ours)]
                 .bounds
@@ -1824,7 +1824,7 @@ fn conflict_canvas_clicks_cannot_transfer_between_rows(cx: &mut gpui::TestAppCon
     let marked_columns = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .conflict_resolver_alignment_marked_columns()
         })

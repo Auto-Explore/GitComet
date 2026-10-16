@@ -119,18 +119,18 @@ impl GitCometView {
             if session_repo_paths.is_empty() && !self.persisted_workspace_repo_paths.is_empty() {
                 // Entering Home: the store records these as recent in the
                 // background, so promote them here rather than race that write.
-                self.refresh_home_repositories();
-                for path in self.persisted_workspace_repo_paths.iter().rev() {
-                    session::promote_recent_repo(&mut self.home_recent_repos, path);
-                }
-                self.home_selected = None;
-                self.defer_home_search_focus(true, cx);
+                let closed = self.persisted_workspace_repo_paths.clone();
+                self.home.update(cx, |home, cx| {
+                    home.enter(&closed);
+                    home.defer_search_focus(true, cx);
+                });
             } else if !session_repo_paths.is_empty()
                 && self.persisted_workspace_repo_paths.is_empty()
             {
                 // Leaving Home: gpui keeps focus on an unmounted element, which
                 // would then be a stale restore target for the palette.
-                self.defer_home_search_focus(false, cx);
+                self.home
+                    .update(cx, |home, cx| home.defer_search_focus(false, cx));
             }
             self.persisted_workspace_repo_paths = session_repo_paths;
             self.persisted_workspace_active_repository = session_active_repository;
@@ -156,7 +156,7 @@ impl GitCometView {
                 live_repo_paths.push(path.clone());
             }
         }
-        self.workspace_id = if self.view_mode == GitCometViewMode::Normal {
+        let workspace_id = if self.view_mode == GitCometViewMode::Normal {
             crate::workspaces::sync_window(
                 cx,
                 self.window_handle.window_id(),
@@ -167,6 +167,7 @@ impl GitCometView {
         } else {
             None
         };
+        self.set_workspace_id(workspace_id, cx);
         // Live routing includes provisional tabs; durable membership above does not.
         if self.synced_repo_paths.as_ref() != live_repo_paths.as_slice() {
             self.synced_repo_paths = live_repo_paths.into();
@@ -175,7 +176,7 @@ impl GitCometView {
             cx,
             self.window_handle,
             cx.weak_entity(),
-            self.main_pane.downgrade(),
+            self.diff_renderer.downgrade(),
             self.documents.downgrade(),
             self.view_mode,
             self.workspace_id,

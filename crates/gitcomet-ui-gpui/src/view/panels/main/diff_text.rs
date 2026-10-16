@@ -1,7 +1,16 @@
-use super::*;
-use crate::view::panes::main::{DiffHorizontalScrollColumn, MainPaneBody};
+use super::{
+    AppTheme, DiffRenderer, DiffSplitResizeDragGhost, DiffSplitResizeHandle, DiffSplitResizeState,
+    DiffTextEmptySpaceDecoration, DiffTextRegion, DiffViewMode, Loadable, PANE_RESIZE_HANDLE_PX,
+    components, diff_split_column_widths, diff_split_drag_params, empty_diff_text_document,
+    next_diff_split_drag_ratio,
+};
+use crate::view::panes::diff::DiffBody;
+use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
+use gpui::{
+    AnyElement, CursorStyle, MouseButton, MouseDownEvent, Window, div, prelude::*, px, uniform_list,
+};
 
-impl MainPaneView {
+impl DiffRenderer {
     pub(super) fn render_selected_patch_diff(
         &mut self,
         theme: AppTheme,
@@ -42,7 +51,7 @@ impl MainPaneView {
         self.ensure_diff_wrap_visible_rows(window, cx);
         self.maybe_autoscroll_diff_to_first_change();
 
-        let total_len = if self.main_pane_surface().body == MainPaneBody::Patch {
+        let total_len = if self.diff_surface().body == DiffBody::Patch {
             self.patch_diff_row_len()
         } else if self.is_collapsed_diff_projection_active() {
             self.collapsed_diff_visible_rows.len()
@@ -53,7 +62,7 @@ impl MainPaneView {
             }
         };
         if total_len == 0 {
-            let message = if self.main_pane_surface().body == MainPaneBody::Patch {
+            let message = if self.diff_surface().body == DiffBody::Patch {
                 "No changes."
             } else {
                 "Empty file."

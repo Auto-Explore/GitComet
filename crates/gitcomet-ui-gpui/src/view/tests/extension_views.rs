@@ -483,7 +483,7 @@ fn switching_views_focuses_the_selected_view_once(cx: &mut gpui::TestAppContext)
     test_support::redraw(cx);
     assert!(cx.update(|window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .is_focused(window)

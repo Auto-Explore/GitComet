@@ -1,4 +1,4 @@
-//! Conflict resolver rendering for [`MainPaneView`].
+//! Conflict resolver rendering for [`DiffRenderer`].
 //!
 //! Extracted from `diff_view.rs`: the kdiff3-style three-way resolver pane,
 //! its toolbar control clusters, and the rendered (SVG/Markdown) conflict
@@ -35,7 +35,7 @@ fn conflict_output_post_layout_scroll_y(gutter_y: Pixels, editor_max_y: Pixels) 
     gutter_y.clamp(-editor_max_y.max(px(0.0)), px(0.0))
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
     /// decision-only): resolved counts. File navigation is in the bottom bar.
     pub(super) fn conflict_toolbar_simple_controls(
@@ -133,7 +133,7 @@ impl MainPaneView {
                             theme,
                             format!(
                                 "Previous conflict (F2 / Shift+F7 / {})",
-                                crate::view::shortcut_labels::alt_shortcut("Up")
+                                crate::kit::components::alt_shortcut("Up")
                             )
                             .into(),
                         ),
@@ -156,7 +156,7 @@ impl MainPaneView {
                             theme,
                             format!(
                                 "Next conflict (F3 / F7 / {})",
-                                crate::view::shortcut_labels::alt_shortcut("Down")
+                                crate::kit::components::alt_shortcut("Down")
                             )
                             .into(),
                         ),
@@ -1695,6 +1695,7 @@ impl MainPaneView {
                                         components::MinimapColumn::new(
                                             "conflict_minimap",
                                             self.conflict_resolver.minimap_bands.clone(),
+                                            minimap_band_color,
                                         )
                                         .width(minimap_w)
                                         .driver(self.conflict_resolver_diff_scroll.clone())
@@ -2642,6 +2643,63 @@ impl MainPaneView {
                     .child(body),
             )
             .into_any_element()
+    }
+}
+
+/// Each side's change color, a muted settled conflict, and the danger color
+/// for conflicts still open.
+fn minimap_band_color(
+    theme: AppTheme,
+    kind: gitcomet_core::merge::MinimapRowKind,
+) -> Option<gpui::Rgba> {
+    use gitcomet_core::merge::MinimapRowKind;
+    let changed_alpha = if theme.is_dark { 0.85 } else { 0.70 };
+    // A settled conflict drops to a muted neutral, so the red that remains is
+    // exactly the work left and it reads as neither side's change color.
+    let resolved_alpha = if theme.is_dark { 0.45 } else { 0.35 };
+    let (mut color, alpha) = match kind {
+        MinimapRowKind::Unchanged => return None,
+        MinimapRowKind::LocalChanged => (theme.colors.diff.added.foreground, changed_alpha),
+        MinimapRowKind::RemoteChanged => (theme.colors.accent.foreground, changed_alpha),
+        MinimapRowKind::ResolvedConflict => (theme.colors.foreground.secondary, resolved_alpha),
+        MinimapRowKind::Conflict => (theme.colors.status.danger.foreground, changed_alpha),
+    };
+    color.alpha = alpha;
+    Some(color)
+}
+
+#[cfg(test)]
+mod minimap_color_tests {
+    use super::minimap_band_color;
+    use crate::theme::AppTheme;
+    use gitcomet_core::merge::MinimapRowKind;
+
+    #[test]
+    fn unchanged_bands_are_not_painted() {
+        let theme = AppTheme::gitcomet_dark();
+        assert!(minimap_band_color(theme, MinimapRowKind::Unchanged).is_none());
+        assert!(minimap_band_color(theme, MinimapRowKind::Conflict).is_some());
+        assert!(minimap_band_color(theme, MinimapRowKind::LocalChanged).is_some());
+        assert!(minimap_band_color(theme, MinimapRowKind::RemoteChanged).is_some());
+    }
+
+    #[test]
+    fn a_resolved_conflict_is_painted_but_not_in_the_conflict_color() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let resolved = minimap_band_color(theme, MinimapRowKind::ResolvedConflict)
+                .expect("a resolved conflict still marks its rows");
+            let open = minimap_band_color(theme, MinimapRowKind::Conflict)
+                .expect("an open conflict paints");
+            assert_ne!(
+                (resolved.red, resolved.green, resolved.blue),
+                (open.red, open.green, open.blue),
+                "a resolved conflict must not keep the open-conflict hue",
+            );
+            assert!(
+                resolved.alpha < open.alpha,
+                "a resolved conflict should recede: {resolved:?} vs {open:?}",
+            );
+        }
     }
 }
 

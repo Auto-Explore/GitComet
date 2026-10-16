@@ -37,7 +37,7 @@ fn worktree_markdown_preview_draws_task_items_as_editable_checkboxes(
         "a plain item keeps its bullet"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.markdown_preview_tasks_editable(),
             "an unstaged working-tree file is the file the click writes to"
@@ -72,7 +72,7 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
             )),
         );
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.toggle_markdown_preview_task(DiffTextRegion::Inline, task, cx);
             });
         });
@@ -102,7 +102,7 @@ fn toggling_a_task_invalidates_the_file_preview(cx: &mut gpui::TestAppContext) {
     }
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let still_the_old_document = matches!(
             &pane.worktree_markdown.document,
             gitcomet_state::model::Loadable::Ready(document)
@@ -139,7 +139,7 @@ fn a_deleted_file_offers_no_editable_checkboxes(cx: &mut gpui::TestAppContext) {
     draw_frames(cx, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.markdown_preview_tasks_editable(),
             "a deleted file's checkboxes look clickable but every click fails to read the file"

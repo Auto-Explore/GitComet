@@ -52,9 +52,6 @@ impl Render for FetchRefPrompt {
         if let Some(root) = self.root.upgrade() {
             self.theme = root.read(cx).theme;
         }
-        for input in [&self.remote, &self.refspec] {
-            input.update(cx, |input, cx| input.set_theme(self.theme, cx));
-        }
         div().flex().flex_col().gap_2()
             .child("Remote")
             .child(self.remote.clone())
@@ -104,7 +101,6 @@ impl GitCometView {
                     )
                 });
                 remote.update(cx, |input, cx| {
-                    input.set_theme(theme, cx);
                     input.set_text(default_remote, cx);
                 });
                 let refspec = cx.new(|cx| {
@@ -117,7 +113,6 @@ impl GitCometView {
                         cx,
                     )
                 });
-                refspec.update(cx, |input, cx| input.set_theme(theme, cx));
                 window.focus(&refspec.read(cx).focus_handle(), cx);
                 cx.new(|_| FetchRefPrompt {
                     root,

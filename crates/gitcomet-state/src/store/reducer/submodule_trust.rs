@@ -7,6 +7,8 @@ use crate::model::{
     SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::Effect;
+use crate::msg::RepoCommandEffect;
+use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{SubmoduleTrustDecision, SubmoduleTrustTarget};
 use std::path::PathBuf;
@@ -39,15 +41,17 @@ pub(super) fn add_submodule(
         repo_id,
         operation: SubmoduleTrustCheckOperation::Add,
     });
-    vec![Effect::CheckSubmoduleAddTrust {
-        repo_id,
-        url,
-        path,
-        branch,
-        name,
-        force,
-        remote_url_policy: state.remote_url_policy,
-    }]
+    vec![Effect::RepoCommand(
+        RepoCommandEffect::CheckSubmoduleAddTrust {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            remote_url_policy: state.remote_url_policy,
+        },
+    )]
 }
 
 pub(super) fn add_submodule_approved(
@@ -80,10 +84,12 @@ pub(super) fn update_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Ef
         repo_id,
         operation: SubmoduleTrustCheckOperation::Update,
     });
-    vec![Effect::CheckSubmoduleUpdateTrust {
-        repo_id,
-        remote_url_policy: state.remote_url_policy,
-    }]
+    vec![Effect::RepoCommand(
+        RepoCommandEffect::CheckSubmoduleUpdateTrust {
+            repo_id,
+            remote_url_policy: state.remote_url_policy,
+        },
+    )]
 }
 
 pub(super) fn update_submodules_approved(
@@ -101,11 +107,13 @@ pub(super) fn load_submodule(state: &mut AppState, repo_id: RepoId, path: PathBu
         repo_id,
         operation: SubmoduleTrustCheckOperation::Load,
     });
-    vec![Effect::CheckSubmoduleLoadTrust {
-        repo_id,
-        path,
-        remote_url_policy: state.remote_url_policy,
-    }]
+    vec![Effect::RepoCommand(
+        RepoCommandEffect::CheckSubmoduleLoadTrust {
+            repo_id,
+            path,
+            remote_url_policy: state.remote_url_policy,
+        },
+    )]
 }
 
 pub(super) fn load_submodule_approved(
@@ -169,6 +177,7 @@ pub(super) fn cancel_prompt(state: &mut AppState) -> Vec<Effect> {
 }
 
 pub(super) fn add_trust_checked(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     url: String,
@@ -210,6 +219,7 @@ pub(super) fn add_trust_checked(
         }
         Err(error) => {
             report_error(
+                inputs,
                 state,
                 Some(repo_id),
                 util::format_failure_summary("Submodule trust check", &error),
@@ -220,6 +230,7 @@ pub(super) fn add_trust_checked(
 }
 
 pub(super) fn update_trust_checked(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     result: Result<SubmoduleTrustDecision, Error>,
@@ -240,6 +251,7 @@ pub(super) fn update_trust_checked(
         }
         Err(error) => {
             report_error(
+                inputs,
                 state,
                 Some(repo_id),
                 util::format_failure_summary("Submodule trust check", &error),
@@ -250,6 +262,7 @@ pub(super) fn update_trust_checked(
 }
 
 pub(super) fn load_trust_checked(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
@@ -271,6 +284,7 @@ pub(super) fn load_trust_checked(
         }
         Err(error) => {
             report_error(
+                inputs,
                 state,
                 Some(repo_id),
                 util::format_failure_summary("Submodule trust check", &error),

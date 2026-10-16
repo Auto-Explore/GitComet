@@ -1,8 +1,10 @@
 use super::*;
+use crate::msg::PersistenceEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn close_repo_removes_and_moves_active() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(10);
     let mut state = AppState::test_default();
 
@@ -45,11 +47,10 @@ fn close_repo_removes_and_moves_active() {
     assert!(effects.iter().any(
         |effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(10))
     ));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.active_repo, Some(RepoId(10)));
 }
@@ -58,7 +59,9 @@ fn recent_repo_effect_workdirs(effects: &[Effect]) -> Vec<PathBuf> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::PersistRecentRepo { workdir, .. } => Some(workdir.clone()),
+            Effect::Persistence(PersistenceEffect::PersistRecentRepo { workdir, .. }) => {
+                Some(workdir.clone())
+            }
             _ => None,
         })
         .collect()
@@ -69,7 +72,7 @@ fn recent_repo_effect_workdirs(effects: &[Effect]) -> Vec<PathBuf> {
 /// closed — the repo tab's `x`, its menu, or the picker's row menu.
 #[test]
 fn close_repo_records_the_closed_repository_as_recent() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -112,7 +115,7 @@ fn close_repo_records_the_closed_repository_as_recent() {
 
 #[test]
 fn moving_repo_out_removes_it_without_recording_a_recent_close() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -142,18 +145,17 @@ fn moving_repo_out_removes_it_without_recording_a_recent_close() {
         vec![std::env::temp_dir().join("repo1")]
     );
     assert_eq!(state.active_repo, Some(RepoId(1)));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
 }
 
 /// Bulk closes walk the tab strip left to right rather than the `FxHashSet` of
 /// ids, so the Recently Closed order they leave behind is the same on every run.
 #[test]
 fn close_repos_records_recents_in_tab_order() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -193,7 +195,7 @@ fn close_repos_records_recents_in_tab_order() {
 
 #[test]
 fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(20);
     let mut state = AppState::test_default();
 
@@ -247,18 +249,17 @@ fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
     assert!(effects.iter().any(
         |effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(21))
     ));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Persistence(PersistenceEffect::PersistSession { .. })
+    )));
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(21)));
 }
 
 #[test]
 fn close_repos_ignores_unknown_ids_and_persists_once() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -301,7 +302,10 @@ fn close_repos_ignores_unknown_ids_and_persists_once() {
     assert_eq!(
         effects
             .iter()
-            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .filter(|effect| matches!(
+                effect,
+                Effect::Persistence(PersistenceEffect::PersistSession { .. })
+            ))
             .count(),
         1
     );
@@ -314,7 +318,7 @@ fn close_repos_ignores_unknown_ids_and_persists_once() {
 
 #[test]
 fn close_repos_selects_left_neighbor_when_active_repo_is_closed() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -352,7 +356,7 @@ fn close_repos_selects_left_neighbor_when_active_repo_is_closed() {
 
 #[test]
 fn close_repos_uses_requested_active_repo_after_batch_close() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -390,7 +394,7 @@ fn close_repos_uses_requested_active_repo_after_batch_close() {
 
 #[test]
 fn close_repos_noops_when_no_existing_repos_match() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -425,7 +429,7 @@ fn close_repos_noops_when_no_existing_repos_match() {
 
 #[test]
 fn close_repos_closing_all_repos_clears_active_and_persists_once() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -453,7 +457,10 @@ fn close_repos_closing_all_repos_clears_active_and_persists_once() {
     assert_eq!(
         effects
             .iter()
-            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .filter(|effect| matches!(
+                effect,
+                Effect::Persistence(PersistenceEffect::PersistSession { .. })
+            ))
             .count(),
         1
     );
@@ -461,7 +468,7 @@ fn close_repos_closing_all_repos_clears_active_and_persists_once() {
 
 #[test]
 fn reorder_repo_tabs_moves_repo_and_keeps_active() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -502,7 +509,9 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PersistSession { .. }]
+        [Effect::Persistence(
+            PersistenceEffect::PersistSession { .. }
+        )]
     ));
     assert_eq!(
         state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
@@ -522,7 +531,9 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PersistSession { .. }]
+        [Effect::Persistence(
+            PersistenceEffect::PersistSession { .. }
+        )]
     ));
     assert_eq!(
         state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
@@ -533,7 +544,7 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
 
 #[test]
 fn reorder_repo_tabs_noops_for_invalid_or_already_stable_ordering() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 

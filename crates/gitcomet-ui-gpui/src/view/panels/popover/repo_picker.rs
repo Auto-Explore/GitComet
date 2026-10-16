@@ -766,6 +766,7 @@ fn sort_menu(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl In
             } else {
                 components::ContextMenuIconSlot::Reserved
             })
+            .tone(components::ContextMenuTone::Accent)
             .selected(selected_index == Some(ix))
             .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                 apply_sort(this, sort, cx);
@@ -784,7 +785,7 @@ pub(super) fn activate(
     // Deferred: activation can run inside a root-view update.
     let root_view = this.root_view.clone();
     cx.defer(move |cx| {
-        let _ = root_view.update(cx, |root, cx| root.show_repository_canvas(cx));
+        let _ = root_view.request(RootRequest::ShowRepositoryCanvas, None, cx);
     });
     match entry {
         RepoPickerEntry::Workspace(workspace_id) => activate_workspace(this, workspace_id, cx),
@@ -796,9 +797,7 @@ pub(super) fn activate(
             this.close_popover(cx);
             let root_view = this.root_view.clone();
             cx.defer(move |cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_repo_path(path, cx);
-                });
+                let _ = root_view.request(RootRequest::OpenRepoPath(path), None, cx);
             });
         }
     }
@@ -977,12 +976,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             let Some(label) = label else {
                 continue;
             };
+            let tone = crate::view::menu_presentation::context_menu_tone(label.as_ref(), None);
             let entry = entry.clone();
             menu = menu.child(
                 components::ContextMenuEntry::new(
                     ("repo_item", ix),
                     components::ContextMenuText::path_single_line(label),
                 )
+                .tone(tone)
                 .tooltip_host(this.tooltip_host.clone())
                 .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                     activate(this, entry.clone(), cx);

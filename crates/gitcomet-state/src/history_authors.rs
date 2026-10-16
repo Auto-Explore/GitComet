@@ -1,5 +1,5 @@
 //! On-demand author discovery, independent of history paging and author filters.
-use crate::model::{Loadable, RepoId, RepoState};
+use crate::model::{Loadable, RepoId, RepoLoadEpoch, RepoState};
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub struct HistoryAuthorsState {
     pub names: Loadable<Arc<[Arc<str>]>>,
     pub rev: u64,
-    pub(crate) source: Option<(HistoryMode, Option<HistorySnapshot>, u64)>,
+    pub(crate) source: Option<(HistoryMode, Option<HistorySnapshot>, RepoLoadEpoch)>,
     pub(crate) seq: u64,
     pub(crate) cancellation: CancellationToken,
 }
@@ -46,7 +46,9 @@ impl HistoryAuthorsState {
             .is_some_and(|(mode, ..)| *mode == scope)
     }
 
-    pub(crate) fn source_for(repo: &RepoState) -> (HistoryMode, Option<HistorySnapshot>, u64) {
+    pub(crate) fn source_for(
+        repo: &RepoState,
+    ) -> (HistoryMode, Option<HistorySnapshot>, RepoLoadEpoch) {
         (
             repo.history_state.history_scope,
             repo.history_state.log_snapshot.clone(),

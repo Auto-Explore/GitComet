@@ -65,14 +65,17 @@ fn whole_patch_target_has_no_diff_rows_in_the_main_pane(cx: &mut gpui::TestAppCo
 
     for diff_view in [DiffViewMode::Inline, DiffViewMode::Split] {
         cx.update(|_window, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
-                pane.diff_view = diff_view;
-                cx.notify();
-            });
+            view.read(app)
+                .diff_renderer
+                .clone()
+                .update(app, |pane, cx| {
+                    pane.diff_view = diff_view;
+                    cx.notify();
+                });
         });
         draw_and_drain_test_window(cx);
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             assert!(
                 pane.diff_text_hitboxes.is_empty(),
                 "a range without a selected file must not render a whole-patch panel"
@@ -100,8 +103,8 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
 
     seed_file_diff_state(cx, &view, repo_id, &workdir, &path, old_text, new_text);
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_view = DiffViewMode::Inline;
             cx.notify();
         });
@@ -136,7 +139,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     );
 
     let (visible_ix, expected_line) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let visible_ix = (0..pane.diff_visible_len())
             .find(|&visible_ix| {
                 let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
@@ -160,7 +163,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
         "file diff multi-click target row hitbox",
     );
     let expected_word = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let offset = pane
             .diff_text_offset_for_position(visible_ix, DiffTextRegion::Inline, click)
             .expect("expected diff text offset for click");
@@ -171,8 +174,8 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     simulate_counted_click(cx, click, 2);
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -182,7 +185,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_selection_anchor,
             Some(visible_ix),
@@ -197,8 +200,8 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     simulate_counted_click(cx, click, 3);
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -210,7 +213,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_text_has_selection(),
             "single click should clear the text selection"
@@ -230,7 +233,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     use gitcomet_core::file_diff::FileDiffRowKind;
 
     fn split_right_row_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
@@ -239,7 +242,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn split_right_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
@@ -253,14 +256,14 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((text, styled))
     }
 
-    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
     fn inline_cached_styled_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         new_line: u32,
     ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
@@ -273,7 +276,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -283,7 +286,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         })
     }
 
-    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn inline_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
                 return false;
@@ -301,7 +304,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         for &visible_ix in visible_indices {
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                         cx.notify();
                     });
@@ -344,7 +347,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn split_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -384,7 +387,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     }
 
     fn inline_debug(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         lines: &[u32],
     ) -> Vec<(
         u32,
@@ -453,7 +456,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(50),
                 });
@@ -486,7 +489,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         "YAML commit file-diff cache and prepared syntax documents",
         |pane| {
             pane.file_diff_cache_inflight.is_none()
-                && pane.file_diff_cache_repo_id == Some(repo_id)
+                && pane.file_diff_cache_repo_id == Some(repo_id.into())
                 && pane.file_diff_cache_rev == 1
                 && pane.file_diff_cache_target == Some(target.clone())
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
@@ -524,7 +527,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.scroll_diff_to_item_strict(0, gpui::ScrollStrategy::Top);
                 pane.clear_diff_text_style_caches();
@@ -633,7 +636,7 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -804,7 +807,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     }
 
     fn yaml_patch_snapshot_for_src_ix(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         theme: AppTheme,
         string_color: gpui::Hsla,
         src_ix: usize,
@@ -842,7 +845,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     }
 
     fn patch_split_snapshot_by_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         region: DiffTextRegion,
         theme: AppTheme,
         string_color: gpui::Hsla,
@@ -886,7 +889,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let theme = cx.update(|_window, app| view.read(app).diff_renderer.read(app).theme);
     let yaml_string_color = rows::syntax_highlights_for_line(
         theme,
         "\"yaml-string\"",
@@ -983,7 +986,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_millis(50),
                 });
@@ -1012,7 +1015,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1031,7 +1034,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
             pane.file_diff_cache_inflight.is_none()
                 && pane.is_file_diff_view_active()
-                && pane.file_diff_cache_repo_id == Some(repo_id)
+                && pane.file_diff_cache_repo_id == Some(repo_id.into())
                 && pane.file_diff_cache_rev == 1
                 && pane.file_diff_cache_target == Some(file_target.clone())
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
@@ -1076,7 +1079,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1154,7 +1157,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     );
 
     let split_mismatches = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let mut mismatches = Vec::new();
 
         for (&line_no, expected) in &baseline_old_by_line {
@@ -1192,7 +1195,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1221,7 +1224,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     );
 
     let inline_mismatches = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let mut mismatches = Vec::new();
 
         for src_ix in 0..pane.patch_diff_row_len() {
@@ -1318,10 +1321,10 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
     });
 
     let main_notifies = Arc::new(AtomicUsize::new(0));
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     let _main_notify_sub = cx.update(|_window, app| {
         let main_notifies = Arc::clone(&main_notifies);
-        main_pane.update(app, |_pane, cx| {
+        diff_renderer.update(app, |_pane, cx| {
             cx.observe_self(move |_pane, _cx| {
                 main_notifies.fetch_add(1, Ordering::Relaxed);
             })

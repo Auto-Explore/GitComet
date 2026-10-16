@@ -1,5 +1,4 @@
 use super::*;
-use gpui::point;
 use gpui::{
     Action, Context, FocusHandle, InteractiveElement, IntoElement, Render, Styled, Window, div,
 };
@@ -7,6 +6,7 @@ use gpui::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitRepository, Result};
 use gitcomet_state::msg::Msg;
+use std::cell::Cell;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -1052,7 +1052,7 @@ fn review_regression_move_noop_check_ignores_closed_windows(cx: &mut gpui::TestA
                     diff_fallback_enabled: true,
                     handle: closed_handle,
                     view: gpui::WeakEntity::new_invalid(),
-                    main_pane: gpui::WeakEntity::new_invalid(),
+                    diff_renderer: gpui::WeakEntity::new_invalid(),
                     documents: gpui::WeakEntity::new_invalid(),
                     view_mode: GitCometViewMode::Normal,
                     workspace_id: Some(saved_id),
@@ -1170,17 +1170,17 @@ fn check_provisional_drop_window_locality(cx: &mut gpui::TestAppContext, succeed
         },
     );
     repo.open = gitcomet_state::model::Loadable::Ready(());
+    store.replace_snapshot_for_test(Arc::new(gitcomet_state::model::AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..gitcomet_state::model::AppState::test_default()
+    }));
     store.insert_repo_for_test(
         repo_id,
         Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
             base.clone(),
         )),
     );
-    store.replace_snapshot_for_test(Arc::new(gitcomet_state::model::AppState {
-        repos: vec![repo],
-        active_repo: Some(repo_id),
-        ..gitcomet_state::model::AppState::test_default()
-    }));
     let store_for_view = store.clone();
     let source =
         cx.add_window(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -1591,7 +1591,7 @@ fn review_regression_lifecycle_cold_start_activates_a_requested_inactive_saved_t
             app,
             owner.handle,
             owner.view.clone(),
-            owner.main_pane.clone(),
+            owner.diff_renderer.clone(),
             owner.documents.clone(),
             GitCometViewMode::Normal,
             Some(saved_id),
@@ -1736,26 +1736,6 @@ fn review_regression_colliding_restored_window_frames_are_cascaded(cx: &mut gpui
         first.get_bounds(),
         second.get_bounds(),
         "identical saved frames must not restore directly on top of one another"
-    );
-}
-
-#[test]
-fn window_zoom_action_restores_only_on_windows_when_already_maximized() {
-    assert_eq!(window_zoom_action(false), WindowZoomAction::Zoom);
-
-    let expected = if cfg!(target_os = "windows") {
-        WindowZoomAction::Restore
-    } else {
-        WindowZoomAction::Zoom
-    };
-    assert_eq!(window_zoom_action(true), expected);
-}
-
-#[test]
-fn window_menu_position_scales_logical_pixels_to_device_pixels() {
-    assert_eq!(
-        window_menu_position(point(px(12.4), px(7.6)), 1.25),
-        (16, 10)
     );
 }
 

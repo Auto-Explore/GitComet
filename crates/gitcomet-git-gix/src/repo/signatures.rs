@@ -105,13 +105,6 @@ impl GixRepo {
             .collect()
     }
 
-    pub(in super::super) fn verify_commit_signatures_impl(
-        &self,
-        ids: &[CommitId],
-    ) -> Result<Vec<(CommitId, CommitSignature)>> {
-        self.verify_commit_signatures_cancellable_impl(ids, SignatureFormats::ALL, None)
-    }
-
     pub(in super::super) fn verify_commit_signatures_cancellable_impl(
         &self,
         ids: &[CommitId],

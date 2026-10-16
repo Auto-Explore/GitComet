@@ -60,7 +60,7 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) layout: MarkdownDocumentLayoutCache,
     /// Set when the preview is interactive: text selection, copy, the link
     /// menu, and the diff context menu all go through this view.
-    pub(in crate::view) view: Option<Entity<MainPaneView>>,
+    pub(in crate::view) view: Option<Entity<DiffRenderer>>,
     pub(in crate::view) text_region: DiffTextRegion,
     /// Gutter colour for a wholly added or removed file, `None` otherwise.
     pub(in crate::view) change_bar_color: Option<gpui::Rgba>,
@@ -638,7 +638,7 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
         return column.into_any_element();
     };
     let boxes = context.row_boxes.clone();
-    let focus = |view: &Entity<MainPaneView>, window: &mut Window, cx: &mut App| {
+    let focus = |view: &Entity<DiffRenderer>, window: &mut Window, cx: &mut App| {
         let focus = view.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus, cx);
     };
@@ -2664,11 +2664,11 @@ mod tests {
 
     fn image_search_query(
         text: &str,
-        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+        options: crate::view::panes::diff::diff_search::DiffSearchOptions,
     ) -> crate::view::rows::MarkdownPreviewQuery {
         crate::view::rows::MarkdownPreviewQuery {
             matcher: Arc::new(
-                crate::view::panes::main::diff_search::DiffSearchMatcher::new(text, options),
+                crate::view::panes::diff::diff_search::DiffSearchMatcher::new(text, options),
             ),
             current_row: None,
         }
@@ -2678,7 +2678,7 @@ mod tests {
     fn table_image_search_respects_full_row_regex_anchors() {
         let query = image_search_query(
             "^cat$",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 regex: true,
                 ..Default::default()
             },
@@ -2708,7 +2708,7 @@ mod tests {
     fn table_image_search_respects_full_row_word_boundaries() {
         let query = image_search_query(
             "cat",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 whole_word: true,
                 ..Default::default()
             },
@@ -2744,7 +2744,7 @@ mod tests {
         let tab_width = 4;
 
         use crate::view::markdown_preview::parse_markdown;
-        use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+        use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
         let theme = AppTheme::gitcomet_dark();
         let mut source = String::from(

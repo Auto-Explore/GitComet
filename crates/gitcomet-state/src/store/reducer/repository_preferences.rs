@@ -2,6 +2,7 @@ use crate::model::{
     AppState, Loadable, RepoId, RepositoryPreferenceUpdate, RepositoryPreferencesSnapshot,
 };
 use crate::msg::Effect;
+use crate::msg::PersistenceEffect;
 
 pub(super) fn update(
     state: &AppState,
@@ -14,11 +15,13 @@ pub(super) fn update(
     if !matches!(repo.open, Loadable::Ready(())) {
         return Vec::new();
     }
-    vec![Effect::UpdateRepositoryPreferences {
-        repo_id,
-        key: repo.repository_key(),
-        update,
-    }]
+    vec![Effect::Persistence(
+        PersistenceEffect::UpdateRepositoryPreferences {
+            repo_id,
+            key: repo.repository_key(),
+            update,
+        },
+    )]
 }
 
 pub(super) fn set_explorer_visibility(

@@ -383,6 +383,7 @@ impl CommitSearchFilterFixture {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct InDiffTextSearchMetrics {
     pub total_lines: u64,
+    /// Visible rows for a broad scan, or prepared candidate entries for refinement.
     pub visible_rows_scanned: u64,
     pub query_len: u64,
     pub matches_found: u64,
@@ -395,7 +396,7 @@ pub struct InDiffTextSearchMetrics {
 ///
 /// The broad query (`render_cache`) matches both context rows and modified
 /// rows, while the refined query (`render_cache_hot_path`) narrows to a smaller
-/// subset of modified rows without changing the overall scan cost.
+/// subset of modified rows by scanning only the prepared broad-query candidates.
 pub struct InDiffTextSearchFixture {
     diff: Arc<Diff>,
     visible_line_indices: Box<[usize]>,
@@ -475,21 +476,16 @@ impl InDiffTextSearchFixture {
             hash,
             InDiffTextSearchMetrics {
                 total_lines: bench_counter_u64(self.total_lines),
-                visible_rows_scanned: bench_counter_u64(self.visible_rows),
+                visible_rows_scanned: if query.trim().is_empty() {
+                    0
+                } else {
+                    bench_counter_u64(prior_matches.len())
+                },
                 query_len: query.trim().len() as u64,
                 matches_found,
                 prior_matches: bench_counter_u64(prior_matches.len()),
             },
         )
-    }
-
-    pub fn run_refinement_with_metrics(
-        &self,
-        broad_query: &str,
-        refined_query: &str,
-    ) -> (u64, InDiffTextSearchMetrics) {
-        let prior_matches = self.prepare_matches(broad_query);
-        self.run_refinement_from_matches_with_metrics(refined_query, &prior_matches)
     }
 
     fn scan_matches(&self, query: &str) -> (u64, u64) {
@@ -580,7 +576,7 @@ impl FilePreviewTextSearchFixture {
             .sum::<usize>()
             .saturating_add(preview_lines.len().saturating_sub(1));
         let (source_text, line_starts) =
-            crate::view::panes::main::preview_source_text_and_line_starts_from_lines(
+            crate::view::panes::diff::helpers::line_index::preview_source_text_and_line_starts_from_lines(
                 &preview_lines,
                 source_len,
             );

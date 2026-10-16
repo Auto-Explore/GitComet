@@ -1,25 +1,29 @@
+use super::conflict_load::{
+    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
+};
 use super::effects::append_ensure_sidebar_data_effects;
 use super::util::{
     EffectAccumulator, SelectedConflictTarget, append_auto_background_metadata_effects,
     append_refresh_full_effects, append_refresh_primary_effects,
-    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
-    background_metadata_effect_capacity, dedup_paths_in_order, format_failure_summary,
-    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
-    refresh_full_effect_capacity, refresh_full_effects, refresh_primary_effect_capacity,
-    selected_conflict_target, selected_diff_load_plan,
+    background_metadata_effect_capacity, format_failure_summary, handle_session_persist_result,
+    push_diagnostic, push_notification, refresh_full_effect_capacity, refresh_full_effects,
+    refresh_primary_effect_capacity, selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
-    CloneProgressStage, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoLoadsInFlight,
-    RepoState, SidebarMode,
+    CloneProgressStage, DiagnosticKind, GitLogSettings, LoadKind, Loadable, RepoId, RepoState,
+    SidebarMode,
 };
 use crate::msg::Effect;
+use crate::msg::{ControlEffect, PersistenceEffect, ReferenceEffect};
 use crate::session;
+use crate::store::reducer::prepared::ReducerInputs;
 use crate::store::repo_load_trace;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::RepoSpec;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, GitRepository};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -91,15 +95,15 @@ fn persist_session_effect(
     repo_id: Option<RepoId>,
     action: &'static str,
 ) -> Effect {
-    Effect::PersistSession { repo_id, action }
+    Effect::Persistence(PersistenceEffect::PersistSession { repo_id, action })
 }
 
 fn persist_recent_repo_effect(repo_id: Option<RepoId>, workdir: PathBuf) -> Effect {
-    Effect::PersistRecentRepo {
+    Effect::Persistence(PersistenceEffect::PersistRecentRepo {
         repo_id,
         workdir,
         action: "updating recent repositories",
-    }
+    })
 }
 
 fn persist_repo_history_mode_effect(
@@ -107,12 +111,12 @@ fn persist_repo_history_mode_effect(
     workdir: PathBuf,
     mode: gitcomet_core::domain::HistoryMode,
 ) -> Effect {
-    Effect::PersistRepoHistoryMode {
+    Effect::Persistence(PersistenceEffect::PersistRepoHistoryMode {
         repo_id,
         workdir,
         mode,
         action: "updating history mode",
-    }
+    })
 }
 
 fn append_repo_switch_worktree_refresh_effect(
@@ -267,10 +271,12 @@ pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
         repo_state.spec.workdir.display()
     );
     clear_cancelled_repo_loading(repo_state);
-    effects.extend(std::iter::once(Effect::CancelRepoLoads {
-        repo_id,
-        load_epoch,
-    }));
+    effects.extend(std::iter::once(Effect::Control(
+        ControlEffect::CancelRepoLoads {
+            repo_id,
+            load_epoch,
+        },
+    )));
 }
 
 /// Cancels the loads of the tab being switched away from, except a dropped
@@ -349,8 +355,9 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
     for reload in reloads {
         match reload {
             SelectedHistoryReload::FileHistory(path) => {
-                repo_state.history_state.file_history = Loadable::Loading;
+                let request = repo_state.history_state.begin_file_history(path.clone());
                 effects.push_effect(Effect::LoadFileHistory {
+                    request,
                     repo_id,
                     path,
                     limit: REACTIVATED_FILE_HISTORY_LIMIT,
@@ -374,23 +381,23 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
 }
 
 pub(super) fn open_repo(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: PathBuf,
 ) -> Vec<Effect> {
-    open_repo_with_mode(repos, id_alloc, state, path, OpenRepoMode::Standard)
+    open_repo_with_mode(inputs, id_alloc, state, path, OpenRepoMode::Standard)
 }
 
 pub(super) fn open_document_repository(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: PathBuf,
     activate: bool,
 ) -> Vec<Effect> {
     open_repo_with_mode(
-        repos,
+        inputs,
         id_alloc,
         state,
         path,
@@ -403,13 +410,13 @@ pub(super) fn open_document_repository(
 }
 
 pub(super) fn open_repo_from_external_drop(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: PathBuf,
 ) -> Vec<Effect> {
     open_repo_with_mode(
-        repos,
+        inputs,
         id_alloc,
         state,
         path,
@@ -418,14 +425,13 @@ pub(super) fn open_repo_from_external_drop(
 }
 
 fn open_repo_with_mode(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: PathBuf,
     mode: OpenRepoMode,
 ) -> Vec<Effect> {
-    let now = SystemTime::now();
-    let path = normalize_repo_path(path);
+    let now = inputs.now();
     state.repository_open_failures.remove(&path);
     if let Some((repo_id, existing_is_provisional_drop)) = state
         .repos
@@ -442,7 +448,7 @@ fn open_repo_with_mode(
         }
         // Re-opening an already open repository should still refresh primary state, so stale
         // status/diff data gets reconciled immediately.
-        let mut effects = set_active_repo(repos, state, repo_id);
+        let mut effects = set_active_repo(inputs, state, repo_id);
         if mode == OpenRepoMode::Standard || !existing_is_provisional_drop {
             effects.push(persist_recent_repo_effect(Some(repo_id), path));
         }
@@ -452,7 +458,7 @@ fn open_repo_with_mode(
     let previous_active = state.active_repo;
     let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
     let spec = RepoSpec { workdir: path };
-    let session_preferences = session::load_repo_session_preferences();
+    let session_preferences = inputs.session_preferences();
     let workdir_key = session::path_storage_key(&spec.workdir);
     let saved_history_mode = session_preferences
         .repo_history_modes
@@ -517,25 +523,24 @@ fn open_repo_with_mode(
 }
 
 pub(super) fn restore_session(
-    _repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     open_repos: Vec<PathBuf>,
     active_repo: Option<PathBuf>,
 ) -> Vec<Effect> {
-    let now = SystemTime::now();
+    let now = inputs.now();
     // Startup may wait for the Git probe while a drop or forwarded open is
     // already loading. Keep those tabs, handles and IDs; their replies are
     // still in flight, and an explicit selection takes precedence over restore.
     let live_active_repo = state.active_repo;
 
-    let session_preferences = session::load_repo_session_preferences();
+    let session_preferences = inputs.session_preferences();
     let default_history_mode = session_preferences.default_history_mode.unwrap_or_default();
-    let active_repo = active_repo.map(normalize_repo_path);
+
     let mut active_repo_id: Option<RepoId> = None;
     let mut history_mode_persist_updates = Vec::new();
 
-    let open_repos = dedup_paths_in_order(open_repos);
     let mut effects = Vec::with_capacity(4);
     let mut seen_workdirs: FxHashSet<PathBuf> = state
         .repos
@@ -544,7 +549,7 @@ pub(super) fn restore_session(
         .collect();
     seen_workdirs.reserve(open_repos.len());
 
-    for path in open_repos.into_iter().map(normalize_repo_path) {
+    for path in open_repos {
         if !seen_workdirs.insert(path.clone()) {
             continue;
         }
@@ -602,11 +607,13 @@ pub(super) fn restore_session(
     }
 
     if !history_mode_persist_updates.is_empty() {
-        effects.push(Effect::PersistRepoHistoryModesBatch {
-            repo_id: state.active_repo,
-            updates: history_mode_persist_updates,
-            action: "updating history mode",
-        });
+        effects.push(Effect::Persistence(
+            PersistenceEffect::PersistRepoHistoryModesBatch {
+                repo_id: state.active_repo,
+                updates: history_mode_persist_updates,
+                action: "updating history mode",
+            },
+        ));
     }
 
     effects.push(persist_session_effect(
@@ -618,23 +625,26 @@ pub(super) fn restore_session(
 }
 
 pub(super) fn close_repo(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    remove_repo(repos, state, repo_id, true)
+    remove_repo(inputs, repos, state, repo_id, true)
 }
 
 pub(super) fn move_repo_out(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    remove_repo(repos, state, repo_id, false)
+    remove_repo(inputs, repos, state, repo_id, false)
 }
 
 fn remove_repo(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     record_recent: bool,
@@ -671,12 +681,7 @@ fn remove_repo(
     let closed_workdir = closed_repo.spec.workdir.clone();
     let persist_closed_recent = !closed_repo.is_provisional_external_drop_open();
     state.repos.remove(removed_repo_ix);
-    repos.remove(&repo_id);
-    // The worktree scan's cached handles are pruned only by that repo's own scan,
-    // and a closed repo never scans again. This is the one place that knows the
-    // repo is gone rather than merely idle -- `CancelRepoLoads` also fires on tab
-    // switches and reloads, where the handles are still worth keeping.
-    crate::store::effects::release_worktree_scan_handles(repo_id);
+    repos.retire(&repo_id);
     if record_recent && persist_closed_recent {
         effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
     }
@@ -691,7 +696,7 @@ fn remove_repo(
         if let Some(active_repo_id) = next_active_repo {
             let mut activation_effects = SetActiveRepoEffects::new();
             fill_set_active_repo_inline_impl(
-                repos,
+                inputs,
                 state,
                 active_repo_id,
                 &mut activation_effects,
@@ -711,8 +716,48 @@ fn remove_repo(
     effects
 }
 
+pub(super) fn active_after_closing(
+    state: &AppState,
+    close_ids: &FxHashSet<RepoId>,
+    activate_after: Option<RepoId>,
+) -> Option<RepoId> {
+    let remains =
+        |id: RepoId| !close_ids.contains(&id) && state.repos.iter().any(|repo| repo.id == id);
+    let first = || {
+        state
+            .repos
+            .iter()
+            .find(|repo| !close_ids.contains(&repo.id))
+            .map(|repo| repo.id)
+    };
+    if let Some(requested) = activate_after.filter(|id| remains(*id)) {
+        return Some(requested);
+    }
+    if let Some(active) = state.active_repo.filter(|id| close_ids.contains(id)) {
+        return state
+            .repos
+            .iter()
+            .position(|repo| repo.id == active)
+            .and_then(|index| {
+                state.repos[..index]
+                    .iter()
+                    .rev()
+                    .find(|repo| !close_ids.contains(&repo.id))
+                    .or_else(|| {
+                        state.repos[index + 1..]
+                            .iter()
+                            .find(|repo| !close_ids.contains(&repo.id))
+                    })
+                    .map(|repo| repo.id)
+            })
+            .or_else(first);
+    }
+    state.active_repo.filter(|id| remains(*id)).or_else(first)
+}
+
 pub(super) fn close_repos(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_ids: Vec<RepoId>,
     activate_after: Option<RepoId>,
@@ -735,9 +780,7 @@ pub(super) fn close_repos(
     }
 
     let original_order: Vec<RepoId> = state.repos.iter().map(|repo| repo.id).collect();
-    let original_active = state.active_repo;
-    let original_active_ix =
-        original_active.and_then(|repo_id| original_order.iter().position(|id| *id == repo_id));
+    let next_active_repo = active_after_closing(state, &close_ids, activate_after);
 
     let mut effects =
         Vec::with_capacity(2 * close_ids.len() + 2 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
@@ -760,8 +803,7 @@ pub(super) fn close_repos(
                 repo.spec.workdir.clone(),
             ));
         }
-        repos.remove(&repo_id);
-        crate::store::effects::release_worktree_scan_handles(repo_id);
+        repos.retire(&repo_id);
     }
 
     state.repos.retain(|repo| {
@@ -773,42 +815,11 @@ pub(super) fn close_repos(
         keep
     });
 
-    let repo_still_open =
-        |repo_id: RepoId, state: &AppState| state.repos.iter().any(|repo| repo.id == repo_id);
-    let requested_active = activate_after.filter(|repo_id| repo_still_open(*repo_id, state));
-    let active_was_closed = original_active.is_some_and(|repo_id| close_ids.contains(&repo_id));
-    let next_active_repo = if state.repos.is_empty() {
-        None
-    } else if let Some(repo_id) = requested_active {
-        Some(repo_id)
-    } else if active_was_closed {
-        original_active_ix
-            .and_then(|ix| {
-                original_order[..ix]
-                    .iter()
-                    .rev()
-                    .copied()
-                    .find(|repo_id| !close_ids.contains(repo_id))
-                    .or_else(|| {
-                        original_order[ix + 1..]
-                            .iter()
-                            .copied()
-                            .find(|repo_id| !close_ids.contains(repo_id))
-                    })
-            })
-            .or_else(|| state.repos.first().map(|repo| repo.id))
-    } else {
-        state
-            .active_repo
-            .filter(|repo_id| repo_still_open(*repo_id, state))
-            .or_else(|| state.repos.first().map(|repo| repo.id))
-    };
-
     if let Some(active_repo_id) = next_active_repo {
         if state.active_repo != Some(active_repo_id) {
             let mut activation_effects = SetActiveRepoEffects::new();
             fill_set_active_repo_inline_impl(
-                repos,
+                inputs,
                 state,
                 active_repo_id,
                 &mut activation_effects,
@@ -832,12 +843,12 @@ pub(super) fn close_repos(
 }
 
 pub(super) fn set_active_repo(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
     let mut effects = SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(repos, state, repo_id, false, &mut effects);
+    fill_set_active_repo_inline(inputs, state, repo_id, false, &mut effects);
     effects.into_vec()
 }
 
@@ -856,13 +867,13 @@ fn file_browser_load_for_active_files_mode(
 }
 
 pub(super) fn fill_set_active_repo_inline(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     unchanged: bool,
     effects: &mut SetActiveRepoEffects,
 ) {
-    fill_set_active_repo_inline_impl(repos, state, repo_id, effects, true, unchanged);
+    fill_set_active_repo_inline_impl(inputs, state, repo_id, effects, true, unchanged);
 }
 
 /// Everything a switch would reload is loaded, nothing for the repository is
@@ -880,7 +891,7 @@ fn repo_switch_state_complete(repo_state: &RepoState, git_log_settings: GitLogSe
 }
 
 fn fill_set_active_repo_inline_impl(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
@@ -899,14 +910,14 @@ fn fill_set_active_repo_inline_impl(
         return;
     };
 
-    let now = SystemTime::now();
+    let now = inputs.now();
     let previous_active = state.active_repo;
     let changed = previous_active != Some(repo_id);
     if changed {
         // The inactive tab may have observed a HEAD move while no monitor was
         // attached to it. Refresh its retained path before capturing the diff
         // reload plan below.
-        super::refresh_selected_head_gitlink(repos, state, repo_id);
+        super::refresh_selected_head_gitlink(inputs, state, repo_id);
         // Leaving cancels whatever is in flight, but keeps the values it was
         // about to replace.
         if let Some(previous) = state
@@ -949,7 +960,7 @@ fn fill_set_active_repo_inline_impl(
                     }
                 }
             } else {
-                SelectedDiffReload::Diff(selected_diff_load_plan(repo_state, target))
+                SelectedDiffReload::Diff(selected_diff_load_plan(inputs, repo_state, target))
             }
         })
     } else {
@@ -1046,13 +1057,10 @@ fn fill_set_active_repo_inline_impl(
         } else {
             append_refresh_primary_effects(repo_state, effects);
         }
-        if changed
-            && !use_full_refresh
-            && repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::BRANCHES)
-        {
-            effects.push(Effect::LoadBranches { repo_id });
+        if changed && !use_full_refresh && repo_state.loads_in_flight.request(LoadKind::Branches) {
+            effects.push(Effect::References(ReferenceEffect::LoadBranches {
+                repo_id,
+            }));
         }
         if changed {
             append_repo_switch_worktree_refresh_effect(repo_state, effects);
@@ -1065,6 +1073,7 @@ fn fill_set_active_repo_inline_impl(
     if changed {
         append_auto_background_metadata_effects(repo_state, git_log_settings, effects);
         effects.extend(super::maintenance::request_check_for(
+            inputs,
             maintenance_settings,
             repo_state,
         ));
@@ -1237,7 +1246,7 @@ pub(super) fn abort_clone_repo(state: &mut AppState, dest: PathBuf) -> Vec<Effec
 
     op.status = CloneOpStatus::Cancelling;
     op.seq = op.seq.wrapping_add(1);
-    vec![Effect::AbortCloneRepo { dest }]
+    vec![Effect::Control(ControlEffect::AbortCloneRepo { dest })]
 }
 
 pub(super) fn clone_repo_progress(
@@ -1310,25 +1319,28 @@ pub(super) fn clone_repo_finished(
 }
 
 pub(super) fn repo_opened_ok(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     spec: RepoSpec,
     repo: Arc<dyn GitRepository>,
     preferences: Option<crate::model::RepositoryPreferencesSnapshot>,
 ) -> Vec<Effect> {
-    if !state.repos.iter().any(|repo| repo.id == repo_id) {
+    let Some(lifetime) = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| repo.lifetime_id())
+    else {
         return Vec::new();
-    }
+    };
 
     let common_dir = repo.common_dir().map(Arc::<std::path::Path>::from);
-    repos.insert(repo_id, repo);
+    repos.opened(repo_id, lifetime, repo);
     let git_log_settings = state.git_log_settings;
     let maintenance_settings = state.maintenance_settings;
 
-    let spec = RepoSpec {
-        workdir: normalize_repo_path(spec.workdir),
-    };
     let mut committed_external_drop = None;
     let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -1348,10 +1360,10 @@ pub(super) fn repo_opened_ok(
             ));
         }
         repo_state.set_open(Loadable::Ready(()));
-        repo_state.feedback.missing_on_disk = false;
+        repo_state.feedback_mut().missing_on_disk = false;
         if !should_refresh_worktrees {
             clear_cancelled_repo_loading(repo_state);
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
         } else {
             repo_state.set_head_branch(Loadable::Loading);
             repo_state.set_detached_head_commit(None);
@@ -1369,8 +1381,7 @@ pub(super) fn repo_opened_ok(
             repo_state.set_rebase_in_progress(Loadable::Loading);
             repo_state.set_sequencer_state(Loadable::Loading);
             repo_state.set_merge_commit_message(Loadable::Loading);
-            repo_state.history_state.file_history_path = None;
-            repo_state.history_state.file_history = Loadable::NotLoaded;
+            repo_state.history_state.clear_file_history();
             repo_state.diff_state.blame_path = None;
             repo_state.diff_state.blame_source = None;
             repo_state.diff_state.blame = Loadable::NotLoaded;
@@ -1387,7 +1398,7 @@ pub(super) fn repo_opened_ok(
             repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
             // Reopening resets the whole repo view; saved back/forward snapshots
             // may reference commits or file revisions from before the reopen, so
             // start the navigation stacks fresh.
@@ -1444,6 +1455,7 @@ pub(super) fn repo_opened_ok(
             append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
         }
         effects.extend(super::maintenance::request_check_for(
+            inputs,
             maintenance_settings,
             repo_state,
         ));
@@ -1454,7 +1466,8 @@ pub(super) fn repo_opened_ok(
 }
 
 fn discard_failed_repo_open(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     workdir: &std::path::Path,
@@ -1463,11 +1476,12 @@ fn discard_failed_repo_open(
     activation: FailedOpenActivation,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
-    push_notification(state, AppNotificationKind::Warning, message);
+    push_notification(inputs, state, AppNotificationKind::Warning, message);
 
     if remove_from_recents {
         let remove_recent_result = session::remove_recent_repo(workdir);
         handle_session_persist_result(
+            inputs,
             state,
             Some(repo_id),
             "removing an invalid repository from recent repositories",
@@ -1475,7 +1489,7 @@ fn discard_failed_repo_open(
         );
     }
 
-    repos.remove(&repo_id);
+    repos.retire(&repo_id);
     if let Some(ix) = state.repos.iter().position(|r| r.id == repo_id) {
         // Drops opened after this one fall back past it, so several failed
         // drops in a row still land on the tab that was active before them.
@@ -1514,7 +1528,7 @@ fn discard_failed_repo_open(
                 // with status/log/branch fields stuck at NotLoaded.
                 let mut activation_effects = SetActiveRepoEffects::new();
                 fill_set_active_repo_inline_impl(
-                    repos,
+                    inputs,
                     state,
                     active_repo_id,
                     &mut activation_effects,
@@ -1528,6 +1542,7 @@ fn discard_failed_repo_open(
         }
         let persist_result = session::persist_from_state(state);
         handle_session_persist_result(
+            inputs,
             state,
             state.active_repo,
             "discarding a failed repository open from the session",
@@ -1538,7 +1553,8 @@ fn discard_failed_repo_open(
 }
 
 pub(super) fn repo_opened_err(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    inputs: &ReducerInputs,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     repo_id: RepoId,
     spec: RepoSpec,
@@ -1558,9 +1574,6 @@ pub(super) fn repo_opened_err(
         return Vec::new();
     };
 
-    let spec = RepoSpec {
-        workdir: normalize_repo_path(spec.workdir),
-    };
     if state.repository_open_failures.len() >= 50 {
         state.repository_open_failures.pop_first();
     }
@@ -1588,6 +1601,7 @@ pub(super) fn repo_opened_err(
             )
         };
         return discard_failed_repo_open(
+            inputs,
             repos,
             state,
             repo_id,
@@ -1605,12 +1619,12 @@ pub(super) fn repo_opened_err(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Error(error.to_string()));
-        repo_state.feedback.missing_on_disk = is_missing_repo_error(&error);
+        repo_state.feedback_mut().missing_on_disk = is_missing_repo_error(&error);
         if repo_state.feedback.missing_on_disk {
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
         } else {
-            repo_state.feedback.last_error = Some(error.to_string());
-            push_diagnostic(repo_state, DiagnosticKind::Error, error.to_string());
+            repo_state.feedback_mut().last_error = Some(error.to_string());
+            push_diagnostic(inputs, repo_state, DiagnosticKind::Error, error.to_string());
         }
     }
     Vec::new()

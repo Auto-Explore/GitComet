@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
-    let pane = host.main_pane.read(cx);
+    let pane = host.diff_renderer.read(cx);
     let mut model = model_for_diff_actions(
         host.diff_whitespace_mode,
         host.diff_reveal_whitespace_chars,

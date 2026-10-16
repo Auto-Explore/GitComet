@@ -31,7 +31,13 @@ fn cancels_clean_walk(cached: bool, through_parent: bool) {
     touch(timestamp + 1);
     if cached {
         assert!(repo.status_impl().unwrap().unstaged.is_empty());
-        assert!(repo.worktree_status_impl().unwrap().is_empty());
+        assert!(
+            repo.worktree_status_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .unwrap()
+            .is_empty()
+        );
         assert!(repo.stat_refreshed_index.lock().unwrap().is_some());
         touch(timestamp + 2);
     }

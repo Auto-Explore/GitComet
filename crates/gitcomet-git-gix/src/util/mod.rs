@@ -15,7 +15,7 @@ use std::io::{self, BufRead as _, Read};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -69,21 +69,6 @@ pub(super) const GIT_ACTIVITY_OUTPUT_BATCH_BYTES: usize = 16 * 1024;
 pub(super) const GIT_TRACE2_POLL: Duration = Duration::from_millis(20);
 #[cfg(unix)]
 pub(super) const GIT_PROCESS_TERMINATE_GRACE: Duration = Duration::from_secs(2);
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TestGitCommandEnvironment {
-    pub(crate) global_config: PathBuf,
-    pub(crate) home_dir: PathBuf,
-    pub(crate) xdg_config_home: PathBuf,
-    pub(crate) gnupg_home: PathBuf,
-}
-
-pub(super) static TEST_GIT_COMMAND_ENVIRONMENT: OnceLock<TestGitCommandEnvironment> =
-    OnceLock::new();
-
-pub(super) fn io_err(e: std::io::Error) -> Error {
-    Error::new(ErrorKind::Io(e.kind()))
-}
 
 mod args;
 mod log_parse;

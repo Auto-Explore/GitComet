@@ -453,7 +453,7 @@ fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
         "opening the find bar must focus its input"
     );
     assert!(
-        !cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_active),
+        !cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_search_active),
         "the history find bar is not the diff search"
     );
     assert_eq!(find_matches(cx, &view), Vec::<usize>::new());
@@ -482,7 +482,7 @@ fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
     cx.update(|window, app| {
         let focus = view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();
@@ -495,7 +495,7 @@ fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
     draw_and_park(cx);
 
     cx.update(|window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_active,
             "secondary-f with a diff visible must still open the diff search"
@@ -1374,15 +1374,102 @@ impl GitRepository for IndexedFindRepo {
         })
     }
 
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Remote>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<gitcomet_core::domain::RepoStatus> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::StashEntry>> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
+
+    fn pull(
+        &self,
+        _mode: gitcomet_core::services::PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "not needed by the history find tests",
+        )))
+    }
     not_needed! {
-        fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Arc<LogPage>;
+
         fn commit_details(&self, id: &CommitId) -> gitcomet_core::domain::CommitDetails;
         fn reflog_head(&self, limit: usize) -> Vec<gitcomet_core::domain::ReflogEntry>;
-        fn current_branch(&self) -> String;
-        fn list_branches(&self) -> Vec<Branch>;
-        fn list_remotes(&self) -> Vec<gitcomet_core::domain::Remote>;
-        fn list_remote_branches(&self) -> Vec<RemoteBranch>;
-        fn status(&self) -> gitcomet_core::domain::RepoStatus;
+
+
+
+
+
         fn diff_unified(&self, target: &gitcomet_core::domain::DiffTarget) -> String;
         fn create_branch(&self, name: &str, target: &CommitId) -> ();
         fn delete_branch(&self, name: &str) -> ();
@@ -1390,14 +1477,14 @@ impl GitRepository for IndexedFindRepo {
         fn checkout_commit(&self, id: &CommitId) -> ();
         fn cherry_pick(&self, id: &CommitId) -> ();
         fn stash_create(&self, message: &str, include_untracked: bool) -> ();
-        fn stash_list(&self) -> Vec<gitcomet_core::domain::StashEntry>;
+
         fn stash_apply(&self, index: usize) -> ();
         fn stash_drop(&self, index: usize) -> ();
         fn stage(&self, paths: &[&Path]) -> ();
         fn unstage(&self, paths: &[&Path]) -> ();
         fn commit(&self, message: &str) -> ();
-        fn fetch_all(&self) -> ();
-        fn pull(&self, mode: gitcomet_core::services::PullMode) -> ();
+
+
         fn push(&self) -> ();
         fn discard_worktree_changes(&self, paths: &[&Path]) -> ();
     }
@@ -2138,11 +2225,13 @@ fn indexed_history_find_keeps_partial_matches_after_a_failure(cx: &mut gpui::Tes
 #[gpui::test]
 fn history_find_input_tracks_theme_changes_while_open_and_closed(cx: &mut gpui::TestAppContext) {
     let (view, _store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
-    open_find_with_shortcut(cx, &view);
-    let input = find_input(cx, &view);
+    // Each theme lands while find is closed and must show once it opens.
     for theme in [AppTheme::gitcomet_light(), AppTheme::gitcomet_dark()] {
+        cx.update(|_window, app| view.update(app, |root, cx| root.set_theme(theme, cx)));
+        open_find_with_shortcut(cx, &view);
+        crate::test_support::refresh_and_draw(cx);
+        let input = find_input(cx, &view);
         cx.update(|_window, app| {
-            history_view(&view, app).update(app, |history, cx| history.set_theme(theme, cx));
             let actual = input.read(app).theme_for_test();
             assert_eq!(
                 actual.colors.editor.foreground,
@@ -2703,9 +2792,9 @@ fn indexed_history_find_switching_repos_releases_the_previous_search(
     second.history_state.selected_commit = None;
     state.repos.push(second);
     state.active_repo = Some(RepoId(2));
-    store.insert_repo_for_test(RepoId(2), backend.0.clone());
     let state = Arc::new(state);
     store.replace_snapshot_for_test(state.clone());
+    store.insert_repo_for_test(RepoId(2), backend.0.clone());
     cx.update(|_window, app| {
         let model = view.read(app).ui_model.clone();
         model.update(app, |model, cx| model.set_state(state, cx));

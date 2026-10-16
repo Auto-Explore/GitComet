@@ -21,12 +21,8 @@ fn use_text_backend(cx: &mut gpui::TestAppContext, system_fonts: gpui_parley::Sy
     );
     system
         .add_fonts(vec![
-            std::borrow::Cow::Borrowed(include_bytes!(
-                "../../gitcomet-fonts/assets/ibm_plex_sans/IBMPlexSans-Regular.ttf"
-            )),
-            std::borrow::Cow::Borrowed(include_bytes!(
-                "../../gitcomet-fonts/assets/lilex/Lilex-Regular.ttf"
-            )),
+            std::borrow::Cow::Borrowed(gitcomet_fonts::IBM_PLEX_SANS_REGULAR_BYTES),
+            std::borrow::Cow::Borrowed(gitcomet_fonts::LILEX_REGULAR_BYTES),
         ])
         .expect("bundled test fonts");
     *cx = gpui::TestAppContext::build_with_text_system(cx.dispatcher.clone(), None, system);
@@ -103,10 +99,9 @@ pub mod source_guards {
         for path in paths {
             let relative = path.strip_prefix(src_dir).expect("source below src");
             let relative_str = relative.to_string_lossy().replace('\\', "/");
-            let is_test_source = relative
-                .components()
-                .any(|component| component.as_os_str() == "tests")
-                || relative_str.ends_with("tests.rs")
+            let is_test_source = relative.components().any(|component| {
+                component.as_os_str() == "tests" || component.as_os_str() == "smoke_tests"
+            }) || relative_str.ends_with("tests.rs")
                 || relative_str.ends_with("test_support.rs");
             if is_test_source {
                 continue;
@@ -179,9 +174,6 @@ pub mod source_guards {
         unscaled
     }
 
-    /// Menu icon literals (`icon: Some("icons/..")`,
-    /// `ContextMenuIconSlot::Icon("icons/..")`) and those the context menu
-    /// would draw as an empty slot.
     pub fn unresolved_menu_icons(src_dir: &Path) -> (usize, Vec<String>) {
         let mut unresolved = Vec::new();
         let mut seen = 0usize;
@@ -205,9 +197,7 @@ pub mod source_guards {
                         continue;
                     };
                     seen += 1;
-                    if crate::components::context_menu_icon_path(&literal, "").map(str::to_owned)
-                        != Some(literal.clone())
-                    {
+                    if crate::assets::KitAssets::load_static(&literal).is_none() {
                         unresolved.push(format!("{relative}: {literal}"));
                     }
                 }
@@ -225,12 +215,11 @@ pub mod source_guards {
         for path in paths {
             let relative = path.strip_prefix(src_dir).expect("source below src");
             let relative_str = relative.to_string_lossy().replace('\\', "/");
-            let is_test_source = relative
-                .components()
-                .any(|component| component.as_os_str() == "tests")
-                || relative.file_name().is_some_and(|name| {
-                    name == "tests.rs" || name == "smoke_tests.rs" || name == "test_support.rs"
-                });
+            let is_test_source = relative.components().any(|component| {
+                component.as_os_str() == "tests" || component.as_os_str() == "smoke_tests"
+            }) || relative.file_name().is_some_and(|name| {
+                name == "tests.rs" || name == "smoke_tests.rs" || name == "test_support.rs"
+            });
             if allowed.contains(&relative_str.as_str()) || is_test_source {
                 continue;
             }
@@ -325,6 +314,71 @@ pub mod source_guards {
                 }
             }
         }
+        // An entry must still be needed, so moved or cleaned-up code cannot
+        // leave an exemption behind for whatever lands at that path next.
+        for (list, rule) in [
+            (allow.custom_styling, &pattern),
+            (allow.release_gestures, &raw_release),
+            (allow.primary_press, &primary_press),
+            (allow.context_press, &context_press),
+        ] {
+            for entry in list {
+                match std::fs::read_to_string(src_dir.join(entry)) {
+                    Err(_) => violations.push(format!("{entry}: allowlisted but missing")),
+                    Ok(source) if !rule.is_match(&source) => {
+                        violations.push(format!("{entry}: allowlisted but no longer needed"))
+                    }
+                    Ok(_) => {}
+                }
+            }
+        }
         violations
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn allowlist_entries_that_are_missing_or_unneeded_are_violations() {
+            let sources = tempfile::tempdir().unwrap();
+            std::fs::write(sources.path().join("drag.rs"), ".on_mouse_up(\n").unwrap();
+            std::fs::write(sources.path().join("plain.rs"), "div()\n").unwrap();
+            let violations = super::discrete_control_violations(
+                sources.path(),
+                &super::DiscreteControlAllowlist {
+                    custom_styling: &[],
+                    release_gestures: &["drag.rs", "plain.rs", "moved.rs"],
+                    primary_press: &[],
+                    context_press: &[],
+                },
+            );
+            assert_eq!(
+                violations,
+                [
+                    "plain.rs: allowlisted but no longer needed",
+                    "moved.rs: allowlisted but missing",
+                ]
+            );
+        }
+
+        #[test]
+        fn source_scans_skip_smoke_modules_but_keep_similarly_named_sources() {
+            let sources = tempfile::tempdir().unwrap();
+            for directory in ["smoke_tests", "smoke_tests_extra", "production"] {
+                let directory = sources.path().join(directory);
+                std::fs::create_dir(&directory).unwrap();
+                std::fs::write(directory.join("fixture.rs"), "cx.read_from_clipboard()\n").unwrap();
+            }
+            let expected = ["production/fixture.rs", "smoke_tests_extra/fixture.rs"];
+            let mut production: Vec<_> = super::production_sources(sources.path())
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect();
+            production.sort();
+            assert_eq!(production, expected);
+
+            let mut clipboard = super::direct_clipboard_access(sources.path(), &[]);
+            clipboard.sort();
+            assert_eq!(clipboard, expected);
+        }
     }
 }

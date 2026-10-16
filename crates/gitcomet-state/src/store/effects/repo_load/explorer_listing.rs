@@ -1,6 +1,6 @@
 use crate::model::FileBrowserState;
 use gitcomet_core::domain::{FileEntry, FileEntryKind};
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::Error;
 use gitcomet_core::services::{CancellationToken, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -59,11 +59,16 @@ pub(super) fn augment(
         {
             continue;
         }
-        let directory = std::fs::read_dir(root.join(&parent))
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let directory_path = root.join(&parent);
+        let directory = std::fs::read_dir(&directory_path).map_err(|e| {
+            Error::from(e).with_context("read repository directory", Some(&directory_path))
+        })?;
         for entry in directory {
             cancellation.check_cancelled()?;
-            let entry = entry.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let entry = entry.map_err(|e| {
+                Error::from(e)
+                    .with_context("read repository directory entry", Some(&directory_path))
+            })?;
             let name = entry.file_name();
             if gitcomet_core::path_utils::is_git_metadata_component(&name)
                 || gitcomet_core::path_utils::is_service_owned_name(name.as_encoded_bytes())
@@ -71,9 +76,9 @@ pub(super) fn augment(
                 continue;
             }
             let path = parent.join(name);
-            let kind = entry
-                .file_type()
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let kind = entry.file_type().map_err(|e| {
+                Error::from(e).with_context("read repository entry type", Some(&entry.path()))
+            })?;
             if !(kind.is_dir() || kind.is_file() || kind.is_symlink()) {
                 continue;
             }

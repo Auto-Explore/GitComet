@@ -2,11 +2,9 @@ use super::super::*;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository};
 
-// A 20x6 grid of 6x12 cells, so the viewport is 120x72 at (100, 200).
+// A 20x6 grid with 100 lines of scrollback.
 pub(super) const TEST_COLS: usize = 20;
 pub(super) const TEST_ROWS: usize = 6;
-pub(super) const TEST_CELL_W: f32 = 6.0;
-pub(super) const TEST_LINE_H: f32 = 12.0;
 pub(super) const TEST_SCROLLBACK: usize = 100;
 
 pub(super) struct TerminalTestBackend;

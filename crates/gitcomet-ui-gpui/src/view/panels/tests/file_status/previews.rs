@@ -47,7 +47,7 @@ fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path.clone(),
@@ -90,8 +90,8 @@ fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
 
     let mut base_highlights_hash = 0u64;
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let pane = diff_renderer.read(app);
         assert_eq!(
             pane.worktree_preview_segments_cache_path.as_ref(),
             Some(&preview_abs_path),
@@ -104,8 +104,8 @@ fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_search_active = true;
             pane.diff_search_input.update(cx, |input, cx| {
                 input.set_text("needle", cx);
@@ -115,8 +115,8 @@ fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let pane = diff_renderer.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "needle");
         assert_eq!(
             pane.worktree_preview_segments_cache_path.as_ref(),
@@ -136,8 +136,8 @@ fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let pane = diff_renderer.read(app);
         let searched = pane
             .worktree_preview_segments_cache_get(0)
             .expect("expected worktree preview row cache after search query rebuild");
@@ -200,7 +200,7 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::from_secs(1),
                 });
@@ -249,8 +249,8 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
     let mut base_style_epoch = 0u64;
     let mut base_prepared_syntax_ready = false;
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let pane = diff_renderer.read(app);
         let base = pane
             .worktree_preview_segments_cache_get(0)
             .expect("expected worktree preview row cache before identical refresh");
@@ -263,7 +263,7 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path.clone(),
@@ -276,8 +276,8 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let pane = diff_renderer.read(app);
         let refreshed = pane
             .worktree_preview_segments_cache_get(0)
             .expect("identical refresh should preserve the cached preview row");
@@ -314,7 +314,7 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
         view.update(app, |this, cx| {
             let changed_lines = Arc::clone(&changed_lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path.clone(),
@@ -327,8 +327,8 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
     });
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let pane = diff_renderer.read(app);
         assert_ne!(
             pane.worktree_preview_style_cache_epoch, base_style_epoch,
             "changed source should bump the preview syntax/style epoch"
@@ -425,7 +425,7 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.deleted_file_preview_abs_path(),
             Some(workdir.join(&file_rel))
@@ -543,7 +543,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.deleted_file_preview_abs_path(),
             Some(workdir.join(&file_rel))
@@ -622,7 +622,7 @@ fn untracked_markdown_file_preview_defaults_to_preview_mode_and_renders_containe
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -670,7 +670,7 @@ fn untracked_markdown_file_preview_defaults_to_preview_mode_and_renders_containe
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_file_preview_active());
         assert!(pane.is_markdown_preview_active());
         assert_eq!(
@@ -790,7 +790,7 @@ fn unstaged_deleted_gitlink_preview_does_not_stay_loading(cx: &mut gpui::TestApp
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !matches!(
                 pane.worktree_preview,
@@ -862,7 +862,7 @@ fn unstaged_modified_gitlink_target_uses_unified_diff_mode(cx: &mut gpui::TestAp
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.is_worktree_target_directory(),
             "gitlink-like target should be treated as directory-backed for unified diff mode"
@@ -905,7 +905,7 @@ fn ensure_preview_loading_does_not_reenter_loading_from_error_for_same_path(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.worktree_preview_path = Some(path_a.clone());
                 pane.worktree_preview = gitcomet_state::model::Loadable::Error("boom".into());
 
@@ -993,7 +993,7 @@ fn switching_diff_target_clears_stale_worktree_preview_loading(cx: &mut gpui::Te
         view.update(app, |this, cx| {
             let first = make_state(file_a.clone(), 1);
             push_test_state(this, first, cx);
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.worktree_preview_path = Some(workdir.join(&file_a));
                 pane.worktree_preview = gitcomet_state::model::Loadable::Loading;
             });
@@ -1008,7 +1008,7 @@ fn switching_diff_target_clears_stale_worktree_preview_loading(cx: &mut gpui::Te
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let stale_path = workdir.join(&file_a);
         let is_stale_loading =
             matches!(pane.worktree_preview, gitcomet_state::model::Loadable::Loading)
@@ -1058,7 +1058,7 @@ fn staged_directory_target_uses_unified_diff_mode(cx: &mut gpui::TestAppContext)
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.is_worktree_target_directory(),
             "expected staged directory target detection for gitlink-like entries"
@@ -1106,7 +1106,7 @@ fn staged_added_missing_target_uses_unified_diff_mode(cx: &mut gpui::TestAppCont
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.is_file_preview_active(),
             "staged Added targets that are not real files should bypass file preview to avoid stuck loading"
@@ -1150,7 +1150,7 @@ fn untracked_directory_target_uses_unified_diff_mode(cx: &mut gpui::TestAppConte
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.is_worktree_target_directory(),
             "expected untracked directory target detection for gitlink-like entries"
@@ -1204,7 +1204,7 @@ fn untracked_directory_target_clears_stale_file_loading_state(cx: &mut gpui::Tes
 
             push_test_state(this, Arc::clone(&next_state), cx);
 
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.worktree_preview_path = Some(workdir.join(&file_rel));
                 pane.worktree_preview = gitcomet_state::model::Loadable::Loading;
             });
@@ -1216,7 +1216,7 @@ fn untracked_directory_target_clears_stale_file_loading_state(cx: &mut gpui::Tes
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.untracked_directory_notice().is_some(),
             "expected untracked directory selection to expose a directory-specific notice"
@@ -1266,7 +1266,7 @@ fn directory_target_with_loading_status_clears_stale_file_loading_state(
 
             push_test_state(this, Arc::clone(&next_state), cx);
 
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.worktree_preview_path = Some(workdir.join(&file_rel));
                 pane.worktree_preview = gitcomet_state::model::Loadable::Loading;
             });
@@ -1278,7 +1278,7 @@ fn directory_target_with_loading_status_clears_stale_file_loading_state(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.untracked_directory_notice().is_some(),
             "expected directory target to expose a non-file notice even while status is loading"
@@ -1346,7 +1346,7 @@ fn theme_change_clears_conflict_three_way_segments_cache(cx: &mut gpui::TestAppC
     // stale highlight colors after a theme switch.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let dummy = super::super::CachedDiffStyledText {
                     text: "dummy".into(),
                     highlights: Arc::from(Vec::new()),

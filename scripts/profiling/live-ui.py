@@ -53,7 +53,7 @@ import perf_metadata  # noqa: E402
 import perf_platform  # noqa: E402
 import perf_gpu  # noqa: E402
 
-SURVEY_SOURCE = ROOT / "crates/gitcomet-core/src/identity.rs"
+SURVEY_SOURCE = ROOT / "crates/gitcomet-base/src/identity.rs"
 SAVE_FILE = "save-target.txt"
 SEARCH_FILE = "search-target.txt"
 IGNORED_DIR = "build"

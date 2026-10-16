@@ -209,11 +209,6 @@ impl ReflogPaneView {
             return;
         }
         self.theme = theme;
-        for panel in self.panels.values() {
-            panel
-                .query_input
-                .update(cx, |input, cx| input.set_theme(theme, cx));
-        }
         cx.notify();
     }
 
@@ -252,17 +247,14 @@ impl ReflogPaneView {
         if self.panels.contains_key(&repo_id) {
             return;
         }
-        let theme = self.theme;
         let query_input = cx.new(|cx| {
-            let mut input = components::TextInput::new_inert(
+            components::TextInput::new_inert(
                 components::TextInputOptions {
                     placeholder: "Filter reflog entries".into(),
                     ..Default::default()
                 },
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         // The table is filtered by this input's text, which the row builder reads
         // from `ReflogPanelState::query`. The input owns its text (uncontrolled);
@@ -1046,7 +1038,7 @@ mod view_tests {
         let state = seeded_state(repo_id, entries);
 
         let (host, cx) = cx.add_window_view(|_window, cx| {
-            let ui_model = cx.new(|_cx| {
+            let ui_model = cx.new(|cx| {
                 AppUiModel::new_with_preferences(
                     Arc::clone(&state),
                     UiPreferences {
@@ -1058,6 +1050,8 @@ mod view_tests {
                         },
                         ..UiPreferences::default()
                     },
+                    Arc::downgrade(&store),
+                    cx,
                 )
             });
             let pane = cx.new(|cx| {

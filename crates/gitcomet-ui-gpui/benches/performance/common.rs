@@ -1,5 +1,6 @@
 pub(crate) use criterion::{BatchSize, BenchmarkFilter, BenchmarkId, Criterion};
 pub(crate) use gitcomet_core::file_diff::BenchmarkReplacementDistanceBackend;
+use gitcomet_perf::sidecar::{PerfSidecarReport, write_criterion_sidecar};
 pub(crate) use gitcomet_ui_gpui::benchmarks::{
     BranchSidebarCacheFixture, BranchSidebarCacheMetrics, BranchSidebarFixture,
     BranchSidebarMetrics, ClipboardFixture, ClipboardMetrics, CommitDetailsFixture,
@@ -58,7 +59,6 @@ use gitcomet_ui_gpui::perf_alloc::{
     PerfAllocChannels, install_tree_sitter_tracking_allocator, measure_allocation_channels,
 };
 use gitcomet_ui_gpui::perf_ram_guard::install_benchmark_process_ram_guard;
-use gitcomet_ui_gpui::perf_sidecar::{PerfSidecarReport, write_criterion_sidecar};
 use regex::Regex;
 pub(crate) use serde_json::{Map, Value, json};
 use std::cell::RefCell;

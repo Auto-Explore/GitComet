@@ -150,7 +150,7 @@ fn full_chrome_layout_caches_the_pane_subviews() {
 
     assert!(
         normalized_root.contains(
-            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::TITLE_BAR_HEIGHT"
+            "stable_cached_fixed_height_view(self.title_bar.clone(),crate::kit::window_chrome::TITLE_BAR_HEIGHT"
         ),
         "expected the title bar (hosting the repo tabs bar) to stay behind the stable cache boundary"
     );
@@ -184,6 +184,20 @@ fn full_chrome_layout_caches_the_pane_subviews() {
     assert!(
         normalized.contains("stable_cached_fill_view(self.main_pane.clone())"),
         "expected the focused-layout main pane mount to stay cached"
+    );
+    let (_, main_render) = include_str!("../panes/main.rs")
+        .split_once("impl Render for MainPaneView")
+        .expect("the main pane composes its retained child views");
+    let normalized_main: String = main_render.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        normalized_main
+            .contains("MainPaneContent::History=>self.history_view.clone().into_any_element()"),
+        "expected the cached compositor to render its retained history view"
+    );
+    assert!(
+        normalized_main
+            .contains("MainPaneContent::Diff=>self.diff_renderer.clone().into_any_element()"),
+        "expected the cached compositor to render its retained diff renderer"
     );
     assert!(
         normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
@@ -330,29 +344,29 @@ fn pr530_home_rows_reuse_data_until_an_input_changes(cx: &mut gpui::TestAppConte
     let id = workspace.id;
     let (view, cx) = home_view_with(cx, vec![workspace], Vec::new());
     cx.update(|_, app| {
-        view.update(app, |view, cx| {
-            view.sync_home_rows(cx);
-            let rows = view.home_rows.workspaces.as_ptr();
-            view.sync_home_rows(cx);
+        let home = view.read(app).home.clone();
+        home.update(app, |view, cx| {
+            view.sync_rows(cx);
+            let rows = view.rows.workspaces.as_ptr();
+            view.sync_rows(cx);
             assert_eq!(
                 rows,
-                view.home_rows.workspaces.as_ptr(),
+                view.rows.workspaces.as_ptr(),
                 "a repaint rebuilt Home rows"
             );
         });
         crate::workspaces::set_workspace_name(app, id, "Renamed");
-        view.update(app, |view, cx| {
-            view.sync_home_rows(cx);
-            assert_eq!(view.home_rows.workspaces[0].display_name(), "Renamed");
-            view.home_search_query = "missing".to_string();
-            view.sync_home_rows(cx);
-            assert!(view.home_rows.workspaces.is_empty());
-            view.home_search_query.clear();
-            view.home_recent_repos
-                .push(PathBuf::from("/tmp/pr530-recent"));
-            view.sync_home_rows(cx);
+        home.update(app, |view, cx| {
+            view.sync_rows(cx);
+            assert_eq!(view.rows.workspaces[0].display_name(), "Renamed");
+            view.search_query = "missing".to_string();
+            view.sync_rows(cx);
+            assert!(view.rows.workspaces.is_empty());
+            view.search_query.clear();
+            view.recent_repos.push(PathBuf::from("/tmp/pr530-recent"));
+            view.sync_rows(cx);
             assert_eq!(
-                view.home_rows.repositories,
+                view.rows.repositories,
                 vec![PathBuf::from("/tmp/pr530-recent")]
             );
         });
