@@ -3,7 +3,9 @@ use super::mergetool_builtin::{
     builtin_tool_program,
 };
 use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
-use crate::util::{bytes_to_text_preserving_utf8, fnv1a_64, run_git_simple, stable_path_bytes};
+use crate::util::{
+    bytes_to_text_preserving_utf8, fnv1a_64, push_literal_paths, run_git_simple, stable_path_bytes,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::{
     canonicalize_or_original, symlink_free_write_target, validated_repo_relative_path,
@@ -200,14 +202,16 @@ impl GixRepo {
 
                 // Stage the file
                 let mut add = self.git_workdir_cmd();
-                add.arg("add").arg("--").arg(path);
+                add.arg("add");
+                push_literal_paths(&mut add, [path]);
                 run_git_simple(add, "git add (after mergetool)")?;
 
                 Some(bytes)
             }
             MergedFileState::Missing => {
                 let mut rm = self.git_workdir_cmd();
-                rm.arg("rm").arg("--").arg(path);
+                rm.arg("rm");
+                push_literal_paths(&mut rm, [path]);
                 run_git_simple(rm, "git rm (after mergetool)")?;
                 None
             }

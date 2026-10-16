@@ -144,6 +144,180 @@ fn checkout_conflict_base_restores_non_utf8_stage_and_resolves_conflict() {
     );
 }
 
+/// During a rebase the worktree holds the upstream side of a symlink conflict.
+/// "Use base" wrote the base's link text with `fs::write`, which followed that
+/// symlink and overwrote whatever file upstream pointed it at, anywhere on
+/// disk, and still left `notes` a symlink instead of the base's link.
+#[cfg(unix)]
+#[test]
+fn checkout_conflict_base_replaces_a_symlink_instead_of_writing_through_it() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let outside = dir.path().join("bashrc");
+    fs::write(&outside, "precious\n").unwrap();
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.as_path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    symlink("target-a", repo.join("notes")).unwrap();
+    run_git(repo, &["add", "notes"]);
+    run_git(repo, &["commit", "-m", "base"]);
+    run_git(repo, &["checkout", "-b", "mine"]);
+    fs::remove_file(repo.join("notes")).unwrap();
+    symlink("target-mine", repo.join("notes")).unwrap();
+    run_git(repo, &["commit", "-am", "mine"]);
+    run_git(repo, &["checkout", "main"]);
+    fs::remove_file(repo.join("notes")).unwrap();
+    symlink(&outside, repo.join("notes")).unwrap();
+    run_git(repo, &["commit", "-am", "upstream"]);
+    run_git(repo, &["checkout", "mine"]);
+    let rebase = gitcomet_core::test_support::git_fixture::git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["rebase", "main"])
+        .output()
+        .expect("git rebase to run");
+    assert!(
+        !rebase.status.success(),
+        "the rebase must stop at the conflict"
+    );
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened.checkout_conflict_base(Path::new("notes")).unwrap();
+
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "precious\n");
+    assert_eq!(
+        fs::read_link(repo.join("notes")).unwrap(),
+        Path::new("target-a")
+    );
+    let after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    assert!(
+        after
+            .unstaged
+            .iter()
+            .all(|e| !(e.path == Path::new("notes") && e.kind == FileStatusKind::Conflicted)),
+        "the base must resolve the conflict; status={after:?}"
+    );
+}
+
+/// The base used to be written as raw blob bytes, skipping the checkout
+/// filters: with `eol=crlf` the restored file came out with LF endings.
+#[test]
+fn checkout_conflict_base_applies_the_checkout_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join(".gitattributes"), "x.txt text eol=crlf\n").unwrap();
+    fs::write(repo.join("x.txt"), "base\r\n").unwrap();
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-m", "base"]);
+    run_git(repo, &["checkout", "-b", "theirs"]);
+    fs::write(repo.join("x.txt"), "theirs\r\n").unwrap();
+    run_git(repo, &["commit", "-am", "theirs"]);
+    run_git(repo, &["checkout", "main"]);
+    fs::write(repo.join("x.txt"), "ours\r\n").unwrap();
+    run_git(repo, &["commit", "-am", "ours"]);
+    let merge = gitcomet_core::test_support::git_fixture::git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["merge", "theirs"])
+        .output()
+        .expect("git merge to run");
+    assert!(!merge.status.success(), "the merge must conflict");
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened.checkout_conflict_base(Path::new("x.txt")).unwrap();
+
+    assert_eq!(fs::read(repo.join("x.txt")).unwrap(), b"base\r\n");
+    let after = opened
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    assert!(
+        after
+            .unstaged
+            .iter()
+            .all(|e| !(e.path == Path::new("x.txt") && e.kind == FileStatusKind::Conflicted)),
+        "the base must resolve the conflict; status={after:?}"
+    );
+}
+
+/// `checkout-index` skips a gitlink, so the `git add` after it recorded the
+/// submodule's checked-out commit (ours) and called it the base.
+#[test]
+fn checkout_conflict_base_refuses_a_submodule_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("seed.txt"), b"seed\n").unwrap();
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(repo, &["commit", "-m", "seed"]);
+
+    let sub = repo.join("s");
+    fs::create_dir_all(&sub).unwrap();
+    run_git(&sub, &["init"]);
+    run_git(&sub, &["config", "user.email", "you@example.com"]);
+    run_git(&sub, &["config", "user.name", "You"]);
+    run_git(&sub, &["commit", "--allow-empty", "-m", "checked out"]);
+    let ours = gitcomet_core::test_support::git_fixture::git_command()
+        .arg("-C")
+        .arg(&sub)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse");
+    let ours = String::from_utf8(ours.stdout).unwrap().trim().to_string();
+    let base = "1".repeat(ours.len());
+    let theirs = "2".repeat(ours.len());
+
+    let mut child = gitcomet_core::test_support::git_fixture::git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["update-index", "--index-info"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("git update-index --index-info to run");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(
+            format!("160000 {base} 1\ts\n160000 {ours} 2\ts\n160000 {theirs} 3\ts\n").as_bytes(),
+        )
+        .expect("write index-info");
+    assert!(child.wait().expect("update-index").success());
+
+    let opened = GixBackend.open(repo).unwrap();
+    opened
+        .checkout_conflict_base(Path::new("s"))
+        .expect_err("a submodule conflict has no base to check out");
+
+    let unmerged = gitcomet_core::test_support::git_fixture::git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-files", "-u", "--", "s"])
+        .output()
+        .expect("ls-files");
+    assert_eq!(
+        String::from_utf8(unmerged.stdout).unwrap().lines().count(),
+        3,
+        "the conflict must stay unresolved"
+    );
+}
+
 #[test]
 fn checkout_conflict_base_errors_when_base_stage_is_missing() {
     let dir = tempfile::tempdir().unwrap();

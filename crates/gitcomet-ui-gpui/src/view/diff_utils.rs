@@ -589,6 +589,17 @@ fn unified_patch_capacity<T: UnifiedDiffLine>(
         )
 }
 
+/// The file header without `old mode`/`new mode`: the mode is a file-level
+/// change, so a hunk or line patch must neither stage nor reset it.
+fn push_hunk_patch_file_header(out: &mut Vec<u8>, header: &[impl UnifiedDiffLine]) {
+    for line in header {
+        let raw = line.raw();
+        if !raw.starts_with(b"old mode ") && !raw.starts_with(b"new mode ") {
+            push_patch_line(out, raw);
+        }
+    }
+}
+
 pub(super) fn build_unified_patch_for_hunk(
     diff: &[impl UnifiedDiffLine],
     hunk_src_ix: usize,
@@ -599,9 +610,7 @@ pub(super) fn build_unified_patch_for_hunk(
 
     let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
     let mut out = Vec::with_capacity(capacity);
-    for line in &lines[file_start..header_end] {
-        push_patch_line(&mut out, line.raw());
-    }
+    push_hunk_patch_file_header(&mut out, &lines[file_start..header_end]);
     for line in &lines[hunk_src_ix..hunk_end] {
         push_patch_line(&mut out, line.raw());
     }
@@ -637,22 +646,69 @@ enum UnselectedHunkLineBehavior {
     KeepAsContext,
 }
 
-fn append_unselected_hunk_line(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectionPatchRole {
+    Context,
+    Remove,
+    Add,
+}
+
+impl SelectionPatchRole {
+    fn in_old_side(self) -> bool {
+        matches!(self, Self::Context | Self::Remove)
+    }
+
+    fn in_new_side(self) -> bool {
+        matches!(self, Self::Context | Self::Add)
+    }
+}
+
+struct SelectionPatchLine<'a> {
+    role: SelectionPatchRole,
+    content: &'a [u8],
+    /// The diff followed this line with `\ No newline at end of file`.
+    no_newline: bool,
+}
+
+pub(super) const NO_NEWLINE_MARKER: &str = "\\ No newline at end of file";
+
+fn push_selection_patch_line(
     out: &mut Vec<u8>,
-    line: &[u8],
-    expected_prefix: u8,
-    behavior: UnselectedHunkLineBehavior,
-    prev_included: &mut bool,
+    prefix: u8,
+    content: &[u8],
+    no_newline_marker: bool,
 ) {
-    match behavior {
-        UnselectedHunkLineBehavior::Drop => {
-            *prev_included = false;
-        }
-        UnselectedHunkLineBehavior::KeepAsContext => {
-            let content = line.strip_prefix(&[expected_prefix]).unwrap_or(line);
-            out.push(b' ');
-            push_patch_line(out, content);
-            *prev_included = true;
+    out.push(prefix);
+    push_patch_line(out, content);
+    if no_newline_marker {
+        push_patch_line(out, NO_NEWLINE_MARKER.as_bytes());
+    }
+}
+
+/// A missing final newline belongs to whichever line ends a side. A selection
+/// can move that end: keeping an unselected `-b` as context puts the staged
+/// `+B` after it, so `b` ends the old side but not the new one. Such a line is
+/// split into `-b`/`+b` so each side gets its own newline state.
+fn push_selection_patch_body(out: &mut Vec<u8>, lines: &[SelectionPatchLine<'_>]) {
+    let old_last = lines.iter().rposition(|line| line.role.in_old_side());
+    let new_last = lines.iter().rposition(|line| line.role.in_new_side());
+    for (ix, line) in lines.iter().enumerate() {
+        let old_marker = line.no_newline && old_last == Some(ix);
+        let new_marker = line.no_newline && new_last == Some(ix);
+        match line.role {
+            SelectionPatchRole::Context if old_marker == new_marker => {
+                push_selection_patch_line(out, b' ', line.content, old_marker);
+            }
+            SelectionPatchRole::Context => {
+                push_selection_patch_line(out, b'-', line.content, old_marker);
+                push_selection_patch_line(out, b'+', line.content, new_marker);
+            }
+            SelectionPatchRole::Remove => {
+                push_selection_patch_line(out, b'-', line.content, old_marker);
+            }
+            SelectionPatchRole::Add => {
+                push_selection_patch_line(out, b'+', line.content, new_marker);
+            }
         }
     }
 }
@@ -674,68 +730,56 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
 
     let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
     let mut out = Vec::with_capacity(capacity);
-    for line in &lines[file_start..header_end] {
-        push_patch_line(&mut out, line.raw());
-    }
+    push_hunk_patch_file_header(&mut out, &lines[file_start..header_end]);
 
     // Keep the original hunk header; `git apply --recount` will adjust counts.
     push_patch_line(&mut out, lines[hunk_src_ix].raw());
 
+    use gitcomet_core::domain::DiffLineKind as K;
     let mut has_change = false;
-    let mut prev_included = false;
+    let mut body: Vec<SelectionPatchLine<'_>> = Vec::with_capacity(hunk_end - hunk_src_ix);
     for (ix, line) in lines
         .iter()
         .enumerate()
         .take(hunk_end)
         .skip(hunk_src_ix + 1)
     {
-        if line.raw().starts_with(b"\\") {
-            if prev_included {
-                push_patch_line(&mut out, line.raw());
-            }
+        let raw = line.raw();
+        if raw.starts_with(b"\\") {
             continue;
         }
-
-        match line.kind {
-            gitcomet_core::domain::DiffLineKind::Add => {
-                if selected_src_ixs.contains(&ix) {
-                    push_patch_line(&mut out, line.raw());
-                    has_change = true;
-                    prev_included = true;
+        let role = match line.kind {
+            K::Add | K::Remove if selected_src_ixs.contains(&ix) => {
+                has_change = true;
+                if line.kind == K::Add {
+                    SelectionPatchRole::Add
                 } else {
-                    append_unselected_hunk_line(
-                        &mut out,
-                        line.raw(),
-                        b'+',
-                        unselected_add,
-                        &mut prev_included,
-                    );
+                    SelectionPatchRole::Remove
                 }
             }
-            gitcomet_core::domain::DiffLineKind::Remove => {
-                if selected_src_ixs.contains(&ix) {
-                    push_patch_line(&mut out, line.raw());
-                    has_change = true;
-                    prev_included = true;
+            K::Add | K::Remove => {
+                let unselected = if line.kind == K::Add {
+                    unselected_add
                 } else {
-                    append_unselected_hunk_line(
-                        &mut out,
-                        line.raw(),
-                        b'-',
-                        unselected_remove,
-                        &mut prev_included,
-                    );
+                    unselected_remove
+                };
+                match unselected {
+                    UnselectedHunkLineBehavior::Drop => continue,
+                    UnselectedHunkLineBehavior::KeepAsContext => SelectionPatchRole::Context,
                 }
             }
-            gitcomet_core::domain::DiffLineKind::Context
-            | gitcomet_core::domain::DiffLineKind::Header
-            | gitcomet_core::domain::DiffLineKind::Hunk => {
-                push_patch_line(&mut out, line.raw());
-                prev_included = true;
-            }
-        }
+            K::Context | K::Header | K::Hunk => SelectionPatchRole::Context,
+        };
+        body.push(SelectionPatchLine {
+            role,
+            content: raw.get(1..).unwrap_or_default(),
+            no_newline: lines
+                .get(ix + 1)
+                .is_some_and(|next| next.raw().starts_with(b"\\")),
+        });
     }
 
+    push_selection_patch_body(&mut out, &body);
     has_change.then_some(out)
 }
 
@@ -1251,6 +1295,253 @@ mod tests {
         assert!(!patch.contains("-line3"));
         assert!(!patch.contains("+line3_mod"));
         assert!(patch.contains(" line3"));
+    }
+
+    #[derive(Clone, Copy)]
+    enum LineAction {
+        Stage,
+        Unstage,
+        Discard,
+    }
+
+    struct EditedFile {
+        dir: tempfile::TempDir,
+        opened: std::sync::Arc<dyn gitcomet_core::services::GitRepository>,
+        text: String,
+        diff: Vec<AnnotatedDiffLine>,
+    }
+
+    /// A repository with `name` committed as `head` and then changed by
+    /// `edit`, with the pane's diff of it for `area` (staged first for Staged).
+    fn edited_file_diff(
+        name: &str,
+        head: &str,
+        edit: impl FnOnce(&std::path::Path),
+        area: gitcomet_core::domain::DiffArea,
+    ) -> EditedFile {
+        use gitcomet_core::domain::{Diff, DiffArea, DiffTarget};
+        use gitcomet_core::services::GitBackend as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path();
+        crate::test_support::git(repo, &["init", "-q"]);
+        // Git for Windows' system config sets autocrlf, so applying a patch
+        // to the worktree would write CRLF.
+        crate::test_support::git(repo, &["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join(name), head).expect("write head");
+        crate::test_support::git(repo, &["add", name]);
+        crate::test_support::git(
+            repo,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@e.st",
+                "commit",
+                "-qm",
+                "base",
+            ],
+        );
+        edit(&repo.join(name));
+        if area == DiffArea::Staged {
+            crate::test_support::git(repo, &["add", name]);
+        }
+        let opened = gitcomet_git_gix::GixBackend.open(repo).expect("open repo");
+        let target = DiffTarget::working_tree(std::path::PathBuf::from(name), area);
+        let text = opened.diff_unified(&target).expect("diff");
+        let diff = gitcomet_core::diff::annotate_unified(&Diff::from_unified(target, &text));
+        EditedFile {
+            dir,
+            opened,
+            text,
+            diff,
+        }
+    }
+
+    /// Runs one line action the way the diff pane does: the real git diff,
+    /// the pane's patch builder for that action, and the backend apply. Returns
+    /// the content of the side the action writes (index or worktree).
+    fn apply_line_action(head: &str, worktree: &str, line: &str, action: LineAction) -> String {
+        use gitcomet_core::domain::DiffArea;
+
+        let area = match action {
+            LineAction::Stage | LineAction::Discard => DiffArea::Unstaged,
+            LineAction::Unstage => DiffArea::Staged,
+        };
+        let EditedFile {
+            dir,
+            opened,
+            text,
+            diff,
+        } = edited_file_diff(
+            "f.txt",
+            head,
+            |path| std::fs::write(path, worktree).expect("write worktree"),
+            area,
+        );
+        let repo = dir.path();
+        let selected: FxHashSet<usize> = diff
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.text.as_ref() == line)
+            .map(|(ix, _)| ix)
+            .collect();
+        assert_eq!(selected.len(), 1, "{line:?} must be one line of:\n{text}");
+
+        match action {
+            LineAction::Stage => {
+                let patch = build_unified_patch_for_selected_lines_across_hunks(&diff, &selected)
+                    .expect("patch");
+                opened
+                    .apply_unified_patch_to_index_with_output(&patch, false)
+                    .expect("apply");
+            }
+            LineAction::Unstage => {
+                let patch = build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
+                    &diff, &selected,
+                )
+                .expect("patch");
+                opened
+                    .apply_unified_patch_to_index_with_output(&patch, true)
+                    .expect("apply");
+            }
+            LineAction::Discard => {
+                let patch = build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
+                    &diff, &selected,
+                )
+                .expect("patch");
+                opened
+                    .apply_unified_patch_to_worktree_with_output(&patch, true)
+                    .expect("apply");
+            }
+        }
+
+        match action {
+            LineAction::Stage | LineAction::Unstage => {
+                String::from_utf8(crate::test_support::git(repo, &["show", ":f.txt"]))
+                    .expect("UTF-8 index")
+            }
+            LineAction::Discard => std::fs::read_to_string(repo.join("f.txt")).expect("worktree"),
+        }
+    }
+
+    /// A script made executable and edited shows `old mode`/`new mode` above
+    /// its hunk. Hunk and line patches copied those lines, so "Stage hunk"
+    /// also staged the mode and "Discard hunk" also reset the executable bit.
+    #[cfg(unix)]
+    #[test]
+    fn hunk_and_line_actions_leave_the_file_mode_alone() {
+        use gitcomet_core::domain::DiffArea;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let edited_executable = || {
+            let edited = edited_file_diff(
+                "run.sh",
+                "echo one\n",
+                |path| {
+                    std::fs::write(path, "echo two\n").expect("write worktree");
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                        .expect("chmod +x");
+                },
+                DiffArea::Unstaged,
+            );
+            assert!(edited.text.contains("new mode 100755"), "{}", edited.text);
+            (edited.dir, edited.opened, edited.diff)
+        };
+        let index_entry = |repo: &std::path::Path| {
+            String::from_utf8(crate::test_support::git(
+                repo,
+                &["ls-files", "-s", "run.sh"],
+            ))
+            .expect("UTF-8 ls-files")
+        };
+        let worktree_mode = |repo: &std::path::Path| {
+            std::fs::metadata(repo.join("run.sh"))
+                .expect("worktree file")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+
+        let (dir, opened, diff) = edited_executable();
+        let hunk_ix = diff.iter().position(|line| line.kind == K::Hunk).unwrap();
+        let patch = build_unified_patch_for_hunk(&diff, hunk_ix).expect("hunk patch");
+        opened
+            .apply_unified_patch_to_index_with_output(&patch, false)
+            .expect("stage hunk");
+        assert!(index_entry(dir.path()).starts_with("100644 "), "stage hunk");
+
+        let (dir, opened, diff) = edited_executable();
+        let selected: FxHashSet<usize> = diff
+            .iter()
+            .position(|line| line.text.as_ref() == "+echo two")
+            .into_iter()
+            .collect();
+        let patch =
+            build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
+        opened
+            .apply_unified_patch_to_index_with_output(&patch, false)
+            .expect("stage line");
+        assert!(index_entry(dir.path()).starts_with("100644 "), "stage line");
+
+        let (dir, opened, diff) = edited_executable();
+        let hunk_ix = diff.iter().position(|line| line.kind == K::Hunk).unwrap();
+        let patch = build_unified_patch_for_hunk(&diff, hunk_ix).expect("hunk patch");
+        opened
+            .apply_unified_patch_to_worktree_with_output(&patch, true)
+            .expect("discard hunk");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("run.sh")).unwrap(),
+            "echo one\n"
+        );
+        assert_eq!(worktree_mode(dir.path()), 0o755, "discard hunk");
+    }
+
+    /// A removed `-- comment` line reads `--- comment` in the diff. Parsed as a
+    /// file header, it was hidden from the view and staged along with any
+    /// selected line of its hunk.
+    #[test]
+    fn staging_a_line_leaves_an_unselected_removed_dash_dash_line_alone() {
+        assert_eq!(
+            apply_line_action(
+                "select 1;\n-- old comment\nselect 2;\n",
+                "select 1;\nselect 2;\nselect 3;\n",
+                "+select 3;",
+                LineAction::Stage,
+            ),
+            "select 1;\n-- old comment\nselect 2;\nselect 3;\n"
+        );
+    }
+
+    /// An edited last line without a trailing newline shows as `-b`, `\ No
+    /// newline`, `+B`, `\ No newline`. Keeping the unselected side as context
+    /// used to keep its marker too, so git glued the two lines into `bB`.
+    #[test]
+    fn line_actions_on_a_last_line_without_newline_keep_lines_apart() {
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "+B", LineAction::Stage),
+            "a\nb\nB"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "-b", LineAction::Stage),
+            "a\n"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "-b", LineAction::Unstage),
+            "a\nb\nB"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "+B", LineAction::Unstage),
+            "a\n"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "-b", LineAction::Discard),
+            "a\nb\nB"
+        );
+        assert_eq!(
+            apply_line_action("a\nb", "a\nB", "+B", LineAction::Discard),
+            "a\n"
+        );
     }
 
     #[test]

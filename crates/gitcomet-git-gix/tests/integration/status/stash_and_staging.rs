@@ -263,6 +263,69 @@ fn stash_apply_staged_overlap_still_merges_into_conflict() {
     assert_eq!(entry.conflict, Some(FileConflictKind::BothModified));
 }
 
+/// When a stashed untracked file cannot be restored because the path now
+/// exists, the leftover merge wrote conflict markers into the file at that
+/// path, following a symlink at or above it: a tracked `notes -> ~/.bashrc`
+/// or `dir -> ~/.ssh` from upstream got the stashed text merged into the file
+/// it leads to.
+#[cfg(unix)]
+#[test]
+fn stash_apply_never_merges_an_untracked_file_through_a_symlink() {
+    for (link, untracked) in [("notes", "notes"), ("dir", "dir/notes")] {
+        test_git_env::ensure_initialized();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("notes"), "precious\n").unwrap();
+        let link_target = if link == "dir" {
+            outside.clone()
+        } else {
+            outside.join("notes")
+        };
+        let repo = repo.as_path();
+
+        run_git(repo, &["init"]);
+        run_git(repo, &["config", "user.email", "you@example.com"]);
+        run_git(repo, &["config", "user.name", "You"]);
+        run_git(repo, &["config", "commit.gpgsign", "false"]);
+        write(repo, "a.txt", "base\n");
+        run_git(repo, &["add", "a.txt"]);
+        run_git(repo, &["commit", "-m", "init"]);
+
+        let backend = GixBackend;
+        let opened = backend.open(repo).unwrap();
+        write(repo, untracked, "stashed secret\n");
+        opened.stash_create("wip", true).unwrap();
+
+        symlink(&link_target, repo.join(link)).unwrap();
+        run_git(repo, &["add", link]);
+        run_git(repo, &["commit", "-m", "upstream adds a symlink"]);
+
+        let err = opened
+            .stash_apply(0)
+            .expect_err("the untracked file cannot be restored over the symlink");
+        assert_git_failure(
+            &err,
+            "git stash apply",
+            GitFailureId::UntrackedRestoreConflict,
+        );
+        assert_eq!(
+            fs::read_to_string(outside.join("notes")).unwrap(),
+            "precious\n",
+            "{untracked}"
+        );
+        assert!(
+            fs::symlink_metadata(repo.join(link))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{untracked}"
+        );
+    }
+}
+
 #[test]
 fn stash_apply_allows_merge_when_only_untracked_restore_fails() {
     test_git_env::ensure_initialized();
@@ -813,6 +876,204 @@ fn discard_worktree_changes_supports_mixed_selection() {
         .unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
+}
+
+/// Paths after `--` are still pathspecs, so without literal pathspecs a name
+/// like `[a].txt` is a glob: discarding it also reverted `a.txt`, and
+/// discarding the untracked `[b].txt` also deleted the untracked `b.txt`.
+#[test]
+fn discard_worktree_changes_reads_glob_characters_in_names_literally() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    write(repo, "[a].txt", "one\n");
+    run_git(repo, &["add", "a.txt", "[a].txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "a.txt", "sibling edit\n");
+    write(repo, "[a].txt", "selected edit\n");
+    write(repo, "b.txt", "untracked sibling\n");
+    write(repo, "[b].txt", "untracked selected\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    opened
+        .discard_worktree_changes(&[Path::new("[a].txt"), Path::new("[b].txt")])
+        .unwrap();
+
+    assert_eq!(fs::read_to_string(repo.join("[a].txt")).unwrap(), "one\n");
+    assert!(!repo.join("[b].txt").exists());
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "sibling edit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("b.txt")).unwrap(),
+        "untracked sibling\n"
+    );
+}
+
+/// Same glob reading as the discard case: the diff of `[a].txt` also showed
+/// `a.txt`, staging `[a].txt` also staged `a.txt`, and unstaging it also
+/// unstaged `a.txt`.
+#[test]
+fn stage_and_unstage_read_glob_characters_in_names_literally() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    write(repo, "[a].txt", "one\n");
+    run_git(repo, &["add", "a.txt", "[a].txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "a.txt", "sibling edit\n");
+    write(repo, "[a].txt", "selected edit\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let staged_paths = || -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = opened
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        paths.sort();
+        paths
+    };
+
+    let diff = opened
+        .diff_unified(&DiffTarget::working_tree(
+            PathBuf::from("[a].txt"),
+            DiffArea::Unstaged,
+        ))
+        .unwrap();
+    assert!(
+        diff.contains("+selected edit") && !diff.contains("sibling edit"),
+        "the diff must show only [a].txt:\n{diff}"
+    );
+
+    opened.stage(&[Path::new("[a].txt")]).unwrap();
+    assert_eq!(staged_paths(), vec![PathBuf::from("[a].txt")]);
+
+    run_git(repo, &["add", "a.txt"]);
+    opened.unstage(&[Path::new("[a].txt")]).unwrap();
+    assert_eq!(staged_paths(), vec![PathBuf::from("a.txt")]);
+}
+
+/// Taking a side for the conflicted `[a].txt` also took it for the
+/// conflicted `a.txt`, resolving a file the user never chose.
+#[test]
+fn conflict_side_checkout_reads_glob_characters_in_names_literally() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    write(repo, "[a].txt", "base\n");
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-m", "base"]);
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    write(repo, "[a].txt", "theirs\n");
+    run_git(repo, &["commit", "-am", "theirs"]);
+    run_git(repo, &["checkout", "main"]);
+    write(repo, "a.txt", "ours\n");
+    write(repo, "[a].txt", "ours\n");
+    run_git(repo, &["commit", "-am", "ours"]);
+    let _ = gitcomet_core::test_support::git_fixture::git_command()
+        .current_dir(repo)
+        .args(["merge", "feature"])
+        .output();
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened
+        .checkout_conflict_side(Path::new("[a].txt"), ConflictSide::Theirs)
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo.join("[a].txt")).unwrap(),
+        "theirs\n"
+    );
+    assert_eq!(
+        run_git_output(repo, &["ls-files", "-u", "--", "a.txt"])
+            .lines()
+            .count(),
+        3,
+        "a.txt must still be conflicted"
+    );
+}
+
+/// File history followed `[a].txt` as a glob, so it listed `a.txt`'s commits,
+/// and "open at parent" resolved `[a].txt`'s previous version to `a.txt`.
+#[test]
+fn file_history_reads_glob_characters_in_names_literally() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "sibling\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["commit", "-m", "add a.txt"]);
+    let before = run_git_output(repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    write(repo, "[a].txt", "bracketed name\n");
+    run_git(repo, &["add", "[a].txt"]);
+    run_git(repo, &["commit", "-m", "add [a].txt"]);
+    write(repo, "a.txt", "sibling edit\n");
+    run_git(repo, &["commit", "-am", "edit a.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let history = opened
+        .log_file_page(Path::new("[a].txt"), 10, None)
+        .unwrap();
+    let summaries: Vec<&str> = history
+        .commits
+        .iter()
+        .map(|commit| commit.summary.as_ref())
+        .collect();
+    assert_eq!(summaries, vec!["add [a].txt"]);
+    assert_eq!(
+        opened
+            .resolve_file_path_at_commit(Path::new("[a].txt"), &CommitId(before.into()))
+            .unwrap(),
+        None
+    );
 }
 
 #[test]

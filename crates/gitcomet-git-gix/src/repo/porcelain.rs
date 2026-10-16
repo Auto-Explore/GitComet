@@ -8,7 +8,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::path_utils::{canonicalize_or_original, symlink_free_write_target};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -874,7 +874,11 @@ impl GixRepo {
         }
 
         for path in conflicts.paths {
-            let ours_path = self.spec.workdir.join(&path);
+            // A symlink at or above the path has no text of its own to merge,
+            // and reading and writing through it would rewrite its target.
+            let Ok(ours_path) = symlink_free_write_target(&self.spec.workdir, &path) else {
+                continue;
+            };
             if !ours_path.exists() {
                 continue;
             }

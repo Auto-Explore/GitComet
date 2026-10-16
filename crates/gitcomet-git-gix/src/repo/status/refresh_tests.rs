@@ -42,6 +42,8 @@ fn selected_gitlinks(root: &Path, staged: &[FileStatus]) -> Option<Vec<std::path
     super::gitlink_status_paths(&gix::open(root).unwrap(), staged)
 }
 
+// Keep this independent Git oracle outside the per-file production-command audit.
+#[cfg(test)]
 fn gitlink_status_from_git(root: &Path) -> (Vec<FileStatus>, Vec<FileStatus>) {
     let output = crate::util::git_workdir_cmd_for(root)
         .args([

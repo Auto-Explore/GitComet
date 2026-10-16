@@ -5,7 +5,8 @@ use super::history::gix_head_id_or_none;
 use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
-    run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output, stable_path_bytes,
+    push_literal_paths, run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output,
+    stable_path_bytes, submodule_script_path,
 };
 use gitcomet_core::domain::{
     CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -310,7 +311,8 @@ impl GixRepo {
         )?;
 
         let mut stage_cmd = self.git_workdir_cmd();
-        stage_cmd.arg("add").arg("--").arg(path);
+        stage_cmd.arg("add");
+        push_literal_paths(&mut stage_cmd, [path]);
         let stage_output =
             run_git_with_output(stage_cmd, &format!("git add -- {}", path.display()))?;
 
@@ -328,16 +330,14 @@ impl GixRepo {
             resolve_submodule_logical_name(&repo, path)?.unwrap_or_else(|| path.to_path_buf());
 
         let mut cmd1 = self.git_workdir_cmd();
-        cmd1.arg("submodule")
-            .arg("deinit")
-            .arg("-f")
-            .arg("--")
-            .arg(path);
+        cmd1.arg("submodule").arg("deinit").arg("-f");
+        push_literal_paths(&mut cmd1, [submodule_script_path(path)]);
         let out1 =
             run_git_with_output(cmd1, &format!("git submodule deinit -f {}", path.display()))?;
 
         let mut cmd2 = self.git_workdir_cmd();
-        cmd2.arg("rm").arg("-f").arg("--").arg(path);
+        cmd2.arg("rm").arg("-f");
+        push_literal_paths(&mut cmd2, [path]);
         let out2 = run_git_with_output(cmd2, &format!("git rm -f {}", path.display()))?;
 
         cleanup_removed_submodule_metadata(&workdir, &git_dir, &logical_name).map_err(|err| {
@@ -501,7 +501,10 @@ fn push_submodule_add_args(
     }
     // The label stays a human-readable summary; `--` is an argv concern only,
     // and credentials in the URL are masked because the label is displayed.
-    cmd.arg("--").arg(url).arg(path);
+    push_literal_paths(
+        cmd,
+        [std::ffi::OsStr::new(url), &*submodule_script_path(path)],
+    );
     command.push_str(&format!(" {} {}", redact_url_userinfo(url), path.display()));
     command
 }
@@ -586,11 +589,8 @@ fn update_repo_submodules_recursive(
             allow_file_submodule_transport(&mut cmd);
         }
 
-        cmd.arg("submodule")
-            .arg("update")
-            .arg("--init")
-            .arg("--")
-            .arg(&relative_path);
+        cmd.arg("submodule").arg("update").arg("--init");
+        push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
         outputs.push(run_git_with_output(
             cmd,
             &format!("git submodule update --init -- {}", full_path.display()),
@@ -711,11 +711,8 @@ fn load_target_submodule_recursive(
                 allow_file_submodule_transport(&mut cmd);
             }
 
-            cmd.arg("submodule")
-                .arg("update")
-                .arg("--init")
-                .arg("--")
-                .arg(&relative_path);
+            cmd.arg("submodule").arg("update").arg("--init");
+            push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
             outputs.push(run_git_with_output(
                 cmd,
                 &format!("git submodule update --init -- {}", full_path.display()),
@@ -2196,6 +2193,10 @@ mod tests {
             true,
         );
         let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            cmd.get_envs().collect::<Vec<_>>(),
+            [(OsStr::new("GIT_LITERAL_PATHSPECS"), Some(OsStr::new("1")))]
+        );
         assert_eq!(
             args,
             [

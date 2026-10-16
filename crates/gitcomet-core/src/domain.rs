@@ -1105,8 +1105,9 @@ impl DiffSectionFormats {
         let mut old = ContentSniffer::new();
         let mut new = ContentSniffer::new();
         let mut headers = ContentSniffer::new();
+        let mut classifier = UnifiedLineClassifier::default();
         for line in section.split_inclusive(|&byte| byte == b'\n') {
-            match Diff::classify_unified_line_bytes(line) {
+            match classifier.classify(line) {
                 DiffLineKind::Remove => old.feed(&line[1..]),
                 DiffLineKind::Add => new.feed(&line[1..]),
                 DiffLineKind::Context if line.starts_with(b" ") => {
@@ -1596,21 +1597,136 @@ pub enum DiffLineKind {
     Context,
 }
 
-impl Diff {
-    pub const MAX_UNIFIED_BYTES: u64 = 64 * 1024 * 1024;
-    pub const MAX_UNIFIED_LINES: usize = 1_000_000;
-    /// Start of the row appended when a diff was cut at a display limit.
-    pub const TRUNCATION_NOTICE_PREFIX: &'static str = "... diff truncated";
+/// One side's range in a hunk header, `-l,s` or `+l,s`; an omitted count is 1.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnifiedHunkRange {
+    pub(crate) start: u32,
+    pub(crate) count: u32,
+}
 
-    fn line_capacity_from_bytes(bytes: &[u8]) -> usize {
-        if bytes.is_empty() {
-            return 0;
+/// A `@@ -l,s +l,s @@` hunk header, or a combined `@@@ -l,s -l,s +l,s @@@`
+/// one with a range per parent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UnifiedHunkHeader {
+    pub(crate) parents: SmallVec<[UnifiedHunkRange; 2]>,
+    pub(crate) result: UnifiedHunkRange,
+}
+
+pub(crate) fn parse_unified_hunk_header(raw: &[u8]) -> Option<UnifiedHunkHeader> {
+    let marker_len = raw.iter().take_while(|byte| **byte == b'@').count();
+    if marker_len < 2 {
+        return None;
+    }
+    let rest = raw[marker_len..].strip_prefix(b" ")?;
+    // Ranges never contain `@`, so the next marker is the closing one.
+    let end = memchr::memmem::find(rest, &raw[..marker_len])?;
+    let ranges = std::str::from_utf8(rest[..end].strip_suffix(b" ")?).ok()?;
+    let parse_range = |range: &str| {
+        let (start, count) = match range.split_once(',') {
+            Some((start, count)) => (start, count.parse().ok()?),
+            None => (range, 1),
+        };
+        Some(UnifiedHunkRange {
+            start: start.parse().ok()?,
+            count,
+        })
+    };
+    let mut parents = SmallVec::new();
+    let mut result = None;
+    for token in ranges.split(' ') {
+        if let Some(range) = token.strip_prefix('-')
+            && result.is_none()
+        {
+            parents.push(parse_range(range)?);
+        } else if let Some(range) = token.strip_prefix('+')
+            && result.is_none()
+        {
+            result = Some(parse_range(range)?);
+        } else {
+            return None;
         }
+    }
+    (parents.len() == marker_len - 1).then_some(UnifiedHunkHeader {
+        parents,
+        result: result?,
+    })
+}
 
-        memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n"))
+/// Classifies `git diff` lines in order. A hunk header counts the hunk's
+/// lines, and until they are used up every line is content: a removed
+/// `-- comment` reads `--- comment` and an added `++ x` reads `+++ x`, which
+/// out of context look like file headers.
+#[derive(Default)]
+struct UnifiedLineClassifier {
+    /// Lines still to come in the current hunk from each parent (one for a
+    /// plain diff, one per parent for a combined one).
+    parents_remaining: SmallVec<[u32; 2]>,
+    /// Lines still to come in the current hunk from the result.
+    result_remaining: u32,
+}
+
+impl UnifiedLineClassifier {
+    fn classify(&mut self, raw: &[u8]) -> DiffLineKind {
+        if self.in_hunk() {
+            if let Some(kind) = self.classify_hunk_line(raw) {
+                return kind;
+            }
+            self.parents_remaining.clear();
+            self.result_remaining = 0;
+        }
+        let kind = Self::classify_outside_hunk(raw);
+        if kind == DiffLineKind::Hunk
+            && let Some(header) = parse_unified_hunk_header(raw)
+        {
+            self.parents_remaining = header.parents.iter().map(|range| range.count).collect();
+            self.result_remaining = header.result.count;
+        }
+        kind
     }
 
-    fn classify_unified_line_bytes(raw: &[u8]) -> DiffLineKind {
+    fn in_hunk(&self) -> bool {
+        self.result_remaining > 0 || self.parents_remaining.iter().any(|count| *count > 0)
+    }
+
+    /// A hunk line's kind by its first column, or `None` when the line cannot
+    /// be hunk content and the hunk ended early. A combined diff has a column
+    /// per parent: a line belongs to each parent whose column is not `+`, and
+    /// to the result unless a column is `-`.
+    fn classify_hunk_line(&mut self, raw: &[u8]) -> Option<DiffLineKind> {
+        if raw.first() == Some(&b'\\') {
+            return Some(DiffLineKind::Context);
+        }
+        // A tool that trims trailing whitespace leaves an empty context line.
+        let blank = raw.first().is_none_or(|byte| matches!(byte, b'\r' | b'\n'));
+        let columns: &[u8] = if blank {
+            &[]
+        } else {
+            raw.get(..self.parents_remaining.len())?
+        };
+        if !columns
+            .iter()
+            .all(|column| matches!(column, b' ' | b'-' | b'+'))
+        {
+            return None;
+        }
+        for (ix, remaining) in self.parents_remaining.iter_mut().enumerate() {
+            if columns.get(ix) != Some(&b'+') {
+                *remaining = remaining.saturating_sub(1);
+            }
+        }
+        if !columns.contains(&b'-') {
+            self.result_remaining = self.result_remaining.saturating_sub(1);
+        }
+        Some(match columns.first() {
+            Some(b'-') => DiffLineKind::Remove,
+            Some(b'+') => DiffLineKind::Add,
+            _ => DiffLineKind::Context,
+        })
+    }
+
+    /// Outside a hunk, a line's prefix decides; inside one this would misread
+    /// content (see the type's doc).
+    fn classify_outside_hunk(raw: &[u8]) -> DiffLineKind {
         match raw.first().copied() {
             Some(b'@') if raw.starts_with(b"@@") => DiffLineKind::Hunk,
             Some(b'd') if raw.starts_with(b"diff ") || raw.starts_with(b"deleted file mode ") => {
@@ -1630,12 +1746,20 @@ impl Diff {
             _ => DiffLineKind::Context,
         }
     }
+}
 
-    fn parsed_unified_line(raw: &str) -> DiffLine {
-        DiffLine {
-            kind: Self::classify_unified_line_bytes(raw.as_bytes()),
-            text: SharedLineText::from(raw),
+impl Diff {
+    pub const MAX_UNIFIED_BYTES: u64 = 64 * 1024 * 1024;
+    pub const MAX_UNIFIED_LINES: usize = 1_000_000;
+    /// Start of the row appended when a diff was cut at a display limit.
+    pub const TRUNCATION_NOTICE_PREFIX: &'static str = "... diff truncated";
+
+    fn line_capacity_from_bytes(bytes: &[u8]) -> usize {
+        if bytes.is_empty() {
+            return 0;
         }
+
+        memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n"))
     }
 
     fn trim_unified_line_bytes(raw: &[u8]) -> &[u8] {
@@ -1646,6 +1770,7 @@ impl Diff {
         let storage = Arc::new(SharedLineTextStorage { text, raw: None });
         let bytes = storage.text.as_bytes();
         let mut lines = Vec::with_capacity(Self::line_capacity_from_bytes(bytes));
+        let mut classifier = UnifiedLineClassifier::default();
 
         let mut start = 0usize;
         while start < bytes.len() {
@@ -1655,7 +1780,7 @@ impl Diff {
             };
             let raw_end = Self::trim_unified_line_bytes(&bytes[start..line_end]).len() + start;
             lines.push(DiffLine {
-                kind: Self::classify_unified_line_bytes(&bytes[start..raw_end]),
+                kind: classifier.classify(&bytes[start..raw_end]),
                 text: SharedLineText::from_storage(&storage, start..raw_end),
             });
             if line_end == bytes.len() {
@@ -1698,13 +1823,14 @@ impl Diff {
         let mut text = String::with_capacity(bytes.len() + bytes.len() / 4);
         let mut ranges = Vec::with_capacity(Self::line_capacity_from_bytes(&bytes));
         let mut kinds = Vec::with_capacity(ranges.capacity());
+        let mut classifier = UnifiedLineClassifier::default();
         for (section, section_format) in sections.into_iter().zip(section_formats) {
             let mut start = section.start;
             while start < section.end {
                 let line_end = memchr(b'\n', &bytes[start..section.end])
                     .map_or(section.end, |offset| start + offset);
                 let line = Self::trim_unified_line_bytes(&bytes[start..line_end]);
-                let kind = Self::classify_unified_line_bytes(line);
+                let kind = classifier.classify(line);
                 let text_start = text.len();
                 Self::decode_unified_line(line, kind, section_format, &mut text);
                 ranges.push(RawLineRange {
@@ -1802,17 +1928,6 @@ impl Diff {
             }
             _ => decode_into(line, TextFormat::UTF_8, out),
         }
-    }
-
-    pub fn from_unified_iter<'a>(
-        target: DiffTarget,
-        lines: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
-        let mut out = Vec::new();
-        for raw in lines {
-            out.push(Self::parsed_unified_line(raw));
-        }
-        Self { target, lines: out }
     }
 
     /// Read a unified diff, cutting it at the display limits rather than failing.
@@ -2465,7 +2580,63 @@ index 0000000..1111111 100644
         );
 
         assert_eq!(diff.lines[1].kind, DiffLineKind::Remove);
-        assert_eq!(diff.lines[2].kind, DiffLineKind::Header);
+        assert_eq!(diff.lines[2].kind, DiffLineKind::Add);
+    }
+
+    /// A removed `-- comment` reads `--- comment` and an added `++ x` reads
+    /// `+++ x`. The hunk's counts make them content; read as file headers they
+    /// were hidden from the diff view and swept into line-level staging.
+    #[test]
+    fn diff_from_unified_reads_header_lookalikes_inside_a_hunk_as_content() {
+        let target = DiffTarget::working_tree(PathBuf::from("q.sql"), DiffArea::Unstaged);
+        let text = "\
+diff --git a/q.sql b/q.sql
+index 1111111..2222222 100644
+--- a/q.sql
++++ b/q.sql
+@@ -1,3 +1,3 @@ create
+ select 1;
+--- old comment
++++ new comment
+ select 2;
+diff --git a/r.sql b/r.sql
+index 3333333..4444444 100644
+--- a/r.sql
++++ b/r.sql
+@@ -1 +1 @@
+-x
+\\ No newline at end of file
++y
+";
+        use DiffLineKind::{Add, Context, Header, Hunk, Remove};
+        let expected = vec![
+            Header, Header, Header, Header, Hunk, Context, Remove, Add, Context, Header, Header,
+            Header, Header, Hunk, Remove, Context, Add,
+        ];
+        let kinds = |diff: Diff| diff.lines.iter().map(|line| line.kind).collect::<Vec<_>>();
+
+        assert_eq!(kinds(Diff::from_unified(target.clone(), text)), expected);
+        let combined = Diff::from_unified(
+            target.clone(),
+            "diff --cc q.sql\n@@@ -1,2 -1,2 +1,1 @@@\n  keep\n--- dropped by both\n",
+        );
+        assert_eq!(kinds(combined), vec![Header, Hunk, Context, Remove]);
+        // A Latin-1 byte takes the per-line decoding path.
+        let latin1 = text
+            .replace("old comment", "old comment \u{1}")
+            .into_bytes();
+        let latin1: Vec<u8> = latin1
+            .into_iter()
+            .map(|byte| if byte == 1 { 0xE9 } else { byte })
+            .collect();
+        assert_eq!(
+            kinds(Diff::from_unified_bytes(
+                target,
+                latin1,
+                DiffSectionFormats::sniff
+            )),
+            expected
+        );
     }
 
     #[test]

@@ -1,11 +1,13 @@
 use super::{
     GixRepo, bstr_to_arc_str,
-    conflict_stages::{gix_index_stage_blob_bytes_optional, gix_index_stage_exists},
+    conflict_stages::{
+        gix_index_stage_blob_bytes_optional, gix_index_stage_exists, gix_index_stage_mode_optional,
+    },
     oid_to_arc_str,
 };
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_timeout, path_buf_from_git_bytes,
-    run_git_capture_bytes, run_git_with_output, run_git_with_stdin_capture,
+    push_literal_paths, run_git_capture_bytes, run_git_with_output, run_git_with_stdin_capture,
 };
 use gitcomet_core::domain::{DiffArea, is_uncommitted_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -536,7 +538,8 @@ impl GixRepo {
 
         if !gix_index_stage_exists(&repo, path, desired_stage)? {
             let mut rm = self.git_workdir_cmd();
-            rm.arg("rm").arg("--").arg(path);
+            rm.arg("rm");
+            push_literal_paths(&mut rm, [path]);
             return run_git_with_output(rm, "git rm --");
         }
 
@@ -550,11 +553,12 @@ impl GixRepo {
                 checkout.arg("--theirs");
             }
         }
-        checkout.arg("--").arg(path);
+        push_literal_paths(&mut checkout, [path]);
         let checkout_out = run_git_with_output(checkout, "git checkout --ours/--theirs")?;
 
         let mut add = self.git_workdir_cmd();
-        add.arg("add").arg("--").arg(path);
+        add.arg("add");
+        push_literal_paths(&mut add, [path]);
         let add_out = run_git_with_output(add, "git add --")?;
 
         Ok(CommandOutput {
@@ -575,38 +579,51 @@ impl GixRepo {
 
     pub(super) fn accept_conflict_deletion_impl(&self, path: &Path) -> Result<CommandOutput> {
         let mut rm = self.git_workdir_cmd();
-        rm.arg("rm").arg("--").arg(path);
+        rm.arg("rm");
+        push_literal_paths(&mut rm, [path]);
         run_git_with_output(rm, "git rm --")
     }
 
     pub(super) fn checkout_conflict_base_impl(&self, path: &Path) -> Result<CommandOutput> {
         let repo = self.repo();
-        let base_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 1)?.ok_or_else(|| {
-            Error::new(ErrorKind::Backend(format!(
-                "base conflict stage is not available for {}",
-                path.display()
-            )))
-        })?;
-        let abs_path = self.spec.workdir.join(path);
-        if let Some(parent) = abs_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                Error::from(error).with_context("create conflict parent directory", Some(parent))
-            })?;
+        match gix_index_stage_mode_optional(&repo, path, 1)? {
+            None => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "base conflict stage is not available for {}",
+                    path.display()
+                ))));
+            }
+            // checkout-index skips a gitlink and the `git add` below would
+            // then record whatever the submodule has checked out.
+            Some(mode) if mode == gix::index::entry::Mode::COMMIT => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "{} is a submodule conflict; take a side instead of the base",
+                    path.display()
+                ))));
+            }
+            Some(_) => {}
         }
-        fs::write(&abs_path, base_bytes).map_err(|error| {
-            Error::from(error).with_context("write conflict base", Some(&abs_path))
-        })?;
+        // Write the stage the way a checkout does: replacing a symlink in the
+        // worktree rather than writing through it, as a symlink when the base
+        // is one, and through the smudge filters and eol rules.
+        let mut checkout = self.git_workdir_cmd();
+        checkout
+            .args(["checkout-index", "-f", "--stage=1", "--"])
+            .arg(path);
+        let checkout_out = run_git_with_output(checkout, "git checkout-index --stage=1")?;
 
         let mut add = self.git_workdir_cmd();
-        add.arg("add").arg("--").arg(path);
+        add.arg("add");
+        push_literal_paths(&mut add, [path]);
         let add_out = run_git_with_output(add, "git add --")?;
 
-        Ok(CommandOutput {
-            command: format!("git show :1:{} + git add --", path.display()),
-            stdout: add_out.stdout,
-            stderr: add_out.stderr,
-            exit_code: add_out.exit_code,
-        })
+        Ok(CommandOutput::combine(
+            format!(
+                "git checkout-index --stage=1 {} + git add --",
+                path.display()
+            ),
+            &[checkout_out, add_out],
+        ))
     }
 }
 

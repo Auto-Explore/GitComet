@@ -26,6 +26,23 @@ pub(super) fn gix_index_stage_object_id_optional(
     path: &Path,
     stage: u8,
 ) -> Result<Option<gix::ObjectId>> {
+    gix_index_stage_entry(repo, path, stage, |entry| entry.id)
+}
+
+pub(super) fn gix_index_stage_mode_optional(
+    repo: &gix::Repository,
+    path: &Path,
+    stage: u8,
+) -> Result<Option<gix::index::entry::Mode>> {
+    gix_index_stage_entry(repo, path, stage, |entry| entry.mode)
+}
+
+fn gix_index_stage_entry<T>(
+    repo: &gix::Repository,
+    path: &Path,
+    stage: u8,
+    read: impl FnOnce(&gix::index::Entry) -> T,
+) -> Result<Option<T>> {
     let Some(stage) = gix_index_stage_from_u8(stage) else {
         return Err(Error::new(ErrorKind::Backend(format!(
             "invalid conflict stage: {stage}"
@@ -37,9 +54,7 @@ pub(super) fn gix_index_stage_object_id_optional(
     let path = gix::path::os_str_into_bstr(path.as_os_str())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
 
-    Ok(index
-        .entry_by_path_and_stage(path, stage)
-        .map(|entry| entry.id))
+    Ok(index.entry_by_path_and_stage(path, stage).map(read))
 }
 
 pub(super) fn conflict_kind_from_stage_mask(mask: u8) -> Option<FileConflictKind> {

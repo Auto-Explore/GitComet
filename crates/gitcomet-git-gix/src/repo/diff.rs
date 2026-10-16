@@ -4,7 +4,7 @@ use super::{
         ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
-use crate::util::{run_git_parsed_stdout, run_git_parsed_stdout_cancellable};
+use crate::util::{push_literal_paths, run_git_parsed_stdout, run_git_parsed_stdout_cancellable};
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
 };
@@ -88,7 +88,7 @@ impl GixRepo {
                 if matches!(area, DiffArea::Staged) {
                     cmd.arg("--cached");
                 }
-                cmd.arg("--").arg(path);
+                push_literal_paths(&mut cmd, [path]);
             }
             DiffTarget::Commit {
                 commit_id,
@@ -136,7 +136,7 @@ impl GixRepo {
         if old_path.is_some() {
             cmd.arg("--find-copies-harder");
         }
-        cmd.arg("--").args(old_path).arg(path);
+        push_literal_paths(cmd, old_path.into_iter().chain([path]));
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {

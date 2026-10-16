@@ -862,10 +862,13 @@ fn lfs_progress_monitor_reports_lines_and_keeps_the_command_alive() {
     let mut monitor = LfsProgressMonitor::start(&mut cmd, Some(&context), &liveness)
         .expect("lfs commands are monitored");
     thread::sleep(Duration::from_millis(40));
+    let written = Instant::now();
     std::fs::write(&monitor._path, "download 1/2 500/1000 a.bin\n").unwrap();
     monitor.stop();
+    // Bounded by the time since the write, not a fixed 40 ms: a loaded runner
+    // can stall between the touch and this check. The clock keeps whole ms.
     assert!(
-        liveness.idle() < Duration::from_millis(40),
+        liveness.idle() <= written.elapsed() + Duration::from_millis(1),
         "a line counts as activity"
     );
     let events: Vec<_> = receiver.try_iter().collect();

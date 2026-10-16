@@ -2,14 +2,12 @@
 //! a cherry-pick narrowed to those files.
 
 use super::GixRepo;
-use super::history::{
-    append_command_output, append_raw_output, gix_head_id_or_none, pathspec_from_file_arg,
-};
+use super::history::{append_command_output, append_raw_output, gix_head_id_or_none};
 use super::patch::{write_patch_file, write_pathspec_file};
 use crate::util::{
     bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error,
-    path_buf_from_git_bytes, run_git_capture_bytes, run_git_raw_output, run_git_with_output,
-    validate_hex_commit_id,
+    path_buf_from_git_bytes, push_literal_paths, push_literal_pathspec_file, run_git_capture_bytes,
+    run_git_raw_output, run_git_with_output, validate_hex_commit_id,
 };
 use gitcomet_core::domain::{
     ApplyChangeSource, ApplyChangeTarget, ApplyFileChangeIndexEntry, ApplyFileChangeRetry, CommitId,
@@ -21,7 +19,6 @@ use gitcomet_core::services::{
 };
 use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// A path's entry kind and object in a tree or the index; `None` when absent.
 type FileVersion = Option<(gix::object::tree::EntryKind, gix::ObjectId)>;
@@ -413,12 +410,6 @@ impl GixRepo {
             .collect()
     }
 
-    fn literal_paths_cmd(&self) -> Command {
-        let mut cmd = self.git_workdir_cmd();
-        cmd.env("GIT_LITERAL_PATHSPECS", "1");
-        cmd
-    }
-
     /// The `paths` whose worktree copy differs from the index.
     fn paths_with_unstaged_changes<'p>(
         &self,
@@ -440,16 +431,15 @@ impl GixRepo {
             }
         }
         for chunk in paths.chunks(PATHS_PER_COMMAND) {
-            let mut cmd = self.literal_paths_cmd();
+            let mut cmd = self.git_workdir_cmd();
             cmd.args([
                 "diff",
                 "--no-ext-diff",
                 "--no-textconv",
                 "--name-only",
                 "-z",
-                "--",
-            ])
-            .args(chunk);
+            ]);
+            push_literal_paths(&mut cmd, chunk);
             let listing = run_git_capture_bytes(cmd, "git diff --name-only")?;
             for name in listing
                 .split(|byte| *byte == 0)
@@ -496,7 +486,7 @@ impl GixRepo {
     }
 
     fn diff_tree_patch(&self, source: &ChangeSource<'_>, names: &[&Path]) -> Result<Vec<u8>> {
-        let mut cmd = self.literal_paths_cmd();
+        let mut cmd = self.git_workdir_cmd();
         cmd.args([
             "diff-tree",
             "-p",
@@ -512,7 +502,8 @@ impl GixRepo {
             Some(base) => cmd.arg(base.to_string()),
             None => cmd.arg("--root"),
         };
-        cmd.arg(source.tip.to_string()).arg("--").args(names);
+        cmd.arg(source.tip.to_string());
+        push_literal_paths(&mut cmd, names);
         run_git_capture_bytes(cmd, "git diff-tree -p")
     }
 
@@ -609,7 +600,7 @@ impl GixRepo {
             .map(|path| repo_path_bytes(path))
             .collect::<Result<Vec<_>>>()?;
         let pathspec = write_pathspec_file(path_bytes.iter().map(Vec::as_slice))?;
-        let mut cmd = self.literal_paths_cmd();
+        let mut cmd = self.git_workdir_cmd();
         cmd.args(["commit", "--no-verify", "--only"]);
         let label = match &source.message {
             CommitMessage::Reuse(commit_id) => {
@@ -621,8 +612,7 @@ impl GixRepo {
                 "git commit --only".to_string()
             }
         };
-        cmd.arg("--pathspec-file-nul")
-            .arg(pathspec_from_file_arg(pathspec.path()));
+        push_literal_pathspec_file(&mut cmd, pathspec.path());
         run_git_with_output(cmd, &label).map_err(|error| match error.kind() {
             // The change stays staged; mark it so the store offers the message.
             ErrorKind::Git(failure) if failure.id() == GitFailureId::CommandFailed => {
