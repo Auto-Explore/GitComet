@@ -123,7 +123,6 @@ impl CommitFileSort {
         Self::ALL.into_iter().find(|sort| sort.key() == raw)
     }
 
-    /// Whether the sort reads the line diff, which an untracked file lacks.
     pub(in crate::view) const fn needs_line_stats(self) -> bool {
         match self {
             Self::EditSizeAscending | Self::EditSizeDescending | Self::Edits => true,
@@ -132,12 +131,6 @@ impl CommitFileSort {
             | Self::FileTypeAscending
             | Self::FileTypeDescending => false,
         }
-    }
-
-    /// Whether `list` offers this sort: one that reads the line diff has
-    /// nothing to order by in a list without one.
-    pub(in crate::view) const fn offered_by(self, list: FileListId) -> bool {
-        list.has_line_stats() || !self.needs_line_stats()
     }
 
     /// Each option reads "Ascending"/"Descending" its own way -- path A→Z, file
@@ -307,7 +300,7 @@ impl<K: Eq + Clone> Default for CommitFileProjectionCache<K> {
 }
 
 fn commit_file_edit_size(file: &gitcomet_core::domain::CommitFileChange) -> Option<u64> {
-    Some(u64::from(file.additions?) + u64::from(file.deletions?))
+    Some(u64::from(file.line_stats.additions?) + u64::from(file.line_stats.deletions?))
 }
 
 fn commit_file_path_sort_key(path: &std::path::Path) -> String {
@@ -476,7 +469,7 @@ fn build_commit_file_projection(
         EditClusters::new(
             sortable
                 .iter()
-                .map(|item| (files[item.0].edit, item.1.as_str())),
+                .map(|item| (files[item.0].line_stats.edit, item.1.as_str())),
         )
     });
     sortable.sort_by(|left, right| match sort {
@@ -515,8 +508,8 @@ fn build_commit_file_projection(
             .as_ref()
             .map(|clusters| {
                 clusters
-                    .rank(files[left.0].edit)
-                    .cmp(&clusters.rank(files[right.0].edit))
+                    .rank(files[left.0].line_stats.edit)
+                    .cmp(&clusters.rank(files[right.0].line_stats.edit))
             })
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| compare_commit_file_paths(left, right, files)),
@@ -1270,7 +1263,7 @@ pub(in crate::view) use diff_text::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
+    use gitcomet_core::domain::{CommitFileChange, FileStatusKind, LineStats};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
@@ -1746,7 +1739,8 @@ mod tests {
         additions: Option<u32>,
         deletions: Option<u32>,
     ) -> CommitFileChange {
-        CommitFileChange::new(PathBuf::from(path), kind).with_line_counts(additions, deletions)
+        CommitFileChange::new(PathBuf::from(path), kind)
+            .with_line_stats((additions, deletions).into())
     }
 
     #[test]
@@ -1898,8 +1892,13 @@ mod tests {
     #[test]
     fn edits_put_the_largest_shared_edit_first_then_singles_then_unknown() {
         let file = |path: &str, text: Option<&str>| {
-            commit_file(path, FileStatusKind::Modified, Some(1), Some(1))
-                .with_edit(text.and_then(edit))
+            CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified).with_line_stats(
+                LineStats {
+                    additions: Some(1),
+                    deletions: Some(1),
+                    edit: text.and_then(edit),
+                },
+            )
         };
         let files = vec![
             file("z/one.rs", Some("a")),
@@ -1928,11 +1927,18 @@ mod tests {
 
     #[test]
     fn edits_cluster_only_the_files_a_filter_shows() {
+        let file = |path: &str, kind: FileStatusKind, text: &str| {
+            CommitFileChange::new(PathBuf::from(path), kind).with_line_stats(LineStats {
+                additions: Some(1),
+                deletions: Some(0),
+                edit: edit(text),
+            })
+        };
         let files = vec![
-            commit_file("a.rs", FileStatusKind::Added, Some(1), Some(0)).with_edit(edit("x")),
-            commit_file("b.rs", FileStatusKind::Modified, Some(1), Some(0)).with_edit(edit("x")),
-            commit_file("c.rs", FileStatusKind::Modified, Some(1), Some(0)).with_edit(edit("y")),
-            commit_file("d.rs", FileStatusKind::Modified, Some(1), Some(0)).with_edit(edit("y")),
+            file("a.rs", FileStatusKind::Added, "x"),
+            file("b.rs", FileStatusKind::Modified, "x"),
+            file("c.rs", FileStatusKind::Modified, "y"),
+            file("d.rs", FileStatusKind::Modified, "y"),
         ];
 
         let modified =

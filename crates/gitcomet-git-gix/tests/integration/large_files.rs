@@ -9,7 +9,7 @@ use gitcomet_core::large_files::{
     LargeFileContent, LargeFilePointer, LargeFileSide, LargeFileWorktree,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::services::{CancellationToken, GitBackend};
+use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -112,7 +112,7 @@ fn lfs_repository_reports_filter_patterns_and_store() {
     let support = opened
         .large_file_support(&CancellationToken::new())
         .unwrap();
-    assert!(support.lfs.filter_configured && support.lfs.filter_required);
+    assert!(support.lfs.filter_configured);
     assert!(
         support.lfs.has_local_store,
         "committing through clean fills the store"
@@ -2376,7 +2376,15 @@ fn storage_changes_refresh_rows_and_all_diff_resolvers_on_the_same_handle() {
         assert_eq!(image.new.as_deref(), Some(image_bytes.as_slice()));
         for rows in [
             opened.commit_details(&head).unwrap().files,
-            opened.diff_range_files(&parent, Some(&head)).unwrap(),
+            opened
+                .compare_files(
+                    &parent,
+                    Some(&head),
+                    &ComparisonOptions::direct(),
+                    &CancellationToken::new(),
+                )
+                .unwrap()
+                .files,
         ] {
             let state = rows
                 .iter()
@@ -2409,7 +2417,15 @@ fn committed_pointer_scans_detect_nested_attributes_without_a_local_store() {
     assert!(!repo.join(".git/lfs").exists());
     for rows in [
         opened.commit_details(&head).unwrap().files,
-        opened.diff_range_files(&parent, Some(&head)).unwrap(),
+        opened
+            .compare_files(
+                &parent,
+                Some(&head),
+                &ComparisonOptions::direct(),
+                &CancellationToken::new(),
+            )
+            .unwrap()
+            .files,
     ] {
         let state = rows
             .iter()

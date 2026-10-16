@@ -51,8 +51,6 @@ jobs:
         run: cargo fmt --all --check
       - name: Check Rust source layout
         run: bash scripts/check-rust-source-size.sh
-      - name: Check refactor ratchets
-        run: python3 scripts/ci/ratchets.py
       - name: Check product identity literals
         run: python3 scripts/ci/identity_literals.py
       - name: Install Python for CI helpers

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::git_success;
 
 #[cfg(windows)]
 #[test]
@@ -282,18 +283,6 @@ fn sleep_command(seconds: u64) -> Command {
     shell_command(&format!("Start-Sleep -Seconds {seconds}"))
 }
 
-fn run_git_test_setup(workdir: &Path, args: &[&str]) {
-    let mut cmd = git_workdir_cmd_for(workdir);
-    cmd.args(args);
-    let output = cmd.output().expect("test Git command should start");
-    assert!(
-        output.status.success(),
-        "git {} failed: {}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 fn write_test_hook(workdir: &Path, name: &str, script: &str) {
     let hooks = workdir.join(".githooks");
     std::fs::create_dir_all(&hooks).expect("create test hooks directory");
@@ -429,14 +418,14 @@ fn trace2_monitor_finish_and_drop_drain_the_final_unterminated_event() {
 #[test]
 fn operation_context_reports_real_hooks_output_and_exit_codes() {
     let repo = tempfile::tempdir().expect("create test repository");
-    run_git_test_setup(repo.path(), &["init", "--quiet"]);
-    run_git_test_setup(repo.path(), &["config", "user.name", "GitComet Test"]);
-    run_git_test_setup(
+    git_success(repo.path(), &["init", "--quiet"]);
+    git_success(repo.path(), &["config", "user.name", "GitComet Test"]);
+    git_success(
         repo.path(),
         &["config", "user.email", "gitcomet@example.invalid"],
     );
-    run_git_test_setup(repo.path(), &["config", "commit.gpgsign", "false"]);
-    run_git_test_setup(repo.path(), &["config", "core.hooksPath", ".githooks"]);
+    git_success(repo.path(), &["config", "commit.gpgsign", "false"]);
+    git_success(repo.path(), &["config", "core.hooksPath", ".githooks"]);
     write_test_hook(
         repo.path(),
         "pre-commit",
@@ -448,7 +437,7 @@ fn operation_context_reports_real_hooks_output_and_exit_codes() {
         "#!/bin/sh\nprintf 'post-commit stdout\\n'\nprintf 'post-commit stderr\\n' >&2\nexit 7\n",
     );
     std::fs::write(repo.path().join("file.txt"), "content\n").expect("write test file");
-    run_git_test_setup(repo.path(), &["add", "--", "file.txt"]);
+    git_success(repo.path(), &["add", "--", "file.txt"]);
 
     let events = Arc::new(Mutex::new(Vec::<GitOperationEvent>::new()));
     let captured = Arc::clone(&events);
@@ -781,10 +770,8 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
     let dir = tempfile::tempdir().unwrap();
     let workdir = dir.path();
     let git = |args: &[&str]| {
-        let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+        let mut cmd = crate::test_support::git_command();
+        cmd.args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
             .arg(workdir)
             .args(args);
         assert!(cmd.status().unwrap().success(), "{args:?}");
@@ -804,10 +791,7 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
          echo \"download $i/6 1/1 a.bin\" >> \"$GIT_LFS_PROGRESS\"; fi; sleep 0.25; done; cat",
     ]);
     git(&["config", "filter.lfs.required", "true"]);
-    let repo = crate::repo::GixRepo::new(
-        workdir.to_path_buf(),
-        gix::open(workdir).unwrap().into_sync(),
-    );
+    let repo = crate::test_support::open_repo(workdir);
     let worktree = dir.path().join("wt");
     let worktree_arg = worktree.to_str().unwrap();
     for (label, args, checked_out) in [
@@ -819,9 +803,7 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
         ("git checkout", vec!["checkout", "-q", "assets"], workdir),
     ] {
         let mut cmd = repo.git_workdir_cmd();
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .args(&args);
+        cmd.args(&args);
         run_command_with_timeout(cmd, label, Duration::from_millis(600), None)
             .unwrap_or_else(|e| panic!("progress lines keep `{label}` alive: {e}"));
         assert_eq!(
@@ -1251,13 +1233,13 @@ fn repository_git_commands_do_not_start_auto_maintenance() {
     let repo = tempfile::tempdir().expect("tempdir");
     let trace_dir = tempfile::tempdir().expect("trace tempdir");
     let trace = trace_dir.path().join("trace2.json");
-    run_git_test_setup(repo.path(), &["init", "--quiet"]);
+    git_success(repo.path(), &["init", "--quiet"]);
     for (key, value) in [
         ("user.name", "Test"),
         ("user.email", "test@example.com"),
         ("commit.gpgsign", "false"),
     ] {
-        run_git_test_setup(repo.path(), &["config", key, value]);
+        git_success(repo.path(), &["config", key, value]);
     }
 
     let output = git_workdir_cmd_for(repo.path())
@@ -1281,8 +1263,8 @@ fn repository_git_commands_do_not_start_auto_maintenance() {
 #[test]
 fn repository_config_cannot_reenable_the_ext_protocol() {
     let repo = tempfile::tempdir().expect("tempdir");
-    run_git_test_setup(repo.path(), &["init", "--quiet"]);
-    run_git_test_setup(repo.path(), &["config", "protocol.ext.allow", "always"]);
+    git_success(repo.path(), &["init", "--quiet"]);
+    git_success(repo.path(), &["config", "protocol.ext.allow", "always"]);
 
     let mut cmd = git_workdir_cmd_for(repo.path());
     // Git's refusal text is translated; assert on the exit status.

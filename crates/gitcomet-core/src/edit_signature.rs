@@ -33,18 +33,22 @@ impl EditSignatureBuilder {
         self.line(b'+', line);
     }
 
-    /// Every line of `text` as added, for a side that did not exist before.
-    pub fn added_lines(&mut self, text: &[u8]) {
-        for line in lines(text) {
+    /// Every line of `text` as added, for a side that did not exist before;
+    /// returns how many lines that is.
+    pub fn added_lines(&mut self, text: &[u8]) -> u32 {
+        lines(text).fold(0, |count, line| {
             self.added(line);
-        }
+            count.saturating_add(1)
+        })
     }
 
-    /// Every line of `text` as removed, for a side that no longer exists.
-    pub fn removed_lines(&mut self, text: &[u8]) {
-        for line in lines(text) {
+    /// Every line of `text` as removed, for a side that no longer exists;
+    /// returns how many lines that is.
+    pub fn removed_lines(&mut self, text: &[u8]) -> u32 {
+        lines(text).fold(0, |count, line| {
             self.removed(line);
-        }
+            count.saturating_add(1)
+        })
     }
 
     /// `None` when no line changed.
@@ -65,9 +69,12 @@ impl EditSignatureBuilder {
 /// `text` split the way a line diff tokenizes it: on `\n`, with a last line
 /// that has no newline still a line.
 fn lines(text: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let text = text.strip_suffix(b"\n").unwrap_or(text);
     (!text.is_empty())
-        .then(|| text.split(|byte| *byte == b'\n'))
+        .then(|| {
+            text.strip_suffix(b"\n")
+                .unwrap_or(text)
+                .split(|byte| *byte == b'\n')
+        })
         .into_iter()
         .flatten()
 }
@@ -107,22 +114,30 @@ mod tests {
     fn nothing_changed_has_no_signature() {
         assert_eq!(EditSignatureBuilder::default().finish(), None);
         let mut empty = EditSignatureBuilder::default();
-        empty.added_lines(b"");
+        assert_eq!(empty.added_lines(b""), 0);
         assert_eq!(empty.finish(), None);
     }
 
     #[test]
     fn a_whole_file_reads_as_its_lines() {
         let mut whole = EditSignatureBuilder::default();
-        whole.added_lines(b"a\nb\n");
+        assert_eq!(whole.added_lines(b"a\nb\n"), 2);
         assert_eq!(whole.finish(), signature(&[], &["a", "b"]));
 
         let mut unterminated = EditSignatureBuilder::default();
-        unterminated.added_lines(b"a\nb");
+        assert_eq!(unterminated.added_lines(b"a\nb"), 2);
         assert_eq!(unterminated.finish(), signature(&[], &["a", "b"]));
 
         let mut blank_kept = EditSignatureBuilder::default();
-        blank_kept.removed_lines(b"a\n\nb\n");
+        assert_eq!(blank_kept.removed_lines(b"a\n\nb\n"), 3);
         assert_eq!(blank_kept.finish(), signature(&["a", "", "b"], &[]));
+    }
+
+    /// A file holding one empty line is a one-line file, as its count says.
+    #[test]
+    fn a_lone_newline_is_one_blank_line() {
+        let mut blank = EditSignatureBuilder::default();
+        assert_eq!(blank.added_lines(b"\n"), 1);
+        assert_eq!(blank.finish(), signature(&[], &[""]));
     }
 }

@@ -1611,8 +1611,8 @@ fn commit_file_list_with_truncated_paths_ignores_unrelated_frames(cx: &mut gpui:
             path.into(),
             gitcomet_core::domain::FileStatusKind::Modified,
         );
-        change.additions = stats.map(|(added, _)| added);
-        change.deletions = stats.map(|(_, removed)| removed);
+        change.line_stats.additions = stats.map(|(added, _)| added);
+        change.line_stats.deletions = stats.map(|(_, removed)| removed);
         change
     };
     cx.update(|_window, app| {

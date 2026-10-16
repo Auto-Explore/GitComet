@@ -79,16 +79,12 @@ pub struct LfsTrackedPattern {
 pub struct LfsRepoInfo {
     /// `filter.lfs.process` or `filter.lfs.clean` is configured.
     pub filter_configured: bool,
-    pub filter_required: bool,
     pub tracked_patterns: Vec<LfsTrackedPattern>,
     /// An attribute rule sets `lockable`, independently of `filter=lfs`.
     /// Per-file state resolves the effective value through the attribute stack.
     pub has_lockable_patterns: bool,
     pub storage_dir: PathBuf,
     pub has_local_store: bool,
-    /// Smudge is skipped (`filter.lfs.smudge` runs `--skip`, or the env var).
-    pub skip_smudge: bool,
-    pub locks_verify: Option<bool>,
 }
 
 impl LfsRepoInfo {

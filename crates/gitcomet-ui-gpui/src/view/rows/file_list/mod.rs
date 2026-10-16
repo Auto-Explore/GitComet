@@ -146,14 +146,6 @@ impl FileListId {
         }
     }
 
-    /// Whether the list's files carry a line diff; untracked files have none.
-    pub(in crate::view) const fn has_line_stats(self) -> bool {
-        match self {
-            Self::Status(section) => crate::view::status_section_has_line_stats(section),
-            Self::CommitFiles | Self::WorktreeFiles | Self::RangeFiles => true,
-        }
-    }
-
     /// How the filter tooltips name what the counts belong to.
     pub(in crate::view) const fn filter_scope(self) -> &'static str {
         match self {

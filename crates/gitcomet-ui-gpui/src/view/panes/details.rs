@@ -1271,8 +1271,8 @@ impl DetailsPaneView {
                             .get(*source_ix)
                             .map(|file| crate::view::rows::FileTreeItem {
                                 path: file.path.as_path(),
-                                additions: file.additions,
-                                deletions: file.deletions,
+                                additions: file.line_stats.additions,
+                                deletions: file.line_stats.deletions,
                             })
                     }),
                     sort,
@@ -1438,18 +1438,13 @@ impl DetailsPaneView {
             .find(|repo| repo.id == repo_id)
             .and_then(|repo| repo.shared_preferences.as_ref())
             .map(|snapshot| {
-                let sort = snapshot
+                snapshot
                     .preferences
                     .file_sorts
                     .get(&list.preference_key())
                     .copied()
                     .map(crate::view::rows::CommitFileSort::from)
-                    .unwrap_or(self.default_file_list_sort);
-                if sort.offered_by(list) {
-                    sort
-                } else {
-                    crate::view::rows::CommitFileSort::default()
-                }
+                    .unwrap_or(self.default_file_list_sort)
             })
     }
 
@@ -1585,7 +1580,7 @@ impl DetailsPaneView {
                     _ => Default::default(),
                 };
                 gitcomet_core::domain::CommitFileChange::new(entry.path.clone(), entry.kind)
-                    .with_line_counts(stats.additions, stats.deletions)
+                    .with_line_stats(stats)
             })
             .collect();
 
@@ -1802,17 +1797,7 @@ impl DetailsPaneView {
         self.status_file_sort
             .get(&section)
             .copied()
-            .unwrap_or_else(|| {
-                let sort = self.default_file_list_sort;
-                // Untracked files have no line diff, so a default that reads one
-                // would leave the section in path order under a mode it does not
-                // offer.
-                if sort.offered_by(crate::view::rows::FileListId::Status(section)) {
-                    sort
-                } else {
-                    crate::view::rows::CommitFileSort::default()
-                }
-            })
+            .unwrap_or(self.default_file_list_sort)
     }
 
     pub(in super::super) fn set_status_file_sort(
@@ -1864,7 +1849,8 @@ impl DetailsPaneView {
             entries,
             &base,
             sort,
-            status_section_line_stats(repo, section).filter(|_| sort.needs_line_stats()),
+            repo.line_stats_for_area(section.diff_area())
+                .filter(|_| sort.needs_line_stats()),
         );
         cache[slot] = Some((key, Arc::clone(&ordered)));
         Some(ordered)
@@ -2372,7 +2358,7 @@ impl DetailsPaneView {
             StatusSection::Staged => repo.staged_status_entries(),
             _ => repo.worktree_status_entries(),
         };
-        let line_stats = status_section_line_stats(repo, section);
+        let line_stats = repo.line_stats_for_area(section.diff_area());
         let controller = self.file_controller(repo.id, list);
         let mut controller = controller.borrow_mut();
         let collapsed_groups = controller.collapsed_groups().to_vec();

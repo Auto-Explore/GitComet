@@ -391,7 +391,7 @@ fn render_status_rows_for_section(
     };
     let plan = this.status_file_plan(repo, section);
     let is_tree = plan.is_tree();
-    let line_stats = status_section_line_stats(repo, section);
+    let line_stats = repo.line_stats_for_area(section.diff_area());
     // Measured from the section's prepaint probe; unmeasured reads as roomy.
     let detail_width = this
         .current_status_sections_bounds()
@@ -678,7 +678,7 @@ struct StatusRowCtx {
     is_selected: bool,
     is_submodule: bool,
     submodule_status: Option<SubmoduleStatus>,
-    /// `None` for untracked, binary, or before the counts have loaded.
+    /// `None` when unknown (binary, say) or before the counts have loaded.
     line_stats: Option<gitcomet_core::domain::LineStats>,
     /// Set when Git LFS or git-annex manages the path.
     large_file: Option<gitcomet_core::large_files::LargeFileState>,
@@ -783,8 +783,6 @@ fn status_row(
     } = ctx;
     let ix = row_ix;
     let scaled_px = crate::ui_scale::scaler(ui_scale);
-    // Untracked is in neither index lane, so the column would always be blank.
-    let show_line_stats = crate::view::status_section_has_line_stats(section);
     let area = section.diff_area();
     let (icon, color) = if is_submodule {
         let color = match submodule_status {
@@ -997,14 +995,12 @@ fn status_row(
                     .debug_selector(move || format!("status_row_large_file_{ix}")),
             )
         })
-        .when(show_line_stats, |row| {
-            row.child(div().flex_none().child(components::diff_stat_optional(
-                theme,
-                ui_scale,
-                line_stats.and_then(|stats| stats.additions),
-                line_stats.and_then(|stats| stats.deletions),
-            )))
-        })
+        .child(div().flex_none().child(components::diff_stat_optional(
+            theme,
+            ui_scale,
+            line_stats.and_then(|stats| stats.additions),
+            line_stats.and_then(|stats| stats.deletions),
+        )))
         .child(
             div()
                 .debug_selector(move || {

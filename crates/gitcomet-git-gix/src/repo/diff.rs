@@ -435,9 +435,7 @@ impl GixRepo {
             )))
         })?;
         let converted;
-        let normalized = if attributes.working_tree_encoding().is_some() && !attributes.has_filter {
-            // gix only knows WHATWG labels (and reads `latin-1` as cp1252);
-            // git uses iconv's. Decode with ours, then normalize EOL and ident.
+        let normalized = if super::text_attributes::decodes_working_tree_encoding(&attributes) {
             converted = worktree_encoding_to_git(repo, &index, path, &full, &attributes)?;
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(&converted)
         } else {
@@ -1373,7 +1371,7 @@ fn conflict_file_stages_from_stage_data(
 
 /// `convert_to_git` for a `working-tree-encoding` file: decode to UTF-8, then
 /// apply the path's line-ending and ident normalization.
-fn worktree_encoding_to_git(
+pub(super) fn worktree_encoding_to_git(
     repo: &gix::Repository,
     index: &gix::index::State,
     path: &Path,
@@ -1963,6 +1961,14 @@ impl GixRepo {
     }
 }
 
+/// The config the worktree->git conversion reads.
+pub(super) const WORKTREE_CONVERSION_CONFIG: [&str; 4] = [
+    "core.autocrlf",
+    "core.eol",
+    "core.safecrlf",
+    "core.checkRoundtripEncoding",
+];
+
 /// Resolve attributes with the same source precedence as the filter pipeline.
 /// This includes system/user attributes, info/attributes, and index-backed
 /// .gitattributes when worktree copies are absent. Re-resolving these small
@@ -1988,28 +1994,21 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         .matching_attributes(&mut outcome);
     let mut hasher = FxHasher::default();
     let config = repo.config_snapshot();
-    for key in [
-        "core.autocrlf",
-        "core.eol",
-        "core.safecrlf",
-        "core.checkRoundtripEncoding",
-    ] {
+    for key in WORKTREE_CONVERSION_CONFIG {
         config.string(key).hash(&mut hasher);
     }
     for matched in outcome.iter() {
         let assignment = matched.assignment;
         if assignment.name.as_str() == "filter" {
             match assignment.state {
-                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"annex" => {}
-                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"lfs" => {
-                    for key in [
-                        "filter.lfs.clean",
-                        "filter.lfs.process",
-                        "filter.lfs.required",
-                    ] {
+                gix::attrs::StateRef::Value(value)
+                    if value.as_bstr() == super::large_files::ANNEX_FILTER_DRIVER => {}
+                gix::attrs::StateRef::Value(value)
+                    if value.as_bstr() == super::large_files::LFS_FILTER_DRIVER =>
+                {
+                    for key in ["clean", "process", "required"] {
                         config
-                            .string(key)
-                            .map(|value| value.to_vec())
+                            .string_by("filter", super::large_files::LFS_FILTER_DRIVER, key)
                             .hash(&mut hasher);
                     }
                 }

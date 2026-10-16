@@ -27,10 +27,7 @@ fn model_for_sort(
         ContextMenuItem::Header(header.into()),
         ContextMenuItem::Separator,
     ];
-    for sort in crate::view::rows::CommitFileSort::ALL
-        .into_iter()
-        .filter(|sort| sort.offered_by(list))
-    {
+    for sort in crate::view::rows::CommitFileSort::ALL {
         items.push(ContextMenuItem::Entry {
             label: sort.label().into(),
             icon: check(sort == current),
@@ -112,33 +109,27 @@ mod tests {
             .collect()
     }
 
-    /// Untracked files are in neither index lane, so git reports no counts or
-    /// edits for them — a sort that reads either would silently sort by path
-    /// instead. File type reads off the path, so it survives the trim.
+    /// Untracked files have counts and edits too, so every section offers
+    /// the edit-size and edit sorts.
     #[test]
-    fn the_untracked_section_drops_only_the_sorts_that_read_line_counts() {
+    fn every_status_section_offers_every_sort() {
         use crate::view::StatusSection;
         use crate::view::rows::{CommitFileSort, FileListId};
 
-        assert_eq!(
-            sort_labels(FileListId::Status(StatusSection::Untracked)),
-            vec![
-                CommitFileSort::PathAscending.label().to_string(),
-                CommitFileSort::PathDescending.label().to_string(),
-                CommitFileSort::FileTypeAscending.label().to_string(),
-                CommitFileSort::FileTypeDescending.label().to_string(),
-            ]
-        );
-
+        let every_sort: Vec<String> = CommitFileSort::ALL
+            .iter()
+            .map(|sort| sort.label().to_string())
+            .collect();
         for section in [
-            StatusSection::Staged,
+            StatusSection::Untracked,
             StatusSection::Unstaged,
             StatusSection::CombinedUnstaged,
+            StatusSection::Staged,
         ] {
             assert_eq!(
-                sort_labels(FileListId::Status(section)).len(),
-                CommitFileSort::ALL.len(),
-                "{section:?} has line counts, so it offers every sort"
+                sort_labels(FileListId::Status(section)),
+                every_sort,
+                "{section:?}"
             );
         }
     }

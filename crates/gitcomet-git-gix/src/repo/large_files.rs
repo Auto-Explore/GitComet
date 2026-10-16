@@ -70,21 +70,29 @@ pub(crate) fn strip_annex_filter(repo: &mut gix::Repository) {
         .sections_by_name("filter")
         .into_iter()
         .flatten()
-        .any(|section| section.header().subsection_name() == Some("annex".into()));
+        .any(|section| section.header().subsection_name() == Some(ANNEX_FILTER_DRIVER.into()));
     if !has_annex_filter {
         return;
     }
     let mut config = repo.config_snapshot_mut();
     while config
-        .remove_section("filter", Some(gix::bstr::BStr::new("annex")))
+        .remove_section("filter", ANNEX_FILTER_DRIVER)
         .is_some()
     {}
 }
 
+/// The `filter` attribute value Git LFS assigns, and its driver's name.
+pub(crate) const LFS_FILTER_DRIVER: &str = "lfs";
+
+/// The `filter` attribute value git-annex assigns, and its driver's name.
+pub(crate) const ANNEX_FILTER_DRIVER: &str = "annex";
+
 pub(crate) fn lfs_filter_configured(config: &gix::config::File) -> bool {
-    ["filter.lfs.process", "filter.lfs.clean"]
-        .iter()
-        .any(|key| config.string(*key).is_some_and(|value| !value.is_empty()))
+    ["process", "clean"].iter().any(|key| {
+        config
+            .string_by("filter", LFS_FILTER_DRIVER, *key)
+            .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
@@ -93,15 +101,6 @@ fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
         .string("lfs.storage")
         .and_then(|value| gix::path::from_bstring(value).ok());
     lfs::storage_dir(storage.as_deref(), repo.common_dir())
-}
-
-fn truthy_env(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
 }
 
 fn backend_error(context: &str, error: impl std::fmt::Display) -> Error {
@@ -386,7 +385,7 @@ fn scan_lfs_attributes(
             for assignment in assignments.flatten() {
                 match (assignment.name.as_str(), assignment.state) {
                     ("filter", gix::attrs::StateRef::Value(value)) => {
-                        lfs = value.as_bstr() == "lfs";
+                        lfs = value.as_bstr() == LFS_FILTER_DRIVER;
                     }
                     ("filter", _) => lfs = false,
                     ("lockable", state) => lockable = matches!(state, gix::attrs::StateRef::Set),
@@ -635,21 +634,11 @@ impl super::GixRepo {
         let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let storage_dir = lfs_storage_dir(&repo);
-        let skip_flag = |key: &str| {
-            config
-                .string(key)
-                .is_some_and(|value| value.contains_str("--skip"))
-        };
         cancellation.check_cancelled()?;
         let mut lfs = LfsRepoInfo {
             filter_configured: lfs_filter_configured(&config),
-            filter_required: config.boolean("filter.lfs.required").unwrap_or(false),
             has_local_store: storage_dir.join("objects").is_dir(),
             storage_dir,
-            skip_smudge: truthy_env("GIT_LFS_SKIP_SMUDGE")
-                || skip_flag("filter.lfs.smudge")
-                || skip_flag("filter.lfs.process"),
-            locks_verify: config.boolean("lfs.locksverify"),
             ..LfsRepoInfo::default()
         };
         scan_lfs_attributes(&repo, cancellation, |pattern, lockable| {

@@ -1432,4 +1432,4 @@ fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;

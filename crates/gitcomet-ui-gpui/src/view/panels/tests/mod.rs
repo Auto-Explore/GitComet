@@ -1194,6 +1194,32 @@ pub(super) fn opening_repo_state(
     )
 }
 
+/// Loads the unstaged lane's counts as a finished scan does: the map and a
+/// new revision, which every cache of the counts keys on.
+pub(super) fn load_unstaged_line_stats(
+    repo: &mut gitcomet_state::model::RepoState,
+    counts: &[(&str, u32, u32)],
+) {
+    repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+        gitcomet_core::domain::UncommittedLineStats {
+            staged: Default::default(),
+            unstaged: counts
+                .iter()
+                .map(|(path, additions, deletions)| {
+                    (
+                        std::path::PathBuf::from(path),
+                        gitcomet_core::domain::LineStats::from((
+                            Some(*additions),
+                            Some(*deletions),
+                        )),
+                    )
+                })
+                .collect(),
+        },
+    ));
+    repo.unstaged_line_stats_rev += 1;
+}
+
 /// Publish `state` the way production does: into the store first, then into the
 /// UI model.
 ///

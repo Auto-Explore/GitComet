@@ -1,5 +1,5 @@
 use super::cancellation::test_progress::{ScanHook, with_hook};
-use super::tests::{git_success, init_test_repo, open_repo, write_file};
+use crate::test_support::{git_success, init_test_repo, open_repo, write_file};
 use gitcomet_core::error::ErrorKind;
 use gitcomet_core::services::CancellationToken;
 use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};

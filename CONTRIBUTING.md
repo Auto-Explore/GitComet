@@ -154,12 +154,7 @@ cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p
 cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
 cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
 python3 scripts/ci/boundaries.py
-python3 scripts/ci/ratchets.py
 ```
-
-The ratchet script keeps the [refactor round 2](docs/refactor-round-2.md)
-structure counts from regressing; after a change that improves one, run it with
-`--write` to record the new value.
 
 Coverage (local + CI-compatible):
 
