@@ -2089,13 +2089,14 @@ mod tests {
     fn a_reopen_reads_only_the_sources_the_first_open_could() {
         let tmp = tempfile::tempdir().unwrap();
         crate::test_support::init_test_repo(tmp.path());
-        let isolated = gix::open::Permissions::isolated();
-        let opened = crate::open::open_worktree_repo_with(tmp.path(), isolated).unwrap();
-        let repo = GixRepo::new(tmp.path().to_path_buf(), opened.into_sync());
+        let repo = crate::test_support::open_repo(tmp.path());
 
         let reopened = repo.reopen_repo().unwrap();
 
-        assert_eq!(reopened.open_options().permissions, isolated);
+        assert_eq!(
+            reopened.open_options().permissions,
+            gix::open::Permissions::isolated()
+        );
     }
 
     #[test]

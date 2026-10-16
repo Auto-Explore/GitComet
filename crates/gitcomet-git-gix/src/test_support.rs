@@ -142,10 +142,12 @@ pub(crate) fn write_file(workdir: &Path, relative: &str, contents: &str) {
 
 /// Reads only the repository's own config, as `git_command` runs git: a
 /// developer's global config must not decide what a test sees.
+pub(crate) fn open_gix(workdir: &Path) -> gix::Repository {
+    crate::open::open_worktree_repo_with(workdir, gix::open::Permissions::isolated())
+        .expect("open repo")
+}
+
+/// [`open_gix`], as the crate's repository.
 pub(crate) fn open_repo(workdir: &Path) -> crate::repo::GixRepo {
-    let thread_safe_repo =
-        crate::open::open_worktree_repo_with(workdir, gix::open::Permissions::isolated())
-            .expect("open repo")
-            .into_sync();
-    crate::repo::GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    crate::repo::GixRepo::new(workdir.to_path_buf(), open_gix(workdir).into_sync())
 }

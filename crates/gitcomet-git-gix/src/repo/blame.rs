@@ -604,12 +604,7 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::git_command;
-
-    /// Opens with the repository's own config only, as `git_command` runs git.
-    fn open(dir: &Path) -> gix::Repository {
-        crate::open::open_worktree_repo_with(dir, gix::open::Permissions::isolated()).unwrap()
-    }
+    use crate::test_support::{git_command, open_gix};
 
     #[test]
     fn blame_line_text_trims_crlf_and_lf() {
@@ -842,7 +837,7 @@ mod tests {
         assert!(ok, "git init must succeed");
 
         // Default (no diff.renames): rename tracking enabled.
-        let repo = open(repo_path);
+        let repo = open_gix(repo_path);
         assert!(
             configured_rewrites(&repo).is_some(),
             "default (no diff.renames) must enable rewrites"
@@ -858,7 +853,7 @@ mod tests {
             .success();
         assert!(ok, "git config must succeed");
 
-        let repo = open(repo_path);
+        let repo = open_gix(repo_path);
         assert!(
             configured_rewrites(&repo).is_none(),
             "diff.renames=false must disable rewrites entirely"
