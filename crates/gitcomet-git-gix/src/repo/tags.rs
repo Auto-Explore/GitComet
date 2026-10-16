@@ -315,31 +315,15 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::{GixRepo, local_tags_to_prune, parse_ls_remote_tag_names, parse_ls_remote_tags};
+    use crate::test_support::init_test_repo;
     use gitcomet_core::error::ErrorKind;
     use gitcomet_core::services::CancellationToken;
     use rustc_hash::FxHashSet;
     use std::path::Path;
 
-    fn run_git(workdir: &Path, args: &[&str]) {
-        let output = gitcomet_core::test_support::git_fixture::git_command()
-            .arg("-C")
-            .arg(workdir)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
     fn open_repo(workdir: &Path) -> GixRepo {
-        run_git(workdir, &["init"]);
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+        init_test_repo(workdir);
+        crate::test_support::open_repo(workdir)
     }
 
     #[test]

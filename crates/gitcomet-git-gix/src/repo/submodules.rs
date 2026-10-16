@@ -1103,7 +1103,7 @@ fn submodule_range_changes_from_commits(
         .into_iter()
         .map(|change| {
             cancellation.check_cancelled()?;
-            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
+            let (additions, deletions) = change.line_counts(&counts);
             Ok(SubmoduleInnerChange::new(change.path, change.kind)
                 .with_line_counts(additions, deletions)
                 .with_old_path(change.old_path))
@@ -1137,11 +1137,17 @@ fn git_numstat_counts(
     if cached {
         command.arg("--cached");
     }
-    command.arg("--numstat").arg("-z").arg("--no-renames");
+    // A gitlink would count its "Subproject commit" line, and these rows
+    // carry no mode to drop that by.
+    command
+        .arg("--numstat")
+        .arg("-z")
+        .arg("--no-renames")
+        .arg("--ignore-submodules=all");
     let label = if cached {
-        "git diff --cached --numstat -z --no-renames"
+        "git diff --cached --numstat -z --no-renames --ignore-submodules=all"
     } else {
-        "git diff --numstat -z --no-renames"
+        "git diff --numstat -z --no-renames --ignore-submodules=all"
     };
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
 
@@ -1960,6 +1966,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_support::{git_success, init_test_repo, open_repo};
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
@@ -2077,37 +2084,104 @@ mod tests {
         }
     }
 
-    fn run_git(workdir: &Path, args: &[&str]) {
-        let output = gitcomet_core::test_support::git_fixture::git_command()
-            .arg("-C")
-            .arg(workdir)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+    /// A submodule whose own nested submodule pointer `vendor/x` moves in
+    /// two commits and once more in the index. Returns the two commits.
+    fn nested_pointer_moves(dir: &Path) -> (CommitId, CommitId) {
+        init_test_repo(dir);
+        let point = |digit: char| {
+            let id = digit
+                .to_string()
+                .repeat(gix::open(dir).unwrap().object_hash().len_in_hex());
+            git_success(
+                dir,
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    &format!("160000,{id},vendor/x"),
+                ],
+            );
+        };
+        let head = || {
+            CommitId(
+                gix::open(dir)
+                    .unwrap()
+                    .head_id()
+                    .unwrap()
+                    .to_string()
+                    .into(),
+            )
+        };
+        point('1');
+        git_success(dir, &["commit", "-q", "-m", "first"]);
+        let first = head();
+        point('2');
+        git_success(dir, &["commit", "-q", "-m", "second"]);
+        let second = head();
+        point('3');
+        (first, second)
     }
 
-    fn init_test_repo(workdir: &Path) {
-        run_git(workdir, &["init"]);
-        gitcomet_core::test_support::git_fixture::append_config(
-            workdir,
-            &[
-                ("commit.gpgsign", "false"),
-                ("user.name", "Test User"),
-                ("user.email", "test@example.com"),
-            ],
-        );
+    fn pointer_counts(changes: &[SubmoduleInnerChange]) -> (Option<u32>, Option<u32>) {
+        let pointer = changes
+            .iter()
+            .find(|change| change.path == Path::new("vendor/x"))
+            .expect("the nested pointer is listed");
+        (pointer.additions, pointer.deletions)
     }
 
-    fn open_repo(workdir: &Path) -> GixRepo {
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    /// numstat counts a gitlink's "Subproject commit" line, not content.
+    #[test]
+    fn a_nested_pointer_has_no_line_counts_between_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (first, second) = nested_pointer_moves(tmp.path());
+        let changes = submodule_range_changes_from_commits(
+            tmp.path(),
+            &first,
+            &second,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(pointer_counts(&changes), (None, None));
+    }
+
+    #[test]
+    fn a_nested_pointer_has_no_line_counts_in_the_live_lists() {
+        let tmp = tempfile::tempdir().unwrap();
+        nested_pointer_moves(tmp.path());
+        let repo = open_repo(tmp.path()).repo();
+        let (staged, _) =
+            submodule_live_inner_changes(tmp.path(), Some(&repo), &CancellationToken::new())
+                .unwrap();
+        assert_eq!(pointer_counts(&staged), (None, None));
+    }
+
+    /// numstat still counts a gitlink replaced by a file, submodules ignored
+    /// or not; that change is a submodule's, so it has no counts either.
+    #[test]
+    fn a_nested_pointer_replaced_by_a_file_has_no_line_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let (_, second) = nested_pointer_moves(dir);
+        git_success(dir, &["rm", "--cached", "-q", "vendor/x"]);
+        std::fs::create_dir_all(dir.join("vendor")).unwrap();
+        std::fs::write(dir.join("vendor/x"), "a\nb\nc\n").unwrap();
+        git_success(dir, &["add", "vendor/x"]);
+        git_success(dir, &["commit", "-q", "-m", "third"]);
+        let third = CommitId(
+            gix::open(dir)
+                .unwrap()
+                .head_id()
+                .unwrap()
+                .to_string()
+                .into(),
+        );
+
+        let changes =
+            submodule_range_changes_from_commits(dir, &second, &third, &CancellationToken::new())
+                .unwrap();
+
+        assert_eq!(pointer_counts(&changes), (None, None));
     }
 
     #[test]
@@ -2241,7 +2315,7 @@ mod tests {
             )
             .expect("write .gitmodules");
 
-            let repo = gix::open(tmp.path()).expect("open repo");
+            let repo = open_repo(tmp.path()).repo();
             let err = resolve_submodule_logical_name(&repo, Path::new("sub"))
                 .expect_err(&format!("name {name:?} must be rejected"));
             assert!(err.to_string().contains(name), "{name:?}: {err}");
@@ -2258,7 +2332,7 @@ mod tests {
         )
         .expect("write .gitmodules");
 
-        let repo = gix::open(tmp.path()).expect("open repo");
+        let repo = open_repo(tmp.path()).repo();
         let name = resolve_submodule_logical_name(&repo, Path::new("sub")).expect("resolve name");
         assert_eq!(name.as_deref(), Some(Path::new("group/sub")));
     }
@@ -2382,7 +2456,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let submodule_path = Path::new("vendor/submodule");
         init_test_repo(tmp.path());
-        run_git(
+        git_success(
             tmp.path(),
             &[
                 "update-index",
@@ -2394,8 +2468,8 @@ mod tests {
                 ),
             ],
         );
-        run_git(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
-        run_git(
+        git_success(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
+        git_success(
             tmp.path(),
             &["update-index", "--force-remove", "vendor/submodule"],
         );

@@ -2267,7 +2267,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
         let git = |args: &[&str]| {
-            gitcomet_core::test_support::git_fixture::git_command()
+            crate::test_support::git_command()
                 .current_dir(path)
                 .args(["-c", "user.name=T", "-c", "user.email=t@e.st"])
                 .args(["-c", "commit.gpgsign=false"])
@@ -2286,7 +2286,7 @@ mod tests {
         std::fs::write(path.join("a.txt"), "main\n").unwrap();
         git(&["commit", "-qam", "main"]);
 
-        let repo = super::GixRepo::new(path.to_path_buf(), gix::open(path).unwrap().into_sync());
+        let repo = crate::test_support::open_repo(path);
         // Cache the pre-merge index in gix's shared snapshot.
         assert!(repo.repo().index_or_empty().is_ok());
         assert!(!repo.index_has_conflicts());

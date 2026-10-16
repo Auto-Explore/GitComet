@@ -970,33 +970,6 @@ impl GixRepo {
         .ok_or_else(|| Error::new(ErrorKind::Backend(format!("gix resolve commit {spec}"))))
     }
 
-    pub(in super::super) fn diff_range_files_impl(
-        &self,
-        from: &CommitId,
-        to: Option<&CommitId>,
-    ) -> Result<Vec<CommitFileChange>> {
-        match to {
-            Some(to) => {
-                let repo = self.repo();
-                diff_range_files(self, &repo, from, to)
-            }
-            // Working-tree tip: the newer side is the live worktree, which has no
-            // tree object, so shell out to `git diff <from>` for the file list
-            // (consistent with the unified diff shown in the main pane).
-            None => {
-                let cancellation = CancellationToken::new();
-                let mut files = super::super::comparison::commit_to_worktree_files(
-                    &self.spec.workdir,
-                    from,
-                    false,
-                    &cancellation,
-                )?;
-                self.add_worktree_edits(&mut files, &cancellation)?;
-                Ok(files)
-            }
-        }
-    }
-
     pub(in super::super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {
         let repo = self.repo();
         ids.iter()

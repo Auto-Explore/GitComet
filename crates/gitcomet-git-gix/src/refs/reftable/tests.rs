@@ -3,10 +3,9 @@ use gitcomet_core::services::CancellationToken;
 use std::path::Path;
 
 fn git(path: &Path, args: &[&str]) -> Vec<u8> {
-    let output = crate::util::git_workdir_cmd_for(path)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        // Empty = no global config everywhere; Git for Windows dies on "NUL".
-        .env("GIT_CONFIG_GLOBAL", "")
+    let output = crate::test_support::git_command()
+        .arg("-C")
+        .arg(path)
         .env("GIT_AUTHOR_DATE", "1700000000 +0000")
         .env("GIT_COMMITTER_DATE", "1800000000 +0530")
         .env("GIT_TEST_REFTABLE_AUTOCOMPACTION", "0")
@@ -25,12 +24,10 @@ fn git_reftable_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         let dir = tempfile::tempdir().unwrap();
-        let available = crate::util::git_workdir_cmd_for(dir.path())
-            .args(["init", "--ref-format=reftable"])
-            .output()
-            .unwrap()
-            .status
-            .success();
+        let available =
+            crate::test_support::git_output(dir.path(), &["init", "--ref-format=reftable"])
+                .status
+                .success();
         if !available {
             eprintln!("skipping Git cross-check: reftable is unavailable");
         }
@@ -71,8 +68,10 @@ fn tables_and_logs_match_git_across_hashes_blocks_and_compaction() {
     ] {
         for block in ["256", "512", "1000", "4096", "65536"] {
             let dir = fixture(format, block);
-            let mut cmd = crate::util::git_workdir_cmd_for(dir.path());
-            cmd.env("GIT_TEST_REFTABLE_AUTOCOMPACTION", "0")
+            let mut cmd = crate::test_support::git_command();
+            cmd.arg("-C")
+                .arg(dir.path())
+                .env("GIT_TEST_REFTABLE_AUTOCOMPACTION", "0")
                 .args(["update-ref", "--stdin"])
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null());
@@ -443,11 +442,7 @@ fn private_worktree_refs_do_not_leak_and_explicit_aliases_route_correctly() {
             (&other, linked.as_path(), format!("main-worktree/{name}")),
         ] {
             // File pseudorefs have no cross-worktree alias in Git's ref store.
-            let output = crate::util::git_workdir_cmd_for(workdir)
-                .args(["rev-parse", "--verify", &spec])
-                .output()
-                .unwrap();
-            assert!(!output.status.success());
+            crate::test_support::git_expect_failure(workdir, &["rev-parse", "--verify", &spec]);
             assert!(super::super::resolve(repo, &spec).unwrap().is_none());
             let expected = git(workdir, &["rev-parse", "--verify", name]);
             assert_eq!(
@@ -658,7 +653,9 @@ fn reference_names_preserve_non_utf8_bytes() {
     }
     let dir = fixture("sha256", "512");
     let name = b"refs/heads/non-utf8-\xff";
-    let output = crate::util::git_workdir_cmd_for(dir.path())
+    let output = crate::test_support::git_command()
+        .arg("-C")
+        .arg(dir.path())
         .arg("update-ref")
         .arg(std::ffi::OsStr::from_bytes(name))
         .arg("HEAD")

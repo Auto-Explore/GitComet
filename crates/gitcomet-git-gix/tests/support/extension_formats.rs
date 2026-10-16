@@ -1,5 +1,5 @@
 use gitcomet_core::domain::{CommitId, DiffArea, DiffLineKind, DiffTarget, HistoryMode};
-use gitcomet_core::services::{CancellationToken, GitBackend};
+use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
@@ -196,7 +196,11 @@ pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
         assert_eq!(index.commit_id(0), Some(head.clone()));
         assert_eq!(index.parent_commit_id(0, 0), Some(root.clone()));
         let empty = gitcomet_core::domain::empty_tree_id_like(&root).unwrap();
-        assert_eq!(repo.diff_range_files(&empty, Some(&head)).unwrap().len(), 1);
+        let direct = ComparisonOptions::direct();
+        let comparison = repo
+            .compare_files(&empty, Some(&head), &direct, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(comparison.files.len(), 1);
         for path in [None, Some("file.txt".into())] {
             assert!(
                 repo.diff_unified(&DiffTarget::commit_range(

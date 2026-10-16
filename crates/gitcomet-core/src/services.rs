@@ -20,8 +20,8 @@ pub enum ComparisonBase {
     MergeBase,
 }
 
-/// How [`GitRepository::compare_files`] compares. The default is what
-/// [`GitRepository::diff_range_files`] has always done.
+/// How [`GitRepository::compare_files`] compares. The default measures from
+/// `from` itself and lists tracked files only.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[non_exhaustive]
 pub struct ComparisonOptions {
@@ -856,78 +856,19 @@ pub trait GitRepository: Send + Sync {
             "commit reference resolution is not implemented for this backend",
         )))
     }
-    /// Files that differ between two points (`from` → `to`), for the
-    /// compare-selected-commits feature. `from` is the base/older side, so the
-    /// result reads as "what `to` adds/removes relative to `from`". `to = None`
-    /// compares `from` against the live working tree. Branch and tag comparisons
-    /// resolve their tips to commit ids before calling this.
-    fn diff_range_files(
+    /// Files that differ between `from` and `to` (the working tree when
+    /// `None`), honoring `options`, with rename sources, ids, and modes where
+    /// the backend reports them. `from` is the older side, so the files read
+    /// as what `to` changes; measured from the merge base when asked.
+    fn compare_files(
         &self,
         _from: &CommitId,
         _to: Option<&CommitId>,
-    ) -> Result<Vec<CommitFileChange>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "range file listing is not implemented for this backend",
-        )))
-    }
-    /// Files that differ between `from` and `to` (the working tree when
-    /// `None`), honoring `options`, with rename sources, ids, and modes where
-    /// the backend reports them. Measures from the merge base when asked.
-    ///
-    /// The default honors only what it can: the direct comparison is
-    /// [`Self::diff_range_files`], a merge base comes from
-    /// [`Self::merge_base`], and untracked files are `Unsupported` rather than
-    /// silently left out.
-    fn compare_files(
-        &self,
-        from: &CommitId,
-        to: Option<&CommitId>,
-        options: &ComparisonOptions,
-        cancellation: &CancellationToken,
+        _options: &ComparisonOptions,
+        _cancellation: &CancellationToken,
     ) -> Result<Comparison> {
-        if options.include_untracked && to.is_none() {
-            return Err(Error::new(ErrorKind::Unsupported(
-                "listing untracked files in a comparison is not implemented for this backend",
-            )));
-        }
-        let base = match options.base {
-            ComparisonBase::Direct => from.clone(),
-            ComparisonBase::MergeBase => {
-                let head = match to {
-                    Some(to) => to.clone(),
-                    None => self.head_commit_id()?.ok_or_else(|| {
-                        Error::new(ErrorKind::Backend(
-                            "a merge-base comparison with the working tree needs a HEAD commit"
-                                .to_string(),
-                        ))
-                    })?,
-                };
-                self.merge_base(from, &head)?.ok_or_else(|| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "{from} and {head} have no merge base"
-                    )))
-                })?
-            }
-        };
-        cancellation.check_cancelled()?;
-        let files = self.diff_range_files(&base, to)?;
-        cancellation.check_cancelled()?;
-        Ok(Comparison::new(base, files))
-    }
-
-    /// The best common ancestor of `a` and `b`, or `None` when their
-    /// histories are unrelated.
-    fn merge_base(&self, _a: &CommitId, _b: &CommitId) -> Result<Option<CommitId>> {
         Err(Error::new(ErrorKind::Unsupported(
-            "merge-base lookup is not implemented for this backend",
-        )))
-    }
-
-    /// Whether `ancestor` is reachable from `descendant` (a commit is its own
-    /// ancestor).
-    fn is_ancestor(&self, _ancestor: &CommitId, _descendant: &CommitId) -> Result<bool> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "ancestry checks are not implemented for this backend",
+            "file comparison is not implemented for this backend",
         )))
     }
 

@@ -1560,4 +1560,4 @@ fn is_empty_gitlink_checkout(workdir: &Path, path: &Path) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
