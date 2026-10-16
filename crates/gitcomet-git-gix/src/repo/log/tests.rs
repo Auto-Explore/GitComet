@@ -239,9 +239,9 @@ fn only_a_missing_object_allows_the_date_order_fallback() {
 }
 
 #[test]
-fn diff_range_files_lists_changes_between_two_commits() {
+fn compare_files_lists_changes_between_two_commits() {
     use gitcomet_core::domain::FileStatusKind;
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -264,8 +264,14 @@ fn diff_range_files_lists_changes_between_two_commits() {
 
     let opened = open_repo(repo);
     let mut files = opened
-        .diff_range_files(&CommitId(from.into()), Some(&CommitId(to.into())))
-        .expect("diff_range_files should succeed");
+        .compare_files(
+            &CommitId(from.into()),
+            Some(&CommitId(to.into())),
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files
@@ -283,9 +289,9 @@ fn diff_range_files_lists_changes_between_two_commits() {
 }
 
 #[test]
-fn diff_range_files_lists_changes_against_the_working_tree() {
+fn compare_files_lists_changes_against_the_working_tree() {
     use gitcomet_core::domain::FileStatusKind;
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -311,8 +317,14 @@ fn diff_range_files_lists_changes_against_the_working_tree() {
     let opened = open_repo(repo);
     // `None` tip = compare `from` against the working tree.
     let mut files = opened
-        .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed");
+        .compare_files(
+            &CommitId(from.into()),
+            None,
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files
@@ -329,12 +341,12 @@ fn diff_range_files_lists_changes_against_the_working_tree() {
     );
 }
 
-/// What `diff_range_files` lists against the working tree after a gitlink
+/// What `compare_files` lists against the working tree after a gitlink
 /// `vendor/sub` is staged straight into the index: no submodule clone needed
 /// for the 160000 entry mode. The directory has to exist or `git diff
 /// <commit>` skips the entry when comparing against the working tree.
 fn worktree_files_with_a_staged_gitlink() -> Vec<CommitFileChange> {
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -357,8 +369,14 @@ fn worktree_files_with_a_staged_gitlink() -> Vec<CommitFileChange> {
         ],
     );
     open_repo(repo)
-        .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed")
+        .compare_files(
+            &CommitId(from.into()),
+            None,
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files
 }
 
 fn staged_gitlink(files: &[CommitFileChange]) -> &CommitFileChange {
@@ -373,7 +391,7 @@ fn staged_gitlink(files: &[CommitFileChange]) -> &CommitFileChange {
 /// out of `git diff --raw`, so a plain `--name-status` listing would render
 /// the same submodule as an ordinary file.
 #[test]
-fn diff_range_files_flags_a_submodule_pointer_against_the_working_tree() {
+fn compare_files_flags_a_submodule_pointer_against_the_working_tree() {
     let files = worktree_files_with_a_staged_gitlink();
     assert!(
         staged_gitlink(&files).is_submodule,
@@ -401,9 +419,9 @@ fn a_submodule_pointer_has_no_line_counts_against_the_working_tree() {
 /// a field, silently pairing paths with the wrong statuses for the rest of
 /// the listing, so the shape is worth pinning directly.
 #[test]
-fn diff_range_files_parses_renames_against_the_working_tree() {
+fn compare_files_parses_renames_against_the_working_tree() {
     use gitcomet_core::domain::FileStatusKind;
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -426,8 +444,14 @@ fn diff_range_files_parses_renames_against_the_working_tree() {
 
     let opened = open_repo(repo);
     let mut files = opened
-        .diff_range_files(&CommitId(from.into()), None)
-        .expect("diff_range_files should succeed");
+        .compare_files(
+            &CommitId(from.into()),
+            None,
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
+        )
+        .expect("compare_files should succeed")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files
@@ -449,9 +473,9 @@ fn diff_range_files_parses_renames_against_the_working_tree() {
 /// expressed — a root has no parent to diff from — so it has to resolve as a
 /// comparison base even though it is not a commit.
 #[test]
-fn diff_range_files_accepts_the_empty_tree_as_a_base() {
+fn compare_files_accepts_the_empty_tree_as_a_base() {
     use gitcomet_core::domain::{FileStatusKind, empty_tree_id_like};
-    use gitcomet_core::services::GitRepository;
+    use gitcomet_core::services::{CancellationToken, ComparisonOptions, GitRepository};
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path();
@@ -465,11 +489,14 @@ fn diff_range_files_accepts_the_empty_tree_as_a_base() {
 
     let opened = open_repo(repo);
     let mut files = opened
-        .diff_range_files(
+        .compare_files(
             &empty_tree_id_like(&CommitId(root.clone().into())).unwrap(),
             Some(&CommitId(root.into())),
+            &ComparisonOptions::direct(),
+            &CancellationToken::new(),
         )
-        .expect("the empty tree should resolve as a base");
+        .expect("the empty tree should resolve as a base")
+        .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let by_path: Vec<(String, FileStatusKind)> = files

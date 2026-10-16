@@ -2227,9 +2227,17 @@ mod tests {
         // The worktree side has no blob; its counts come from numstat, so the
         // edit is read separately.
         seed_same_edit(workdir, "new", "newer");
-        let against_worktree = repo.diff_range_files(&seed, None).expect("range");
+        let against_worktree = repo
+            .compare_files(
+                &seed,
+                None,
+                &gitcomet_core::services::ComparisonOptions::direct(),
+                &CancellationToken::new(),
+            )
+            .expect("comparison");
         let edit = |path: &str| {
             against_worktree
+                .files
                 .iter()
                 .find(|f| f.path == std::path::Path::new(path))?
                 .edit

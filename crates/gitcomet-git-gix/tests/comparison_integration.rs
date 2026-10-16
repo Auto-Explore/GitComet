@@ -167,8 +167,6 @@ fn a_worktree_comparison_keeps_renames_and_lists_untracked_files_only_when_asked
             .all(|file| file.path != Path::new("scratch.txt")),
         "untracked files stay out by default"
     );
-    // The existing call keeps its behavior.
-    assert_eq!(opened.diff_range_files(&base, None).unwrap(), tracked.files);
 
     let with_untracked = opened
         .compare_files(

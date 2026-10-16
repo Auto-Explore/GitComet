@@ -2,11 +2,11 @@ mod tag_push;
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
-    DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry,
-    HistoryMode, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
-    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
-    Tag, Upstream, UpstreamDivergence, Worktree,
+    Branch, Commit, CommitDetails, CommitId, CommitSignature, Diff, DiffArea, DiffPreviewTextFile,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
+    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -1052,16 +1052,6 @@ impl GitRepository for GixRepo {
 
     fn is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
         self.is_ancestor_impl(ancestor, descendant)
-    }
-
-    fn diff_range_files(
-        &self,
-        from: &CommitId,
-        to: Option<&CommitId>,
-    ) -> Result<Vec<CommitFileChange>> {
-        let direct = gitcomet_core::services::ComparisonOptions::direct();
-        self.compare_files_impl(from, to, &direct, &CancellationToken::new())
-            .map(|comparison| comparison.files)
     }
 
     fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
