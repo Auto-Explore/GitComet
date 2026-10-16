@@ -191,8 +191,16 @@
 
 ; GitComet: was `((identifier) @property (#has-ancestor? @property
 ; struct_declaration))`. An instance variable's name sits under its
-; `struct_declarator`, directly or behind a pointer, block or function pointer.
+; `struct_declarator`, directly or behind a pointer, array, block or function
+; pointer.
 (struct_declarator (identifier) @property)
+
+(struct_declarator
+  (array_declarator declarator: (identifier) @property))
+
+(struct_declarator
+  (pointer_declarator
+    declarator: (array_declarator declarator: (identifier) @property)))
 
 (struct_declarator
   (pointer_declarator declarator: (identifier) @property))

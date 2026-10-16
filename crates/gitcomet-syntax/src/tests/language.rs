@@ -710,8 +710,7 @@ fn objective_c_colours_comments_strings_and_numbers() {
 /// unevaluated `#has-ancestor?`; only an instance variable's name is one.
 #[test]
 fn objective_c_marks_only_instance_variables_as_properties() {
-    let text =
-        "@interface Foo : NSObject {\n  int count;\n  NSString *name;\n}\n- (void)bar;\n@end\n";
+    let text = "@interface Foo : NSObject {\n  int count;\n  NSString *name;\n  char *names[2];\n}\n- (void)bar;\n@end\n";
     let document = prepare_test_document(DiffSyntaxLanguage::ObjectiveC, text);
     let kinds = |line: usize, fragment| {
         token_kinds_for_line_fragment(document, line, text.lines().nth(line).unwrap(), fragment)
@@ -719,7 +718,8 @@ fn objective_c_marks_only_instance_variables_as_properties() {
     assert_eq!(kinds(1, "count"), [SyntaxTokenKind::Property]);
     assert_eq!(kinds(2, "name"), [SyntaxTokenKind::Property]);
     assert!(!kinds(0, "Foo").contains(&SyntaxTokenKind::Property));
-    assert!(!kinds(4, "bar").contains(&SyntaxTokenKind::Property));
+    assert_eq!(kinds(3, "names"), [SyntaxTokenKind::Property]);
+    assert!(!kinds(5, "bar").contains(&SyntaxTokenKind::Property));
 }
 
 /// The crate's query gated two rules on `#lua-match?`, which the engine never
