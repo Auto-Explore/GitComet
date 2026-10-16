@@ -168,6 +168,17 @@ fn rows_for_repo(this: &mut PopoverHost, repo_id: RepoId) -> AuthorRows {
     rows(&authors, current.as_deref())
 }
 
+#[cfg(test)]
+thread_local! {
+    static NAV_TARGET_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`nav_targets`] calls since the last call, which resets the count.
+#[cfg(test)]
+pub(super) fn take_nav_target_builds_for_tests() -> usize {
+    NAV_TARGET_BUILDS.with(|count| count.replace(0))
+}
+
 /// What the arrow keys walk, in the order the rows are rendered.
 ///
 /// `PickerPrompt` re-sorts a non-empty query's matches by where the match lands,
@@ -178,6 +189,8 @@ pub(super) fn nav_targets(
     repo_id: RepoId,
     query: &str,
 ) -> Vec<AuthorTarget> {
+    #[cfg(test)]
+    NAV_TARGET_BUILDS.with(|count| count.set(count.get() + 1));
     let rows = rows_for_repo(this, repo_id);
     let layout = components::picker_prompt_layout(&rows.items, query);
     layout

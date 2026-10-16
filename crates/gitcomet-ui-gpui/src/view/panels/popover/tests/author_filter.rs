@@ -229,3 +229,58 @@ fn author_catalog_from_another_scope_is_not_offered(cx: &mut gpui::TestAppContex
     });
     assert_eq!(suggestion_names(&names), ["Current branch author"]);
 }
+
+/// The caret blinks every 800 ms for ten seconds after each keystroke,
+/// notifying the search box as typing does. The picker works out its navigation
+/// targets only for a new query or a navigation key; each blink used to rebuild
+/// every author row for them and redraw the popover.
+#[gpui::test]
+fn author_navigation_targets_wait_for_a_new_query(cx: &mut gpui::TestAppContext) {
+    let _cache_guard = crate::view::enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        window.activate();
+        GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(9005);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let repo = repo_with_authors(repo_id, 1, &["Bob", "Alice", "Carol"]);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::HistoryAuthorFilter { repo_id },
+                    gpui::point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
+    let search = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .history_author_filter_search_input_for_test()
+            .cloned()
+            .expect("the author filter's search box")
+    });
+    author_filter::take_nav_target_builds_for_tests();
+
+    cx.update(|window, app| {
+        search.update(app, |_, cx| cx.notify());
+        let _ = window.draw(app);
+    });
+    assert_eq!(author_filter::take_nav_target_builds_for_tests(), 0);
+
+    cx.update(|window, app| {
+        search.update(app, |input, cx| input.set_text("bo", cx));
+        let _ = window.draw(app);
+    });
+    assert_eq!(
+        author_filter::take_nav_target_builds_for_tests(),
+        1,
+        "a new query works them out again"
+    );
+}
