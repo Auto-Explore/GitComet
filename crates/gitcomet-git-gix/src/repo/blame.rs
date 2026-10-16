@@ -604,6 +604,12 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::test_support::git_command;
+
+    /// Opens with the repository's own config only, as `git_command` runs git.
+    fn open(dir: &Path) -> gix::Repository {
+        crate::open::open_worktree_repo_with(dir, gix::open::Permissions::isolated()).unwrap()
+    }
 
     #[test]
     fn blame_line_text_trims_crlf_and_lf() {
@@ -827,7 +833,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo_path = dir.path();
 
-        let ok = gitcomet_core::test_support::git_fixture::git_command()
+        let ok = git_command()
             .args(["init", "-b", "main"])
             .current_dir(repo_path)
             .status()
@@ -836,14 +842,14 @@ mod tests {
         assert!(ok, "git init must succeed");
 
         // Default (no diff.renames): rename tracking enabled.
-        let repo = gix::open(repo_path).unwrap();
+        let repo = open(repo_path);
         assert!(
             configured_rewrites(&repo).is_some(),
             "default (no diff.renames) must enable rewrites"
         );
 
         // Explicit disable via diff.renames=false.
-        let ok = gitcomet_core::test_support::git_fixture::git_command()
+        let ok = git_command()
             .args(["-C"])
             .arg(repo_path.to_string_lossy().as_ref())
             .args(["config", "diff.renames", "false"])
@@ -852,7 +858,7 @@ mod tests {
             .success();
         assert!(ok, "git config must succeed");
 
-        let repo = gix::open(repo_path).unwrap();
+        let repo = open(repo_path);
         assert!(
             configured_rewrites(&repo).is_none(),
             "diff.renames=false must disable rewrites entirely"

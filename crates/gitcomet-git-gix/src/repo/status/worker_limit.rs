@@ -115,16 +115,20 @@ fn benchmark_override() -> Option<Option<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::test_support::git_command;
+
+    /// Opens with the repository's own config only, as `git_command` runs git.
+    fn open(dir: &std::path::Path) -> gix::Repository {
+        crate::open::open_worktree_repo_with(dir, gix::open::Permissions::isolated()).unwrap()
+    }
 
     fn fixture(attributes: &str) -> (tempfile::TempDir, gix::Repository) {
         let dir = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
-            let output = gitcomet_core::test_support::git_fixture::git_command()
+            let output = git_command()
                 .arg("-C")
                 .arg(dir.path())
                 .args(args)
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_CONFIG_GLOBAL", "")
                 .output()
                 .unwrap();
             assert!(
@@ -147,7 +151,7 @@ mod tests {
             ".",
         ]);
         git(&["config", "filter.lfs.process", "git-lfs filter-process"]);
-        let repo = gix::open(dir.path()).unwrap();
+        let repo = open(dir.path());
         (dir, repo)
     }
 
@@ -184,12 +188,10 @@ mod tests {
         std::fs::write(&global, "*.bin filter=lfs\n").unwrap();
         let git = |args: &[&std::ffi::OsStr]| {
             assert!(
-                gitcomet_core::test_support::git_fixture::git_command()
+                git_command()
                     .arg("-C")
                     .arg(dir.path())
                     .args(args)
-                    .env("GIT_CONFIG_GLOBAL", "")
-                    .env("GIT_CONFIG_NOSYSTEM", "1")
                     .status()
                     .unwrap()
                     .success()
@@ -200,7 +202,7 @@ mod tests {
             "core.attributesFile".as_ref(),
             global.as_os_str(),
         ]);
-        let repo = gix::open(dir.path()).unwrap();
+        let repo = open(dir.path());
         assert_eq!(policy(&repo), Some(1));
         std::fs::create_dir(dir.path().join("nested")).unwrap();
         std::fs::write(dir.path().join("nested/b.bin"), "asset").unwrap();
@@ -214,7 +216,7 @@ mod tests {
             "add".as_ref(),
             "nested/b.bin".as_ref(),
         ]);
-        let repo = gix::open(dir.path()).unwrap();
+        let repo = open(dir.path());
         assert_eq!(policy(&repo), Some(1));
         std::fs::write(dir.path().join("nested/.gitattributes"), "*.bin -filter\n").unwrap();
         assert_eq!(policy(&repo), Some(bounded_limit()));

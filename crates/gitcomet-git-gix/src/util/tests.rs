@@ -802,9 +802,13 @@ fn checkout_that_brings_in_lfs_stays_alive_through_its_progress_file() {
          echo \"download $i/6 1/1 a.bin\" >> \"$GIT_LFS_PROGRESS\"; fi; sleep 0.25; done; cat",
     ]);
     git(&["config", "filter.lfs.required", "true"]);
+    // The repository's own config only, as the git above reads it.
+    let isolated = gix::open::Permissions::isolated();
     let repo = crate::repo::GixRepo::new(
         workdir.to_path_buf(),
-        gix::open(workdir).unwrap().into_sync(),
+        crate::open::open_worktree_repo_with(workdir, isolated)
+            .unwrap()
+            .into_sync(),
     );
     let worktree = dir.path().join("wt");
     let worktree_arg = worktree.to_str().unwrap();
