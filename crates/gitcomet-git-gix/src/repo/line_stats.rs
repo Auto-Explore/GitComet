@@ -48,7 +48,8 @@ struct UntrackedCounts {
 }
 
 /// A worktree file's stamp and how it converts (its conversion attributes
-/// and config): the same identity reads the same bytes.
+/// and config). For a path with no index entry the same identity reads the
+/// same bytes; with one, autocrlf also reads the entry's blob.
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct ReadIdentity {
     file: super::DiskFileStamp,
