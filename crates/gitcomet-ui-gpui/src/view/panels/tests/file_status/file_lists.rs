@@ -1321,7 +1321,8 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
 }
 
 /// Line counts arrive after every save of a modified file. A section sorted by
-/// path keeps its cached order; only a sort that reads the counts re-sorts.
+/// path keeps its cached order and the identity a shift-click anchor checks;
+/// only a sort that reads the counts re-sorts.
 #[gpui::test]
 fn status_line_stats_resort_only_sections_sorted_by_edit_size(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
@@ -1361,21 +1362,25 @@ fn status_line_stats_resort_only_sections_sorted_by_edit_size(cx: &mut gpui::Tes
     };
     let order = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
-            view.read(app)
-                .details_pane
-                .read(app)
-                .active_status_section_order(repo_id, StatusSection::CombinedUnstaged)
-                .expect("combined order")
+            let pane = view.read(app).details_pane.read(app);
+            let repo = pane.active_repo().expect("active repo");
+            (
+                pane.active_status_section_order(repo_id, StatusSection::CombinedUnstaged)
+                    .expect("combined order"),
+                pane.status_anchor_order_rev(repo, StatusSection::CombinedUnstaged),
+            )
         })
     };
 
     push_stats(cx, 1);
-    let path_sorted = order(cx);
+    let (path_sorted, path_anchor) = order(cx);
     push_stats(cx, 2);
+    let (path_resorted, path_anchor_after) = order(cx);
     assert!(
-        Arc::ptr_eq(&path_sorted, &order(cx)),
+        Arc::ptr_eq(&path_sorted, &path_resorted),
         "path sort kept its order"
     );
+    assert_eq!(path_anchor, path_anchor_after, "path sort kept its anchor");
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -1389,12 +1394,17 @@ fn status_line_stats_resort_only_sections_sorted_by_edit_size(cx: &mut gpui::Tes
         });
     });
     draw_and_drain_test_window(cx);
-    let size_sorted = order(cx);
+    let (size_sorted, size_anchor) = order(cx);
     assert_eq!(&*size_sorted, &[2, 1, 0], "largest edit first");
     push_stats(cx, 3);
+    let (size_resorted, size_anchor_after) = order(cx);
     assert!(
-        !Arc::ptr_eq(&size_sorted, &order(cx)),
+        !Arc::ptr_eq(&size_sorted, &size_resorted),
         "edit-size sort re-sorted for the new counts"
+    );
+    assert_ne!(
+        size_anchor, size_anchor_after,
+        "edit-size sort moved its anchor"
     );
 }
 

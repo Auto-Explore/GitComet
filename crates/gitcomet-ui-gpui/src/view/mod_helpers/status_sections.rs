@@ -190,9 +190,10 @@ pub(crate) fn status_section_rev(repo: &RepoState, section: StatusSection) -> u6
     }
 }
 
-/// The rev anything derived from a section must key on: its status lane and
-/// its line-stats lane. Counts arrive without `status_section_rev` moving, so a
-/// cache keyed on that alone keeps serving pre-stats rows.
+/// The rev anything that reads a section's line counts must key on (its rows,
+/// folder sums and size sorts): the status lane mixed with the line-stats lane.
+/// Counts arrive without `status_section_rev` moving, so a cache keyed on that
+/// alone keeps serving pre-stats rows.
 pub(crate) fn status_section_content_rev(repo: &RepoState, section: StatusSection) -> u64 {
     if !status_section_has_line_stats(section) {
         return status_section_rev(repo, section);
@@ -201,6 +202,19 @@ pub(crate) fn status_section_content_rev(repo: &RepoState, section: StatusSectio
         status_section_rev(repo, section),
         repo.line_stats_rev(section.diff_area()),
     ])
+}
+
+/// The rev a section's display order keys on. Counts arrive after every save
+/// but reorder only a sort that reads them.
+pub(in crate::view) fn status_section_order_rev(
+    repo: &RepoState,
+    section: StatusSection,
+    sort: crate::view::rows::CommitFileSort,
+) -> u64 {
+    if sort.needs_line_stats() {
+        return status_section_content_rev(repo, section);
+    }
+    status_section_rev(repo, section)
 }
 
 /// `None` while unloaded, and always `None` for Untracked — those files are in

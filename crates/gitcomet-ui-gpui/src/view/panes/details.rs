@@ -1843,15 +1843,9 @@ impl DetailsPaneView {
         section: StatusSection,
     ) -> Option<Arc<[usize]>> {
         let sort = self.status_file_sort_for(section);
-        // Counts arrive after every save; only a sort that reads them re-sorts.
-        let content_rev = if sort.needs_line_stats() {
-            status_section_content_rev(repo, section)
-        } else {
-            crate::view::status_section_rev(repo, section)
-        };
         let key = crate::view::rows::file_list_projection_key(
             repo.id.0,
-            self.file_source_key(repo.id, content_rev, None),
+            self.file_source_key(repo.id, status_section_order_rev(repo, section, sort), None),
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
@@ -1957,9 +1951,10 @@ impl DetailsPaneView {
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let list = crate::view::rows::FileListId::Status(section);
+        let sort = self.file_list_sort_for(list);
         let mut hasher = rustc_hash::FxHasher::default();
-        status_section_content_rev(repo, section).hash(&mut hasher);
-        self.file_list_sort_for(list).hash(&mut hasher);
+        status_section_order_rev(repo, section, sort).hash(&mut hasher);
+        sort.hash(&mut hasher);
         self.file_list_layout_for(repo.id, list)
             .key()
             .hash(&mut hasher);
