@@ -1,0 +1,23 @@
+[package]
+name = "gitcomet-difftastic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gitcomet-core = { workspace = true }
+log = { workspace = true }
+process-wrap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }

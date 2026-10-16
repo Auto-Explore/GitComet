@@ -4,6 +4,7 @@ members = [
   "crates/gitcomet",
   "crates/gitcomet-app",
   "crates/gitcomet-core",
+  "crates/gitcomet-difftastic",
   "crates/gitcomet-diagrams",
   "crates/gitcomet-fonts",
   "crates/gitcomet-extension-api",
@@ -88,6 +89,7 @@ block = { path = "vendor/block" }
 # Internal crates
 gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
 gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-difftastic = { path = "crates/gitcomet-difftastic" }
 gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
 gitcomet-fonts = { path = "crates/gitcomet-fonts" }
 gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }

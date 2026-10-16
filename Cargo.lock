@@ -2438,6 +2438,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-difftastic"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-core",
+ "log",
+ "process-wrap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gitcomet-extension-api"
 version = "0.3.0"
 dependencies = [
