@@ -189,7 +189,6 @@ impl AtomicSpanStats {
         self.total_nanos.fetch_add(elapsed_nanos, Ordering::Relaxed);
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn snapshot(&self) -> SpanStats {
         SpanStats {
@@ -198,7 +197,6 @@ impl AtomicSpanStats {
         }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
@@ -234,7 +232,6 @@ impl AtomicRowBatchStats {
         self.painted_rows.fetch_add(painted_rows, Ordering::Relaxed);
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn snapshot(&self) -> RowBatchStats {
         RowBatchStats {
@@ -244,7 +241,6 @@ impl AtomicRowBatchStats {
         }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
