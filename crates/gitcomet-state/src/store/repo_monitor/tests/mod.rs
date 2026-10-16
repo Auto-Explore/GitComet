@@ -899,15 +899,6 @@ fn gitignore_lookup_stats_track_cache_hits_misses_and_matcher_failures() {
 }
 
 #[test]
-fn panic_payload_to_string_handles_string_and_unknown_payloads() {
-    assert_eq!(
-        panic_payload_to_string(&"panic message".to_string()),
-        "panic message"
-    );
-    assert_eq!(panic_payload_to_string(&123usize), "unknown panic payload");
-}
-
-#[test]
 fn debouncer_covers_no_pending_due_check_and_max_delay_selection() {
     let base = Instant::now();
     let mut d = DebouncedChange::new(Duration::from_millis(500), Duration::from_millis(100));

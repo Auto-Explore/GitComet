@@ -1,4 +1,5 @@
-use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
+use super::send_diagnostics::{SendFailureKind, send_or_log};
+use gitcomet_core::panic::payload_message;
 use gitcomet_core::{mergetool_trace, op_trace};
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
@@ -113,7 +114,7 @@ fn record_worker_task_panic(payload: &(dyn Any + Send)) {
     let count = WORKER_TASK_PANICS.fetch_add(1, Ordering::Relaxed) + 1;
     let thread = thread::current();
     let thread = thread.name().unwrap_or("<unnamed>");
-    let message = panic_payload_to_string(payload);
+    let message = payload_message(payload);
     gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: executor task panicked on worker thread {thread}: {message}; total_panics={count}"
     ));

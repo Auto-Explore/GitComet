@@ -798,12 +798,7 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
         let _ = writeln!(file, "location={}#L{}", location.file(), location.line());
     }
 
-    let payload = info
-        .payload()
-        .downcast_ref::<&str>()
-        .map(|s| (*s).to_string())
-        .or_else(|| info.payload().downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "<non-string panic payload>".to_string());
+    let payload = gitcomet_core::panic::payload_message(info.payload());
     let _ = writeln!(file, "message={payload}");
     let _ = writeln!(file, "info={info}");
     let _ = write_cached_environment(&mut file);

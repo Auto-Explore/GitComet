@@ -32,7 +32,7 @@ pub fn contain<R>(f: impl FnOnce() -> R) -> Result<R, ContainedPanic> {
     CONTAINING.with(|depth| depth.set(depth.get() - 1));
     let noted = NOTED.with(|noted| noted.borrow_mut().take());
     result.map_err(|payload| ContainedPanic {
-        message: panic_payload_to_string(payload.as_ref(), UNKNOWN_PAYLOAD),
+        message: payload_message(payload.as_ref()),
         location: noted.and_then(|noted| noted.location),
     })
 }
@@ -60,24 +60,28 @@ pub fn note_contained(info: &PanicHookInfo<'_>) -> bool {
     })
 }
 
-/// Renders a `catch_unwind` / `JoinHandle::join` payload for diagnostics,
-/// using `fallback` for payloads that are not `&str` or `String`.
-///
-/// Callers keep their own fallback wording; taking a reference means a caller
-/// holding a `Box` can pass `payload.as_ref()` without giving up ownership.
-pub fn panic_payload_to_string(payload: &(dyn Any + Send), fallback: &str) -> String {
+/// Renders a panic payload (from a hook, `catch_unwind` or
+/// `JoinHandle::join`) for diagnostics.
+pub fn payload_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         (*message).to_string()
     } else if let Some(message) = payload.downcast_ref::<String>() {
         message.clone()
     } else {
-        fallback.to_string()
+        UNKNOWN_PAYLOAD.to_string()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payload_message_renders_str_string_and_other_payloads() {
+        assert_eq!(payload_message(&"static"), "static");
+        assert_eq!(payload_message(&"owned".to_string()), "owned");
+        assert_eq!(payload_message(&123usize), "unknown panic payload");
+    }
 
     #[test]
     fn contain_passes_the_value_through() {

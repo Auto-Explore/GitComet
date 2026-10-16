@@ -823,16 +823,6 @@ fn contains_marker_like_line(text: &str) -> bool {
     })
 }
 
-fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
-}
-
 fn run_validation_with_artifact<F>(
     fixture_name: &str,
     validation_name: &str,
@@ -846,7 +836,7 @@ where
     match panic::catch_unwind(AssertUnwindSafe(validate)) {
         Ok(()) => Ok(()),
         Err(payload) => {
-            let panic_message = panic_payload_message(payload);
+            let panic_message = gitcomet_core::panic::payload_message(payload.as_ref());
             let artifact_note = match std::fs::write(actual_path, actual_content) {
                 Ok(()) => format!("actual written to {}", actual_path.display()),
                 Err(e) => format!(

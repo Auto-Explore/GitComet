@@ -58,7 +58,7 @@ pub(super) fn schedule(
                     work.cache.clear_poison();
                     send(Err(Error::new(ErrorKind::Backend(format!(
                         "History search panicked: {}",
-                        super::super::send_diagnostics::panic_payload_to_string(payload.as_ref()),
+                        gitcomet_core::panic::payload_message(payload.as_ref()),
                     )))));
                 }
             }
