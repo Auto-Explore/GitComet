@@ -88,9 +88,11 @@ pub(crate) const LFS_FILTER_DRIVER: &str = "lfs";
 pub(crate) const ANNEX_FILTER_DRIVER: &str = "annex";
 
 pub(crate) fn lfs_filter_configured(config: &gix::config::File) -> bool {
-    ["filter.lfs.process", "filter.lfs.clean"]
-        .iter()
-        .any(|key| config.string(*key).is_some_and(|value| !value.is_empty()))
+    ["process", "clean"].iter().any(|key| {
+        config
+            .string_by("filter", LFS_FILTER_DRIVER, *key)
+            .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
@@ -643,18 +645,22 @@ impl super::GixRepo {
         let storage_dir = lfs_storage_dir(&repo);
         let skip_flag = |key: &str| {
             config
-                .string(key)
+                .string_by("filter", LFS_FILTER_DRIVER, key)
                 .is_some_and(|value| value.contains_str("--skip"))
         };
         cancellation.check_cancelled()?;
         let mut lfs = LfsRepoInfo {
             filter_configured: lfs_filter_configured(&config),
-            filter_required: config.boolean("filter.lfs.required").unwrap_or(false),
+            filter_required: config
+                .boolean_by("filter", LFS_FILTER_DRIVER, "required")
+                .ok()
+                .flatten()
+                .unwrap_or(false),
             has_local_store: storage_dir.join("objects").is_dir(),
             storage_dir,
             skip_smudge: truthy_env("GIT_LFS_SKIP_SMUDGE")
-                || skip_flag("filter.lfs.smudge")
-                || skip_flag("filter.lfs.process"),
+                || skip_flag("smudge")
+                || skip_flag("process"),
             locks_verify: config.boolean("lfs.locksverify"),
             ..LfsRepoInfo::default()
         };

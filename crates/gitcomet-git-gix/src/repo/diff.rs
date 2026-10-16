@@ -2016,14 +2016,9 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
                 gix::attrs::StateRef::Value(value)
                     if value.as_bstr() == super::large_files::LFS_FILTER_DRIVER =>
                 {
-                    for key in [
-                        "filter.lfs.clean",
-                        "filter.lfs.process",
-                        "filter.lfs.required",
-                    ] {
+                    for key in ["clean", "process", "required"] {
                         config
-                            .string(key)
-                            .map(|value| value.to_vec())
+                            .string_by("filter", super::large_files::LFS_FILTER_DRIVER, key)
                             .hash(&mut hasher);
                     }
                 }
