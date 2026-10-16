@@ -1918,7 +1918,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::repo::status::tests::{git_success, init_test_repo, open_repo};
+    use crate::repo::test_support::{git_success, init_test_repo, open_repo};
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;

@@ -372,7 +372,7 @@ mod tests {
     /// without its content is not a change.
     #[test]
     fn comparison_against_the_worktree_does_not_write_the_index() {
-        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        use crate::repo::test_support::{git_success, init_test_repo, open_repo, write_file};
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         init_test_repo(dir);
@@ -432,7 +432,7 @@ mod tests {
     /// use; past it they report no counts instead of being read whole.
     #[test]
     fn untracked_counts_stop_at_the_worktree_size_cap() {
-        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        use crate::repo::test_support::{git_success, init_test_repo, open_repo, write_file};
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         init_test_repo(dir);
@@ -468,7 +468,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn untracked_counts_match_the_status_list() {
-        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        use crate::repo::test_support::{git_success, init_test_repo, open_repo, write_file};
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         init_test_repo(dir);
@@ -506,7 +506,7 @@ mod tests {
     /// not the counts of its untracked ones.
     #[test]
     fn untracked_counts_survive_the_edit_cap() {
-        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        use crate::repo::test_support::{git_success, init_test_repo, open_repo, write_file};
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         init_test_repo(dir);

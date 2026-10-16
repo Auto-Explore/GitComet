@@ -79,6 +79,8 @@ mod signatures;
 mod status;
 mod submodules;
 mod tags;
+#[cfg(test)]
+mod test_support;
 mod text_attributes;
 mod text_decode;
 mod worktrees;
@@ -2088,7 +2090,7 @@ mod tests {
     #[test]
     fn a_reopen_reads_only_the_sources_the_first_open_could() {
         let tmp = tempfile::tempdir().unwrap();
-        status::tests::init_test_repo(tmp.path());
+        test_support::init_test_repo(tmp.path());
         let isolated = gix::open::Permissions::isolated();
         let opened = crate::open::open_worktree_repo_with(tmp.path(), isolated).unwrap();
         let repo = GixRepo::new(tmp.path().to_path_buf(), opened.into_sync());

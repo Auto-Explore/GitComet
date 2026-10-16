@@ -2311,7 +2311,7 @@ fn unified_body_line_count(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo::status::tests::{git_success, init_test_repo, open_repo};
+    use crate::repo::test_support::{git_success, init_test_repo, open_repo};
 
     #[test]
     fn chunked_reads_retry_interruptions_and_remain_cancellable() {

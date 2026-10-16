@@ -796,7 +796,7 @@ impl FoundFile<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+    use crate::repo::test_support::{git_success, init_test_repo, open_repo, write_file};
 
     /// The counts alone: these tests are about counting, not the edit.
     fn counts(stats: Option<&LineStats>) -> Option<(Option<u32>, Option<u32>)> {
