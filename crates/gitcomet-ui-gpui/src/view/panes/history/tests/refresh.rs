@@ -1313,13 +1313,14 @@ fn indexed_history_unrelated_updates_reuse_text_and_graph_windows(cx: &mut gpui:
     });
     for progress in [true, false] {
         let history = &mut state.repos[0].history_state.indexed;
-        history.rev += 1;
         if progress {
+            history.status_rev += 1;
             history.progress = Some(gitcomet_core::history_index::HistoryIndexProgress {
                 scanned: 40_000,
                 matched: 30_000,
             });
         } else {
+            history.rev += 1;
             history.ranges.insert(
                 4096,
                 Arc::new(gitcomet_core::history_index::HistoryRange {

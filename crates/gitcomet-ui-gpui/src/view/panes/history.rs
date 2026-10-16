@@ -820,11 +820,14 @@ impl HistoryView {
                 .repos
                 .iter()
                 .find(|repo| Some(repo.id) == next.active_repo);
-            // Badges, find results and dropped selections repaint without
-            // invalidating refs menus.
+            // Badges, find results, dropped selections and the index build's
+            // status line repaint without invalidating refs menus.
             let signatures_changed = previous_repo
                 .map(|repo| repo.history_state.commit_signatures_rev)
                 != next_repo.map(|repo| repo.history_state.commit_signatures_rev);
+            let index_status_changed = previous_repo
+                .map(|repo| repo.history_state.indexed.status_rev)
+                != next_repo.map(|repo| repo.history_state.indexed.status_rev);
             let find_changed = this.history_find_is_open()
                 && previous_repo.map(|repo| repo.history_state.find.rev)
                     != next_repo.map(|repo| repo.history_state.find.rev);
@@ -889,7 +892,11 @@ impl HistoryView {
                 this.notify_fingerprint = next_fingerprint;
                 this.dismiss_history_refs_hover(cx);
                 cx.notify();
-            } else if signatures_changed || find_changed || selection_ack_changed {
+            } else if signatures_changed
+                || find_changed
+                || selection_ack_changed
+                || index_status_changed
+            {
                 cx.notify();
             }
         });
