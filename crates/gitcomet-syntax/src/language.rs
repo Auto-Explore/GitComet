@@ -1035,7 +1035,14 @@ fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         "diff.minus" => SyntaxTokenKind::DiffMinus,
         "diff.delta" => SyntaxTokenKind::DiffDelta,
         // Keywords
-        "conditional" | "keyword.control" | "repeat" => SyntaxTokenKind::KeywordControl,
+        // `keyword.conditional.ternary` is `?`/`:`, not a control-flow word.
+        "keyword.conditional.ternary" => SyntaxTokenKind::Keyword,
+        "conditional"
+        | "keyword.control"
+        | "keyword.conditional"
+        | "keyword.repeat"
+        | "keyword.return"
+        | "repeat" => SyntaxTokenKind::KeywordControl,
         "exception"
         | "keyword"
         | "keyword.declaration"

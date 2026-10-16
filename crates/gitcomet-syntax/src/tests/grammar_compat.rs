@@ -794,7 +794,10 @@ fn vendored_haskell_grammar_names_type_synonyms_and_highlights_cases() {
     ];
     let doc = prepare_test_document(DiffSyntaxLanguage::Haskell, &lines.join("\n"));
     let kinds = token_kinds_for_line_fragment(doc, 1, lines[1], "cases");
-    assert!(kinds.contains(&SyntaxTokenKind::Keyword), "{kinds:?}");
+    assert!(
+        kinds.contains(&SyntaxTokenKind::KeywordControl),
+        "{kinds:?}"
+    );
 }
 
 #[test]
@@ -1752,3 +1755,27 @@ export interface TranspileResult {
  * Compiles `input` with the plugin as an `after` transformer and returns the emitted code untouched,
  * the source map when compilerOptions.sourceMap is set, and the syntactic diagnostics of the input.
  */"#;
+
+/// nvim-treesitter's current control-flow names render as control flow, so a
+/// query taken from it needs no renaming; its ternary operator stays a keyword.
+#[test]
+fn nvim_control_flow_capture_names_are_control_keywords() {
+    for name in [
+        "keyword.conditional",
+        "keyword.repeat",
+        "keyword.return",
+        "keyword.control",
+        "conditional",
+        "repeat",
+    ] {
+        assert_eq!(
+            syntax_kind_from_capture_name(name),
+            Some(SyntaxTokenKind::KeywordControl),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        syntax_kind_from_capture_name("keyword.conditional.ternary"),
+        Some(SyntaxTokenKind::Keyword)
+    );
+}

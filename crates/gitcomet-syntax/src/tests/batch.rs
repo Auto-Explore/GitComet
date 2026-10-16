@@ -230,7 +230,7 @@ fn prepared_julia_document_highlights_core_syntax() {
     for (line_ix, fragment, expected) in [
         (3usize, "function", SyntaxTokenKind::Keyword),
         (3, "Int", SyntaxTokenKind::TypeBuiltin),
-        (5, "return", SyntaxTokenKind::Keyword),
+        (5, "return", SyntaxTokenKind::KeywordControl),
     ] {
         let kinds = token_kinds_for_line_fragment(doc, line_ix, JULIA_FIXTURE[line_ix], fragment);
         assert!(
@@ -486,8 +486,9 @@ fn prepared_solidity_document_highlights_core_syntax() {
         (3, "contract", SyntaxTokenKind::Keyword),
         (4, "uint256", SyntaxTokenKind::Type),
         (6, "function", SyntaxTokenKind::Keyword),
-        (6, "returns", SyntaxTokenKind::Keyword),
-        (8, "return", SyntaxTokenKind::Keyword),
+        // The query captures both as `@keyword.return`.
+        (6, "returns", SyntaxTokenKind::KeywordControl),
+        (8, "return", SyntaxTokenKind::KeywordControl),
     ] {
         let kinds =
             token_kinds_for_line_fragment(doc, line_ix, SOLIDITY_FIXTURE[line_ix], fragment);
@@ -668,8 +669,8 @@ fn prepared_svelte_document_highlights_markup_and_block_tags() {
     for (line_ix, fragment) in [(4usize, "if"), (6, "else"), (8, "if")] {
         let kinds = token_kinds_for_line_fragment(doc, line_ix, SVELTE_FIXTURE[line_ix], fragment);
         assert!(
-            kinds.contains(&SyntaxTokenKind::Keyword),
-            "the `{{{fragment}}}` block marker should be a keyword: {kinds:?}"
+            kinds.contains(&SyntaxTokenKind::KeywordControl),
+            "the `{{{fragment}}}` block marker should be a control keyword: {kinds:?}"
         );
     }
 }

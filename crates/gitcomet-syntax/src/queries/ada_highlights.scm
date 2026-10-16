@@ -4,9 +4,7 @@
 ; https://github.com/briot/tree-sitter-ada; the crate ships no LICENSE file, its
 ; Cargo.toml declares MIT). Edits, all marked `GitComet:` below:
 ;
-;   * `@keyword.repeat` -> `@repeat` on the loop-context rules (upstream listed
-;     one twice; now once), so `end loop` and `for I in` take the same control
-;     colour as `for`/`loop` (`keyword.repeat` falls back to plain `keyword`).
+;   * Dropped a duplicate `(loop_parameter_specification "in" @keyword.repeat)`.
 ;   * Package names, instantiations included, `@function` -> `@namespace`,
 ;     matching the `with`/`use` names.
 ;   * gnatprep `#if` blocks: upstream captured the whole statement, so every
@@ -137,11 +135,11 @@
 (use_clause (_) @namespace)
 (with_clause (_) @namespace)
 
-(loop_statement "end" @repeat) ; GitComet: was @keyword.repeat
+(loop_statement "end" @keyword.repeat)
 (if_statement "end" @conditional)
-(loop_parameter_specification "in" @repeat) ; GitComet: was @keyword.repeat (listed twice upstream)
-(iterator_specification ["in" "of"] @repeat) ; GitComet: was @keyword.repeat
-(range_attribute_designator "range" @repeat) ; GitComet: was @keyword.repeat
+(loop_parameter_specification "in" @keyword.repeat) ; GitComet: listed twice upstream
+(iterator_specification ["in" "of"] @keyword.repeat)
+(range_attribute_designator "range" @keyword.repeat)
 
 (raise_statement "with" @exception)
 

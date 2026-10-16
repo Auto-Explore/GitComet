@@ -9,8 +9,6 @@
 ; Edits, each marked `GitComet:` below:
 ;   * the doc-comment rule's `#lua-match?` -> `#match?`. Unevaluated, it made every
 ;     `{- -}` comment a doc comment.
-;   * `@keyword.conditional` -> `@keyword.control`, the name GitComet styles as
-;     control flow.
 ;   * `(string_escape)` -> `@string.escape` in strings and chars; upstream gave it
 ;     the plain string/char colour.
 ;   * the `_` wildcard: `@character.special` -> `@punctuation.special`. GitComet
@@ -33,7 +31,7 @@
   "else"
   (case)
   (of)
-] @keyword.control ; GitComet: was @keyword.conditional
+] @keyword.conditional
 
 [
   "let"
