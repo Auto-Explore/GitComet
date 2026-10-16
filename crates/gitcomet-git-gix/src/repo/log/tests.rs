@@ -17,18 +17,16 @@ fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn git");
-    child
-        .stdin
-        .take()
-        .expect("git stdin")
-        .write_all(input)
-        .expect("write git stdin");
+    // Checked after the exit: git rejecting the stream closes the pipe, and
+    // its stderr says why where the write error would only say EPIPE.
+    let written = child.stdin.take().expect("git stdin").write_all(input);
     let output = child.wait_with_output().expect("git exit");
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    written.expect("write git stdin");
 }
 
 fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
