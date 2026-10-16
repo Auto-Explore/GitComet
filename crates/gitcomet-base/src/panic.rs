@@ -72,6 +72,35 @@ pub fn payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::cell::Cell;
+    use std::sync::Once;
+
+    thread_local! {
+        static UNCONTAINED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Runs `f` under a hook that answers [`super::note_contained`] like the
+    /// crash hook, returning how many of this thread's panics it would report.
+    pub fn uncontained_panics<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        static HOOK: Once = Once::new();
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                if super::note_contained(info) {
+                    return;
+                }
+                UNCONTAINED.with(|count| count.set(count.get() + 1));
+                previous(info);
+            }));
+        });
+        let before = UNCONTAINED.with(Cell::get);
+        let result = f();
+        (result, UNCONTAINED.with(Cell::get) - before)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

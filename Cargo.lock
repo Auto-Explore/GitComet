@@ -2488,6 +2488,7 @@ dependencies = [
 name = "gitcomet-base"
 version = "0.3.0"
 dependencies = [
+ "gitcomet-base",
  "serde",
  "serde_json",
  "sysinfo",
@@ -2543,6 +2544,7 @@ name = "gitcomet-diagrams"
 version = "0.3.0"
 dependencies = [
  "criterion",
+ "gitcomet-base",
  "gitcomet-fonts",
  "image",
  "mermaid-rs-renderer",
@@ -2697,6 +2699,7 @@ name = "gitcomet-syntax"
 version = "0.3.0"
 dependencies = [
  "dekobon-tree-sitter-groovy",
+ "gitcomet-base",
  "gitcomet-core",
  "gitcomet-text",
  "gitcomet-tree-sitter-alloc",

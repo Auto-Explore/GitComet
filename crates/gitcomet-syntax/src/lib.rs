@@ -6,6 +6,7 @@
 use gitcomet_text::SyntaxTokenKind;
 use gitcomet_text::cache::{FxLruCache, new_fx_lru_cache};
 use gpui_shared_string::SharedString;
+use query_catch::catch_treesitter_query_panic;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -230,22 +231,6 @@ thread_local! {
 
 fn invalidate_ts_parser_language_fast_path() {
     TS_PARSER_REQUIRES_LANGUAGE_RESET.with(|needs_reset| needs_reset.set(true));
-}
-
-fn catch_treesitter_query_panic<R>(f: impl FnOnce() -> R) -> Option<R> {
-    // Upstream tree-sitter can panic during query predicate evaluation when a
-    // recovered node reports a byte range that extends past the provided text.
-    // Treat those as syntax-miss fallbacks instead of crashing the UI.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Ok(result) => Some(result),
-        Err(_) => {
-            TS_CURSOR.with(|cursor| {
-                *cursor.borrow_mut() = tree_sitter::QueryCursor::new();
-            });
-            invalidate_ts_parser_language_fast_path();
-            None
-        }
-    }
 }
 
 fn ascii_lowercase_for_match(s: &str) -> Cow<'_, str> {
@@ -632,6 +617,7 @@ mod live;
 mod occurrences;
 mod pairs;
 mod prepared;
+mod query_catch;
 
 pub use heuristic::*;
 pub use language::*;

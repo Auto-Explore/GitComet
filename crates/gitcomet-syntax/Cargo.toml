@@ -102,6 +102,7 @@ tree-sitter-yaml = { workspace = true }
 tree-sitter-zig = { workspace = true }
 
 [dev-dependencies]
+gitcomet-base = { workspace = true, features = ["test-support"] }
 # Live-document tests render through the UI kit's theme palette.
 gitcomet-text = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true }

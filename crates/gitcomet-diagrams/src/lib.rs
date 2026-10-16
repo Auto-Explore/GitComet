@@ -5,6 +5,7 @@ use std::sync::Arc;
 pub mod scene;
 pub mod source;
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+const RENDER_FAILED: &str = "The native Mermaid renderer could not process this source.";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DiagramKind {
@@ -69,35 +70,56 @@ pub fn render(kind: DiagramKind, source: &str) -> Result<DiagramOutput, String> 
     if source.trim().is_empty() {
         return Err("Empty diagram.".into());
     }
+    // A bug in GitComet's own steps is a render error too, but it keeps its
+    // crash report; the renderer's own panics arrive contained, as `Err`.
     std::panic::catch_unwind(|| render_mermaid(kind, source.trim_start_matches('\u{feff}')))
-        .map_err(|_| "The native Mermaid renderer could not process this source.".to_string())?
+        .map_err(|_| RENDER_FAILED.to_string())?
+}
+
+// A call into the vendored renderer: its panic is a render error, not a crash.
+fn renderer<R>(call: impl FnOnce() -> R) -> Result<R, String> {
+    gitcomet_base::panic::contain(call).map_err(|_| RENDER_FAILED.to_string())
 }
 
 fn render_mermaid(kind: DiagramKind, source: &str) -> Result<DiagramOutput, String> {
     let mut diagnostics = Vec::new();
     let (source, frontmatter) = source_frontmatter(source)?;
     // Exactly one parse/layout/SVG pass. The convenience API discarded init_config.
-    let parsed = mermaid_rs_renderer::parse_mermaid_strict(source).map_err(|e| e.to_string())?;
-    let mut config = mermaid_rs_renderer::Config {
-        theme: mermaid_rs_renderer::Theme::modern(),
-        ..Default::default()
-    };
-    for mut value in frontmatter.into_iter().chain(parsed.init_config) {
-        diagnose_options(&value, "", &mut diagnostics);
-        normalize_config_fonts(&mut value, &mut diagnostics);
-        config = mermaid_rs_renderer::source_config::merge_init_config(config, value);
-    }
+    let parsed = renderer(|| mermaid_rs_renderer::parse_mermaid_strict(source))?
+        .map_err(|e| e.to_string())?;
+    let values: Vec<_> = frontmatter
+        .into_iter()
+        .chain(parsed.init_config)
+        .map(|mut value| {
+            diagnose_options(&value, "", &mut diagnostics);
+            normalize_config_fonts(&mut value, &mut diagnostics);
+            value
+        })
+        .collect();
+    let mut config = renderer(|| {
+        let config = mermaid_rs_renderer::Config {
+            theme: mermaid_rs_renderer::Theme::modern(),
+            ..Default::default()
+        };
+        values.into_iter().fold(
+            config,
+            mermaid_rs_renderer::source_config::merge_init_config,
+        )
+    })?;
     config.theme.font_family = bundled_family(&config.theme.font_family);
-    let layout = mermaid_rs_renderer::compute_layout(&parsed.graph, &config.theme, &config.layout);
-    let dimensions = mermaid_rs_renderer::measure_svg_dimensions(&layout, &config.layout, None);
-    // Native SVGs for pie, C4, GitGraph and mindmap use CSS percentage widths.
-    // Supply their natural size explicitly for an actual-size native viewport.
-    let svg = mermaid_rs_renderer::render::render_svg_with_dimensions(
-        &layout,
-        &config.theme,
-        &config.layout,
-        Some((dimensions.width, dimensions.height)),
-    );
+    let svg = renderer(|| {
+        let layout =
+            mermaid_rs_renderer::compute_layout(&parsed.graph, &config.theme, &config.layout);
+        let dimensions = mermaid_rs_renderer::measure_svg_dimensions(&layout, &config.layout, None);
+        // Native SVGs for pie, C4, GitGraph and mindmap use CSS percentage widths.
+        // Supply their natural size explicitly for an actual-size native viewport.
+        mermaid_rs_renderer::render::render_svg_with_dimensions(
+            &layout,
+            &config.theme,
+            &config.layout,
+            Some((dimensions.width, dimensions.height)),
+        )
+    })?;
     validate_svg(&svg)?;
     Ok(DiagramOutput {
         pages: vec![DiagramPage {
