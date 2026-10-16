@@ -134,6 +134,12 @@ impl CommitFileSort {
         }
     }
 
+    /// Whether `list` offers this sort: one that reads the line diff has
+    /// nothing to order by in a list without one.
+    pub(in crate::view) const fn offered_by(self, list: FileListId) -> bool {
+        list.has_line_stats() || !self.needs_line_stats()
+    }
+
     /// Each option reads "Ascending"/"Descending" its own way -- path A→Z, file
     /// type by extension A→Z -- so the direction word is the same everywhere and
     /// the noun in front says what is being ordered. Edit size keeps

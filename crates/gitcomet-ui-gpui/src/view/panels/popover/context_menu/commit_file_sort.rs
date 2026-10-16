@@ -9,24 +9,6 @@ pub(super) fn model(
     model_for_sort(list, current)
 }
 
-/// Untracked entries carry no line diff, so the sorts that read one have
-/// nothing to order by and are left out of their menu. Path and file type
-/// read off the path alone, so they stay.
-fn sorts_for(
-    list: crate::view::rows::FileListId,
-) -> impl Iterator<Item = crate::view::rows::CommitFileSort> {
-    // Untracked files are in neither index lane, so git reports no counts or
-    // edits for them — those modes there would silently sort by path.
-    let lacks_line_stats = matches!(
-        list,
-        crate::view::rows::FileListId::Status(section)
-            if !crate::view::status_section_has_line_stats(section)
-    );
-    crate::view::rows::CommitFileSort::ALL
-        .into_iter()
-        .filter(move |sort| !(lacks_line_stats && sort.needs_line_stats()))
-}
-
 fn model_for_sort(
     list: crate::view::rows::FileListId,
     current: crate::view::rows::CommitFileSort,
@@ -45,7 +27,10 @@ fn model_for_sort(
         ContextMenuItem::Header(header.into()),
         ContextMenuItem::Separator,
     ];
-    for sort in sorts_for(list) {
+    for sort in crate::view::rows::CommitFileSort::ALL
+        .into_iter()
+        .filter(|sort| sort.offered_by(list))
+    {
         items.push(ContextMenuItem::Entry {
             label: sort.label().into(),
             icon: check(sort == current),

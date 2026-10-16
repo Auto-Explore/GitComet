@@ -1445,13 +1445,10 @@ impl DetailsPaneView {
                     .copied()
                     .map(crate::view::rows::CommitFileSort::from)
                     .unwrap_or(self.default_file_list_sort);
-                if let crate::view::rows::FileListId::Status(section) = list
-                    && sort.needs_line_stats()
-                    && !crate::view::status_section_has_line_stats(section)
-                {
-                    crate::view::rows::CommitFileSort::default()
-                } else {
+                if sort.offered_by(list) {
                     sort
+                } else {
+                    crate::view::rows::CommitFileSort::default()
                 }
             })
     }
@@ -1808,10 +1805,10 @@ impl DetailsPaneView {
                 // Untracked files have no line diff, so a default that reads one
                 // would leave the section in path order under a mode it does not
                 // offer.
-                if sort.needs_line_stats() && !crate::view::status_section_has_line_stats(section) {
-                    crate::view::rows::CommitFileSort::default()
-                } else {
+                if sort.offered_by(crate::view::rows::FileListId::Status(section)) {
                     sort
+                } else {
+                    crate::view::rows::CommitFileSort::default()
                 }
             })
     }
