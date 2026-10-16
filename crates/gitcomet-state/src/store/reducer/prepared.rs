@@ -527,7 +527,6 @@ fn needs_preparation(message: &Msg) -> bool {
             | Msg::GlobalNavForward { .. }
             | Msg::ReloadRepo { .. }
             | Msg::RepoExternallyChanged { .. }
-            | Msg::RepoActivated { .. }
             | Msg::SetTextOverride { .. }
             | Msg::FilesystemPathsChanged(_)
             | Msg::FilesystemFinished(_)
@@ -681,9 +680,6 @@ fn capture_message(
         }
         Msg::RepoExternallyChanged { repo_id, change } => {
             inputs.external_change(state, repos, *repo_id, change, None);
-        }
-        Msg::RepoActivated { repo_id } => {
-            inputs.external_change(state, repos, *repo_id, &RepoExternalChange::all(), None);
         }
         Msg::SetTextOverride {
             repo_id,
@@ -1156,6 +1152,71 @@ fn capture_command(
                     inputs.activation(state, repos, next);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::msg::{Effect, RepoCommandEffect};
+    use gitcomet_core::domain::{FileStatus, RepoSpec, RepoStatus};
+
+    #[test]
+    fn repo_activation_defers_selected_path_inputs_but_keeps_maintenance_clock() {
+        let repo_id = RepoId(1);
+        let repos = RepositoryRuntimes::default();
+        for kind in [FileStatusKind::Deleted, FileStatusKind::Modified] {
+            let path = PathBuf::from("vendor/submodule");
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: PathBuf::from("activation-preparation-test"),
+                },
+            );
+            repo.set_open(Loadable::Ready(()));
+            repo.set_status(Loadable::Ready(Arc::new(RepoStatus {
+                staged: Arc::default(),
+                unstaged: Arc::new(vec![FileStatus {
+                    path: path.clone(),
+                    kind,
+                    conflict: None,
+                }]),
+            })));
+            repo.diff_state.diff_target = Some(DiffTarget::working_tree(path, DiffArea::Unstaged));
+            repo.common_dir = Some(Arc::from(repo.spec.workdir.join(".git")));
+            let mut state = AppState::test_default();
+            state.maintenance_settings.recommend = true;
+            state.repos.push(repo);
+            state.active_repo = Some(repo_id);
+            let message = Msg::RepoActivated { repo_id };
+
+            assert!(!needs_preparation(&message));
+            assert!(capture_paths(&message, &state).0.is_empty());
+            let mut queries = InputQueries::default();
+            capture_message(&message, &state, &repos, &mut queries);
+            assert!(queries.head.is_empty());
+            assert!(queries.markers.is_empty());
+            assert!(!queries.needs_preferences);
+
+            let shared = RwLock::new(Arc::new(state));
+            let before = SystemTime::now();
+            let (_, inputs) = PreparedReduction::for_worker(message, &shared, &repos).into_parts();
+            assert!(inputs.head.is_empty());
+            assert!(inputs.markers.is_empty());
+            assert!(inputs.now() >= before && inputs.now() <= SystemTime::now());
+            let mut state = shared.into_inner().unwrap();
+            let state = Arc::make_mut(&mut state);
+            assert!(matches!(
+                super::super::maintenance::request_check(&inputs, state, repo_id),
+                Some(Effect::RepoCommand(RepoCommandEffect::CheckRepoMaintenance { repo_id: id }))
+                    if id == repo_id
+            ));
+            assert_eq!(
+                state.repos[0].maintenance.check_requested_at,
+                Some(inputs.now())
+            );
+            assert!(super::super::maintenance::request_check(&inputs, state, repo_id).is_none());
         }
     }
 }

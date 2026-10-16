@@ -303,6 +303,56 @@ fn selected_status(kind: FileStatusKind) -> Vec<FileStatus> {
 }
 
 #[test]
+fn checked_activation_refresh_keeps_selected_path_inputs() {
+    use crate::msg::RepoExternalChange;
+    use crate::store::reducer::prepared::PreparedReduction;
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::create_dir_all(directory.path().join("vendor/submodule")).unwrap();
+    fs::write(
+        directory.path().join("vendor/submodule/.git"),
+        b"gitdir: ../../.git/modules/submodule\n",
+    )
+    .unwrap();
+    for (change, kind, expected_head_queries) in [
+        (RepoExternalChange::all(), FileStatusKind::Deleted, 1),
+        (RepoExternalChange::all(), FileStatusKind::Modified, 0),
+        (RepoExternalChange::Index, FileStatusKind::Modified, 0),
+        (RepoExternalChange::Worktree, FileStatusKind::Modified, 0),
+    ] {
+        let (mut state, mut repos, target, queries) =
+            selected_fixture(directory.path(), Some(selected_status(kind)), Ok(true));
+        state.repos[0].diff_state.diff_target = Some(target.clone());
+        let shared = std::sync::RwLock::new(Arc::new(state));
+        // The checked monitor reply reaches preparation as an external change.
+        let (message, inputs) = PreparedReduction::for_worker(
+            Msg::RepoExternallyChanged {
+                repo_id: RepoId(1),
+                change,
+            },
+            &shared,
+            &repos,
+        )
+        .into_parts();
+        let mut state = shared.into_inner().unwrap();
+        let state = Arc::make_mut(&mut state);
+        let effects =
+            reducer::reduce_prepared(&inputs, &mut repos, &AtomicU64::new(2), state, message);
+
+        assert_eq!(
+            queries.try_iter().collect::<Vec<_>>(),
+            vec![target.file_path().unwrap().to_path_buf(); expected_head_queries]
+        );
+        assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmoduleSummary { repo_id: RepoId(1), target: requested }
+                if *requested == target
+        )));
+    }
+}
+
+#[test]
 fn selected_head_lookup_queries_only_deleted_and_unknown_status() {
     let directory = tempfile::tempdir().unwrap();
     for (status, expected_queries) in [
