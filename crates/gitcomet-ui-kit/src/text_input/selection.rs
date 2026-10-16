@@ -793,7 +793,6 @@ impl TextInput {
         offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        let offset = offset.min(content.len());
         let skipped: usize = content
             .reversed_chars_at(offset)
             .take_while(|ch| predicate(*ch))
@@ -808,7 +807,6 @@ impl TextInput {
         offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        let offset = offset.min(content.len());
         let skipped: usize = content
             .chars_at(offset)
             .take_while(|ch| predicate(*ch))
