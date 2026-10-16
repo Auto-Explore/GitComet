@@ -70,19 +70,22 @@ pub(crate) fn strip_annex_filter(repo: &mut gix::Repository) {
         .sections_by_name("filter")
         .into_iter()
         .flatten()
-        .any(|section| section.header().subsection_name() == Some("annex".into()));
+        .any(|section| section.header().subsection_name() == Some(ANNEX_FILTER_DRIVER.into()));
     if !has_annex_filter {
         return;
     }
     let mut config = repo.config_snapshot_mut();
     while config
-        .remove_section("filter", Some(gix::bstr::BStr::new("annex")))
+        .remove_section("filter", Some(gix::bstr::BStr::new(ANNEX_FILTER_DRIVER)))
         .is_some()
     {}
 }
 
 /// The `filter` attribute value Git LFS assigns, and its driver's name.
 pub(crate) const LFS_FILTER_DRIVER: &str = "lfs";
+
+/// The `filter` attribute value git-annex assigns, and its driver's name.
+pub(crate) const ANNEX_FILTER_DRIVER: &str = "annex";
 
 pub(crate) fn lfs_filter_configured(config: &gix::config::File) -> bool {
     ["filter.lfs.process", "filter.lfs.clean"]

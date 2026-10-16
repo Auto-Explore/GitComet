@@ -2011,7 +2011,8 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         let assignment = matched.assignment;
         if assignment.name.as_str() == "filter" {
             match assignment.state {
-                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"annex" => {}
+                gix::attrs::StateRef::Value(value)
+                    if value.as_bstr() == super::large_files::ANNEX_FILTER_DRIVER => {}
                 gix::attrs::StateRef::Value(value)
                     if value.as_bstr() == super::large_files::LFS_FILTER_DRIVER =>
                 {
