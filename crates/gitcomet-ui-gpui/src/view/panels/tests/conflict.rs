@@ -60,7 +60,7 @@ fn seed_conflict_scroll_matrix_state(
     });
 }
 
-fn reset_conflict_scroll_matrix_offsets(pane: &mut MainPaneView) {
+fn reset_conflict_scroll_matrix_offsets(pane: &mut DiffRenderer) {
     reset_uniform_list_offsets(&[
         &pane.conflict_resolver_diff_scroll,
         &pane.conflict_preview_ours_scroll,
@@ -363,7 +363,7 @@ fn load_synthetic_whole_file_conflict(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -376,7 +376,7 @@ fn load_synthetic_whole_file_conflict(
     });
 }
 
-fn assert_streamed_whole_file_two_way_state(pane: &MainPaneView, line_count: usize) -> usize {
+fn assert_streamed_whole_file_two_way_state(pane: &DiffRenderer, line_count: usize) -> usize {
     assert_eq!(
         pane.conflict_resolver.rendering_mode(),
         crate::view::conflict_resolver::ConflictRenderingMode::StreamedLargeFile,
@@ -443,7 +443,7 @@ struct ConflictScrollSnapshot {
     gutter: Pixels,
 }
 
-fn conflict_scroll_snapshot(pane: &MainPaneView) -> ConflictScrollSnapshot {
+fn conflict_scroll_snapshot(pane: &DiffRenderer) -> ConflictScrollSnapshot {
     ConflictScrollSnapshot {
         base: uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
         ours: uniform_list_offset(&pane.conflict_preview_ours_scroll).y,
@@ -457,7 +457,7 @@ fn read_conflict_scroll_snapshot(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> ConflictScrollSnapshot {
-    cx.update(|_window, app| conflict_scroll_snapshot(view.read(app).main_pane.read(app)))
+    cx.update(|_window, app| conflict_scroll_snapshot(view.read(app).diff_renderer.read(app)))
 }
 
 /// A multi-conflict fixture whose two sides have different line counts per

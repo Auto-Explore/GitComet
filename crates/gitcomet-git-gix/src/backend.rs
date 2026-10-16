@@ -1,5 +1,5 @@
 use crate::repo::GixRepo;
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::Error;
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
 use gitcomet_core::services::{
     CancellationToken, GitBackend, GitRepository, Result, WorktreeIgnoreMatcher,
@@ -67,17 +67,15 @@ impl GixBackend {
             cancellation.check_cancelled()?;
         }
 
-        let workdir = strip_windows_verbatim_prefix(
-            workdir
-                .canonicalize()
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?,
-        );
+        let workdir = strip_windows_verbatim_prefix(workdir.canonicalize().map_err(|error| {
+            Error::from(error).with_context("canonicalize repository", Some(workdir))
+        })?);
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
 
         let repo = crate::open::open_worktree_repo(&workdir)
-            .map_err(|e| crate::open::map_open_error(e, "gix open"))?;
+            .map_err(|e| crate::open::map_open_error(e, "gix open", &workdir))?;
         crate::refs::validate_open(&repo, cancellation)?;
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;

@@ -32,7 +32,9 @@ fn custom_lfs_status_stays_quiet(absolute: bool) {
         .watch(&cache.join("tmp"), notify::RecursiveMode::NonRecursive)
         .unwrap();
     for _ in 0..3 {
-        let status = repo.status().unwrap();
+        let status = repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert!(status.staged.is_empty() && status.unstaged.is_empty());
     }
     // One window covers all three: an earlier status's refresh would stay queued.
@@ -47,7 +49,13 @@ fn custom_lfs_status_stays_quiet(absolute: bool) {
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index_before);
     fs::write(root.join("asset.lfsbin"), vec![b'y'; 1024 * 1024]).unwrap();
     monitor.refresh();
-    assert!(!repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        !repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
     monitor.quiet();
 }
 

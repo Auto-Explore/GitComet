@@ -40,7 +40,7 @@ fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppCon
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -77,7 +77,7 @@ fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppCon
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.recompute_conflict_resolved_outline_for_tests(cx);
             });
         });
@@ -313,7 +313,7 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let base_arc: Arc<str> = pane.conflict_resolver.three_way_text.base.clone().into();
                 let ours_arc: Arc<str> = pane.conflict_resolver.three_way_text.ours.clone().into();
                 let theirs_arc: Arc<str> =
@@ -348,7 +348,7 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
     std::fs::remove_dir_all(&workdir).expect("cleanup shared conflict fixture");
 }
 
-fn assert_streamed_whole_file_three_way_state(pane: &MainPaneView, line_count: usize) {
+fn assert_streamed_whole_file_three_way_state(pane: &DiffRenderer, line_count: usize) {
     assert_eq!(
         pane.conflict_resolver.rendering_mode(),
         crate::view::conflict_resolver::ConflictRenderingMode::StreamedLargeFile,
@@ -430,7 +430,7 @@ fn whole_file_conflict_switch_to_three_way_stays_fully_reviewable(cx: &mut gpui:
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 assert_eq!(
                     pane.conflict_resolver.view_mode,
@@ -485,7 +485,7 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
                 cx.notify();
@@ -498,7 +498,7 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = pane
             .conflict_three_way_segments_cache
             .get(&(2, ThreeWayColumn::Ours))
@@ -546,7 +546,7 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
                 cx.notify();
@@ -588,7 +588,7 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
                 cx.notify();
@@ -690,7 +690,7 @@ fn three_way_view_survives_incomplete_line_syntax_fragments(cx: &mut gpui::TestA
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -726,7 +726,7 @@ fn three_way_view_survives_incomplete_line_syntax_fragments(cx: &mut gpui::TestA
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
                 cx.notify();
@@ -736,7 +736,7 @@ fn three_way_view_survives_incomplete_line_syntax_fragments(cx: &mut gpui::TestA
 
     cx.update(|window, app| {
         let _ = window.draw(app);
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = pane
             .conflict_three_way_segments_cache
             .get(&(0, ThreeWayColumn::Base))
@@ -771,7 +771,7 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -810,7 +810,7 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let index = pane
                     .conflict_resolver
                     .split_row_index()
@@ -937,7 +937,7 @@ fn large_conflict_bootstrap_uses_streamed_split_index_for_dense_huge_files(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -979,7 +979,7 @@ fn large_conflict_bootstrap_uses_streamed_split_index_for_dense_huge_files(
 
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
-            this.main_pane.update(_cx, |pane, _cx| {
+            this.diff_renderer.update(_cx, |pane, _cx| {
                 assert_eq!(
                     crate::view::conflict_resolver::conflict_count(
                         &pane.conflict_resolver.marker_segments
@@ -1089,7 +1089,7 @@ fn large_conflict_three_way_sides_get_background_syntax_documents(cx: &mut gpui:
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             // Set foreground budget to zero so all sides go to background.
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -1130,7 +1130,7 @@ fn large_conflict_three_way_sides_get_background_syntax_documents(cx: &mut gpui:
     // how quickly the deterministic test scheduler drains the queued task.
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
-            this.main_pane.update(_cx, |pane, _cx| {
+            this.diff_renderer.update(_cx, |pane, _cx| {
                 assert_eq!(
                     pane.conflict_resolver.conflict_syntax_language,
                     Some(rows::DiffSyntaxLanguage::Xml),
@@ -1145,7 +1145,7 @@ fn large_conflict_three_way_sides_get_background_syntax_documents(cx: &mut gpui:
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         if pane
             .conflict_three_way_prepared_syntax_documents
             .base
@@ -1204,7 +1204,7 @@ fn large_conflict_three_way_sides_get_background_syntax_documents(cx: &mut gpui:
     // and documents should be available for rendering.
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
-            this.main_pane.update(_cx, |pane, _cx| {
+            this.diff_renderer.update(_cx, |pane, _cx| {
                 assert!(!pane.conflict_three_way_syntax_inflight.base);
                 assert!(!pane.conflict_three_way_syntax_inflight.ours);
                 assert!(!pane.conflict_three_way_syntax_inflight.theirs);
@@ -1301,7 +1301,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -1338,7 +1338,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
                 cx.notify();
@@ -1351,7 +1351,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     });
 
     let fallback_split_highlights_hash = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = conflict_split_cached_styled(
             pane,
             crate::view::conflict_resolver::ConflictPickSide::Ours,
@@ -1432,7 +1432,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = conflict_split_cached_styled(
             pane,
             crate::view::conflict_resolver::ConflictPickSide::Ours,
@@ -1451,7 +1451,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 assert!(
                     pane.conflict_diff_segments_cache_split.is_empty(),
@@ -1470,7 +1470,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = pane
             .conflict_three_way_segments_cache
             .get(&(ours_comment_line_ix, ThreeWayColumn::Ours))
@@ -1492,7 +1492,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 assert!(
                     pane.conflict_diff_segments_cache_split.is_empty(),
@@ -1511,7 +1511,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = conflict_split_cached_styled(
             pane,
             crate::view::conflict_resolver::ConflictPickSide::Ours,
@@ -1582,7 +1582,7 @@ fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
 
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
-            this.main_pane.update(_cx, |pane, _cx| {
+            this.diff_renderer.update(_cx, |pane, _cx| {
                 assert_streamed_whole_file_two_way_state(pane, fixture.line_count);
                 assert!(
                     pane.conflict_resolved_output_projection.is_some(),
@@ -1593,7 +1593,7 @@ fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver_input.read(app).text(),
             "",
@@ -1603,7 +1603,7 @@ fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 assert_eq!(
@@ -1638,7 +1638,7 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -1678,7 +1678,7 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
 
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
-            this.main_pane.update(_cx, |pane, _cx| {
+            this.diff_renderer.update(_cx, |pane, _cx| {
                 let index = pane
                     .conflict_resolver
                     .split_row_index()
@@ -1742,7 +1742,7 @@ fn large_conflict_bootstrap_populates_resolved_outline_in_background(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -1783,7 +1783,7 @@ fn large_conflict_bootstrap_populates_resolved_outline_in_background(
 
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
-            this.main_pane.update(_cx, |pane, _cx| {
+            this.diff_renderer.update(_cx, |pane, _cx| {
                 let start_markers = pane
                     .conflict_resolver
                     .resolved_outline
@@ -1883,7 +1883,7 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 pane.recompute_conflict_resolved_outline_for_tests(cx);
             });
@@ -1892,7 +1892,7 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let conflict_line_ix =
                     usize::try_from(fixture.first_conflict_line.saturating_sub(1)).unwrap_or(0);
                 let conflict_meta = pane
@@ -1961,7 +1961,7 @@ fn giant_two_way_search_finds_text_in_middle_of_large_block(cx: &mut gpui::TestA
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
                 assert_streamed_whole_file_two_way_state(pane, fixture.line_count);
 

@@ -6,7 +6,7 @@ use super::*;
 pub(super) struct GitCometWindowEntry {
     pub(super) handle: gpui::AnyWindowHandle,
     pub(super) view: gpui::WeakEntity<GitCometView>,
-    pub(super) main_pane: gpui::WeakEntity<MainPaneView>,
+    pub(super) diff_renderer: gpui::WeakEntity<DiffRenderer>,
     pub(super) documents: gpui::WeakEntity<crate::view::documents::DocumentsView>,
     pub(super) view_mode: GitCometViewMode,
     pub(super) diff_fallback_enabled: bool,
@@ -60,19 +60,17 @@ fn filesystem_document_windows(
         .unwrap_or_default()
 }
 
-fn filesystem_editor_windows(cx: &App) -> Vec<gpui::WeakEntity<MainPaneView>> {
-    cx.try_global::<GitCometWindowRegistry>()
-        .map(|r| r.windows.values().map(|w| w.main_pane.clone()).collect())
-        .unwrap_or_default()
+fn filesystem_document_owners(cx: &App) -> Vec<crate::view::documents::buffers::DocumentOwner> {
+    filesystem_document_windows(cx)
+        .into_iter()
+        .filter_map(|documents| Some(documents.upgrade()?.read(cx).document_owner()))
+        .collect()
 }
 
 pub(crate) fn filesystem_has_unsaved_buffers(paths: &[PathBuf], cx: &App) -> bool {
     filesystem_document_windows(cx).iter().any(|docs| {
         docs.upgrade()
             .is_some_and(|docs| docs.read(cx).filesystem_has_unsaved(paths, cx))
-    }) || filesystem_editor_windows(cx).iter().any(|pane| {
-        pane.upgrade()
-            .is_some_and(|pane| pane.read(cx).filesystem_has_unsaved(paths))
     })
 }
 
@@ -86,32 +84,20 @@ pub(crate) fn filesystem_unsaved_buffer_paths(paths: &[PathBuf], cx: &App) -> Ve
 }
 
 pub(crate) fn resolve_filesystem_buffers(paths: &[PathBuf], save: bool, cx: &mut App) {
-    for docs in filesystem_document_windows(cx) {
-        let _ = docs.update(cx, |docs, cx| docs.filesystem_resolve(paths, save, cx));
-    }
-    for pane in filesystem_editor_windows(cx) {
-        let _ = pane.update(cx, |pane, cx| {
-            pane.filesystem_resolve_unsaved(paths, save, cx)
-        });
+    for owner in filesystem_document_owners(cx) {
+        owner.resolve(None, Some(paths), save, cx);
     }
 }
 
 pub(crate) fn filesystem_saves_drained(cx: &App) -> bool {
-    filesystem_document_windows(cx).iter().all(|docs| {
-        docs.upgrade()
-            .is_none_or(|docs| docs.read(cx).saves_drained(cx))
-    }) && filesystem_editor_windows(cx).iter().all(|pane| {
-        pane.upgrade()
-            .is_none_or(|pane| pane.read(cx).filesystem_saves_drained())
-    })
+    filesystem_document_owners(cx)
+        .iter()
+        .all(|owner| owner.saves_drained(None) && owner.operations_drained(cx))
 }
 
 pub(crate) fn pause_filesystem_editors(id: gitcomet_core::filesystem::OperationId, cx: &mut App) {
-    for docs in filesystem_document_windows(cx) {
-        let _ = docs.update(cx, |docs, cx| docs.filesystem_pause(id, cx));
-    }
-    for pane in filesystem_editor_windows(cx) {
-        let _ = pane.update(cx, |pane, cx| pane.filesystem_pause(id, cx));
+    for owner in filesystem_document_owners(cx) {
+        owner.pause_presenters(id, cx);
     }
 }
 
@@ -123,15 +109,8 @@ pub(crate) fn finish_filesystem_editors(
     redo: bool,
     cx: &mut App,
 ) {
-    for docs in filesystem_document_windows(cx) {
-        let _ = docs.update(cx, |docs, cx| {
-            docs.filesystem_finish(id, changes, versions, cx)
-        });
-    }
-    for pane in filesystem_editor_windows(cx) {
-        let _ = pane.update(cx, |pane, cx| {
-            pane.filesystem_finish(id, changes, versions, cx)
-        });
+    for owner in filesystem_document_owners(cx) {
+        owner.finish_presenters(id, changes, versions, cx);
     }
     let views: Vec<_> = cx
         .try_global::<GitCometWindowRegistry>()
@@ -205,7 +184,7 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
     cx: &mut C,
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
-    main_pane: gpui::WeakEntity<MainPaneView>,
+    diff_renderer: gpui::WeakEntity<DiffRenderer>,
     documents: gpui::WeakEntity<crate::view::documents::DocumentsView>,
     view_mode: GitCometViewMode,
     workspace_id: Option<session::WorkspaceId>,
@@ -223,7 +202,7 @@ pub(crate) fn sync_gitcomet_window_registry<C>(
             }),
         handle,
         view,
-        main_pane,
+        diff_renderer,
         documents,
         view_mode,
         workspace_id,

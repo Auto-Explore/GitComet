@@ -124,7 +124,14 @@ pub(super) fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
 pub(super) fn diff_content_line_text(
     line: &AnnotatedDiffLine,
 ) -> gitcomet_core::file_diff::FileDiffLineText {
-    let content_start = match line.kind {
+    diff_content_line_slice(line.kind, &line.text)
+}
+
+pub(super) fn diff_content_line_slice(
+    kind: gitcomet_core::domain::DiffLineKind,
+    text: &gitcomet_core::domain::SharedLineText,
+) -> gitcomet_core::file_diff::FileDiffLineText {
+    let content_start = match kind {
         gitcomet_core::domain::DiffLineKind::Add
         | gitcomet_core::domain::DiffLineKind::Remove
         | gitcomet_core::domain::DiffLineKind::Context => 1,
@@ -132,9 +139,8 @@ pub(super) fn diff_content_line_text(
             0
         }
     };
-    line.text
-        .slice(content_start..line.text.len())
-        .unwrap_or_else(|| line.text.clone())
+    text.slice(content_start..text.len())
+        .unwrap_or_else(|| text.clone())
         .into()
 }
 
@@ -1262,6 +1268,61 @@ mod tests {
         assert!(!patch.contains("-line3"));
         assert!(!patch.contains("+line3_mod"));
         assert!(patch.contains(" line3_mod"));
+    }
+
+    fn text_svg(family: &str) -> Vec<u8> {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80">
+            <text x="10" y="55" font-family="{family}" font-size="40">Labels</text></svg>"#
+        )
+        .into_bytes()
+    }
+
+    /// Conflict previews parsed SVG without fonts, so their text disappeared
+    /// until detail tiles arrived.
+    #[test]
+    fn svg_text_survives_conflict_preview() {
+        for family in [
+            "IBM Plex Sans",
+            "Lilex",
+            "sans-serif",
+            "monospace",
+            "system-ui",
+        ] {
+            let png = rasterize_svg_preview_png(&text_svg(family)).unwrap();
+            let image = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert!(
+                image.pixels().filter(|p| p[0] < 128).count() > 100,
+                "conflict SVG preview lost font-family={family}"
+            );
+        }
+    }
+
+    #[test]
+    fn svg_text_survives_bounded_image_preview() {
+        for family in [
+            "IBM Plex Sans",
+            "Lilex",
+            "sans-serif",
+            "monospace",
+            "system-ui",
+        ] {
+            let tree = crate::view::image_preview::svg::parse(&text_svg(family)).unwrap();
+            let preview =
+                crate::view::panes::diff::diff_cache::render_svg_image_diff_preview(&tree).unwrap();
+            assert!(
+                preview
+                    .as_bytes(0)
+                    .unwrap()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[0] < 128)
+                    .count()
+                    > 100,
+                "bounded SVG preview lost font-family={family}"
+            );
+        }
     }
 
     #[test]

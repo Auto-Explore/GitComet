@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 /// One cache per repository load epoch. Cancelling/reopening a repo drops it,
 /// so a previously suppressed listing cannot strand a reset view in NotLoaded.
 #[derive(Clone, Default)]
-pub(super) struct WorktreeListPublisher {
+pub(in crate::store) struct WorktreeListPublisher {
     latest: Arc<Mutex<Option<WorktreeListSnapshot>>>,
 }
 

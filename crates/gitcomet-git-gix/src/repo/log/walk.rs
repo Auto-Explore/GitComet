@@ -1,3 +1,4 @@
+use super::topology::TopologyWalk;
 use super::*;
 
 pub(crate) fn empty_log_page() -> LogPage {
@@ -86,7 +87,9 @@ pub(crate) fn shallow_snapshot(repo: &gix::Repository) -> Result<super::ShallowS
             return Err(Error::new(ErrorKind::Backend(format!(
                 "read shallow boundary {}: {error}",
                 path.display()
-            ))));
+            )))
+            .with_source(error)
+            .with_context("read shallow boundary", Some(&path)));
         }
     };
 
@@ -137,7 +140,7 @@ pub(crate) fn log_paged_walk_filter(
     filter
 }
 
-pub(crate) fn new_commit_time_walk(
+pub(super) fn new_commit_time_walk(
     repo: &gix::ThreadSafeRepository,
     tips: &[gix::ObjectId],
     parents: gix::traverse::commit::Parents,
@@ -157,7 +160,7 @@ pub(crate) fn new_commit_time_walk(
         .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
             CommitTimeOrder::NewestFirst,
         ))
-        .map_err(|e| crate::repo::object_store::gix_error("gix walk", &e))?
+        .map_err(|e| crate::repo::object_store::gix_error("gix walk", e))?
         // Set after the sorting, the way `rev_walk` does: first-parent mode
         // walks the chain in order rather than by date, and asking for it
         // swaps the queue.
@@ -166,7 +169,7 @@ pub(crate) fn new_commit_time_walk(
     ))
 }
 
-pub(crate) fn new_log_paged_walk(
+pub(super) fn new_log_paged_walk(
     repo: &gix::ThreadSafeRepository,
     tips: impl IntoIterator<Item = gix::ObjectId>,
     mode: HistoryMode,
@@ -243,7 +246,7 @@ pub(crate) fn new_log_paged_walk(
                 }
                 return Err(crate::repo::object_store::gix_error(
                     "gix date-order walk",
-                    &error,
+                    error,
                 ));
             }
         }
@@ -557,7 +560,7 @@ impl DecodeWorkers {
 /// Returns the commits found and whether the walk still has more to give; the
 /// caller parks `walk_state` in the walk cache so the next page picks up where
 /// this one stopped instead of re-traversing from the tip.
-pub(crate) fn log_page_from_paged_walk_state(
+pub(super) fn log_page_from_paged_walk_state(
     repo: &gix::ThreadSafeRepository,
     walk_state: &mut super::LogPagedWalkState,
     limit: usize,
@@ -609,7 +612,7 @@ pub(crate) fn log_page_from_paged_walk_state(
                         if let Some(cancellation) = cancellation {
                             cancellation.check_cancelled()?;
                         }
-                        return Err(crate::repo::object_store::gix_error("gix walk", &*error));
+                        return Err(crate::repo::object_store::gix_error("gix walk", error));
                     }
                 };
 

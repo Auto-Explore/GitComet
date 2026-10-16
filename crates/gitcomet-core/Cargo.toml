@@ -12,9 +12,10 @@ workspace = true
 
 [features]
 test-support = []
-benchmarks = []
+benchmarks = ["gitcomet-base/benchmarks"]
 
 [dependencies]
+gitcomet-base = { workspace = true }
 chardetng = { workspace = true }
 encoding_rs = { workspace = true }
 faster-hex = { workspace = true }

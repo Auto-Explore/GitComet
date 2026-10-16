@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{AppState, RepoState};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, RepoSpec};
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use std::sync::atomic::AtomicU64;
@@ -25,7 +26,7 @@ fn available_state_with_repo(repo_id: RepoId) -> AppState {
 }
 
 fn dispatch(state: &mut AppState, msg: Msg) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(99);
     let _ = reduce(&mut repos, &id_alloc, state, msg);
 }

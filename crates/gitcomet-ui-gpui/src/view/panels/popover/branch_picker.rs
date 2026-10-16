@@ -663,6 +663,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         let repo_id = repo.id;
                         let name = branch.name.clone();
                         let label: SharedString = name.clone().into();
+                        let tone =
+                            crate::view::menu_presentation::context_menu_tone(label.as_ref(), None);
                         menu = menu.child(
                             components::ContextMenuEntry::new(
                                 ("branch_item", ix),
@@ -672,6 +674,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                         components::TruncatedTextTooltipMode::FullTextIfTruncated,
                                     ),
                             )
+                            .tone(tone)
                             .tooltip_host(this.tooltip_host.clone())
                             .on_select(
                                 theme,

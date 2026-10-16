@@ -160,9 +160,9 @@ impl GitCometView {
                             mergetool_collapse_unchanged,
                             mergetool_output_scroll_sync,
                             mergetool_show_line_numbers,
-                        ) = this.main_pane.read(cx).mergetool_preferences();
+                        ) = this.diff_renderer.read(cx).mergetool_preferences();
                         let mergetool_view_three_way =
-                            this.main_pane.read(cx).mergetool_view_three_way;
+                            this.diff_renderer.read(cx).mergetool_view_three_way;
                         let group_layout = this.current_workspace_layout(cx);
                         let sidebar_width = group_layout.sidebar_width;
                         let details_width = group_layout.details_width;

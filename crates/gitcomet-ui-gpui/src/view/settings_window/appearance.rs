@@ -160,7 +160,7 @@ impl SettingsWindowView {
         if self.expanded_section == Some(SettingsSection::WindowControls) {
             let mut detail =
                 self.detail_container("settings_window_window_controls_container", theme);
-            for mode in crate::window_controls::WindowControlsMode::ALL {
+            for mode in crate::kit::window_chrome::controls::WindowControlsMode::ALL {
                 detail = detail.child(
                     self.option_row(
                         format!("settings_window_window_controls_{}", mode.key()),

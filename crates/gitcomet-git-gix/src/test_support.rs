@@ -1,15 +1,64 @@
-//! The git and repository opens the crate's unit tests share. git runs with
-//! an empty global config and no system config, and gix opens read the
-//! repository's own config alone, so both see the same settings.
-
+#[cfg(test)]
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::sync::OnceLock;
-
-#[cfg(unix)]
+#[cfg(test)]
+use std::process::Output;
+#[cfg(all(test, unix))]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt as _};
 
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TestGitCommandEnvironment {
+    global_config: PathBuf,
+    home_dir: PathBuf,
+    xdg_config_home: PathBuf,
+    gnupg_home: PathBuf,
+}
+
+static TEST_GIT_COMMAND_ENVIRONMENT: OnceLock<TestGitCommandEnvironment> = OnceLock::new();
+
+pub fn install_test_git_command_environment(
+    global_config: PathBuf,
+    home_dir: PathBuf,
+    xdg_config_home: PathBuf,
+    gnupg_home: PathBuf,
+) {
+    let env = TestGitCommandEnvironment {
+        global_config,
+        home_dir,
+        xdg_config_home,
+        gnupg_home,
+    };
+    if let Some(existing) = TEST_GIT_COMMAND_ENVIRONMENT.get() {
+        assert_eq!(
+            existing, &env,
+            "test git command environment already initialized"
+        );
+        return;
+    }
+    let _ = TEST_GIT_COMMAND_ENVIRONMENT.set(env);
+}
+
+pub(crate) fn apply_git_command_environment(cmd: &mut Command) {
+    let Some(env) = TEST_GIT_COMMAND_ENVIRONMENT.get() else {
+        return;
+    };
+
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
+    cmd.env("HOME", &env.home_dir);
+    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
+    cmd.env("GNUPGHOME", &env.gnupg_home);
+    cmd.arg("-c").arg("protocol.file.allow=always");
+}
+
+pub fn allow_test_repo_local_mergetool_command(repo: &Path, tool_name: &str) {
+    crate::repo::allow_test_repo_local_mergetool_command(repo, tool_name);
+}
+
+#[cfg(test)]
 struct TestGitEnv {
     _root: tempfile::TempDir,
     global_config: PathBuf,
@@ -18,6 +67,7 @@ struct TestGitEnv {
     gnupg_home: PathBuf,
 }
 
+#[cfg(test)]
 fn ensure_isolated_git_test_env() -> &'static TestGitEnv {
     static ENV: OnceLock<TestGitEnv> = OnceLock::new();
     ENV.get_or_init(|| {
@@ -53,6 +103,7 @@ fn ensure_isolated_git_test_env() -> &'static TestGitEnv {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn git_command() -> Command {
     let env = ensure_isolated_git_test_env();
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
@@ -67,6 +118,7 @@ pub(crate) fn git_command() -> Command {
     cmd
 }
 
+#[cfg(test)]
 pub(crate) fn git_output(workdir: &Path, args: &[&str]) -> Output {
     git_command()
         .arg("-C")
@@ -76,6 +128,7 @@ pub(crate) fn git_output(workdir: &Path, args: &[&str]) -> Output {
         .expect("spawn git")
 }
 
+#[cfg(test)]
 pub(crate) fn git_success(workdir: &Path, args: &[&str]) {
     let output = git_output(workdir, args);
     assert!(
@@ -88,6 +141,7 @@ pub(crate) fn git_success(workdir: &Path, args: &[&str]) {
 }
 
 /// Trimmed stdout of a git command that must succeed.
+#[cfg(test)]
 pub(crate) fn git_stdout(workdir: &Path, args: &[&str]) -> String {
     let output = git_output(workdir, args);
     assert!(
@@ -102,6 +156,7 @@ pub(crate) fn git_stdout(workdir: &Path, args: &[&str]) -> String {
         .to_string()
 }
 
+#[cfg(test)]
 pub(crate) fn git_expect_failure(workdir: &Path, args: &[&str]) -> Output {
     let output = git_output(workdir, args);
     assert!(
@@ -114,6 +169,7 @@ pub(crate) fn git_expect_failure(workdir: &Path, args: &[&str]) -> Output {
     output
 }
 
+#[cfg(test)]
 pub(crate) fn init_test_repo(workdir: &Path) {
     let _ = ensure_isolated_git_test_env();
     git_success(workdir, &["init"]);
@@ -132,6 +188,7 @@ pub(crate) fn init_test_repo(workdir: &Path) {
     );
 }
 
+#[cfg(test)]
 pub(crate) fn write_file(workdir: &Path, relative: &str, contents: &str) {
     let path = workdir.join(relative);
     if let Some(parent) = path.parent() {
@@ -142,12 +199,14 @@ pub(crate) fn write_file(workdir: &Path, relative: &str, contents: &str) {
 
 /// Reads only the repository's own config, as `git_command` runs git: a
 /// developer's global config must not decide what a test sees.
+#[cfg(test)]
 pub(crate) fn open_gix(workdir: &Path) -> gix::Repository {
     crate::open::open_worktree_repo_with(workdir, gix::open::Permissions::isolated())
         .expect("open repo")
 }
 
 /// [`open_gix`], as the crate's repository.
+#[cfg(test)]
 pub(crate) fn open_repo(workdir: &Path) -> crate::repo::GixRepo {
     crate::repo::GixRepo::new(workdir.to_path_buf(), open_gix(workdir).into_sync())
 }

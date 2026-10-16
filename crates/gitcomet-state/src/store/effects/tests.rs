@@ -1,8 +1,11 @@
 use super::*;
+use crate::msg::ControlEffect;
+use crate::store::repository_runtime::RepoTaskScope;
+use gitcomet_core::services::GitRepository;
 
 #[test]
 fn selecting_a_new_diff_cancels_only_the_previous_diff() {
-    let mut token = RepoTaskToken::new(1);
+    let mut token = RepoTaskScope::new(crate::model::RepoLoadEpoch(1));
     let a = DiffTarget::working_tree("a".into(), gitcomet_core::domain::DiffArea::Unstaged);
     let b = DiffTarget::working_tree("b".into(), gitcomet_core::domain::DiffArea::Unstaged);
     let first = token.selected_diff_cancellation(&a, 1);
@@ -84,9 +87,10 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
     let executor = TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(NoBackend);
     let mut repo_monitors = RepoMonitorManager::new();
-    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> =
-        ids.iter().map(|&id| (id, RepoTaskToken::new(0))).collect();
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
+    for repo in &thread_state.read().unwrap().repos {
+        repos.start_load_scope(repo.id, repo.lifetime_id(), repo.load_epoch);
+    }
     let id_alloc = std::sync::atomic::AtomicU64::new(1);
     let mut ctx = WorkerLoopContext {
         commit_identity: &crate::store::EMPTY_TEST_COMMIT_IDENTITY,
@@ -94,7 +98,6 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
         active_repo_id: &active_repo_id,
         event_tx: &event_tx,
         repo_monitors: &mut repo_monitors,
-        repo_task_tokens: &mut repo_task_tokens,
         thread_msg_tx: &thread_msg_tx,
         executor: &executor,
         repo_load_executor: &executor,
@@ -118,14 +121,12 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
     );
 
     // Tokens holding work are still checked against the new state.
-    let refreshed = ctx
-        .repo_task_tokens
-        .get_mut(&RepoId(2))
+    let refreshed = repos
+        .load_scope_mut(&RepoId(2))
         .unwrap()
         .selected_diff_cancellation(&target, 1);
-    let closed = ctx
-        .repo_task_tokens
-        .get_mut(&RepoId(3))
+    let closed = repos
+        .load_scope_mut(&RepoId(3))
         .unwrap()
         .selected_diff_cancellation(&target, 1);
     ctx.reduce_and_handle(&mut repos, &id_alloc, |_, _, _| Vec::<Effect>::new());
@@ -146,17 +147,21 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
 
 #[test]
 fn abort_clone_repo_does_not_require_available_git() {
-    assert!(!effect_requires_available_git(&Effect::AbortCloneRepo {
-        dest: std::path::PathBuf::from("/tmp/example"),
-    }));
+    assert!(
+        !Effect::Control(ControlEffect::AbortCloneRepo {
+            dest: std::path::PathBuf::from("/tmp/example"),
+        })
+        .requires_available_git()
+    );
 }
 
 #[test]
 fn cancel_git_operation_does_not_require_available_git() {
-    assert!(!effect_requires_available_git(
-        &Effect::CancelGitOperation {
+    assert!(
+        !Effect::Control(ControlEffect::CancelGitOperation {
             repo_id: RepoId(1),
             operation_id: gitcomet_core::git_operation::GitOperationId(7),
-        }
-    ));
+        })
+        .requires_available_git()
+    );
 }

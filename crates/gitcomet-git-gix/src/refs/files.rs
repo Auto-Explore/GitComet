@@ -16,9 +16,11 @@ pub(crate) fn reflog_lines_rev(
         return Ok(Vec::new());
     }
 
-    let Some(iter) = platform
-        .rev()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?
+    let Some(iter) = platform.rev().map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}")))
+            .with_source(e)
+            .with_context("read Git reflog", None)
+    })?
     else {
         return Ok(Vec::new());
     };
@@ -84,12 +86,16 @@ fn collect_loose_local_branches_fast(
             "read refs dir {}: {e}",
             dir.display()
         )))
+        .with_source(e)
+        .with_context("read refs directory", Some(dir))
     })? {
         let entry = entry.map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "read refs dir entry {}: {e}",
                 dir.display()
             )))
+            .with_source(e)
+            .with_context("read refs directory entry", Some(dir))
         })?;
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| {
@@ -97,6 +103,8 @@ fn collect_loose_local_branches_fast(
                 "read refs file type {}: {e}",
                 path.display()
             )))
+            .with_source(e)
+            .with_context("read ref file type", Some(&path))
         })?;
 
         if file_type.is_dir() {
@@ -124,6 +132,8 @@ fn collect_loose_local_branches_fast(
                     "read branch ref {}: {e}",
                     path.display()
                 )))
+                .with_source(e)
+                .with_context("read branch ref", Some(&path))
             })?;
 
         let Some(target_id) = parse_loose_ref_target_id(scratch) else {

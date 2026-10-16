@@ -39,7 +39,7 @@ pub(crate) fn initialize_repository_preferences(
     }
     let mut workdirs = match key {
         RepositoryKey::CommonDir(_) => repo
-            .list_worktrees()
+            .list_worktrees(&gitcomet_core::services::CancellationToken::new())
             .ok()
             .map(|worktrees| {
                 worktrees

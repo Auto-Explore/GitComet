@@ -1,5 +1,6 @@
 use crate::model::{BranchExistsPromptOperation, BranchExistsPromptState};
 use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend, GitRepository};
@@ -8,7 +9,7 @@ use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, RepoMap, message_subject, missing_repo_error, path_context, paths_context,
+    GitOperationTask, message_subject, missing_repo_error, path_context, paths_context,
     send_or_log, short_commit_id, single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
 
@@ -20,7 +21,7 @@ use super::util::{
 /// leave the stage, unstage and discard controls disabled for good.
 fn spawn_repo_action(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     repo_id: RepoId,
     msg_tx: StoreWorkerSender,
     action: RepoActionKind,
@@ -40,7 +41,7 @@ fn spawn_repo_action(
 
 fn schedule_repo_action_with_hook<F, H, M>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     action: RepoActionKind,
@@ -76,7 +77,7 @@ fn schedule_repo_action_with_hook<F, H, M>(
 
 fn schedule_repo_action_with_result<T, F, M>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     label: &'static str,
@@ -89,7 +90,7 @@ fn schedule_repo_action_with_result<T, F, M>(
     M: FnOnce(RepoId, Result<T, Error>) -> InternalMsg + Send + 'static,
 {
     // See `spawn_repo_action`: a missing handle must still complete the action.
-    if !repos.contains_key(&repo_id) {
+    if !repos.has_repository(&repo_id) {
         if !msg_tx.is_cancelled() {
             send_or_log(
                 &msg_tx,
@@ -122,7 +123,7 @@ fn repo_action_finished(
 
 fn schedule_repo_action<F>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     action: RepoActionKind,
@@ -211,7 +212,7 @@ fn open_worktree_holding_branch(
             path.display()
         ))));
     }
-    let current = handle.current_branch()?;
+    let current = handle.current_branch(&gitcomet_core::services::CancellationToken::new())?;
     if current != branch {
         return Err(Error::new(ErrorKind::Backend(format!(
             "the worktree at '{}' no longer has branch '{branch}' checked out",
@@ -255,7 +256,7 @@ fn finish_branch_collision(
 #[allow(clippy::too_many_arguments)]
 fn schedule_branch_action(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -318,7 +319,7 @@ fn schedule_branch_action(
 
 pub(super) fn schedule_checkout_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -343,7 +344,7 @@ pub(super) fn schedule_checkout_branch(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_checkout_remote_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -385,7 +386,7 @@ pub(super) fn schedule_checkout_remote_branch(
 
 pub(super) fn schedule_checkout_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -406,7 +407,7 @@ pub(super) fn schedule_checkout_commit(
 
 pub(super) fn schedule_create_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -432,7 +433,7 @@ pub(super) fn schedule_create_branch(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_create_branch_and_checkout(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -519,7 +520,7 @@ pub(super) fn schedule_create_branch_and_checkout(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_rename_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -593,7 +594,7 @@ pub(super) fn schedule_rename_branch(
 
 pub(super) fn schedule_delete_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -623,7 +624,7 @@ pub(super) fn schedule_delete_branch(
 /// failures are summarised into one error rather than aborting on the first.
 pub(super) fn schedule_delete_branches(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     names: Vec<String>,
@@ -704,7 +705,7 @@ fn delete_branches_failure_message(
 
 pub(super) fn schedule_force_delete_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -725,7 +726,7 @@ pub(super) fn schedule_force_delete_branch(
 
 pub(super) fn schedule_stage_path(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -755,7 +756,7 @@ pub(super) fn schedule_stage_path(
 
 pub(super) fn schedule_stage_paths(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
@@ -786,7 +787,7 @@ pub(super) fn schedule_stage_paths(
 
 pub(super) fn schedule_unstage_path(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -816,7 +817,7 @@ pub(super) fn schedule_unstage_path(
 
 pub(super) fn schedule_unstage_paths(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
@@ -847,7 +848,7 @@ pub(super) fn schedule_unstage_paths(
 
 pub(super) fn schedule_discard_worktree_changes_path(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -877,7 +878,7 @@ pub(super) fn schedule_discard_worktree_changes_path(
 
 pub(super) fn schedule_discard_worktree_changes_paths(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: Vec<PathBuf>,
@@ -908,7 +909,7 @@ pub(super) fn schedule_discard_worktree_changes_paths(
 
 pub(super) fn schedule_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
@@ -934,7 +935,7 @@ pub(super) fn schedule_commit(
 
 pub(super) fn schedule_commit_amend(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
@@ -960,7 +961,7 @@ pub(super) fn schedule_commit_amend(
 
 pub(super) fn schedule_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
@@ -991,7 +992,7 @@ pub(super) fn schedule_stash(
 
 pub(super) fn schedule_apply_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
@@ -1009,7 +1010,7 @@ pub(super) fn schedule_apply_stash(
 
 pub(super) fn schedule_pop_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
@@ -1053,7 +1054,7 @@ pub(super) fn schedule_pop_stash(
 
 pub(super) fn schedule_drop_stash(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,

@@ -75,13 +75,13 @@ index 1111111..2222222 100644
 
 /// First changed collapsed file row at or after `from`, as a source-visible index.
 fn collapsed_first_changed_source_visible_ix(
-    pane: &crate::view::panes::main::MainPaneView,
+    pane: &crate::view::panes::diff::DiffRenderer,
     from: usize,
 ) -> usize {
     (from..pane.collapsed_diff_visible_rows.len())
         .find(|&source_visible_ix| {
             pane.collapsed_visible_row(source_visible_ix)
-                .and_then(crate::view::panes::main::CollapsedDiffVisibleRow::row_ix)
+                .and_then(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::row_ix)
                 .is_some_and(|row_ix| pane.file_diff_row_is_change(row_ix))
         })
         .unwrap_or_else(|| panic!("expected a changed collapsed file row at or after {from}"))
@@ -124,7 +124,7 @@ index 1111111..2222222 100644
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = DiffViewMode::Inline;
             });
             this.set_diff_word_wrap(false, cx);
@@ -161,7 +161,7 @@ index 1111111..2222222 100644
     });
     cx.update(|_window, app| {
         assert!(crate::view::test_support::diff_word_wrap(view.read(app)));
-        assert!(view.read(app).main_pane.read(app).diff_word_wrap);
+        assert!(view.read(app).diff_renderer.read(app).diff_word_wrap);
     });
     draw_and_drain_test_window(cx);
     assert!(
@@ -173,7 +173,7 @@ index 1111111..2222222 100644
         "word wrap on should suppress the horizontal scrollbar"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_visible_len() > pane.file_diff_inline_row_len(),
             "word wrap should expand long logical rows into continuation visual rows"
@@ -188,7 +188,7 @@ index 1111111..2222222 100644
 
     let (_continuation_ix, source_visible_ix, continuation_start, continuation_text) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             pane.diff_wrap_visible_rows
                 .iter()
                 .enumerate()
@@ -220,8 +220,8 @@ index 1111111..2222222 100644
         });
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
                 source_visible_ix,
                 region: DiffTextRegion::Inline,
@@ -243,7 +243,7 @@ index 1111111..2222222 100644
     );
 
     let full_wrapped_line = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let full = pane
             .diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline)
             .to_string();
@@ -258,8 +258,8 @@ index 1111111..2222222 100644
         full
     });
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
                 source_visible_ix,
                 region: DiffTextRegion::Inline,
@@ -286,7 +286,7 @@ index 1111111..2222222 100644
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = "softwrapneedle".into();
                 pane.diff_search_input
@@ -298,7 +298,7 @@ index 1111111..2222222 100644
     rows::clear_diff_paint_log_for_tests();
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches.len(),
             1,
@@ -326,7 +326,7 @@ index 1111111..2222222 100644
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = soft_wrap_boundary_literal_query.clone().into();
                 let query_for_input = soft_wrap_boundary_literal_query.clone();
                 pane.diff_search_input
@@ -336,7 +336,7 @@ index 1111111..2222222 100644
         });
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches.len(),
             1,
@@ -359,7 +359,7 @@ index 1111111..2222222 100644
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = soft_wrap_boundary_query.clone().into();
                 let query_for_input = soft_wrap_boundary_query.clone();
                 pane.diff_search_input
@@ -369,7 +369,7 @@ index 1111111..2222222 100644
         });
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_matches.is_empty(),
             "search should not treat a soft-wrap boundary as a real newline"
@@ -377,7 +377,7 @@ index 1111111..2222222 100644
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = "softwrapneedle".into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("softwrapneedle", cx));
@@ -405,14 +405,14 @@ index 1111111..2222222 100644
 
     let key_before_resize = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_wrap_visible_cache_key
     });
     cx.simulate_resize(gpui::size(px(760.0), px(520.0)));
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_ne!(
             pane.diff_wrap_visible_cache_key, key_before_resize,
             "resizing should rebuild the wrap projection key"
@@ -472,7 +472,7 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 cx.notify();
             });
@@ -501,7 +501,7 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
 
     let (source_visible_ix, full_wrapped_line, next_source_visible_ix, next_source_line) = cx
         .update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let (source_visible_ix, full_wrapped_line) = pane
                 .diff_wrap_visible_rows
                 .iter()
@@ -547,8 +547,8 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
         });
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
                 source_visible_ix,
                 region: DiffTextRegion::SplitRight,
@@ -571,8 +571,8 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
     assert!(!full_wrapped_line.contains('\n'));
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
                 source_visible_ix,
                 region: DiffTextRegion::SplitRight,
@@ -625,7 +625,7 @@ fn collapsed_diff_word_wrap_continuation_rows_use_source_visible_row(
     draw_and_drain_test_window(cx);
 
     let (continuation_ix, source_visible_ix, expected_text) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_wrap_visible_rows
             .iter()
             .enumerate()
@@ -633,8 +633,11 @@ fn collapsed_diff_word_wrap_continuation_rows_use_source_visible_row(
                 if visual.wrap_ix == 0 {
                     return None;
                 }
-                let Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { row_ix }) =
-                    pane.collapsed_visible_row(visual.source_visible_ix)
+                let Some(
+                    crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::FileRow {
+                        row_ix,
+                    },
+                ) = pane.collapsed_visible_row(visual.source_visible_ix)
                 else {
                     return None;
                 };
@@ -658,7 +661,7 @@ fn collapsed_diff_word_wrap_continuation_rows_use_source_visible_row(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.scroll_diff_to_item_strict(continuation_ix, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
@@ -711,7 +714,7 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
 
     let (continuation_ix, source_visible_ix, selection_start, expected_text) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             pane.diff_wrap_visible_rows
                 .iter()
                 .enumerate()
@@ -719,7 +722,7 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
                     if visual.wrap_ix == 0 {
                         return None;
                     }
-                    let Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow {
+                    let Some(crate::view::panes::diff::helpers::state::CollapsedDiffVisibleRow::FileRow {
                         row_ix,
                     }) = pane.collapsed_visible_row(visual.source_visible_ix)
                     else {
@@ -750,8 +753,8 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
     );
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
                 source_visible_ix,
                 region: DiffTextRegion::Inline,
@@ -766,7 +769,7 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
             pane.sync_diff_focus_to_text_selection();
             cx.notify();
         });
-        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        let focus = diff_renderer.read(app).diff_panel_focus_handle.clone();
         window.focus(&focus, app);
         let _ = window.draw(app);
     });
@@ -780,7 +783,7 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
     );
 
     let full_wrapped_line = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let full = pane
             .diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline)
             .to_string();
@@ -795,8 +798,8 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
         full
     });
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
                 source_visible_ix,
                 region: DiffTextRegion::Inline,
@@ -852,7 +855,7 @@ fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppCont
 
     let marker = "right_payload_";
     let (source_visible_ix, marker_start, key_before_resize) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let (source_visible_ix, marker_start) = pane
             .diff_wrap_visible_rows
             .iter()
@@ -876,8 +879,8 @@ fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppCont
     });
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
                 source_visible_ix,
                 region: DiffTextRegion::Inline,
@@ -892,7 +895,7 @@ fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppCont
             pane.sync_diff_focus_to_text_selection();
             cx.notify();
         });
-        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        let focus = diff_renderer.read(app).diff_panel_focus_handle.clone();
         window.focus(&focus, app);
         let _ = window.draw(app);
     });
@@ -907,7 +910,7 @@ fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppCont
     cx.simulate_resize(gpui::size(px(650.0), px(420.0)));
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_ne!(
             pane.diff_wrap_visible_cache_key, key_before_resize,
             "resizing should rebuild wrapped visual rows"
@@ -933,7 +936,7 @@ fn assert_unwrapped_rows_measure_their_own_line(
     view: &gpui::Entity<super::super::super::GitCometView>,
 ) {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let mut shifted_rows = 0;
         for visible_ix in 0..pane.diff_wrap_visible_rows.len() {
             if pane.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
@@ -1024,7 +1027,7 @@ index 1111111..2222222 100644
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = DiffViewMode::Inline;
             });
             this.set_diff_word_wrap(true, cx);
@@ -1077,7 +1080,7 @@ index 1111111..2222222 100644
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = DiffViewMode::Inline;
             });
             this.set_diff_word_wrap(true, cx);
@@ -1099,7 +1102,7 @@ index 1111111..2222222 100644
     draw_and_drain_test_window(cx);
     let default_columns = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_wrap_visible_cache_key
             .expect("expected default wrap cache key")
@@ -1112,7 +1115,7 @@ index 1111111..2222222 100644
     draw_and_drain_test_window(cx);
     let zoomed_columns = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_wrap_visible_cache_key
             .expect("expected zoomed wrap cache key")
@@ -1134,7 +1137,7 @@ index 1111111..2222222 100644
     draw_and_drain_test_window(cx);
     let larger_editor_columns = cx.update(|_, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_wrap_visible_cache_key
             .expect("expected updated wrap cache after changing editor size")
@@ -1181,7 +1184,7 @@ async fn diff_word_wrap_column_count_consistency_with_available_width(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = DiffViewMode::Inline;
             });
             this.set_diff_word_wrap(true, cx);
@@ -1204,7 +1207,7 @@ async fn diff_word_wrap_column_count_consistency_with_available_width(
 
     let (inline_columns, char_width, show_line_numbers) = cx.update(|window, app| {
         let editor_font_family = crate::font_preferences::current_editor_font_family(app);
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let cache_key = pane
             .diff_wrap_visible_cache_key
             .expect("wrap cache key must be populated after rendering with wrap on");
@@ -1221,8 +1224,8 @@ async fn diff_word_wrap_column_count_consistency_with_available_width(
     // Compute expected text-area pixel width.
     let ui_scale_percent = 100u32;
     let content_width = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        crate::view::panes::main::pane_content_width_for_layout(
+        let pane = view.read(app).diff_renderer.read(app);
+        crate::view::panes::diff::pane_content_width_for_layout(
             pane.last_window_size.width,
             pane.layout_sidebar_render_width,
             pane.layout_details_render_width,
@@ -1332,7 +1335,7 @@ async fn diff_word_wrap_segments_are_maximal_for_their_column_budget(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = DiffViewMode::Inline;
             });
             this.set_diff_word_wrap(true, cx);
@@ -1354,7 +1357,7 @@ async fn diff_word_wrap_segments_are_maximal_for_their_column_budget(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let wrap_columns = pane
             .diff_wrap_visible_cache_key
             .expect("wrap cache key must be populated after rendering with wrap on")
@@ -1468,7 +1471,7 @@ async fn diff_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::T
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.diff_view = DiffViewMode::Inline;
             });
             this.set_diff_word_wrap(true, cx);
@@ -1491,8 +1494,8 @@ async fn diff_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::T
 
     cx.update(|window, app| {
         let editor_font_family = crate::font_preferences::current_editor_font_family(app);
-        let main_pane = view.read(app).main_pane.clone();
-        let measured = main_pane.update(app, |pane, cx| pane.diff_wrap_measure_font_family(cx));
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        let measured = diff_renderer.update(app, |pane, cx| pane.diff_wrap_measure_font_family(cx));
 
         assert_eq!(
             measured.as_ref(),
@@ -1555,7 +1558,7 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = diff_view;
                 pane.diff_selection_anchor = None;
                 pane.diff_selection_range = None;
@@ -1598,7 +1601,7 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
     );
 
     let (first_entry, second_entry) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let entries = pane.diff_nav_entries();
         let first_entry = entries[0];
         let second_entry = entries[1];
@@ -1638,13 +1641,13 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_selection_anchor,
+            view.read(app).diff_renderer.read(app).diff_selection_anchor,
             Some(first_entry),
             "first F3 should select the first change block in wrapped Full diff {diff_view:?}"
         );
     });
     let expected_bar_rows = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let rows = &pane.diff_wrap_visible_rows;
         // One unchanged row ("middle") separates the two blocks.
         let block = rows[first_entry].source_visible_ix..rows[second_entry].source_visible_ix - 1;
@@ -1667,7 +1670,7 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_selection_anchor,
+            view.read(app).diff_renderer.read(app).diff_selection_anchor,
             Some(second_entry),
             "second F3 should skip wrap continuations in wrapped Full diff {diff_view:?}"
         );
@@ -1677,7 +1680,7 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_selection_anchor,
+            view.read(app).diff_renderer.read(app).diff_selection_anchor,
             Some(first_entry),
             "F2 should move back to the previous change block in wrapped Full diff {diff_view:?}"
         );
@@ -1748,7 +1751,7 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.set_diff_content_mode(DiffContentMode::Full, cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_selection_anchor = None;
                 pane.diff_selection_range = None;
@@ -1794,7 +1797,7 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let inline_len = pane.file_diff_inline_row_len();
                 assert!(inline_len > 1, "fixture should expose file inline rows");
                 let mut hidden = vec![false; inline_len];
@@ -1815,7 +1818,7 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let provider = pane
             .file_diff_inline_row_provider
             .as_ref()
@@ -1895,7 +1898,7 @@ fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_block_starts(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_selection_anchor = None;
                 pane.diff_selection_range = None;
                 pane.clear_diff_text_selection();
@@ -1931,7 +1934,7 @@ fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_block_starts(
     );
 
     let (first_entry, second_entry) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         // Each hunk holds one change; its stop is the first changed row, not
         // the hunk's header or leading context.
         let raw_first =
@@ -1971,7 +1974,7 @@ fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_block_starts(
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_selection_anchor,
+            view.read(app).diff_renderer.read(app).diff_selection_anchor,
             Some(second_entry),
             "F3 should navigate to the next collapsed change block's visual row in {diff_view:?}"
         );
@@ -1981,7 +1984,7 @@ fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_block_starts(
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).main_pane.read(app).diff_selection_anchor,
+            view.read(app).diff_renderer.read(app).diff_selection_anchor,
             Some(first_entry),
             "F2 should navigate back to the previous collapsed change block's visual row in {diff_view:?}"
         );

@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LoadKind;
 
 fn listing(branch: &str) -> Arc<Vec<Worktree>> {
     Arc::new(vec![Worktree {
@@ -51,11 +52,20 @@ fn worktree_observations_preserve_explicit_load_bookkeeping_and_newer_data() {
     let explicit = WorktreeListRead::explicit();
     let observed = WorktreeListRead::from_dirty_scan();
     let newer = listing("newer");
-    assert!(worktrees_loaded(&mut state, repo_id, observed, Ok(newer.clone())).is_empty());
+    assert!(
+        worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            observed,
+            Ok(newer.clone())
+        )
+        .is_empty()
+    );
     assert!(
         state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
     let revision = state.repos[0].worktrees_rev;
     let sidebar_revision = state.repos[0].branch_sidebar_rev;
@@ -63,13 +73,14 @@ fn worktree_observations_preserve_explicit_load_bookkeeping_and_newer_data() {
     // The late explicit reply must finish its own request and promote exactly
     // one repeat, without replacing the more recent scan observation.
     assert!(matches!(
-        worktrees_loaded(&mut state, repo_id, explicit, Ok(listing("old"))).as_slice(),
+        worktrees_loaded(&crate::store::reducer::test_inputs::clock(), &mut state, repo_id, explicit, Ok(listing("old"))).as_slice(),
         [Effect::LoadWorktrees { repo_id: id }] if *id == repo_id
     ));
     assert_eq!(state.repos[0].worktrees_rev, revision);
     let older_scan = WorktreeListRead::from_dirty_scan();
     assert!(
         worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
             WorktreeListRead::explicit(),
@@ -80,11 +91,21 @@ fn worktree_observations_preserve_explicit_load_bookkeeping_and_newer_data() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
-    assert!(worktrees_loaded(&mut state, repo_id, older_scan, Ok(listing("old"))).is_empty());
     assert!(
         worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id,
+            older_scan,
+            Ok(listing("old"))
+        )
+        .is_empty()
+    );
+    assert!(
+        worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
             explicit,
@@ -108,6 +129,7 @@ fn worktree_refresh_errors_retain_rows_and_recover_without_stuck_loads() {
     mark_repo_open_ready(&mut state, repo_id);
     let before = listing("before");
     worktrees_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         WorktreeListRead::from_dirty_scan(),
@@ -118,6 +140,7 @@ fn worktree_refresh_errors_retain_rows_and_recover_without_stuck_loads() {
     load_worktrees(&mut state, repo_id);
     assert_eq!(
         worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
             WorktreeListRead::explicit(),
@@ -134,6 +157,7 @@ fn worktree_refresh_errors_retain_rows_and_recover_without_stuck_loads() {
     assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
     assert!(
         worktrees_loaded(
+            &crate::store::reducer::test_inputs::clock(),
             &mut state,
             repo_id,
             WorktreeListRead::explicit(),
@@ -144,7 +168,7 @@ fn worktree_refresh_errors_retain_rows_and_recover_without_stuck_loads() {
     assert!(
         !state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
     assert_eq!(
         state.repos[0].worktrees.ready().unwrap()[0]
@@ -163,6 +187,7 @@ fn failed_read_does_not_supersede_an_earlier_successful_read() {
     let later = WorktreeListRead::explicit();
     load_worktrees(&mut state, repo_id);
     worktrees_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         later,
@@ -170,7 +195,13 @@ fn failed_read_does_not_supersede_an_earlier_successful_read() {
     );
     assert!(matches!(state.repos[0].worktrees, Loadable::Error(_)));
     assert_eq!(state.repos[0].worktrees_read_seq, 0);
-    worktrees_loaded(&mut state, repo_id, earlier, Ok(listing("success")));
+    worktrees_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        repo_id,
+        earlier,
+        Ok(listing("success")),
+    );
     assert_eq!(state.repos[0].worktrees_read_seq, earlier.seq);
     assert_eq!(
         state.repos[0].worktrees.ready().unwrap()[0]
@@ -232,6 +263,7 @@ fn expanded_worktrees_load_independently_of_full_scans() {
         assert!(matches!(effects.as_slice(), [Effect::LoadWorktrees { .. }]));
         let result = if succeeds {
             worktrees_loaded(
+                &crate::store::reducer::test_inputs::clock(),
                 &mut state,
                 repo_id,
                 WorktreeListRead::from_dirty_scan(),
@@ -247,10 +279,11 @@ fn expanded_worktrees_load_independently_of_full_scans() {
         assert!(
             state.repos[0]
                 .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::WORKTREES)
+                .is_in_flight(LoadKind::Worktrees)
         );
         assert!(
             worktrees_loaded(
+                &crate::store::reducer::test_inputs::clock(),
                 &mut state,
                 repo_id,
                 WorktreeListRead::explicit(),
@@ -262,7 +295,7 @@ fn expanded_worktrees_load_independently_of_full_scans() {
         assert!(
             !state.repos[0]
                 .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::WORKTREES)
+                .is_in_flight(LoadKind::Worktrees)
         );
         assert!(state.repos[0].feedback.diagnostics.is_empty());
     }
@@ -275,6 +308,7 @@ fn fixture_observations_do_not_finish_an_explicit_load() {
     mark_repo_open_ready(&mut state, repo_id);
     load_worktrees(&mut state, repo_id);
     worktrees_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         repo_id,
         WorktreeListRead::observation_for_test(),
@@ -283,6 +317,6 @@ fn fixture_observations_do_not_finish_an_explicit_load() {
     assert!(
         state.repos[0]
             .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+            .is_in_flight(LoadKind::Worktrees)
     );
 }

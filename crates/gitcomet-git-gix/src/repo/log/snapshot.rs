@@ -46,9 +46,9 @@ impl GixRepo {
             gitcomet_core::git_ops_trace::GitOpTraceKind::LogWalk,
         );
         let seed = if mode == HistoryMode::AllBranches {
-            super::super::LogPageSeed::Tips(Arc::clone(&tips))
+            super::LogPageSeed::Tips(Arc::clone(&tips))
         } else {
-            super::super::LogPageSeed::Head(tips.first().copied())
+            super::LogPageSeed::Head(tips.first().copied())
         };
         let read = |limit, cursor: Option<&LogCursor>, chunks| {
             let mut key = self.log_page_cache_key(

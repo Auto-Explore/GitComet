@@ -4,9 +4,8 @@
 use super::*;
 
 pub(crate) mod diff_pane;
+pub(in crate::view) mod environment;
 pub(crate) mod file_list;
 pub(crate) mod markdown;
-pub(crate) mod projection;
-pub(crate) mod rows;
 
 pub(crate) mod raw_lines;

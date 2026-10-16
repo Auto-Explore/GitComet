@@ -115,7 +115,7 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || matrix.name == 'macos15-x64' && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:

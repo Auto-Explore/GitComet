@@ -1,5 +1,6 @@
 use super::*;
-use crate::view::panes::main::{DiffWrapVisibleCacheKey, DiffWrapVisualRow};
+use crate::view::panes::diff::helpers::state::DiffWrapVisibleCacheKey;
+use crate::view::panes::diff::helpers::state::DiffWrapVisualRow;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{CommitDetails, CommitFileChange};
 use gpui::{ScrollDelta, ScrollWheelEvent};
@@ -152,7 +153,7 @@ fn diff_panel_is_focused(
 ) -> bool {
     cx.update(|window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .is_focused(window)
@@ -219,7 +220,7 @@ fn diff_search_input_is_focused(
 ) -> bool {
     cx.update(|window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_search_input
             .read(app)
@@ -232,21 +233,26 @@ fn diff_selection_anchor(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> Option<usize> {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_anchor)
+    cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_selection_anchor)
 }
 
 fn diff_selection_range(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> Option<(usize, usize)> {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_range)
+    cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_selection_range)
 }
 
 fn diff_text_has_selection(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> bool {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_text_has_selection())
+    cx.update(|_window, app| {
+        view.read(app)
+            .diff_renderer
+            .read(app)
+            .diff_text_has_selection()
+    })
 }
 
 fn set_diff_selection_anchor(
@@ -256,7 +262,7 @@ fn set_diff_selection_anchor(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_selection_anchor = anchor;
                 pane.diff_selection_range = anchor.map(|ix| (ix, ix));
                 cx.notify();
@@ -274,7 +280,7 @@ fn set_diff_text_selection_on_row(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
                     source_visible_ix: visible_ix,
                     region: DiffTextRegion::Inline,
@@ -302,7 +308,7 @@ fn diff_search_active(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> bool {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_active)
+    cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_search_active)
 }
 
 fn conflict_navigation_anchor(
@@ -311,7 +317,7 @@ fn conflict_navigation_anchor(
 ) -> Option<usize> {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .conflict_resolver
             .nav_anchor
@@ -325,7 +331,7 @@ fn active_conflict_ix(
 ) -> usize {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .conflict_resolver
             .active_conflict

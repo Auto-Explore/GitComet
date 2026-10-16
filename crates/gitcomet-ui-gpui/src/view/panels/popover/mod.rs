@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::components::ControlInteractionExt;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::services::InteractiveRebaseAction;
 use std::rc::Rc;
 
@@ -174,7 +175,8 @@ impl DialogFocus {
 pub(in super::super) struct PopoverHost {
     store: crate::view::pane_store::PaneStore,
     history_store: crate::view::pane_store::PaneStore,
-    history_pane: Entity<MainPaneView>,
+    primary_diff_renderer: Entity<DiffRenderer>,
+    main_pane: Entity<MainPaneView>,
     extension_dialog: Option<extension_dialog::ExtensionDialog>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -211,7 +213,7 @@ pub(in super::super) struct PopoverHost {
     root_view_mode: GitCometViewMode,
     pub(in crate::view) extension_editor_available: bool,
     tooltip_host: WeakEntity<TooltipHost>,
-    main_pane: Entity<MainPaneView>,
+    diff_renderer: Entity<DiffRenderer>,
     details_pane: Entity<DetailsPaneView>,
     reflog_pane: Entity<ReflogPaneView>,
     sidebar_pane: Entity<SidebarPaneView>,
@@ -350,7 +352,6 @@ pub(in super::super) struct PopoverHost {
 
     clone_repo_url_input: Entity<components::TextInput>,
     clone_repo_parent_dir_input: Entity<components::TextInput>,
-    rebase_onto_input: Entity<components::TextInput>,
     create_tag_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,
@@ -447,6 +448,7 @@ pub(in crate::view) struct PopoverHostInit {
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) root_view_mode: GitCometViewMode,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) diff_renderer: Entity<DiffRenderer>,
     pub(in crate::view) main_pane: Entity<MainPaneView>,
     pub(in crate::view) details_pane: Entity<DetailsPaneView>,
     pub(in crate::view) reflog_pane: Entity<ReflogPaneView>,

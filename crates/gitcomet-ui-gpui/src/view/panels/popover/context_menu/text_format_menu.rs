@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::mod_helpers::TextFormatMenuSection;
-use crate::view::panes::main::TextEncodingMenuState;
+use crate::view::panes::diff::TextEncodingMenuState;
 use gitcomet_core::text_format::{LineEnding, TextEncoding};
 
 pub(super) fn model(
@@ -8,7 +8,7 @@ pub(super) fn model(
     section: TextFormatMenuSection,
     cx: &gpui::App,
 ) -> ContextMenuModel {
-    let pane = host.main_pane.read(cx);
+    let pane = host.diff_renderer.read(cx);
     match section {
         TextFormatMenuSection::ImageSampling => {
             image_sampling_model(crate::view::image_preview::Preferences::current(cx))
@@ -53,8 +53,9 @@ pub(super) fn model(
         TextFormatMenuSection::TabSize => {
             let (current, _) = pane.effective_tab_size();
             let chosen = pane.active_repo().and_then(|repo| {
-                let path = repo.diff_state.diff_target.as_ref()?.file_path()?;
-                repo.diff_state.text_override_for(path)?.tab_size
+                let diff = pane.bound_diff_state(repo);
+                let path = diff.diff_target.as_ref()?.file_path()?;
+                diff.text_override_for(path)?.tab_size
             });
             tab_size_model(current, chosen, pane.default_tab_size)
         }

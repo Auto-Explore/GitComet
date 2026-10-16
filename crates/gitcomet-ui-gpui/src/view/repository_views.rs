@@ -803,7 +803,7 @@ impl GitCometView {
             } else if index.is_some() {
                 window.focus(&self.repository_view_focus, cx);
             } else {
-                let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+                let focus = self.diff_renderer.read(cx).diff_panel_focus_handle.clone();
                 window.focus(&focus, cx);
             }
         }

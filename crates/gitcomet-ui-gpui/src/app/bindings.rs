@@ -121,7 +121,7 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         cx.defer(|cx| {
             if let Some(window) = cx.active_window() {
                 let _ = window.update(cx, |_root, window, _cx| {
-                    toggle_window_zoom(window);
+                    crate::kit::window_chrome::toggle_window_zoom(window);
                 });
             }
         });
@@ -144,6 +144,8 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         }
     });
     cx.on_window_closed(ui_scale::forget_window).detach();
+    cx.on_window_closed(crate::theme::forget_window_theme)
+        .detach();
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
@@ -232,7 +234,7 @@ pub(super) fn install_global_diff_shortcut_fallback(cx: &mut App) {
         };
 
         let handled = entry
-            .main_pane
+            .diff_renderer
             .update(cx, |pane, cx| {
                 let handled = pane.handle_diff_shortcut(&event.keystroke, window, cx);
                 if handled {

@@ -1,24 +1,28 @@
-use super::panes::main::file_editor::{
-    StashedFileEdit, encode_for_save, file_editor_gutter_width, file_editor_line_for_visual_row,
-    file_editor_text_fingerprint,
-};
-use super::panes::main::{
-    FileImagePreviewAnimationSide, TextDecodeRequest, preflight_worktree_file_for_editing,
-    read_worktree_file_version_for_editing,
-};
+use super::panes::diff::TextDecodeRequest;
+use super::panes::diff::file_editor::{file_editor_gutter_width, file_editor_line_for_visual_row};
+use super::panes::diff::helpers::state::FileImagePreviewAnimationSide;
+use super::panes::diff::preflight_worktree_file_for_editing;
+use super::panes::diff::read_worktree_file_version_for_editing;
 use super::*;
 use crate::kit::{TextInput, TextInputOptions};
+use buffers::{BufferId, BufferSave, DocumentBuffer, DocumentOwner, SaveOrigin};
 use gitcomet_core::filesystem::{DiskVersion, DocumentIdentity, Operation, OperationId, Request};
 use gitcomet_core::text_format::{SideKind, SideTextFormat};
 use gitcomet_state::model::SidebarMode;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod buffers;
 #[cfg(test)]
 mod diagram_tests;
+pub(in crate::view) mod disk;
 mod image_preview;
 mod picker;
+mod presenters;
+pub(in crate::view) mod repository;
+pub(in crate::view) mod text;
 pub(crate) use picker::DocumentPicker;
+use text::{encode_for_save, file_editor_text_fingerprint};
 
 struct RecentDocuments(Entity<RecentDocumentList>);
 impl gpui::Global for RecentDocuments {}
@@ -53,25 +57,23 @@ fn update_recent(path: PathBuf, remove: bool, cx: &mut gpui::App) {
 pub(crate) struct DocumentsView {
     theme: AppTheme,
     root: WeakEntity<GitCometView>,
-    store: Arc<AppStore>,
     ui_model: Entity<AppUiModel>,
     recents: Entity<RecentDocumentList>,
-    buffers: BTreeMap<gpui::EntityId, Entity<StandaloneBuffer>>,
-    active: Option<gpui::EntityId>,
+    owner: DocumentOwner,
+    buffers: BTreeMap<BufferId, Entity<StandaloneBuffer>>,
+    active: Option<BufferId>,
 }
 
 impl DocumentsView {
+    pub(crate) fn document_owner(&self) -> DocumentOwner {
+        self.owner.clone()
+    }
+
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         for buffer in self.buffers.values() {
             buffer.update(cx, |buffer, cx| {
                 buffer.theme = theme;
-                buffer
-                    .input
-                    .update(cx, |input, cx| input.set_theme(theme, cx));
-                buffer
-                    .path_input
-                    .update(cx, |input, cx| input.set_theme(theme, cx));
                 buffer.syntax_key = None;
                 buffer.refresh_syntax(cx);
                 cx.notify();
@@ -83,16 +85,17 @@ impl DocumentsView {
     pub(super) fn new(
         theme: AppTheme,
         root: WeakEntity<GitCometView>,
-        store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let owner = ui_model.read(cx).documents.clone();
+        owner.register_documents(cx.entity().downgrade());
         Self {
             theme,
             root,
-            store,
             ui_model,
             recents: shared_recents(cx),
+            owner,
             buffers: BTreeMap::new(),
             active: None,
         }
@@ -101,20 +104,12 @@ impl DocumentsView {
     fn insert_buffer(
         &mut self,
         path: PathBuf,
-        initial: Option<(StashedFileEdit, Option<DiskVersion>)>,
+        initial: Option<DocumentBuffer>,
         cx: &mut gpui::Context<Self>,
-    ) -> gpui::EntityId {
+    ) -> BufferId {
         let root = self.root.clone();
         let buffer = cx.new(|cx| {
-            StandaloneBuffer::new(
-                path,
-                self.theme,
-                root,
-                self.store.clone(),
-                self.ui_model.clone(),
-                initial,
-                cx,
-            )
+            StandaloneBuffer::new(path, self.theme, root, self.ui_model.clone(), initial, cx)
         });
         let subscription = cx.observe(&buffer, |this, _, cx| {
             this.prune_clean_buffers(cx);
@@ -122,7 +117,7 @@ impl DocumentsView {
         });
         // The observer is released together with the buffer it watches.
         buffer.update(cx, |buffer, _| buffer.subscriptions.push(subscription));
-        let id = buffer.entity_id();
+        let id = buffer.read(cx).document.id();
         self.buffers.insert(id, buffer);
         id
     }
@@ -136,12 +131,12 @@ impl DocumentsView {
         let existing = self
             .buffers
             .iter()
-            .filter(|(_, b)| b.read(cx).identity.0 == path)
-            .max_by_key(|(_, b)| b.read(cx).dirty)
+            .filter(|(_, b)| b.read(cx).identity().0 == path)
+            .max_by_key(|(_, b)| b.read(cx).dirty())
             .map(|(id, _)| *id);
         let id = if let Some(id) = existing {
             self.buffers[&id].update(cx, |buffer, cx| {
-                if !buffer.dirty && buffer.saving.is_none() {
+                if !buffer.dirty() && buffer.saving().is_none() {
                     buffer.reload(cx);
                 }
             });
@@ -152,7 +147,7 @@ impl DocumentsView {
         self.activate_buffer(id, cx);
     }
 
-    fn activate_buffer(&mut self, id: gpui::EntityId, cx: &mut gpui::Context<Self>) {
+    fn activate_buffer(&mut self, id: BufferId, cx: &mut gpui::Context<Self>) {
         if !self.buffers.contains_key(&id) {
             return;
         }
@@ -164,22 +159,26 @@ impl DocumentsView {
     fn prune_clean_buffers(&mut self, cx: &gpui::App) {
         self.buffers.retain(|id, buffer| {
             let buffer = buffer.read(cx);
-            Some(*id) == self.active
-                || buffer.dirty
-                || buffer.saving.is_some()
+            let retain = Some(*id) == self.active
+                || buffer.dirty()
+                || buffer.saving().is_some()
                 // An input notification may still be queued when navigation occurs.
-                || buffer.has_edits(cx)
+                || buffer.has_edits(cx);
+            if !retain {
+                self.owner.release_clean(*id);
+            }
+            retain
         });
     }
 
     /// Unsaved buffers by ID, then history. Addressing unsaved text by buffer
     /// keeps it reachable after a file goes missing or another file takes its path.
-    fn picker_entries(&self, cx: &gpui::App) -> Vec<(PathBuf, Option<gpui::EntityId>)> {
-        let mut entries: Vec<(PathBuf, Option<gpui::EntityId>)> = self
+    fn picker_entries(&self, cx: &gpui::App) -> Vec<(PathBuf, Option<BufferId>)> {
+        let mut entries: Vec<(PathBuf, Option<BufferId>)> = self
             .buffers
             .iter()
-            .filter(|(_, b)| b.read(cx).dirty || b.read(cx).saving.is_some())
-            .map(|(id, b)| (b.read(cx).identity.0.clone(), Some(*id)))
+            .filter(|(_, b)| b.read(cx).dirty() || b.read(cx).saving().is_some())
+            .map(|(id, b)| (b.read(cx).identity().0.clone(), Some(*id)))
             .collect();
         let unsaved_paths: Vec<_> = entries.iter().map(|(p, _)| p.clone()).collect();
         entries.extend(
@@ -196,20 +195,23 @@ impl DocumentsView {
 
     pub(in crate::view) fn adopt(
         &mut self,
-        identity: DocumentIdentity,
-        buffer: StashedFileEdit,
-        version: Option<DiskVersion>,
+        document: DocumentBuffer,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.insert_buffer(identity.0, Some((buffer, version)), cx);
+        if self.buffers.contains_key(&document.id()) {
+            return;
+        }
+        let path = document.read().identity().0.clone();
+        self.insert_buffer(path, Some(document), cx);
         cx.notify();
     }
 
+    #[cfg(test)]
     pub(super) fn unsaved_labels(&self, cx: &gpui::App) -> Vec<SharedString> {
         self.buffers
             .iter()
-            .filter(|(_, b)| b.read(cx).dirty || b.read(cx).saving.is_some())
-            .map(|(_, b)| b.read(cx).identity.0.display().to_string().into())
+            .filter(|(_, b)| b.read(cx).dirty() || b.read(cx).saving().is_some())
+            .map(|(_, b)| b.read(cx).identity().0.display().to_string().into())
             .collect()
     }
 
@@ -225,25 +227,30 @@ impl DocumentsView {
         }
     }
 
-    pub(crate) fn saves_drained(&self, cx: &gpui::App) -> bool {
-        self.buffers.values().all(|b| b.read(cx).saving.is_none())
+    fn process_presented_saves(
+        &mut self,
+        state: &AppState,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<OperationId> {
+        self.buffers
+            .values()
+            .filter_map(|buffer| buffer.update(cx, |buffer, cx| buffer.process_save(state, cx)))
+            .collect()
     }
 
-    pub(crate) fn filesystem_has_unsaved(&self, paths: &[PathBuf], cx: &gpui::App) -> bool {
-        self.buffers.values().any(|b| {
-            let b = b.read(cx);
-            (b.dirty || b.saving.is_some()) && paths.iter().any(|p| b.identity.0.starts_with(p))
-        })
+    #[cfg(test)]
+    pub(crate) fn saves_drained(&self, cx: &gpui::App) -> bool {
+        self.owner.saves_drained(None) && self.owner.operations_drained(cx)
     }
-    pub(crate) fn filesystem_resolve(
-        &mut self,
-        paths: &[PathBuf],
-        save: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
+
+    pub(crate) fn filesystem_has_unsaved(&self, paths: &[PathBuf], _: &gpui::App) -> bool {
+        self.owner.has_unsaved_within(paths)
+    }
+
+    fn resolve_presented(&mut self, paths: &[PathBuf], save: bool, cx: &mut gpui::Context<Self>) {
         for buffer in self.buffers.values() {
             buffer.update(cx, |b, cx| {
-                if paths.iter().any(|p| b.identity.0.starts_with(p)) {
+                if paths.iter().any(|p| b.identity().0.starts_with(p)) {
                     if save {
                         b.save(None, false, cx);
                     } else {
@@ -253,14 +260,14 @@ impl DocumentsView {
             });
         }
     }
-    pub(crate) fn filesystem_pause(&mut self, id: OperationId, cx: &mut gpui::Context<Self>) {
+    fn pause_presented(&mut self, id: OperationId, cx: &mut gpui::Context<Self>) {
         for buffer in self.buffers.values() {
             buffer.update(cx, |b, _| {
-                b.pauses.insert(id);
+                b.document.pause(id);
             });
         }
     }
-    pub(crate) fn filesystem_finish(
+    fn finish_presented(
         &mut self,
         id: OperationId,
         changes: &[gitcomet_core::filesystem::PathChange],
@@ -269,23 +276,17 @@ impl DocumentsView {
     ) {
         for buffer in self.buffers.values() {
             buffer.update(cx, |b, cx| {
-                let identity = b.identity.retarget(changes);
-                if identity != b.identity {
-                    b.identity = identity;
+                let previous = b.identity();
+                b.document.retarget(changes, versions, cx);
+                if previous != b.identity() {
                     b.syntax_key = None;
                     b.refresh_syntax(cx);
                 }
-                if let Some(version) = versions.get(&b.identity.0)
-                    && b.version
-                        .as_ref()
-                        .is_some_and(|old| old.same_contents(version))
-                {
-                    b.version = Some(version.clone());
-                }
                 b.path_input.update(cx, |input, cx| {
-                    input.set_text(b.identity.0.display().to_string(), cx)
+                    input.set_text(b.identity().0.display().to_string(), cx)
                 });
-                if b.pauses.remove(&id) && b.pauses.is_empty() && b.loading {
+                let resume = b.document.resume(id);
+                if resume {
                     b.reload(cx);
                 }
                 cx.notify();
@@ -351,10 +352,10 @@ struct StandaloneBuffer {
     image_input: crate::view::image_preview::Input,
     image_animation: FileImagePreviewAnimationSide,
     image_timer: crate::view::image_preview::FrameTimer,
-    identity: DocumentIdentity,
+    document: DocumentBuffer,
+    owner: DocumentOwner,
     theme: AppTheme,
     root: WeakEntity<GitCometView>,
-    store: Arc<AppStore>,
     input: Entity<TextInput>,
     scroll: gpui::ScrollHandle,
     gutter_scroll: gpui::UniformListScrollHandle,
@@ -369,39 +370,63 @@ struct StandaloneBuffer {
     diagram_input: Option<super::diagram_preview::DiagramInput>,
     preview_mode: RenderedPreviewMode,
     path_input: Entity<TextInput>,
-    version: Option<DiskVersion>,
-    /// How the file was read, so saves write it back the same way.
-    text_format: Option<SideTextFormat>,
-    saved_fingerprint: Option<u64>,
-    load_generation: u64,
     load_task: Option<gpui::Task<()>>,
-    dirty: bool,
     editing: bool,
-    loading: bool,
     image: bool,
-    error: Option<String>,
-    saving: Option<(OperationId, PathBuf, u64)>,
-    failed_destination: Option<PathBuf>,
-    pauses: std::collections::BTreeSet<OperationId>,
     subscriptions: Vec<gpui::Subscription>,
 }
 
 impl StandaloneBuffer {
+    fn identity(&self) -> DocumentIdentity {
+        self.document.read().identity().clone()
+    }
+
+    fn version(&self) -> Option<DiskVersion> {
+        self.document.read().version().clone()
+    }
+
+    fn text_format(&self) -> Option<SideTextFormat> {
+        self.document.read().text_format()
+    }
+
+    fn saved_fingerprint(&self) -> Option<u64> {
+        self.document.read().saved_fingerprint()
+    }
+
+    fn dirty(&self) -> bool {
+        self.document.read().dirty()
+    }
+
+    fn loading(&self) -> bool {
+        self.document.read().loading()
+    }
+
+    fn error(&self) -> Option<String> {
+        self.document.read().error().map(ToString::to_string)
+    }
+
+    fn saving(&self) -> Option<BufferSave> {
+        self.document.read().saving().clone()
+    }
+
+    fn failed_destination(&self) -> Option<PathBuf> {
+        self.document.read().failed_destination().clone()
+    }
+
     fn has_edits(&self, cx: &gpui::App) -> bool {
         self.editing
-            && !self.loading
+            && !self.loading()
             && Some(file_editor_text_fingerprint(
                 &self.input.read(cx).text_snapshot(),
-            )) != self.saved_fingerprint
+            )) != self.saved_fingerprint()
     }
 
     fn new(
         path: PathBuf,
         theme: AppTheme,
         root: WeakEntity<GitCometView>,
-        store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        initial: Option<(StashedFileEdit, Option<DiskVersion>)>,
+        initial: Option<DocumentBuffer>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let scroll = gpui::ScrollHandle::new();
@@ -415,83 +440,42 @@ impl StandaloneBuffer {
                 },
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_content_width_layout(true);
             input.set_vertical_scroll_handle(Some(scroll.clone()));
             input
         });
         let path_input = cx.new(|cx| {
             let mut input = TextInput::new_inert(TextInputOptions::selectable(), cx);
-            input.set_theme(theme, cx);
             // Inherits the header's muted label style.
             input.set_display_text(cx);
             input.set_text(path.display().to_string(), cx);
             input
         });
-        let subscriptions = vec![
-            cx.observe(&input, |this, _, cx| {
-                if !this.loading {
-                    this.dirty = this.has_edits(cx);
-                    this.refresh_syntax(cx);
-                }
-                cx.notify();
-            }),
-            cx.observe(&ui_model, |this, model, cx| {
-                let Some((id, _, _)) = &this.saving else {
-                    return;
-                };
-                let Some(result) = model
-                    .read(cx)
-                    .state
-                    .filesystem
-                    .completed
-                    .iter()
-                    .find(|r| r.id == *id)
-                    .cloned()
-                else {
-                    return;
-                };
-                let (_, path, fingerprint) = this.saving.take().unwrap();
-                this.store
-                    .dispatch(Msg::AcknowledgeFilesystemResults(vec![result.id]));
-                if result.succeeded() {
-                    this.identity = DocumentIdentity(path);
-                    this.path_input.update(cx, |input, cx| {
-                        input.set_text(this.identity.0.display().to_string(), cx)
-                    });
-                    this.version = result.saved_version.clone();
-                    this.saved_fingerprint = Some(fingerprint);
-                    this.dirty = this.has_edits(cx);
-                    this.error = None;
-                    this.failed_destination = None;
-                    update_recent(this.identity.0.clone(), false, cx);
-                    this.syntax_key = None;
-                    this.refresh_syntax(cx);
-                } else {
-                    this.failed_destination = Some(path);
-                    this.error = Some(
-                        result
-                            .items
-                            .iter()
-                            .filter_map(|i| {
-                                if let gitcomet_core::filesystem::ItemOutcome::Failed(e) =
-                                    &i.outcome
-                                {
-                                    Some(e.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n"),
+        let subscriptions = vec![cx.observe(&input, |this, _, cx| {
+            if !this.loading() {
+                if this.editing {
+                    this.document.edit(
+                        file_editor_text_fingerprint(&this.input.read(cx).text_snapshot()),
+                        None,
+                        cx,
                     );
                 }
-                cx.notify();
-            }),
-        ];
+                this.refresh_syntax(cx);
+            }
+            cx.notify();
+        })];
         let image = initial.is_none() && image_format_for_path(&path).is_some();
         let wrap = wraps_by_default(&path);
         cx.on_release(|this, cx| {
+            if !this.document.read().loading() {
+                let input = this.input.read(cx);
+                let fingerprint = file_editor_text_fingerprint(&input.text_snapshot());
+                let text = input.text().to_string().into();
+                let cursor = input.cursor_offset();
+                this.document.capture_fingerprint(fingerprint, cx);
+                this.document.retain_text(text, cursor, fingerprint);
+            }
+            this.owner.adopt(this.document.clone(), cx);
             if let Some(image) = this.image_input.preview.take() {
                 cx.drop_image(image, None);
             }
@@ -502,10 +486,15 @@ impl StandaloneBuffer {
             image_input: Default::default(),
             image_animation: Default::default(),
             image_timer: Default::default(),
-            identity: DocumentIdentity(path),
+            owner: ui_model.read(cx).documents.clone(),
+            document: initial.clone().unwrap_or_else(|| {
+                ui_model
+                    .read(cx)
+                    .documents
+                    .create(DocumentIdentity(path), None)
+            }),
             theme,
             root,
-            store,
             input,
             scroll,
             gutter_scroll: gpui::UniformListScrollHandle::new(),
@@ -519,50 +508,84 @@ impl StandaloneBuffer {
             diagram_input: None,
             preview_mode: RenderedPreviewMode::Rendered,
             path_input,
-            version: None,
-            text_format: None,
-            saved_fingerprint: None,
-            load_generation: 0,
             load_task: None,
-            dirty: false,
             editing: initial.is_some(),
-            loading: false,
             image,
-            error: None,
-            saving: None,
-            failed_destination: None,
-            pauses: Default::default(),
             subscriptions,
         };
-        if let Some((edit, version)) = initial {
-            buffer.version = version;
-            buffer.text_format = edit.text_format;
-            buffer.saved_fingerprint = Some(edit.saved_fingerprint);
-            buffer.dirty = true;
+        if let Some(edit) = initial.as_ref().and_then(DocumentBuffer::stashed) {
             buffer.input.update(cx, |input, cx| {
                 input.set_line_ending(TextInput::detect_line_ending(&edit.text));
                 input.set_text(edit.text, cx);
                 input.set_cursor_offset(edit.cursor, cx);
             });
         } else {
+            buffer.editing = false;
+            buffer.document.begin_read(true, cx);
             buffer.reload(cx);
         }
         buffer
     }
 
+    fn process_save(
+        &mut self,
+        state: &AppState,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<OperationId> {
+        let pending = self.saving()?;
+        let result = state
+            .filesystem
+            .completed
+            .iter()
+            .find(|r| r.id == pending.operation)
+            .cloned()?;
+        let outcome = if result.succeeded() {
+            Ok(result.saved_version.clone())
+        } else {
+            Err(result
+                .items
+                .iter()
+                .filter_map(|item| match &item.outcome {
+                    gitcomet_core::filesystem::ItemOutcome::Failed(message) => {
+                        Some(message.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                .into())
+        };
+        self.document.capture_fingerprint(
+            file_editor_text_fingerprint(&self.input.read(cx).text_snapshot()),
+            cx,
+        );
+        self.document.finish_save(result.id, outcome, cx);
+        if result.succeeded() {
+            self.path_input.update(cx, |input, cx| {
+                input.set_text(self.identity().0.display().to_string(), cx)
+            });
+            update_recent(self.identity().0.clone(), false, cx);
+            self.syntax_key = None;
+            self.refresh_syntax(cx);
+        }
+        if self.loading() {
+            self.reload(cx);
+        }
+        cx.notify();
+        Some(result.id)
+    }
+
     fn reload(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.saving.is_some() || !self.pauses.is_empty() {
+        if self.saving().is_some() || !self.document.read().pauses().is_empty() {
             return;
         }
-        self.load_generation = self.load_generation.wrapping_add(1);
-        let generation = self.load_generation;
-        self.loading = true;
+        let generation = self.document.begin_read(true, cx);
         self.input
             .update(cx, |input, cx| input.set_read_only(true, cx));
-        let path = self.identity.0.clone();
-        let identity = self.identity.clone();
+        let path = self.identity().0.clone();
+        let identity = self.identity().clone();
         let image = self.image;
-        let filesystem = self.store.filesystem();
+        let filesystem = self.owner.filesystem();
         self.load_task = Some(cx.spawn(async move |view, cx| {
             let result = crate::ui_runtime::background_compute(move || {
                 preflight_worktree_file_for_editing(&path)?;
@@ -610,14 +633,13 @@ impl StandaloneBuffer {
             })
             .await;
             let _ = view.update(cx, |this: &mut StandaloneBuffer, cx| {
-                if this.load_generation != generation {
+                if !this.document.read().accepts_read(generation) {
                     return;
                 }
-                if this.identity != identity {
+                if this.identity() != identity {
                     this.reload(cx);
                     return;
                 }
-                this.loading = false;
                 match result {
                     Ok((version, text, format, image_input)) => {
                         if let Some(old) = this.image_input.preview.take() {
@@ -628,8 +650,6 @@ impl StandaloneBuffer {
                         this.image_input = image_input.unwrap_or_default();
                         this.image_animation = Default::default();
                         this.image_timer = Default::default();
-                        this.version = Some(version);
-                        this.text_format = format;
                         // Text that cannot be written back as it was read is view-only.
                         let read_only =
                             !this.editing || format.is_some_and(|format| !format.is_writable());
@@ -638,14 +658,18 @@ impl StandaloneBuffer {
                             input.set_text(text, cx);
                             input.set_read_only(read_only, cx);
                         });
-                        this.saved_fingerprint = Some(file_editor_text_fingerprint(
-                            &this.input.read(cx).text_snapshot(),
-                        ));
-                        this.dirty = false;
-                        this.error = None;
-                        this.failed_destination = None;
+                        let fingerprint =
+                            file_editor_text_fingerprint(&this.input.read(cx).text_snapshot());
+                        this.document.finish_read(
+                            generation,
+                            version,
+                            format,
+                            Default::default(),
+                            cx,
+                        );
+                        this.document.seat_text(fingerprint, None, cx);
                     }
-                    Err(error) => this.error = Some(error),
+                    Err(error) => this.document.fail_read(generation, error.into(), cx),
                 }
                 cx.notify();
             });
@@ -659,53 +683,54 @@ impl StandaloneBuffer {
         overwrite: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        if !self.pauses.is_empty()
-            || self.loading
+        if !self.document.read().pauses().is_empty()
+            || self.loading()
             || self.image
-            || self.saving.is_some()
-            || (!self.dirty && destination.is_none())
+            || self.saving().is_some()
+            || (!self.dirty() && destination.is_none())
         {
             return;
         }
         let text = SharedString::from(self.input.read(cx).text().to_string());
-        let contents = match encode_for_save(text, self.text_format) {
-            Ok((bytes, _)) => Arc::from(bytes.as_bytes()),
+        let (contents, pending_write) = match encode_for_save(text, self.text_format()) {
+            Ok((bytes, pending_write)) => (Arc::from(bytes.as_bytes()), pending_write),
             Err(error) => {
                 // Nothing written; the buffer stays dirty.
-                self.error = Some(error.to_string());
+                self.document
+                    .report_write_error(error.to_string().into(), cx);
                 cx.notify();
                 return;
             }
         };
-        let path = destination.unwrap_or_else(|| self.identity.0.clone());
+        let path = destination.unwrap_or_else(|| self.identity().0.clone());
         let request = Request::new(Operation::Save {
             path: path.clone(),
             worktree: None,
             contents,
-            expected: if path == self.identity.0 {
-                self.version.clone()
+            expected: if path == self.identity().0 {
+                self.version().clone()
             } else {
                 None
             },
             overwrite,
         });
-        self.saving = Some((
-            request.id,
-            path,
-            file_editor_text_fingerprint(&self.input.read(cx).text_snapshot()),
-        ));
-        self.store.dispatch(Msg::FilesystemRequest(request));
+        let fingerprint = file_editor_text_fingerprint(&self.input.read(cx).text_snapshot());
+        self.owner.save(
+            &self.document,
+            SaveOrigin::Detached,
+            request,
+            fingerprint,
+            pending_write,
+            cx,
+        );
         cx.notify();
     }
 
     fn discard(&mut self, cx: &mut gpui::Context<Self>) {
         // Discard is final even if the file vanished before the reload. Mark
         // the retained text clean and read-only while showing that error.
-        self.dirty = false;
         self.editing = false;
-        self.saved_fingerprint = Some(file_editor_text_fingerprint(
-            &self.input.read(cx).text_snapshot(),
-        ));
+        self.document.prepare_reload(cx);
         self.input
             .update(cx, |input, cx| input.set_read_only(true, cx));
         self.reload(cx);
@@ -713,20 +738,22 @@ impl StandaloneBuffer {
 
     fn can_edit(&self) -> bool {
         let editable_image = self
-            .identity
+            .identity()
             .0
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
         !((self.image && !editable_image)
-            || self.loading
-            || (self.error.is_some() && self.version.is_none() && !self.dirty)
-            || self.text_format.is_some_and(|format| !format.is_writable()))
+            || self.loading()
+            || (self.error().is_some() && self.version().is_none() && !self.dirty())
+            || self
+                .text_format()
+                .is_some_and(|format| !format.is_writable()))
     }
 
     /// Enters edit mode, or leaves it once nothing is left to save.
     fn toggle_editing(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         if self.editing {
-            if self.dirty || self.saving.is_some() || self.has_edits(cx) {
+            if self.dirty() || self.saving().is_some() || self.has_edits(cx) {
                 return;
             }
             self.editing = false;
@@ -744,15 +771,15 @@ impl StandaloneBuffer {
             self.reload(cx);
         }
         self.input
-            .update(cx, |input, cx| input.set_read_only(self.loading, cx));
+            .update(cx, |input, cx| input.set_read_only(self.loading(), cx));
         window.focus(&self.input.read(cx).focus_handle(), cx);
         cx.notify();
     }
 
     fn prompt_save_as(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let answer = cx.prompt_for_new_path(
-            self.identity.0.parent().unwrap_or(Path::new("/")),
-            self.identity.0.file_name().and_then(|n| n.to_str()),
+            self.identity().0.parent().unwrap_or(Path::new("/")),
+            self.identity().0.file_name().and_then(|n| n.to_str()),
         );
         cx.spawn_in(window, async move |view, cx| {
             if let Ok(Ok(Some(path))) = answer.await {
@@ -765,12 +792,12 @@ impl StandaloneBuffer {
     fn ensure_diagram_preview(&mut self, cx: &mut gpui::Context<Self>) {
         use super::diagram_preview::DiagramInput;
         use gitcomet_diagrams::DiagramKind;
-        if self.loading || self.image {
+        if self.loading() || self.image {
             return;
         }
         let snapshot = self.input.read(cx).text_snapshot();
         let key = (
-            self.identity.0.clone(),
+            self.identity().0.clone(),
             snapshot.model_id(),
             snapshot.revision(),
         );
@@ -778,7 +805,7 @@ impl StandaloneBuffer {
             return;
         }
         self.diagram_key = Some(key);
-        self.diagram_input = DiagramKind::for_path(&self.identity.0).map(|kind| {
+        self.diagram_input = DiagramKind::for_path(&self.identity().0).map(|kind| {
             if snapshot.len() <= gitcomet_diagrams::MAX_SOURCE_BYTES {
                 DiagramInput::Text {
                     kind,
@@ -794,7 +821,7 @@ impl StandaloneBuffer {
     }
 
     fn refresh_syntax(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.loading || self.image {
+        if self.loading() || self.image {
             return;
         }
         let snapshot = self.input.read(cx).text_snapshot();
@@ -806,15 +833,16 @@ impl StandaloneBuffer {
         self.syntax_serial = self.syntax_serial.wrapping_add(1);
         let serial = self.syntax_serial;
         let theme = self.theme;
-        let language = rows::diff_syntax_language_for_path(&self.identity.0);
+        let language = rows::diff_syntax_language_for_path(&self.identity().0);
         let rope = snapshot.rope();
         let source_len = snapshot.len();
         let heuristic_rope = rope.clone();
         let provider = crate::kit::HighlightProvider::with_pending(
-            move |range: std::ops::Range<usize>| crate::kit::HighlightProviderResult {
+            move |range: std::ops::Range<usize>| {
+                crate::kit::HighlightProviderResult {
                 highlights: language
                     .map(|language| {
-                        panes::main::helpers::resolved_output_heuristic_highlights_for_range(
+                        panes::diff::helpers::presentation::resolved_output_heuristic_highlights_for_range(
                             theme,
                             &heuristic_rope,
                             language,
@@ -823,6 +851,7 @@ impl StandaloneBuffer {
                     })
                     .unwrap_or_default(),
                 pending: false,
+            }
             },
             || 0,
             || false,
@@ -844,7 +873,8 @@ impl StandaloneBuffer {
                         return;
                     }
                     if let Some(syntax) = syntax {
-                        let snapshot = syntax.snapshot(theme);
+                        let snapshot = syntax
+                            .snapshot(crate::kit::syntax_style::SyntaxHighlightPalette::new(theme));
                         let provider = crate::kit::HighlightProvider::with_pending(
                             move |range| crate::kit::HighlightProviderResult {
                                 highlights: snapshot.highlights_for_byte_range(range),
@@ -877,7 +907,7 @@ impl StandaloneBuffer {
     fn render_header(&self, ui_scale_percent: u32, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-        let path = &self.identity.0;
+        let path = &self.identity().0;
         let name: SharedString = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -886,8 +916,8 @@ impl StandaloneBuffer {
         let icon = file_icons::file_icon_for_path(path);
         let icon_color = file_icons::file_icon_color(icon, theme.is_dark)
             .unwrap_or(theme.colors.foreground.secondary);
-        let unsaved = self.dirty || self.saving.is_some();
-        let save_shortcut = crate::view::shortcut_labels::secondary_shortcut("S");
+        let unsaved = self.dirty() || self.saving().is_some();
+        let save_shortcut = crate::kit::components::secondary_shortcut("S");
 
         let title = div()
             .flex_1()
@@ -939,7 +969,10 @@ impl StandaloneBuffer {
         } else if self.editing {
             "Stop editing".into()
         } else if !can_edit {
-            if self.text_format.is_some_and(|format| !format.is_writable()) {
+            if self
+                .text_format()
+                .is_some_and(|format| !format.is_writable())
+            {
                 "This file's encoding cannot be written back; it opens read-only".into()
             } else {
                 "This file cannot be edited".into()
@@ -952,7 +985,7 @@ impl StandaloneBuffer {
             .flex()
             .items_center()
             .gap_1()
-            .when(!self.image && !self.loading, |controls| {
+            .when(!self.image && !self.loading(), |controls| {
                 controls.child(
                     components::Button::new("document_wrap", "Wrap")
                         .style(components::ButtonStyle::Subtle)
@@ -983,9 +1016,9 @@ impl StandaloneBuffer {
                     })
                     .gitcomet_tooltip(theme, edit_tooltip),
             );
-        if !self.loading
+        if !self.loading()
             && let Some(kind @ RenderedPreviewKind::Diagram) =
-                preview_path_rendered_kind(&self.identity.0)
+                preview_path_rendered_kind(&self.identity().0)
         {
             controls = controls.child(super::rendered_preview::mode_toggle(
                 kind,
@@ -1009,14 +1042,14 @@ impl StandaloneBuffer {
                     components::Button::new("document_discard", "Discard")
                         .style(components::ButtonStyle::Subtle)
                         .borderless()
-                        .disabled(!self.dirty || self.saving.is_some())
+                        .disabled(!self.dirty() || self.saving().is_some())
                         .on_click(theme, cx, |this, _, _, cx| this.discard(cx))
                         .gitcomet_tooltip(theme, "Throw away the unsaved changes".into()),
                 )
                 .child(
                     components::Button::new("document_save", "Save")
                         .style(components::ButtonStyle::Outlined)
-                        .disabled(!self.dirty || self.saving.is_some())
+                        .disabled(!self.dirty() || self.saving().is_some())
                         .on_click(theme, cx, |this, _, _, cx| this.save(None, false, cx))
                         .gitcomet_tooltip(theme, format!("Save ({save_shortcut})").into()),
                 );
@@ -1026,7 +1059,9 @@ impl StandaloneBuffer {
                 components::Button::new("document_save_as", "Save As…")
                     .style(components::ButtonStyle::Subtle)
                     .borderless()
-                    .disabled(self.image || self.loading || (self.version.is_none() && !self.dirty))
+                    .disabled(
+                        self.image || self.loading() || (self.version().is_none() && !self.dirty()),
+                    )
                     .on_click(theme, cx, |this, _, window, cx| {
                         this.prompt_save_as(window, cx)
                     })
@@ -1103,7 +1138,7 @@ impl StandaloneBuffer {
                     .text_color(theme.colors.foreground.primary)
                     .child(error),
             )
-            .when(self.dirty || self.failed_destination.is_some(), |d| {
+            .when(self.dirty() || self.failed_destination().is_some(), |d| {
                 d.child(
                     components::Button::new("document_replace_disk", "Replace disk contents…")
                         .style(components::ButtonStyle::Outlined)
@@ -1121,7 +1156,7 @@ impl StandaloneBuffer {
                             cx.spawn_in(window, async move |view, cx| {
                                 if answer.await.ok() == Some(1) {
                                     let _ = view.update_in(cx, |this, _, cx| {
-                                        this.save(this.failed_destination.clone(), true, cx)
+                                        this.save(this.failed_destination().clone(), true, cx)
                                     });
                                 }
                             })
@@ -1373,19 +1408,19 @@ impl Render for StandaloneBuffer {
         // Text stays on screen through a failed save or a vanished file; only a
         // read that never produced any shows the failure in its place.
         let has_text = !self.image
-            && !self.loading
-            && (self.error.is_none()
-                || self.version.is_some()
-                || self.dirty
-                || self.saving.is_some());
+            && !self.loading()
+            && (self.error().is_none()
+                || self.version().is_some()
+                || self.dirty()
+                || self.saving().is_some());
         let notice = self
-            .error
+            .error()
             .clone()
             .filter(|_| has_text)
             .map(|error| self.render_notice(error, cx));
         let header = self.render_header(ui_scale_percent, cx);
         let mut image_controls = None;
-        let body: AnyElement = if self.loading {
+        let body: AnyElement = if self.loading() {
             components::empty_state_message(theme, "Loading…")
                 .size_full()
                 .into_any_element()
@@ -1426,7 +1461,7 @@ impl Render for StandaloneBuffer {
             components::empty_state(
                 theme,
                 "Cannot open this file",
-                self.error.clone().unwrap_or_default(),
+                self.error().clone().unwrap_or_default(),
             )
             .size_full()
             .into_any_element()
@@ -1518,7 +1553,7 @@ impl GitCometView {
     }
 
     /// Shows a retained buffer, such as unsaved text whose file is gone.
-    fn show_document_buffer(&mut self, id: gpui::EntityId, cx: &mut gpui::Context<Self>) {
+    fn show_document_buffer(&mut self, id: BufferId, cx: &mut gpui::Context<Self>) {
         self.supersede_document_routing();
         self.documents
             .update(cx, |docs, cx| docs.activate_buffer(id, cx));

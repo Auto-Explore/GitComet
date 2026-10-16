@@ -1879,22 +1879,12 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     // a file edited and navigated away from is the one hardest to find again.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.file_editor_stash.insert(
-                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
-                        .unwrap(),
-                    crate::view::panes::main::StashedFileEdit {
-                        text: SharedString::from("edited\n"),
-                        text_format: None,
-                        source_text_format: None,
-                        cursor: 0,
-                        text_fingerprint: 1,
-                        saved_fingerprint: 2,
-                        first_dirty_line: Some(0),
-                        disk: Default::default(),
-                    },
-                );
-                pane.sync_unsaved_file_edits_rev(cx);
+            this.diff_renderer.update(cx, |pane, cx| {
+                let identity = pane
+                    .document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                    .unwrap();
+                pane.editor_documents
+                    .retain_for_tests(identity, RepoId(1), "edited\n".into(), cx);
             });
         });
     });
@@ -1926,7 +1916,7 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     // Discarding through the same entry point the row's button uses clears it.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.discard_file_edits_for(RepoId(1), &PathBuf::from("b.rs"), cx);
             });
         });
@@ -2061,22 +2051,12 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
     // Now give `b.rs` an unsaved buffer and click it in the tree.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.file_editor_stash.insert(
-                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
-                        .unwrap(),
-                    crate::view::panes::main::StashedFileEdit {
-                        text: SharedString::from("edited\n"),
-                        text_format: None,
-                        source_text_format: None,
-                        cursor: 0,
-                        text_fingerprint: 1,
-                        saved_fingerprint: 2,
-                        first_dirty_line: Some(0),
-                        disk: Default::default(),
-                    },
-                );
-                pane.sync_unsaved_file_edits_rev(cx);
+            this.diff_renderer.update(cx, |pane, cx| {
+                let identity = pane
+                    .document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                    .unwrap();
+                pane.editor_documents
+                    .retain_for_tests(identity, RepoId(1), "edited\n".into(), cx);
             });
         });
     });
@@ -2488,10 +2468,7 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
     cx.update(|_, app| {
         view.update(app, |_, cx| {
             let files = crate::clipboard::read_files(cx).unwrap();
-            assert_eq!(
-                files.intent,
-                gitcomet_core::filesystem::TransferIntent::Move
-            );
+            assert_eq!(files.intent, gpui::FileTransferOperation::Move);
             assert_eq!(files.paths.len(), 3);
         })
     });
@@ -2500,7 +2477,7 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
         view.update(app, |_, cx| {
             assert_eq!(
                 crate::clipboard::read_files(cx).unwrap().intent,
-                gitcomet_core::filesystem::TransferIntent::Copy
+                gpui::FileTransferOperation::Copy
             )
         })
     });
@@ -2601,10 +2578,7 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
             view.update(app, |_, cx| {
                 let files =
                     crate::clipboard::read_files(cx).expect("the cut reached the clipboard");
-                assert_eq!(
-                    files.intent,
-                    gitcomet_core::filesystem::TransferIntent::Move
-                );
+                assert_eq!(files.intent, gpui::FileTransferOperation::Move);
                 assert_eq!(files.paths, vec![workdir.join("a.txt")]);
             })
         });

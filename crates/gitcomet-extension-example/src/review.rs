@@ -826,6 +826,7 @@ impl Extension for ReviewExtension {
 mod tests {
     use super::*;
     use gitcomet_extension_api::Registry;
+    use gitcomet_extension_api::fake_host::{FakeWindowHost, HostRequest};
 
     #[test]
     fn every_contribution_registers_and_validates() {
@@ -871,6 +872,40 @@ mod tests {
             .err()
             .expect("a duplicate extension id is an error");
         assert!(errors[0].message.contains("registered twice"), "{errors:?}");
+    }
+
+    #[gpui::test]
+    fn marking_a_repository_saves_the_window_count_and_says_so(cx: &mut gpui::TestAppContext) {
+        let fake = FakeWindowHost::new(WindowId::from(7));
+        let host = fake.host();
+        let workdir = Path::new("/work/parser");
+        cx.update(|cx| {
+            mark_reviewed(&host, workdir, cx);
+            mark_reviewed(&host, workdir, cx);
+            assert_eq!(
+                saved_counts(&host, cx),
+                BTreeMap::from([(workdir.to_path_buf(), 2)])
+            );
+        });
+        assert_eq!(
+            fake.requests(),
+            vec![
+                HostRequest::Notify("Marked parser reviewed".into()),
+                HostRequest::Notify("Marked parser reviewed".into()),
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn resetting_asks_in_a_hosted_dialog_first(cx: &mut gpui::TestAppContext) {
+        let fake = FakeWindowHost::new(WindowId::from(8));
+        cx.update(|cx| confirm_reset(&fake.host(), AppTheme::gitcomet_dark(), cx));
+        assert_eq!(
+            fake.requests(),
+            vec![HostRequest::Dialog {
+                title: "Reset review counts?".into()
+            }]
+        );
     }
 
     #[gpui::test]

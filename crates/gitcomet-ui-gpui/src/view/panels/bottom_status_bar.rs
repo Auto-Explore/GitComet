@@ -715,7 +715,7 @@ impl Render for BottomStatusBarView {
             .px_2()
             .bg(theme.colors.surface.chrome)
             .when_some(
-                crate::view::chrome::client_frame_corner_rounding(theme, window),
+                crate::kit::window_chrome::client_frame_corner_rounding(theme, window),
                 |d, rounding| {
                     d.when(rounding.bottom_left, |d| d.rounded_bl(rounding.radius))
                         .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))

@@ -141,7 +141,7 @@ impl PopoverHost {
             return;
         }
         self.date_time_format = next;
-        self.main_pane
+        self.diff_renderer
             .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
         self.sync_pane_date_settings(cx);
         cx.notify();
@@ -218,12 +218,17 @@ impl PopoverHost {
         let root_view = self.root_view.clone();
         cx.spawn(
             async move |_host: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.theme_mode = mode;
-                    root.date_time_format = fmt;
-                    root.timezone = tz;
-                    root.show_timezone = show_tz;
-                    root.schedule_ui_settings_persist(cx);
+                cx.update(|cx| {
+                    root_view.request(
+                        RootRequest::PersistDisplayPreferences {
+                            theme_mode: mode,
+                            date_time_format: fmt,
+                            timezone: tz,
+                            show_timezone: show_tz,
+                        },
+                        None,
+                        cx,
+                    )
                 });
             },
         )

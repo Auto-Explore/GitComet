@@ -130,7 +130,7 @@ jobs:
         # Display (Phase 4) — scale factor sweep is the most representative display cost benchmark
         cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'display/render_cost_1x_vs_2x_vs_3x_scale'
     - name: Emit budget report (alerting mode, skip missing)
-      run: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --skip-missing
+      run: cargo run -p gitcomet-perf --bin perf_budget_report -- --criterion-root target/criterion --skip-missing
 
   performance-budgets-full:
     name: Performance budgets (strict, full suite)
@@ -202,8 +202,8 @@ jobs:
       run: |
         if [ -n "${{ vars.PERF_RUNNER }}" ]; then
           echo "::notice::Running in strict mode on dedicated runner (${{ vars.PERF_RUNNER }}) with real-repo snapshots from ${{ vars.PERF_REAL_REPO_ROOT }}"
-          cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --strict
+          cargo run -p gitcomet-perf --bin perf_budget_report -- --criterion-root target/criterion --strict
         else
           echo "::notice::Running in alerting mode on shared runner (ubuntu-22.04) — numbers are noisy"
-          cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --skip-missing
+          cargo run -p gitcomet-perf --bin perf_budget_report -- --criterion-root target/criterion --skip-missing
         fi

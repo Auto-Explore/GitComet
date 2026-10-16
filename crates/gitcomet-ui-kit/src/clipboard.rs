@@ -77,7 +77,7 @@ pub fn write_text(cx: &mut gpui::App, text: String, source: CopySource) {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilePayload {
     pub paths: Vec<std::path::PathBuf>,
-    pub intent: gitcomet_core::filesystem::TransferIntent,
+    pub intent: gpui::FileTransferOperation,
     pub ownership: u64,
 }
 
@@ -112,29 +112,20 @@ fn bump_files_revision() {
 pub fn write_files<T: 'static>(
     cx: &mut gpui::Context<T>,
     paths: Vec<std::path::PathBuf>,
-    intent: gitcomet_core::filesystem::TransferIntent,
+    intent: gpui::FileTransferOperation,
 ) {
-    write_files_owned(
-        cx,
-        paths,
-        intent,
-        gitcomet_core::filesystem::OperationId::allocate().0,
-    );
+    write_files_owned(cx, paths, intent, gitcomet_base::next_operation_id());
 }
 
 pub fn write_files_owned<T: 'static>(
     cx: &mut gpui::Context<T>,
     paths: Vec<std::path::PathBuf>,
-    intent: gitcomet_core::filesystem::TransferIntent,
+    intent: gpui::FileTransferOperation,
     ownership: u64,
 ) {
     let files = gpui::FileTransfer {
         paths: gpui::ExternalPaths(paths.iter().cloned().collect()),
-        operation: if intent == gitcomet_core::filesystem::TransferIntent::Move {
-            gpui::FileTransferOperation::Move
-        } else {
-            gpui::FileTransferOperation::Copy
-        },
+        operation: intent,
         ownership,
     };
     let item = gpui::ClipboardItem {
@@ -190,11 +181,7 @@ pub fn read_files<T: 'static>(cx: &gpui::Context<T>) -> Option<FilePayload> {
         let files = item.file_transfer()?;
         Some(FilePayload {
             paths: files.paths.paths().to_vec(),
-            intent: if files.operation == gpui::FileTransferOperation::Move {
-                gitcomet_core::filesystem::TransferIntent::Move
-            } else {
-                gitcomet_core::filesystem::TransferIntent::Copy
-            },
+            intent: files.operation,
             ownership: files.ownership,
         })
     })
@@ -205,17 +192,19 @@ pub struct PasteReceipt {
     native: Option<gpui::FilePaste>,
     payload: FilePayload,
     remaining: Vec<std::path::PathBuf>,
-    intent: gitcomet_core::filesystem::TransferIntent,
+    intent: gpui::FileTransferOperation,
 }
 impl PasteReceipt {
+    /// `identity` spells a source the way `completed` will report it.
     pub fn from_drop(
         paths: Vec<std::path::PathBuf>,
         transfer: gpui::FileDropTransfer,
-        intent: gitcomet_core::filesystem::TransferIntent,
+        intent: gpui::FileTransferOperation,
+        identity: fn(&std::path::Path) -> std::path::PathBuf,
     ) -> Self {
         Self {
             native: Some(transfer.completion),
-            remaining: service_identities(&paths),
+            remaining: paths.iter().map(|path| identity(path)).collect(),
             payload: FilePayload {
                 paths,
                 intent,
@@ -224,24 +213,18 @@ impl PasteReceipt {
             intent,
         }
     }
-    /// `paths` are the filesystem service's canonical sources.
+    /// `paths` are spelled as the receipt's `identity` spells its sources.
     pub fn completed(&mut self, paths: &[std::path::PathBuf]) {
         self.remaining
             .retain(|path| !paths.iter().any(|completed| path.starts_with(completed)));
     }
     pub fn finish<T: 'static>(self, cx: &mut gpui::Context<T>) {
         let complete = self.remaining.is_empty();
-        let operation = complete.then_some(
-            if self.intent == gitcomet_core::filesystem::TransferIntent::Move {
-                gpui::FileTransferOperation::Move
-            } else {
-                gpui::FileTransferOperation::Copy
-            },
-        );
+        let operation = complete.then_some(self.intent);
         if let Some(native) = self.native {
             native.complete(operation);
         } else if complete
-            && self.intent == gitcomet_core::filesystem::TransferIntent::Move
+            && self.intent == gpui::FileTransferOperation::Move
             && read_files(cx).as_ref() == Some(&self.payload)
         {
             write_text(cx, String::new(), CopySource::ContextMenu);
@@ -249,21 +232,12 @@ impl PasteReceipt {
     }
 }
 
-/// Spelled as the filesystem service reports completed sources, so a path
-/// reached through a symlink or a Windows 8.3 name still matches.
-fn service_identities(paths: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
-    paths
-        .iter()
-        .map(|path| {
-            gitcomet_core::filesystem::absolute_identity(path).unwrap_or_else(|_| path.clone())
-        })
-        .collect()
-}
-
+/// `identity` spells a source the way the receipt's completions will report it.
 pub fn capture_paste<T: 'static>(
     cx: &gpui::Context<T>,
     paths: &[std::path::PathBuf],
-    intent: gitcomet_core::filesystem::TransferIntent,
+    intent: gpui::FileTransferOperation,
+    identity: fn(&std::path::Path) -> std::path::PathBuf,
 ) -> Option<PasteReceipt> {
     let payload = read_files(cx)?;
     if payload.paths != paths {
@@ -271,16 +245,12 @@ pub fn capture_paste<T: 'static>(
     }
     let files = gpui::FileTransfer {
         paths: gpui::ExternalPaths(payload.paths.iter().cloned().collect()),
-        operation: if payload.intent == gitcomet_core::filesystem::TransferIntent::Move {
-            gpui::FileTransferOperation::Move
-        } else {
-            gpui::FileTransferOperation::Copy
-        },
+        operation: payload.intent,
         ownership: payload.ownership,
     };
     let native = cx.capture_file_paste(&files);
     Some(PasteReceipt {
-        remaining: service_identities(&payload.paths),
+        remaining: payload.paths.iter().map(|path| identity(path)).collect(),
         native,
         payload,
         intent,
@@ -290,14 +260,10 @@ pub fn capture_paste<T: 'static>(
 pub fn cancel_cut<T: 'static>(cx: &mut gpui::Context<T>) {
     let current = read_files(cx);
     if let Some(payload) = current
-        && payload.intent == gitcomet_core::filesystem::TransferIntent::Move
+        && payload.intent == gpui::FileTransferOperation::Move
         && payload.ownership != 0
     {
-        write_files(
-            cx,
-            payload.paths,
-            gitcomet_core::filesystem::TransferIntent::Copy,
-        );
+        write_files(cx, payload.paths, gpui::FileTransferOperation::Copy);
     }
 }
 
@@ -375,7 +341,7 @@ fn write_copy_diagnostic(source: CopySource, text_len: usize, backend: Clipboard
     if let Err(err) = write_copy_diagnostic_inner(source, text_len, backend) {
         eprintln!(
             "Failed to write {} copy crash diagnostics: {err}",
-            gitcomet_core::identity::current().display_name()
+            gitcomet_base::identity::current().display_name()
         );
     }
 }
@@ -386,7 +352,7 @@ fn write_copy_diagnostic_inner(
     text_len: usize,
     backend: ClipboardBackend,
 ) -> std::io::Result<()> {
-    let dir = gitcomet_core::platform::dirs::crash_dir().ok_or_else(|| {
+    let dir = gitcomet_base::platform::dirs::crash_dir().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no per-user state directory is configured",
@@ -404,7 +370,7 @@ fn write_copy_diagnostic_inner(
             ClipboardBackend::X11 => "x11",
         },
     );
-    gitcomet_core::fs_utils::write_private_file(
+    gitcomet_base::fs_utils::write_private_file(
         &dir.join(format!("last-operation-{}.log", std::process::id())),
         text.as_bytes(),
     )
@@ -470,7 +436,6 @@ fn write_text_to_x11(_text: &str) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use super::PasteReceipt;
     use super::{
         ClipboardBackend, clipboard_backend, copy_diagnostics_enabled, replace_clipboard_owner,
@@ -545,29 +510,25 @@ mod tests {
         assert_eq!(active, Some(FakeClipboard(2)));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn drop_receipts_match_completions_reported_under_the_canonical_parent() {
-        let directory = tempfile::tempdir().unwrap();
-        let real = directory.path().join("real");
-        std::fs::create_dir(&real).unwrap();
-        std::fs::write(real.join("a.txt"), "a").unwrap();
-        let link = directory.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
+    fn drop_receipts_match_completions_spelled_by_their_identity() {
         let mut receipt = PasteReceipt::from_drop(
-            vec![link.join("a.txt")],
+            vec!["alias/a.txt".into(), "alias/b.txt".into()],
             gpui::FileDropTransfer {
                 operation: gpui::FileTransferOperation::Move,
                 source_owns_move: false,
                 completion: gpui::FilePaste::new(|_| {}),
             },
-            gitcomet_core::filesystem::TransferIntent::Move,
+            gpui::FileTransferOperation::Move,
+            |path| std::path::Path::new("real").join(path.strip_prefix("alias").unwrap()),
         );
-        receipt.completed(&[std::fs::canonicalize(&real).unwrap().join("a.txt")]);
-        assert!(
-            receipt.remaining.is_empty(),
-            "a moved source dropped through a symlink still completes the drop"
+        receipt.completed(&["real/a.txt".into()]);
+        assert_eq!(
+            receipt.remaining,
+            vec![std::path::PathBuf::from("real/b.txt")]
         );
+        receipt.completed(&["real".into()]);
+        assert!(receipt.remaining.is_empty());
     }
 
     #[test]

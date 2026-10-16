@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{CommitSignature, SignatureFormat, SignatureFormats, SignatureStatus};
 use gitcomet_core::signing_tools::{SigningToolAvailability, SigningToolsState};
 
@@ -88,7 +89,7 @@ fn batch(effects: Vec<Effect>) -> Option<Batch> {
 }
 struct Fixture {
     state: AppState,
-    repos: FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: RepositoryRuntimes,
 }
 impl Fixture {
     fn new() -> Self {
@@ -104,7 +105,7 @@ impl Fixture {
         state.active_repo = Some(RepoId(1));
         Self {
             state,
-            repos: FxHashMap::default(),
+            repos: Default::default(),
         }
     }
     fn send(&mut self, msg: Msg) -> Option<Batch> {

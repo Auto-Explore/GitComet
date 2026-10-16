@@ -5,8 +5,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 cd "$repo_root"
 
-production_limit="${GITCOMET_MAX_PRODUCTION_RS_LINES:-4500}"
-test_limit="${GITCOMET_MAX_TEST_RS_LINES:-6500}"
+production_limit="${GITCOMET_MAX_PRODUCTION_RS_LINES:-3500}"
+test_limit="${GITCOMET_MAX_TEST_RS_LINES:-5500}"
 
 for value in "$production_limit" "$test_limit"; do
   if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
@@ -18,7 +18,9 @@ done
 # Every file is measured by its physical line count. An inline test module
 # counts against its production file: move a large one into a child
 # `tests.rs` (or a `tests/` directory), which is measured against the test
-# limit. Small cohesive inline tests may stay.
+# limit. Small cohesive inline tests may stay. Benchmark fixtures under a
+# `benchmarks/` directory build only with the `benchmarks` feature and count
+# as test code.
 failed=0
 checked=0
 # Include new sources during local development, and skip tracked deletions.
@@ -27,7 +29,7 @@ while IFS= read -r -d '' file; do
   [[ -f "$file" ]] || continue
   checked=$((checked + 1))
   case "$file" in
-    */tests/* | */benches/* | */tests.rs | *_tests.rs)
+    */tests/* | */benches/* | */benchmarks/* | */tests.rs | *_tests.rs)
       kind="test/benchmark"
       limit="$test_limit"
       ;;

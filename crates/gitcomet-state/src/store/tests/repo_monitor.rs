@@ -1,5 +1,6 @@
 use super::super::repo_monitor as monitor_impl;
 use super::*;
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[derive(Default)]
 struct RepoActivationCallCounts {
@@ -60,14 +61,21 @@ impl GitRepository for RepoActivationRecordingRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        self.calls
-            .log
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(std::sync::Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }))
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            self.calls
+                .log
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(std::sync::Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -78,48 +86,98 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(Vec::new())
     }
 
-    fn current_branch(&self) -> Result<String> {
-        Ok("main".to_string())
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { Ok("main".to_string()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        self.calls
-            .branches
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(Vec::new())
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = {
+            self.calls
+                .branches
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        Ok(Vec::new())
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        self.calls
-            .remote_branches
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(Vec::new())
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = {
+            self.calls
+                .remote_branches
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn status(&self) -> Result<RepoStatus> {
-        self.calls
-            .status
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(RepoStatus {
-            staged: std::sync::Arc::new(Vec::new()),
-            unstaged: std::sync::Arc::new(Vec::new()),
-        })
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = {
+            self.calls
+                .status
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(RepoStatus {
+                staged: std::sync::Arc::new(Vec::new()),
+                unstaged: std::sync::Arc::new(Vec::new()),
+            })
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_worktrees(&self) -> Result<Vec<gitcomet_core::domain::Worktree>> {
-        self.calls
-            .worktree_lists
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(vec![gitcomet_core::domain::Worktree {
-            path: self.spec.workdir.clone(),
-            head: None,
-            branch: Some("main".into()),
-            detached: false,
-        }])
+    fn list_worktrees(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Worktree>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<gitcomet_core::domain::Worktree>> = {
+            self.calls
+                .worktree_lists
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(vec![gitcomet_core::domain::Worktree {
+                path: self.spec.workdir.clone(),
+                head: None,
+                branch: Some("main".into()),
+                detached: false,
+            }])
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -150,8 +208,15 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(())
     }
 
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        Ok(Vec::new())
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -174,12 +239,18 @@ impl GitRepository for RepoActivationRecordingRepo {
         Ok(())
     }
 
-    fn fetch_all(&self) -> Result<()> {
-        Ok(())
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        Ok(())
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
     fn push(&self) -> Result<()> {
@@ -358,8 +429,8 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
             limit: 200,
             cursor: None,
         });
-        loads_in_flight.request(crate::model::RepoLoadsInFlight::BRANCHES);
-        loads_in_flight.request(crate::model::RepoLoadsInFlight::REMOTE_BRANCHES);
+        loads_in_flight.request(crate::model::LoadKind::Branches);
+        loads_in_flight.request(crate::model::LoadKind::RemoteBranches);
         state
     };
     let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));
@@ -554,8 +625,8 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
     let metadata_executor = TaskExecutor::new(1);
     let session_persist_executor = TaskExecutor::new(1);
     let backend: std::sync::Arc<dyn GitBackend> = std::sync::Arc::new(FailingBackend);
-    let repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
-    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
+
     let mut repo_monitors = monitor_impl::RepoMonitorManager::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (exited_tx, exited_rx) = std::sync::mpsc::channel();
@@ -568,7 +639,6 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         active_repo_id: &active_repo_id,
         event_tx: &event_tx,
         repo_monitors: &mut repo_monitors,
-        repo_task_tokens: &mut repo_task_tokens,
         thread_msg_tx: &thread_msg_tx,
         executor: &executor,
         repo_load_executor: &repo_load_executor,
@@ -584,7 +654,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         deferred_acknowledgements: &mut Vec::new(),
     }
-    .handle_effects(&repos, std::iter::empty::<Effect>());
+    .handle_effects(&mut repos, std::iter::empty::<Effect>());
     let elapsed = started.elapsed();
 
     assert!(
@@ -604,11 +674,11 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
 /// repositories that are not open.
 #[test]
 fn watch_leases_count_and_leave_with_their_repository() {
-    let mut repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = std::sync::atomic::AtomicU64::new(1);
     let mut state = AppState::test_default();
     let repo_id = RepoId(1);
-    repos.insert(repo_id, std::sync::Arc::new(DummyRepo::new("/tmp/leased")));
+    repos.attach_repository_for_test(repo_id, std::sync::Arc::new(DummyRepo::new("/tmp/leased")));
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -747,14 +817,14 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
     let metadata_executor = TaskExecutor::new(1);
     let session_persist_executor = TaskExecutor::new(1);
     let backend: std::sync::Arc<dyn GitBackend> = std::sync::Arc::new(FailingBackend);
-    let mut repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     for repo in &open_repos {
-        repos.insert(
+        repos.attach_repository_for_test(
             repo.id,
             std::sync::Arc::new(DummyRepo::new(repo.spec.workdir.to_str().unwrap())),
         );
     }
-    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
+
     let mut repo_monitors = monitor_impl::RepoMonitorManager::new();
 
     let mut handle = |repo_monitors: &mut monitor_impl::RepoMonitorManager| {
@@ -764,7 +834,6 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             active_repo_id: &active_repo_id,
             event_tx: &event_tx,
             repo_monitors,
-            repo_task_tokens: &mut repo_task_tokens,
             thread_msg_tx: &thread_msg_tx,
             executor: &executor,
             repo_load_executor: &repo_load_executor,
@@ -780,7 +849,7 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
             deferred_acknowledgements: &mut Vec::new(),
         }
-        .handle_effects(&repos, std::iter::empty::<Effect>());
+        .handle_effects(&mut repos, std::iter::empty::<Effect>());
     };
     handle(&mut repo_monitors);
     let mut running = repo_monitors.running_repo_ids();
@@ -795,7 +864,7 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
 
 #[test]
 fn linked_worktree_leases_count_and_do_not_cross_repository_lifetimes() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let ids = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = AppState::test_default();

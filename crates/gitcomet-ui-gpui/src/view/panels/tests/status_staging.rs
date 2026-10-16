@@ -166,12 +166,12 @@ fn wait_for_displayed_content(cx: &mut gpui::VisualTestContext, view: &View) {
             });
         });
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let Some(repo) = pane.active_repo() else {
                 return false;
             };
             if repo.diff_state.edit_mode {
-                !pane.file_editor_loading && pane.file_editor_key.is_some()
+                !pane.file_editor_loading() && pane.file_editor_key().is_some()
             } else {
                 // Untracked files and content views read directly from disk in
                 // the pane; their store diff loadables deliberately stay empty.
@@ -183,17 +183,17 @@ fn wait_for_displayed_content(cx: &mut gpui::VisualTestContext, view: &View) {
 
 /// Waits for the open editor to show `disk_text`, then prepends an unsaved line.
 fn type_unsaved_line(cx: &mut gpui::VisualTestContext, view: &View, disk_text: &str) {
-    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
-    cx.update(|_, app| main_pane.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    cx.update(|_, app| diff_renderer.update(app, |pane, cx| pane.ensure_file_editor_loaded(cx)));
     cx.run_until_parked();
     super::shortcuts::wait_until(cx, "editor loaded before typing", |cx| {
         cx.update(|_, app| {
-            let pane = main_pane.read(app);
-            !pane.file_editor_loading && pane.file_editor_input.read(app).text() == disk_text
+            let pane = diff_renderer.read(app);
+            !pane.file_editor_loading() && pane.file_editor_input.read(app).text() == disk_text
         })
     });
     cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.file_editor_input.update(cx, |input, cx| {
                 input.replace_utf8_range(0..0, "unsaved\n", cx);
             });
@@ -202,7 +202,7 @@ fn type_unsaved_line(cx: &mut gpui::VisualTestContext, view: &View, disk_text: &
     cx.run_until_parked();
     cx.update(|_, app| {
         assert!(
-            main_pane.read(app).file_editor_is_dirty(),
+            diff_renderer.read(app).file_editor_is_dirty(),
             "the edit must be dirty before pressing anything"
         );
     });
@@ -259,7 +259,9 @@ fn exercise_with_failure(
         .unwrap();
     }
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let mut status = backend.status().unwrap();
+    let mut status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     if matches!(surface, Surface::PaletteRename) {
         // The status list shows only the destination, so unstaging its entries
         // one by one would leave the source's staged deletion behind.
@@ -297,11 +299,11 @@ fn exercise_with_failure(
     // Finish constructor settings before attaching the fixture. Tests pull
     // store snapshots explicitly because the live UI poller is disabled.
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
     cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, _| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
             pane.auto_save_file_edits = false;
         });
         view.read(app).details_pane.clone().update(app, |pane, cx| {
@@ -487,7 +489,7 @@ fn exercise_with_failure(
                 crate::app::bind_app_keys_for_test(app);
                 crate::app::install_global_diff_shortcut_fallback_for_test(app);
                 view.read(app)
-                    .main_pane
+                    .diff_renderer
                     .read(app)
                     .diff_panel_focus_handle
                     .clone()
@@ -630,7 +632,7 @@ fn exercise_with_failure(
         assert_eq!(repo.diff_state.edit_mode, matches!(viewed, Viewed::Editor));
         if matches!(viewed, Viewed::Editor) {
             cx.update(|_, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 assert!(pane.is_file_editor_active());
                 assert!(pane.file_editor_is_dirty());
                 assert!(
@@ -912,7 +914,9 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
             }
 
             let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-            let status = backend.status().unwrap();
+            let status = backend
+                .status(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
             let mut repo = opening_repo_state(REPO, dir.path());
             repo.open = Loadable::Ready(());
             repo.worktree_status = Loadable::Ready(status.unstaged.clone());
@@ -926,8 +930,8 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
                 GitCometView::new(store_for_view, events, None, window, cx)
             });
             crate::view::test_support::drain_store_worker(&view, cx);
-            store.insert_repo_for_test(REPO, backend);
             super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+            store.insert_repo_for_test(REPO, backend);
             cx.simulate_resize(gpui::size(px(1600.0), px(1000.0)));
             cx.update(|_, app| {
                 view.update(app, |root, cx| {
@@ -1125,7 +1129,9 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     conflicted_merge(dir.path());
     std::fs::write(dir.path().join("b.txt"), "base\nchanged\n").unwrap();
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let status = backend.status().unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(
         status
             .unstaged
@@ -1141,8 +1147,8 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
     let target = DiffTarget::working_tree("b.txt".into(), DiffArea::Unstaged);
     store.dispatch(Msg::SelectDiff {
         repo_id: REPO,
@@ -1215,7 +1221,9 @@ fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
     git(dir.path(), &["add", "a.txt"]);
     std::fs::write(dir.path().join("a.txt"), "base\nunstaged\n").unwrap();
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let status = backend.status().unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
@@ -1228,10 +1236,10 @@ fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, _| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
             pane.auto_save_file_edits = false;
         });
     });
@@ -1244,12 +1252,12 @@ fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
     });
     wait_for_displayed_content(cx, &view);
     type_unsaved_line(cx, &view, "base\nunstaged\n");
-    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|window, app| {
         app.clear_key_bindings();
         crate::app::bind_app_keys_for_test(app);
         crate::app::install_global_diff_shortcut_fallback_for_test(app);
-        main_pane.update(app, |pane, cx| match focus {
+        diff_renderer.update(app, |pane, cx| match focus {
             EditorKeyFocus::Panel => pane.diff_panel_focus_handle.clone().focus(window, cx),
             EditorKeyFocus::Search => {
                 assert!(pane.open_search_for_active_view(window, cx));
@@ -1270,7 +1278,7 @@ fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
             "{focus:?}: Space must not stage while editing"
         );
         cx.update(|_, app| {
-            let pane = main_pane.read(app);
+            let pane = diff_renderer.read(app);
             assert!(pane.is_file_editor_active(), "{focus:?}: still editing");
             assert!(pane.file_editor_is_dirty(), "{focus:?}: edits kept");
         });
@@ -1304,7 +1312,9 @@ fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
-    let status = backend.status().unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let mut repo = opening_repo_state(REPO, dir.path());
     repo.open = Loadable::Ready(());
     repo.worktree_status = Loadable::Ready(status.unstaged.clone());
@@ -1314,8 +1324,8 @@ fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
     crate::view::test_support::drain_store_worker(&view, cx);
-    store.insert_repo_for_test(REPO, backend);
     super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
 
     let row = format!("status_row_{}_unstaged_0", REPO.0);
     let bounds = cx.debug_bounds(Box::leak(row.into_boxed_str())).unwrap();

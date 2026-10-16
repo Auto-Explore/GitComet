@@ -179,7 +179,10 @@ impl super::GixRepo {
         for revision in &mut revisions {
             validate_ref_like_arg(revision, "revision")?;
             *revision = crate::refs::resolve_required(&repo, revision)
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("resolve LFS revision: {e}"))))?
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("resolve LFS revision: {e}")))
+                        .with_source(e)
+                })?
                 .detach()
                 .to_string();
         }

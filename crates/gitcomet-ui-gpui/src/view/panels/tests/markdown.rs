@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::mod_helpers::MarkdownSearchSurface;
-use crate::view::panes::main::DiffWrapVisualRow;
+use crate::view::panes::diff::helpers::state::DiffWrapVisualRow;
 
 /// `debug_bounds` takes a `&'static str`; tests that build a selector from a
 /// row index need one that outlives the call.
@@ -66,7 +66,7 @@ impl RenderedPreviewFixture {
         let (workdir, directory) =
             open_rendered_markdown_preview(cx, view, repo_id, name, source, status);
         let document = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             match &pane.worktree_markdown.document {
                 gitcomet_state::model::Loadable::Ready(document) => Arc::clone(document),
                 other => panic!("expected a ready preview, got {other:?}"),
@@ -160,7 +160,7 @@ fn open_rendered_markdown_preview(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -245,8 +245,8 @@ fn copied_preview_selection(
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> Option<String> {
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -266,7 +266,7 @@ fn open_rendered_markdown_diff_in(
     let workdir = open_rendered_markdown_diff(cx, view, repo_id, name, old_text, new_text);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = mode;
                 cx.notify();
             });
@@ -321,8 +321,8 @@ fn open_rendered_markdown_diff(
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -351,7 +351,7 @@ fn point_on_link_in_region(
     region: DiffTextRegion,
 ) -> gpui::Point<Pixels> {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let bounds = pane
             .diff_text_hitbox_bounds_for_tests(row_ix, region)
             .unwrap_or_else(|| panic!("row {row_ix} of {region:?} is drawn"));
@@ -442,7 +442,7 @@ fn open_conflict_markdown_preview(
     draw_frames(cx, 1);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
                 cx.notify();
             });
@@ -490,11 +490,11 @@ fn file_history_controls_live_in_the_bottom_bar(cx: &mut gpui::TestAppContext) {
     assert_eq!(
         cx.update(|_, app| view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .rendered_preview_modes
-            .get(crate::view::mod_helpers::RenderedPreviewKind::Markdown)),
-        crate::view::mod_helpers::RenderedPreviewMode::Source
+            .get(crate::view::RenderedPreviewKind::Markdown)),
+        crate::view::RenderedPreviewMode::Source
     );
     fixture.cleanup();
 }

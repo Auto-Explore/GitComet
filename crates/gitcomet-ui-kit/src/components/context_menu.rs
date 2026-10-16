@@ -85,9 +85,17 @@ pub enum ContextMenuIconSlot {
     /// Keep the icon column empty so the label stays aligned with sibling
     /// entries that carry an icon.
     Reserved,
-    /// An icon name or `icons/*.svg` path resolved via `context_menu_icon_path`,
-    /// or an extension's own asset path (`extensions/<id>/…`), drawn as given.
     Icon(SharedString),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ContextMenuTone {
+    #[default]
+    Accent,
+    Neutral,
+    Success,
+    Warning,
+    Danger,
 }
 
 pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
@@ -298,6 +306,7 @@ pub struct ContextMenuEntry {
     id: ElementId,
     label: ContextMenuText,
     icon: ContextMenuIconSlot,
+    tone: ContextMenuTone,
     shortcut: Option<SharedString>,
     shortcut_keycaps: bool,
     selected: bool,
@@ -311,6 +320,7 @@ impl ContextMenuEntry {
             id: id.into(),
             label: label.into(),
             icon: ContextMenuIconSlot::None,
+            tone: ContextMenuTone::Accent,
             shortcut: None,
             shortcut_keycaps: false,
             selected: false,
@@ -321,6 +331,11 @@ impl ContextMenuEntry {
 
     pub fn icon(mut self, icon: ContextMenuIconSlot) -> Self {
         self.icon = icon;
+        self
+    }
+
+    pub fn tone(mut self, tone: ContextMenuTone) -> Self {
+        self.tone = tone;
         self
     }
 
@@ -384,6 +399,7 @@ fn context_menu_entry<V: 'static>(
         id,
         label,
         icon,
+        tone,
         shortcut,
         shortcut_keycaps,
         selected,
@@ -393,24 +409,12 @@ fn context_menu_entry<V: 'static>(
     let ui_scale = ui_scale.into().with_appearance(theme.metrics);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
     let max_lines = label.resolved_max_lines(2);
-    let icon_path = match &icon {
-        ContextMenuIconSlot::Icon(name) => context_menu_icon_path(name.as_ref(), label.as_ref()),
+    let icon_color = context_menu_icon_color(theme, disabled, tone);
+    let drawn_icon = match &icon {
+        ContextMenuIconSlot::Icon(path) => Some(path.clone()),
         ContextMenuIconSlot::Reserved | ContextMenuIconSlot::None => None,
     };
-    let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
-    // An extension's own asset (`extensions/<id>/…`), or a kit icon the
-    // table does not name, is drawn as given.
-    let drawn_icon = icon_path
-        .map(SharedString::new_static)
-        .or_else(|| match &icon {
-            ContextMenuIconSlot::Icon(name)
-                if name.starts_with("extensions/") || name.starts_with("icons/") =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        });
-    let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
+    let text_color = context_menu_entry_text_color(theme, disabled, tone);
     let mut row = crate::menu::menu_item(id, theme, ui_scale, selected, disabled)
         .text_color(text_color)
         .child(
@@ -490,171 +494,28 @@ fn context_menu_entry<V: 'static>(
 fn context_menu_entry_text_color(
     theme: AppTheme,
     disabled: bool,
-    icon_color: gpui::Rgba,
+    tone: ContextMenuTone,
 ) -> gpui::Rgba {
     if disabled {
         theme.colors.foreground.secondary
-    } else if icon_color == theme.colors.status.danger.foreground {
-        // Destructive entries carry the danger tint on both icon and label.
+    } else if tone == ContextMenuTone::Danger {
         theme.colors.status.danger.foreground
     } else {
         theme.colors.foreground.primary
     }
 }
 
-fn context_menu_icon_color(
-    theme: AppTheme,
-    disabled: bool,
-    label: &str,
-    icon_path: Option<&'static str>,
-) -> gpui::Rgba {
+fn context_menu_icon_color(theme: AppTheme, disabled: bool, tone: ContextMenuTone) -> Rgba {
     if disabled {
         return theme.colors.foreground.secondary;
     }
-
-    if label == "Close" && icon_path == Some("icons/repo_tab_close.svg") {
-        return theme.colors.accent.foreground;
+    match tone {
+        ContextMenuTone::Accent => theme.colors.accent.foreground,
+        ContextMenuTone::Neutral => theme.colors.foreground.secondary,
+        ContextMenuTone::Success => theme.colors.status.success.foreground,
+        ContextMenuTone::Warning => theme.colors.status.warning.foreground,
+        ContextMenuTone::Danger => theme.colors.status.danger.foreground,
     }
-    // Moving to the trash can be undone; only permanent deletion reads red.
-    if label == "Trash" {
-        return theme.colors.accent.foreground;
-    }
-
-    // Semantic-ish mapping for common actions.
-    if label.starts_with("Force push")
-        || matches!(
-            icon_path,
-            Some("icons/trash.svg") | Some("icons/repo_tab_close.svg")
-        )
-        || label.contains("Delete")
-        || label.contains("Drop")
-        || label.contains("Remove")
-    {
-        return theme.colors.status.danger.foreground;
-    }
-    if matches!(icon_path, Some("icons/warning.svg"))
-        || label.contains("Force")
-        || label.contains("Discard")
-    {
-        return theme.colors.status.warning.foreground;
-    }
-    if matches!(icon_path, Some("icons/arrow_up.svg")) || label.starts_with("Push") {
-        return theme.colors.status.success.foreground;
-    }
-    if matches!(icon_path, Some("icons/arrow_down.svg")) || label.starts_with("Pull") {
-        return theme.colors.status.warning.foreground;
-    }
-    if matches!(icon_path, Some("icons/plus.svg")) || label.starts_with("Stage") {
-        return theme.colors.status.success.foreground;
-    }
-    if matches!(icon_path, Some("icons/minus.svg")) || label.starts_with("Unstage") {
-        return theme.colors.status.warning.foreground;
-    }
-
-    theme.colors.accent.foreground
-}
-
-/// The icon a context-menu entry draws, or `None` for an empty slot.
-pub fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
-    let trimmed = icon.trim();
-    let by_icon = match trimmed {
-        "icons/link.svg" | "link" => Some("icons/link.svg"),
-        "icons/unlink.svg" | "unlink" => Some("icons/unlink.svg"),
-        "icons/plus.svg" => Some("icons/plus.svg"),
-        "icons/minus.svg" => Some("icons/minus.svg"),
-        "icons/question.svg" => Some("icons/question.svg"),
-        "icons/warning.svg" => Some("icons/warning.svg"),
-        "A" | "B" | "C" => None,
-        "icons/check.svg" => Some("icons/check.svg"),
-        "icons/git_branch.svg" => Some("icons/git_branch.svg"),
-        "icons/arrow_down.svg" => Some("icons/arrow_down.svg"),
-        "icons/arrow_up.svg" => Some("icons/arrow_up.svg"),
-        "icons/arrow_down_to_line.svg" => Some("icons/arrow_down_to_line.svg"),
-        "icons/arrow_up_to_line.svg" => Some("icons/arrow_up_to_line.svg"),
-        "icons/chevron_down.svg" => Some("icons/chevron_down.svg"),
-        "icons/chevron_right.svg" => Some("icons/chevron_right.svg"),
-        "icons/broom.svg" => Some("icons/broom.svg"),
-        "icons/stash.svg" => Some("icons/stash.svg"),
-        "icons/tag.svg" => Some("icons/tag.svg"),
-        "icons/trash.svg" => Some("icons/trash.svg"),
-        "icons/repo_tab_close.svg" => Some("icons/repo_tab_close.svg"),
-        "icons/refresh.svg" => Some("icons/refresh.svg"),
-        "icons/open_external.svg" => Some("icons/open_external.svg"),
-        "icons/file.svg" => Some("icons/file.svg"),
-        "icons/folder.svg" => Some("icons/folder.svg"),
-        "icons/copy.svg" => Some("icons/copy.svg"),
-        "icons/box.svg" => Some("icons/box.svg"),
-        "icons/menu.svg" => Some("icons/menu.svg"),
-        "icons/list_tree.svg" => Some("icons/list_tree.svg"),
-        "icons/list_groups.svg" => Some("icons/list_groups.svg"),
-        "icons/swap.svg" => Some("icons/swap.svg"),
-        "icons/squash_arrow.svg" => Some("icons/squash_arrow.svg"),
-        "icons/arrow_right.svg" => Some("icons/arrow_right.svg"),
-        "icons/infinity.svg" => Some("icons/infinity.svg"),
-        "icons/arrow_left.svg" => Some("icons/arrow_left.svg"),
-        "icons/undo.svg" => Some("icons/undo.svg"),
-        "icons/pencil.svg" => Some("icons/pencil.svg"),
-        "icons/cloud.svg" => Some("icons/cloud.svg"),
-        "icons/computer.svg" => Some("icons/computer.svg"),
-        "icons/history.svg" => Some("icons/history.svg"),
-        "icons/pin.svg" => Some("icons/pin.svg"),
-        "icons/cog.svg" => Some("icons/cog.svg"),
-        "icons/disk.svg" => Some("icons/disk.svg"),
-        "icons/generic_close.svg" => Some("icons/generic_close.svg"),
-        "icons/git_commit.svg" => Some("icons/git_commit.svg"),
-        "icons/file_plus.svg" => Some("icons/file_plus.svg"),
-        "icons/folder_plus.svg" => Some("icons/folder_plus.svg"),
-        "icons/scissors.svg" => Some("icons/scissors.svg"),
-        "icons/clipboard_paste.svg" => Some("icons/clipboard_paste.svg"),
-        "icons/copy_plus.svg" => Some("icons/copy_plus.svg"),
-        "icons/redo.svg" => Some("icons/redo.svg"),
-        "icons/eye_off.svg" => Some("icons/eye_off.svg"),
-        _ => None,
-    };
-    if by_icon.is_some() {
-        return by_icon;
-    }
-
-    if label.starts_with("Pull") {
-        return Some("icons/arrow_down.svg");
-    }
-    if label.starts_with("Push") {
-        return Some("icons/arrow_up.svg");
-    }
-    if label.contains("Delete") || label.contains("Drop") || label.contains("Remove") {
-        return Some("icons/trash.svg");
-    }
-    if label.contains("Tag") {
-        return Some("icons/tag.svg");
-    }
-    if label.contains("Open") && label.contains("location") {
-        return Some("icons/folder.svg");
-    }
-    if label.contains("Open") {
-        return Some("icons/open_external.svg");
-    }
-    if label.starts_with("Stage") {
-        return Some("icons/plus.svg");
-    }
-    if label.starts_with("Unstage") {
-        return Some("icons/minus.svg");
-    }
-    if label.contains("Squash") {
-        return Some("icons/arrow_right.svg");
-    }
-    if label.contains("Edit") {
-        return Some("icons/pencil.svg");
-    }
-    if label.contains("Reset") {
-        return Some("icons/refresh.svg");
-    }
-    if label.contains("Revert") {
-        return Some("icons/undo.svg");
-    }
-    if label.contains("Copy") {
-        return Some("icons/copy.svg");
-    }
-    None
 }
 
 fn context_menu_text_content<V: 'static>(
@@ -692,498 +553,4 @@ fn context_menu_text_content<V: 'static>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct HeadingBlock {
-        theme: AppTheme,
-    }
-
-    impl gpui::Render for HeadingBlock {
-        fn render(
-            &mut self,
-            _window: &mut gpui::Window,
-            cx: &mut gpui::Context<Self>,
-        ) -> impl IntoElement {
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    context_menu_header(self.theme, 100u32, "primary.rs", None, cx)
-                        .debug_selector(|| "heading_primary".to_string()),
-                )
-                .child(
-                    context_menu_label(
-                        self.theme,
-                        100u32,
-                        ContextMenuText::path_single_line("/tmp/some/where/primary.rs"),
-                        None,
-                        cx,
-                    )
-                    .debug_selector(|| "heading_secondary".to_string()),
-                )
-        }
-    }
-
-    /// A menu naming an object renders two headings, and the second one has to
-    /// read as subordinate. Both lines go through `TruncatedText`, which takes
-    /// its size from the element rather than the wrapping div's text class — so
-    /// dropping the explicit size silently returns both lines to the window
-    /// default and they render identically, which is the bug this guards.
-    ///
-    /// Glyph metrics are useless here (the test text system measures every glyph
-    /// the same), but the line box each heading reserves still follows its font
-    /// size, so height is the observable that separates them.
-    #[gpui::test]
-    fn secondary_heading_renders_smaller_than_the_primary(cx: &mut gpui::TestAppContext) {
-        let theme = crate::theme::AppTheme::gitcomet_dark();
-        let (_view, cx) = cx.add_window_view(|_window, _cx| HeadingBlock { theme });
-        crate::test_support::redraw(cx);
-
-        // The primary heading's outer box is a row, so measure the text box
-        // inside it; the secondary heading is the text box itself.
-        let primary = cx
-            .debug_bounds("context_menu_header_text")
-            .expect("expected the primary heading");
-        let secondary = cx
-            .debug_bounds("heading_secondary")
-            .expect("expected the secondary heading");
-
-        let primary_line = primary.size.height;
-        let secondary_line = secondary.size.height - px(4.0);
-        assert!(
-            secondary_line < primary_line,
-            "secondary heading must render smaller than the primary, got \
-             {secondary_line:?} vs {primary_line:?}"
-        );
-    }
-
-    struct RowKinds {
-        theme: AppTheme,
-    }
-
-    impl gpui::Render for RowKinds {
-        fn render(
-            &mut self,
-            _window: &mut gpui::Window,
-            cx: &mut gpui::Context<Self>,
-        ) -> impl IntoElement {
-            let theme = self.theme;
-            let scale = crate::ui_scale::UiScale::current(cx);
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    ContextMenuEntry::new("plain", SharedString::from("Plain"))
-                        .icon(ContextMenuIconSlot::Reserved)
-                        .render(theme, scale, cx)
-                        .debug_selector(|| "row_plain".to_string()),
-                )
-                .child(
-                    ContextMenuEntry::new("text", SharedString::from("Text shortcut"))
-                        .icon(ContextMenuIconSlot::Reserved)
-                        .shortcut(Some("A".into()))
-                        .render(theme, scale, cx)
-                        .debug_selector(|| "row_text_shortcut".to_string()),
-                )
-                .child(
-                    ContextMenuEntry::new("keycap", SharedString::from("Keycap shortcut"))
-                        .icon(ContextMenuIconSlot::Reserved)
-                        .shortcut(Some("Ctrl+W".into()))
-                        .shortcut_keycaps(true)
-                        .render(theme, scale, cx)
-                        .debug_selector(|| "row_keycap".to_string()),
-                )
-                .child(
-                    ContextMenuEntry::new("collapse_command", "Collapse feat/")
-                        .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
-                        .render(theme, scale, cx)
-                        .debug_selector(|| "row_collapse_command".to_string()),
-                )
-                .child(
-                    context_menu_group(theme, scale, false)
-                        .debug_selector(|| "closed_group".to_string())
-                        .child(
-                            ContextMenuEntry::new("closed_group", "Remote branch origin/main")
-                                .icon(ContextMenuIconSlot::Icon("icons/chevron_right.svg".into()))
-                                .render(theme, scale, cx)
-                                .debug_selector(|| "row_closed_group".to_string()),
-                        ),
-                )
-                .child(
-                    context_menu_group(theme, scale, true)
-                        .debug_selector(|| "open_group".to_string())
-                        .child(
-                            ContextMenuEntry::new("open_group", "Remote branch upstream/main")
-                                .icon(ContextMenuIconSlot::Icon("icons/chevron_down.svg".into()))
-                                .render(theme, scale, cx)
-                                .debug_selector(|| "row_open_group".to_string()),
-                        )
-                        .child(
-                            ContextMenuEntry::new("selected_group", "Checkout")
-                                .icon(ContextMenuIconSlot::Reserved)
-                                .selected(true)
-                                .render(theme, scale, cx)
-                                .debug_selector(|| "row_selected_group".to_string()),
-                        ),
-                )
-                .child(
-                    context_menu_header(theme, scale, SharedString::from("Header"), None, cx)
-                        .id("row_header_id")
-                        .debug_selector(|| "row_header".to_string()),
-                )
-        }
-    }
-
-    struct ExtensionIcon {
-        theme: AppTheme,
-    }
-
-    impl gpui::Render for ExtensionIcon {
-        fn render(
-            &mut self,
-            _window: &mut gpui::Window,
-            cx: &mut gpui::Context<Self>,
-        ) -> impl IntoElement {
-            let scale = crate::ui_scale::UiScale::current(cx);
-            gpui::div()
-                .child(
-                    ContextMenuEntry::new("ext", "Mark reviewed")
-                        .icon(ContextMenuIconSlot::Icon(
-                            "extensions/com.example.review/icons/review.svg".into(),
-                        ))
-                        .render(self.theme, scale, cx),
-                )
-                .child(
-                    ContextMenuEntry::new("kit", "Agents")
-                        .icon(ContextMenuIconSlot::Icon("icons/terminal.svg".into()))
-                        .render(self.theme, scale, cx),
-                )
-        }
-    }
-
-    /// An extension's own asset, and a kit icon the table does not name, are
-    /// drawn as given: dropping them left a blank slot.
-    #[gpui::test]
-    fn extension_menu_icons_draw_their_asset(cx: &mut gpui::TestAppContext) {
-        let theme = AppTheme::gitcomet_dark();
-        let (_view, cx) = cx.add_window_view(|_, _| ExtensionIcon { theme });
-        crate::test_support::redraw(cx);
-        assert!(
-            cx.debug_bounds("context_menu_entry_icon_Mark reviewed")
-                .is_some()
-        );
-        assert!(cx.debug_bounds("context_menu_entry_icon_Agents").is_some());
-    }
-
-    #[gpui::test]
-    fn review_collapse_commands_do_not_inherit_group_header_background(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let theme = AppTheme::from_key("sunset_veil").unwrap();
-        let (_view, cx) = cx.add_window_view(|_, _| RowKinds { theme });
-        crate::test_support::redraw(cx);
-        assert!(
-            !crate::test_support::painted_control_quads(cx, "row_collapse_command")
-                .iter()
-                .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
-        );
-    }
-
-    /// Every kind of menu row is one height, at both densities. Keycaps and
-    /// headings each used to reserve a taller box than a plain entry.
-    #[gpui::test]
-    fn every_menu_row_kind_shares_one_height(cx: &mut gpui::TestAppContext) {
-        for density in crate::appearance::UiDensity::ALL {
-            cx.update(|app| {
-                app.set_global(crate::appearance::Appearance {
-                    density,
-                    ..crate::appearance::Appearance::default()
-                });
-            });
-            let theme = cx.update(|app| {
-                crate::theme::AppTheme::gitcomet_dark()
-                    .with_appearance(crate::appearance::current(app))
-            });
-            let (_view, cx) = cx.add_window_view(|_window, _cx| RowKinds { theme });
-            crate::test_support::redraw(cx);
-
-            let plain = cx
-                .debug_bounds("row_plain")
-                .expect("expected a plain entry to render")
-                .size
-                .height;
-            for selector in [
-                "row_text_shortcut",
-                "row_keycap",
-                "row_header",
-                "row_closed_group",
-                "row_open_group",
-                "row_selected_group",
-            ] {
-                let height = cx
-                    .debug_bounds(selector)
-                    .unwrap_or_else(|| panic!("expected {selector} to render"))
-                    .size
-                    .height;
-                assert_eq!(
-                    height, plain,
-                    "{selector} must match a plain entry at {density:?} density"
-                );
-            }
-            for selector in ["closed_group", "open_group"] {
-                assert!(
-                    crate::test_support::painted_control_quads(cx, selector)
-                        .iter()
-                        .any(|(fill, _)| *fill == theme.colors.surface.panel.into())
-                );
-            }
-            // One block spans the header and its rows; neighbours stay apart.
-            let closed = cx.debug_bounds("closed_group").unwrap();
-            let open = cx.debug_bounds("open_group").unwrap();
-            let header = cx.debug_bounds("row_open_group").unwrap();
-            let action = cx.debug_bounds("row_selected_group").unwrap();
-            assert_eq!((open.top(), open.bottom()), (header.top(), action.bottom()));
-            assert!(open.top() > closed.bottom());
-            assert!(
-                crate::test_support::painted_control_quads(cx, "row_selected_group")
-                    .iter()
-                    .any(|(fill, _)| *fill == theme.hover_overlay().into()),
-                "group backgrounds must preserve keyboard selection feedback"
-            );
-        }
-    }
-
-    #[test]
-    fn secondary_heading_is_muted_against_the_primary() {
-        for theme in [
-            crate::theme::AppTheme::gitcomet_dark(),
-            crate::theme::AppTheme::gitcomet_light(),
-        ] {
-            assert_ne!(
-                theme.colors.foreground.secondary, theme.colors.foreground.primary,
-                "the two headings must not share a color"
-            );
-        }
-    }
-
-    #[test]
-    fn context_menu_icon_path_accepts_direct_svg_paths() {
-        let paths = [
-            "icons/link.svg",
-            "icons/unlink.svg",
-            "icons/plus.svg",
-            "icons/minus.svg",
-            "icons/question.svg",
-            "icons/warning.svg",
-            "icons/check.svg",
-            "icons/git_branch.svg",
-            "icons/arrow_down.svg",
-            "icons/arrow_up.svg",
-            "icons/arrow_down_to_line.svg",
-            "icons/arrow_up_to_line.svg",
-            "icons/chevron_down.svg",
-            "icons/chevron_right.svg",
-            "icons/broom.svg",
-            "icons/stash.svg",
-            "icons/tag.svg",
-            "icons/trash.svg",
-            "icons/repo_tab_close.svg",
-            "icons/refresh.svg",
-            "icons/open_external.svg",
-            "icons/file.svg",
-            "icons/folder.svg",
-            "icons/copy.svg",
-            "icons/box.svg",
-            "icons/menu.svg",
-            "icons/list_tree.svg",
-            "icons/list_groups.svg",
-            "icons/swap.svg",
-            "icons/squash_arrow.svg",
-            "icons/arrow_right.svg",
-            "icons/infinity.svg",
-            "icons/arrow_left.svg",
-            "icons/undo.svg",
-            "icons/pencil.svg",
-            "icons/cloud.svg",
-            "icons/computer.svg",
-            "icons/pin.svg",
-            "icons/cog.svg",
-            "icons/disk.svg",
-            "icons/generic_close.svg",
-            "icons/git_commit.svg",
-            "icons/file_plus.svg",
-            "icons/folder_plus.svg",
-            "icons/scissors.svg",
-            "icons/clipboard_paste.svg",
-            "icons/copy_plus.svg",
-            "icons/redo.svg",
-            "icons/eye_off.svg",
-        ];
-
-        for path in paths {
-            assert_eq!(context_menu_icon_path(path, "test"), Some(path));
-        }
-    }
-
-    #[test]
-    fn context_menu_icon_path_maps_named_link_icons() {
-        assert_eq!(
-            context_menu_icon_path("link", "test"),
-            Some("icons/link.svg")
-        );
-        assert_eq!(
-            context_menu_icon_path("unlink", "test"),
-            Some("icons/unlink.svg")
-        );
-    }
-
-    #[test]
-    fn context_menu_icon_path_uses_label_fallbacks() {
-        assert_eq!(
-            context_menu_icon_path("", "Pull (merge)"),
-            Some("icons/arrow_down.svg")
-        );
-        assert_eq!(
-            context_menu_icon_path("", "Remove remote"),
-            Some("icons/trash.svg")
-        );
-        assert_eq!(
-            context_menu_icon_path("", "Squash into current"),
-            Some("icons/arrow_right.svg")
-        );
-    }
-
-    #[test]
-    fn context_menu_icon_color_preserves_destructive_and_warning_semantics() {
-        let theme = AppTheme::gitcomet_dark();
-        assert_eq!(
-            context_menu_icon_color(theme, false, "Delete branch", Some("icons/trash.svg")),
-            theme.colors.status.danger.foreground
-        );
-        assert_eq!(
-            context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg")),
-            theme.colors.accent.foreground
-        );
-        assert_eq!(
-            context_menu_icon_color(
-                theme,
-                false,
-                "Force push (with lease)…",
-                Some("icons/warning.svg")
-            ),
-            theme.colors.status.danger.foreground
-        );
-        assert_eq!(
-            context_menu_icon_color(theme, false, "Discard changes", Some("icons/warning.svg")),
-            theme.colors.status.warning.foreground
-        );
-        // The explorer's reversible Trash stays neutral; permanent deletion is red.
-        assert_eq!(
-            context_menu_icon_color(theme, false, "Trash", Some("icons/trash.svg")),
-            theme.colors.accent.foreground
-        );
-        assert_eq!(
-            context_menu_icon_color(theme, false, "Delete permanently…", Some("icons/trash.svg")),
-            theme.colors.status.danger.foreground
-        );
-        assert_eq!(
-            context_menu_icon_color(theme, false, "Cut", Some("icons/scissors.svg")),
-            theme.colors.accent.foreground
-        );
-        assert_eq!(
-            context_menu_icon_color(theme, false, "Add to .gitignore", Some("icons/eye_off.svg")),
-            theme.colors.accent.foreground
-        );
-    }
-
-    #[test]
-    fn context_menu_close_uses_normal_text_and_standard_icon_color() {
-        let theme = AppTheme::gitcomet_dark();
-        let close_icon =
-            context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg"));
-
-        assert_eq!(close_icon, theme.colors.accent.foreground);
-        assert_eq!(
-            context_menu_entry_text_color(theme, false, close_icon),
-            theme.colors.foreground.primary
-        );
-        assert_eq!(
-            context_menu_entry_text_color(theme, false, theme.colors.status.danger.foreground),
-            theme.colors.status.danger.foreground,
-            "other destructive entries should retain their danger text"
-        );
-    }
-
-    #[test]
-    fn context_menu_icon_path_covers_all_context_menu_svg_icons() {
-        let paths = [
-            "icons/plus.svg",
-            "icons/check.svg",
-            "icons/git_branch.svg",
-            "icons/arrow_down.svg",
-            "icons/arrow_up.svg",
-            "icons/arrow_down_to_line.svg",
-            "icons/arrow_up_to_line.svg",
-            "icons/chevron_down.svg",
-            "icons/chevron_right.svg",
-            "icons/broom.svg",
-            "icons/stash.svg",
-            "icons/tag.svg",
-            "icons/trash.svg",
-            "icons/repo_tab_close.svg",
-            "icons/refresh.svg",
-            "icons/open_external.svg",
-            "icons/file.svg",
-            "icons/folder.svg",
-            "icons/copy.svg",
-            "icons/box.svg",
-            "icons/infinity.svg",
-            "icons/swap.svg",
-            "icons/squash_arrow.svg",
-            "icons/arrow_right.svg",
-            "icons/arrow_left.svg",
-            "icons/pencil.svg",
-            "icons/link.svg",
-            "icons/unlink.svg",
-            "icons/warning.svg",
-            "icons/minus.svg",
-            "icons/cloud.svg",
-            "icons/computer.svg",
-            "icons/pin.svg",
-            "icons/cog.svg",
-            "icons/disk.svg",
-            "icons/generic_close.svg",
-            "icons/git_commit.svg",
-            "icons/file_plus.svg",
-            "icons/folder_plus.svg",
-            "icons/scissors.svg",
-            "icons/clipboard_paste.svg",
-            "icons/copy_plus.svg",
-            "icons/redo.svg",
-            "icons/eye_off.svg",
-        ];
-        for path in paths {
-            assert_eq!(
-                context_menu_icon_path(path, "test"),
-                Some(path),
-                "missing direct SVG support for context-menu icon path: {path}"
-            );
-        }
-    }
-
-    /// An icon path the resolver does not list renders an empty, still-indented
-    /// slot, so every menu icon literal must resolve to itself. Hosts run the
-    /// same scan over their own sources.
-    #[test]
-    fn every_menu_icon_literal_in_the_kit_resolves() {
-        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let (_seen, unresolved) =
-            crate::test_support::source_guards::unresolved_menu_icons(&src_dir);
-        assert!(
-            unresolved.is_empty(),
-            "add these to context_menu_icon_path:\n{}",
-            unresolved.join("\n")
-        );
-    }
-}
+mod tests;

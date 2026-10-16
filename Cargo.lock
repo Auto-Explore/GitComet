@@ -2360,6 +2360,7 @@ dependencies = [
  "gitcomet-app",
  "gitcomet-core",
  "gitcomet-git-gix",
+ "gitcomet-perf",
  "gitcomet-ui-gpui",
  "process-wrap",
  "rustfs-mimalloc",
@@ -2394,6 +2395,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-base"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+]
+
+[[package]]
+name = "gitcomet-conflict-resolver"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-core",
+ "gitcomet-text",
+ "gpui_ce_shared_string",
+ "gpui_ce_sum_tree",
+ "memchr",
+ "rustc-hash 2.1.3",
+ "smallvec",
+]
+
+[[package]]
 name = "gitcomet-core"
 version = "0.3.0"
 dependencies = [
@@ -2402,6 +2426,7 @@ dependencies = [
  "faster-hex 1.0.0",
  "filetime",
  "fnv",
+ "gitcomet-base",
  "gitcomet-core",
  "gitcomet-filesystem-native",
  "gix-quote",
@@ -2508,6 +2533,7 @@ dependencies = [
  "flate2",
  "fnv",
  "gitcomet-core",
+ "gitcomet-git-gix",
  "gitcomet-win32-window-utils",
  "gix",
  "itertools 0.15.0",
@@ -2524,9 +2550,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-markdown"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-core",
+ "gitcomet-diagrams",
+ "gitcomet-syntax",
+ "gpui_ce_shared_string",
+ "memchr",
+ "pulldown-cmark",
+ "rustc-hash 2.1.3",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "gitcomet-perf"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "gitcomet-state"
 version = "0.3.0"
 dependencies = [
+ "gitcomet-base",
  "gitcomet-core",
  "gitcomet-fs-watch",
  "gitcomet-git-gix",
@@ -2543,60 +2593,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitcomet-tree-sitter-alloc"
+name = "gitcomet-syntax"
 version = "0.3.0"
 dependencies = [
- "ctor",
- "rustfs-mimalloc-sys",
- "tree-sitter",
- "tree-sitter-json",
-]
-
-[[package]]
-name = "gitcomet-ui-gpui"
-version = "0.3.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "criterion",
  "dekobon-tree-sitter-groovy",
- "fast_image_resize",
- "fontdb 0.24.0",
- "futures",
  "gitcomet-core",
- "gitcomet-diagrams",
- "gitcomet-extension-api",
- "gitcomet-extension-example",
- "gitcomet-git-gix",
- "gitcomet-state",
+ "gitcomet-text",
  "gitcomet-tree-sitter-alloc",
  "gitcomet-ui-kit",
- "gitcomet-win32-window-utils",
  "gpui-ce",
- "gpui_ce_platform",
- "gpui_ce_wgpu",
- "image",
- "jiff",
- "lru",
+ "gpui_ce_shared_string",
  "memchr",
- "metal",
- "palette",
- "pulldown-cmark",
- "raw-window-handle",
- "regex",
- "resvg",
  "rustc-hash 2.1.3",
- "rustfs-mimalloc",
- "rustix",
- "schemars",
- "semver",
- "serde",
- "serde_json",
- "shlex",
- "smallvec",
- "smol",
- "stats_alloc",
- "sysinfo",
  "tempfile",
  "tree-sitter",
  "tree-sitter-asm",
@@ -2675,6 +2683,82 @@ dependencies = [
  "tree-sitter-xml",
  "tree-sitter-yaml",
  "tree-sitter-zig",
+]
+
+[[package]]
+name = "gitcomet-text"
+version = "0.3.0"
+dependencies = [
+ "gpui_ce_shared_string",
+ "gpui_ce_sum_tree",
+ "jiff",
+ "lru",
+ "memchr",
+ "rustc-hash 2.1.3",
+ "smallvec",
+]
+
+[[package]]
+name = "gitcomet-tree-sitter-alloc"
+version = "0.3.0"
+dependencies = [
+ "ctor",
+ "rustfs-mimalloc-sys",
+ "tree-sitter",
+ "tree-sitter-json",
+]
+
+[[package]]
+name = "gitcomet-ui-gpui"
+version = "0.3.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "criterion",
+ "fast_image_resize",
+ "fontdb 0.24.0",
+ "futures",
+ "gitcomet-conflict-resolver",
+ "gitcomet-core",
+ "gitcomet-diagrams",
+ "gitcomet-extension-api",
+ "gitcomet-extension-example",
+ "gitcomet-git-gix",
+ "gitcomet-markdown",
+ "gitcomet-perf",
+ "gitcomet-state",
+ "gitcomet-syntax",
+ "gitcomet-text",
+ "gitcomet-tree-sitter-alloc",
+ "gitcomet-ui-kit",
+ "gitcomet-ui-media",
+ "gitcomet-ui-terminal",
+ "gpui-ce",
+ "gpui_ce_platform",
+ "gpui_ce_wgpu",
+ "image",
+ "jiff",
+ "lru",
+ "memchr",
+ "metal",
+ "palette",
+ "pulldown-cmark",
+ "raw-window-handle",
+ "regex",
+ "resvg",
+ "rustc-hash 2.1.3",
+ "rustfs-mimalloc",
+ "rustix",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "shlex",
+ "smallvec",
+ "smol",
+ "stats_alloc",
+ "sysinfo",
+ "tempfile",
  "unicode-normalization",
  "unicode-segmentation",
  "ureq",
@@ -2687,8 +2771,9 @@ name = "gitcomet-ui-kit"
 version = "0.3.0"
 dependencies = [
  "fontdb 0.24.0",
- "gitcomet-core",
+ "gitcomet-base",
  "gitcomet-fonts",
+ "gitcomet-text",
  "gitcomet-win32-window-utils",
  "gpui-ce",
  "gpui_ce_parley",
@@ -2696,6 +2781,7 @@ dependencies = [
  "lru",
  "memchr",
  "palette",
+ "raw-window-handle",
  "regex",
  "rustc-hash 2.1.3",
  "serde",
@@ -2706,6 +2792,35 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "x11-clipboard",
+]
+
+[[package]]
+name = "gitcomet-ui-media"
+version = "0.3.0"
+dependencies = [
+ "fast_image_resize",
+ "gitcomet-base",
+ "gitcomet-diagrams",
+ "gitcomet-markdown",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "image",
+ "lru",
+ "resvg",
+ "tempfile",
+]
+
+[[package]]
+name = "gitcomet-ui-terminal"
+version = "0.3.0"
+dependencies = [
+ "alacritty_terminal",
+ "gitcomet-base",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "palette",
+ "rustc-hash 2.1.3",
+ "smol",
 ]
 
 [[package]]

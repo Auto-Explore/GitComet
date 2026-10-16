@@ -35,7 +35,7 @@ pub(super) struct ConflictChunkContext {
 }
 
 fn conflict_canvas_click_target(
-    view: &Entity<MainPaneView>,
+    view: &Entity<DiffRenderer>,
     action: impl std::hash::Hash,
     cx: &App,
 ) -> gpui::ElementId {
@@ -55,7 +55,7 @@ fn conflict_canvas_click_target(
 impl ConflictChunkContext {
     fn install_menu(
         &self,
-        view: &Entity<MainPaneView>,
+        view: &Entity<DiffRenderer>,
         target: gpui::ElementId,
         hitbox: &Hitbox,
         invoker: SharedString,
@@ -109,7 +109,7 @@ pub(super) struct AlignmentMarkContext {
 pub(super) fn split_conflict_row_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     visible_row_ix: usize,
     row_ix: usize,
     min_width: Pixels,
@@ -349,7 +349,7 @@ pub(super) fn split_conflict_row_canvas(
 pub(super) fn single_column_conflict_canvas(
     tab_width: usize,
     theme: AppTheme,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     id_prefix: &'static str,
     visible_row_ix: usize,
     row_ix: usize,

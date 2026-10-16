@@ -1,0 +1,2952 @@
+use super::*;
+use crate::kit::drag_autoscroll::{DRAG_AUTOSCROLL_TICK, drag_autoscroll_step};
+use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
+mod editor_context_menu;
+
+#[cfg(test)]
+thread_local! {
+    // Web links a Ctrl/Cmd+click followed, in order.
+    static OPENED_WEB_LINKS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Web links followed since the last call, which clears them.
+#[cfg(test)]
+pub(in crate::view) fn take_opened_web_links_for_tests() -> Vec<String> {
+    OPENED_WEB_LINKS.with(|links| links.take())
+}
+
+#[derive(Clone, Copy)]
+enum DiffTextOffsetBias {
+    Start,
+    End,
+}
+
+/// A row hit keeps the caret boundary and the pointer's geometric relation to
+/// the painted text separate. The right half of the final glyph resolves to the
+/// end caret boundary just like trailing blank space does, but only the latter
+/// should suppress click highlights.
+#[derive(Clone, Copy)]
+struct DiffTextHit {
+    pos: DiffTextPos,
+    past_painted_text: bool,
+}
+
+enum DiffTextPairDocumentLookup {
+    Ready(rows::PreparedDiffSyntaxDocument, usize, DiffTextPairSide),
+    Pending(DiffTextRegion),
+    Unavailable,
+}
+
+fn diff_text_local_range_from_source_ranges(
+    selected: Range<usize>,
+    visual: Range<usize>,
+) -> Option<Range<usize>> {
+    let start = selected.start.max(visual.start);
+    let end = selected.end.min(visual.end);
+    if start >= end {
+        return None;
+    }
+    Some(start.saturating_sub(visual.start)..end.saturating_sub(visual.start))
+}
+
+impl DiffRenderer {
+    fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
+        let a = self.diff_text_anchor?;
+        let b = self.diff_text_head?;
+        Some(if a.cmp_key() <= b.cmp_key() {
+            (a, b)
+        } else {
+            (b, a)
+        })
+    }
+
+    pub(in super::super::super) fn diff_text_selection_visible_range(
+        &self,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end {
+            return None;
+        }
+        let start_ix = self.diff_text_visible_ix_for_source_pos(start, DiffTextOffsetBias::Start);
+        let end_ix = self.diff_text_visible_ix_for_source_pos(end, DiffTextOffsetBias::End);
+        Some((start_ix.min(end_ix), start_ix.max(end_ix)))
+    }
+
+    pub(in super::super::super) fn sync_diff_focus_to_text_selection(&mut self) {
+        if let Some((start, end)) = self.diff_text_normalized_selection()
+            && start != end
+        {
+            self.diff_selection_anchor =
+                Some(self.diff_text_visible_ix_for_source_pos(end, DiffTextOffsetBias::End));
+            self.diff_selection_range = None;
+        }
+    }
+
+    pub(in super::super::super) fn clear_diff_text_selection(&mut self) {
+        self.clear_diff_text_selection_span();
+        self.clear_diff_text_projected_highlights();
+    }
+
+    /// Drops the selected span only, leaving the projected click affordances
+    /// (bracket pair, occurrences) alone.
+    ///
+    /// Losing the window's text selection says nothing about those: they are a
+    /// separate affordance, and the surface that took the selection did not
+    /// invalidate the rows they are projected onto.
+    pub(in crate::view) fn clear_diff_text_selection_span(&mut self) {
+        self.diff_text_selecting = false;
+        self.diff_text_anchor = None;
+        self.diff_text_head = None;
+        self.diff_text_autoscroll_target = None;
+    }
+
+    /// Drop click affordances projected into the current visible-row space.
+    /// Pair and occurrence spans carry row indices and display offsets, so
+    /// neither can survive a projection reset or a replacement source.
+    pub(in crate::view) fn clear_diff_text_projected_highlights(&mut self) {
+        // Reached on every file switch, view-mode change and diff rebuild, all of
+        // which move the row indices these spans were projected onto.
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+        self.diff_text_pending_syntax_click = None;
+    }
+
+    pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
+        self.clear_diff_text_selection();
+    }
+
+    pub(in super::super::super) fn diff_text_selection_color(&self) -> gpui::Rgba {
+        self.theme.colors.editor.selection_background
+    }
+
+    pub(in super::super::super) fn set_diff_text_hitbox(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        hitbox: DiffTextHitbox,
+    ) {
+        self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
+    }
+
+    /// Register one table cell of a row. The row's entry collects its cells,
+    /// and its bounds grow to span them, so row-level lookups see one row.
+    pub(in crate::view) fn add_diff_text_cell_hitbox(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        row_len: usize,
+        cell: DiffTextHitbox,
+    ) {
+        let row = self
+            .diff_text_hitboxes
+            .entry((visible_ix, region))
+            .or_insert_with(|| DiffTextHitbox {
+                atomic: false,
+                bounds: cell.bounds,
+                layout_key: 0,
+                source_visible_ix: cell.source_visible_ix,
+                text_start_offset: 0,
+                text_len: row_len,
+                offset_map: None,
+                painted_text: SharedString::default(),
+                streamed_ascii_monospace_cell_width: None,
+                wrapped: None,
+                cells: Vec::new(),
+            });
+        row.bounds = row.bounds.union(&cell.bounds);
+        row.cells.push(cell);
+    }
+
+    /// The cell of a table row a point belongs to: the one it is in, else the
+    /// nearest, by the same line-first distance a drag uses between rows.
+    fn diff_text_cell_for_position(
+        hitbox: &DiffTextHitbox,
+        position: Point<Pixels>,
+    ) -> Option<&DiffTextHitbox> {
+        let distance = |bounds: &Bounds<Pixels>| {
+            let dy = (bounds.top() - position.y)
+                .max(position.y - bounds.bottom())
+                .max(px(0.0));
+            let dx = (bounds.left() - position.x)
+                .max(position.x - bounds.right())
+                .max(px(0.0));
+            (dy, dx)
+        };
+        hitbox.cells.iter().min_by(|a, b| {
+            distance(&a.bounds)
+                .partial_cmp(&distance(&b.bounds))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    /// Register a painted non-text block as a logical target for an active
+    /// selection drag. Unlike a text hitbox this does not make invisible copy
+    /// text clickable or try to map horizontal positions into byte offsets.
+    pub(in crate::view) fn set_diff_text_motion_target(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        start: DiffTextPos,
+        end: DiffTextPos,
+    ) {
+        debug_assert_eq!(start.region, end.region);
+        debug_assert!(start.cmp_key() <= end.cmp_key());
+        self.diff_text_motion_targets
+            .push(DiffTextMotionTarget { bounds, start, end });
+    }
+
+    /// Record where a row painted its stage/unstage gutter button. Hover and
+    /// click routing go through the row's hitbox; this map exists so tests can
+    /// aim at the button without re-deriving its geometry.
+    pub(in super::super::super) fn set_diff_stage_gutter_cell(
+        &mut self,
+        visible_ix: usize,
+        slot: rows::DiffStageSlot,
+        bounds: gpui::Bounds<Pixels>,
+    ) {
+        self.diff_stage_gutter_cells
+            .insert((visible_ix, slot), bounds);
+    }
+
+    fn diff_text_pos_from_hitbox(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextPos> {
+        self.diff_text_hit_from_hitbox(visible_ix, region, position)
+            .map(|hit| hit.pos)
+    }
+
+    fn diff_text_hit_from_hitbox(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextHit> {
+        let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        // A press off the text is not a press on it: the caller has to be able
+        // to tell "not this row" from "the start of this row", or clicking a
+        // row's padding would begin a selection and follow whatever link the
+        // nearest character happens to sit in.
+        if !hitbox.bounds.contains(&position) {
+            return None;
+        }
+        self.diff_text_hit_in_hitbox(hitbox, region, position)
+    }
+
+    /// Where a point outside every row belongs, once the nearest row is known.
+    ///
+    /// Unlike [`Self::diff_text_pos_from_hitbox`] this pulls the point onto the
+    /// row rather than rejecting it. Leaving the text is how a drag selects
+    /// past the end of a line, and the flowing markdown preview is full of
+    /// places to leave it: the margins between blocks, the padding inside a
+    /// code block, a picture, and every line shorter than its neighbours.
+    fn diff_text_pos_from_nearest_hitbox(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextPos> {
+        let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        self.diff_text_pos_in_hitbox(hitbox, region, position)
+    }
+
+    /// The offset a point resolves to inside one row, clamping to the row's
+    /// edges. For a point the row already contains the clamp does nothing.
+    fn diff_text_pos_in_hitbox(
+        &self,
+        hitbox: &DiffTextHitbox,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextPos> {
+        self.diff_text_hit_in_hitbox(hitbox, region, position)
+            .map(|hit| hit.pos)
+    }
+
+    /// Resolve a drag against a block whose copy text has no painted glyphs.
+    /// Approaching from above lands after it; approaching from below lands
+    /// before it. While the pointer is inside the block, the selection anchor
+    /// decides which boundary extends across the block.
+    fn diff_text_pos_from_motion_target(
+        &self,
+        target: &DiffTextMotionTarget,
+        position: Point<Pixels>,
+    ) -> DiffTextPos {
+        if position.y < target.bounds.top() {
+            return target.start;
+        }
+        if position.y > target.bounds.bottom() {
+            return target.end;
+        }
+
+        if let Some(anchor) = self.diff_text_anchor {
+            if anchor.cmp_key() >= target.end.cmp_key() {
+                return target.start;
+            }
+            if anchor.cmp_key() <= target.start.cmp_key() {
+                return target.end;
+            }
+        }
+
+        if position.y <= target.bounds.center().y {
+            target.start
+        } else {
+            target.end
+        }
+    }
+
+    fn diff_text_hit_in_hitbox(
+        &self,
+        hitbox: &DiffTextHitbox,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextHit> {
+        if !hitbox.cells.is_empty() {
+            let cell = Self::diff_text_cell_for_position(hitbox, position)?;
+            return self.diff_text_hit_in_hitbox(cell, region, position);
+        }
+        if hitbox.atomic {
+            let after = position.y > hitbox.bounds.bottom()
+                || (position.y >= hitbox.bounds.top() && position.x >= hitbox.bounds.center().x);
+            return Some(DiffTextHit {
+                pos: DiffTextPos {
+                    source_visible_ix: hitbox.source_visible_ix,
+                    region,
+                    offset: hitbox.text_start_offset + if after { hitbox.text_len } else { 0 },
+                },
+                past_painted_text: true,
+            });
+        }
+        if let Some(wrapped) = &hitbox.wrapped {
+            // A wrapped row spans several visual lines, so the click resolves
+            // against the layout it was painted with; `Err` is the clamp to the
+            // nearest boundary, which is what a drag past the text wants.
+            let (painted_offset, past_painted_text) = if position.y < hitbox.bounds.top() {
+                (0, true)
+            } else if position.y > hitbox.bounds.bottom() {
+                (wrapped.layout.len(), true)
+            } else {
+                match wrapped.layout.index_for_position(position) {
+                    Ok(offset) => (offset, false),
+                    Err(offset) => (offset, true),
+                }
+            };
+            return Some(DiffTextHit {
+                pos: DiffTextPos {
+                    source_visible_ix: hitbox.source_visible_ix,
+                    region,
+                    offset: hitbox
+                        .text_start_offset
+                        .saturating_add(wrapped.row_offset(painted_offset).min(hitbox.text_len)),
+                },
+                past_painted_text,
+            });
+        }
+        // A single shaped line lies wholly below a point above it and wholly
+        // above one below it, so those resolve to its ends rather than to
+        // whatever character shares their x.
+        let (local_offset, past_painted_text) = if position.y < hitbox.bounds.top() {
+            (0, true)
+        } else if position.y > hitbox.bounds.bottom() {
+            (hitbox.text_len, true)
+        } else {
+            let x = (position.x - hitbox.bounds.left()).max(px(0.0));
+            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+                if cell_width <= px(0.0) {
+                    (0, x > px(0.0))
+                } else {
+                    let text_width = cell_width * hitbox.text_len as f32;
+                    (
+                        (((x / cell_width) + 0.5).floor() as usize).min(hitbox.text_len),
+                        x > text_width,
+                    )
+                }
+            } else {
+                let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
+                (
+                    layout
+                        .closest_index_for_x(x)
+                        .min(layout.len())
+                        .min(hitbox.text_len),
+                    x > layout.width,
+                )
+            }
+        };
+        let local_offset = hitbox
+            .offset_map
+            .as_ref()
+            .map(|map| map.source_offset_for_display(local_offset))
+            .unwrap_or(local_offset);
+        Some(DiffTextHit {
+            pos: DiffTextPos {
+                source_visible_ix: hitbox.source_visible_ix,
+                region,
+                offset: hitbox.text_start_offset.saturating_add(local_offset),
+            },
+            past_painted_text,
+        })
+    }
+
+    /// The box a range of one row's text occupies on screen — the inverse of
+    /// [`Self::diff_text_pos_in_hitbox`], for anchoring a menu to the run of
+    /// text it acts on.
+    ///
+    /// `range` is in the offset space that method reports. A range that wraps
+    /// reports its part on the visual line nearest `near` — the line clicked.
+    fn diff_text_bounds_in_hitbox(
+        &self,
+        hitbox: &DiffTextHitbox,
+        range: Range<usize>,
+        near: Point<Pixels>,
+    ) -> Option<Bounds<Pixels>> {
+        if !hitbox.cells.is_empty() {
+            let cell = hitbox.cells.iter().find(|cell| {
+                (cell.text_start_offset..=cell.text_start_offset + cell.text_len)
+                    .contains(&range.start)
+            })?;
+            return self.diff_text_bounds_in_hitbox(cell, range, near);
+        }
+        if hitbox.atomic {
+            return Some(hitbox.bounds);
+        }
+        let local = |offset: usize| {
+            offset
+                .saturating_sub(hitbox.text_start_offset)
+                .min(hitbox.text_len)
+        };
+        let (start, end) = (local(range.start), local(range.end));
+
+        if let Some(wrapped) = &hitbox.wrapped {
+            // One box per visual line, as the selection paints: gpui puts an
+            // offset at a wrap boundary at the end of the line above, so a
+            // range that starts a line would otherwise begin on the previous one.
+            let rects = rows::markdown_flow_range_rects(
+                &wrapped.layout,
+                wrapped.painted_offset(start),
+                wrapped.painted_offset(end),
+            );
+            let distance = |rect: &Bounds<Pixels>| {
+                f32::from((rect.top() - near.y).max(near.y - rect.bottom()))
+            };
+            return rects
+                .into_iter()
+                .min_by(|a, b| distance(a).total_cmp(&distance(b)));
+        }
+
+        let x_for = |offset: usize| -> Option<Pixels> {
+            let display_offset = hitbox
+                .offset_map
+                .as_ref()
+                .map(|map| map.display_offset_for_source(offset))
+                .unwrap_or(offset);
+            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+                return Some(cell_width * display_offset as f32);
+            }
+            let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
+            Some(layout.x_for_index(display_offset.min(layout.len())))
+        };
+        let left = hitbox.bounds.left() + x_for(start)?;
+        let right = hitbox.bounds.left() + x_for(end)?;
+        Some(Bounds::from_corners(
+            point(left, hitbox.bounds.top()),
+            point(right.max(left), hitbox.bounds.bottom()),
+        ))
+    }
+
+    /// Bring the current quick-search match into view sideways.
+    ///
+    /// Runs from the render pass, just before the hitbox map is rebuilt, so it
+    /// reads the geometry the previous frame painted — which is the first frame
+    /// where the row is at its post-vertical-scroll position. Long lines are the
+    /// whole point: without this, jumping to a match 300 columns out scrolls the
+    /// row into view and leaves the hit off the right edge.
+    ///
+    /// Both split columns are considered: in split view the two sides hold
+    /// different text and scroll independently, so each one is revealed only if
+    /// the match is actually in it.
+    pub(in super::super::super) fn apply_pending_diff_search_horizontal_reveal(
+        &mut self,
+        window: &mut gpui::Window,
+    ) {
+        let Some((visible_ix, attempts_left)) = self.diff_search_horizontal_reveal else {
+            return;
+        };
+        if self.diff_text_hitboxes.is_empty() && self.conflict_text_hitboxes.is_empty() {
+            // Nothing painted at all — the pane has not drawn since the jump.
+            // Keep the request without spending an attempt on it, and ask for
+            // the frame it is waiting on: neither `set_offset` nor
+            // `scroll_to_item_strict` schedules one, so on an idle app the
+            // reveal would simply never happen.
+            window.request_animation_frame();
+            return;
+        }
+
+        let matcher = self.diff_search_current_matcher();
+        if matcher.is_empty() || matcher.regex_error().is_some() {
+            self.diff_search_horizontal_reveal = None;
+            return;
+        }
+
+        let revealed = if self.conflict_text_hitboxes.is_empty() {
+            // Every region, not the first that matches: the split columns are
+            // separate scrollables and a hit can be in both.
+            let mut painted = false;
+            let mut revealed = true;
+            for region in [
+                DiffTextRegion::Inline,
+                DiffTextRegion::SplitLeft,
+                DiffTextRegion::SplitRight,
+            ] {
+                if self.diff_text_hitboxes.contains_key(&(visible_ix, region)) {
+                    painted = true;
+                    // Evaluate every painted column even if an earlier one
+                    // needs another layout. No column may cancel its retry.
+                    revealed &=
+                        self.reveal_diff_search_match_in_region(visible_ix, region, &matcher);
+                }
+            }
+            painted && revealed
+        } else {
+            self.reveal_conflict_search_match_horizontally(visible_ix, &matcher)
+        };
+
+        // Retry until the row is painted with usable scroll geometry in every
+        // column. A settled split column cannot cancel another column's retry.
+        self.diff_search_horizontal_reveal = if revealed || attempts_left <= 1 {
+            None
+        } else {
+            // Still waiting on the frame that paints the row where the vertical
+            // scroll put it, so ask for one.
+            window.request_animation_frame();
+            Some((visible_ix, attempts_left - 1))
+        };
+    }
+
+    /// Find the match inside a row's *painted* text.
+    ///
+    /// With "reveal whitespace characters" on, the painted text has every space
+    /// swapped for `·` and every tab for `→`, so a query holding either would
+    /// never be found again and the reveal would silently do nothing. The query
+    /// is put through the same substitution to match it — literal queries only,
+    /// since rewriting a regex would change what it means.
+    pub(super) fn painted_search_range(
+        &self,
+        painted: &str,
+        matcher: &super::diff_search::DiffSearchMatcher,
+    ) -> Option<Range<usize>> {
+        let mut ranges = Vec::new();
+        matcher.find_ranges_into(painted, &mut ranges, 1);
+        if let Some(range) = ranges.first() {
+            return Some(range.clone());
+        }
+
+        let options = self.diff_search_options_or_default();
+        if !self.reveal_whitespace_chars || options.regex {
+            return None;
+        }
+        let revealed = crate::view::rows::whitespace_visible_line_text(matcher.query())
+            .as_ref()
+            .to_string();
+        if revealed == matcher.query() {
+            return None;
+        }
+        let revealed = super::diff_search::DiffSearchMatcher::new(&revealed, options);
+        ranges.clear();
+        revealed.find_ranges_into(painted, &mut ranges, 1);
+        ranges.first().cloned()
+    }
+
+    /// Reveals the match in one region, reporting whether its painted row and
+    /// scroll geometry are ready so the caller can stop retrying that region.
+    fn reveal_diff_search_match_in_region(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        matcher: &super::diff_search::DiffSearchMatcher,
+    ) -> bool {
+        let Some(hitbox) = self.diff_text_hitboxes.get(&(visible_ix, region)) else {
+            return false;
+        };
+        // A wrapped row has no off-screen right edge to chase; it already broke
+        // the line to fit the pane. Table cells wrap too.
+        if hitbox.wrapped.is_some() || !hitbox.cells.is_empty() {
+            return true;
+        }
+
+        // Searched against the painted text, so the offsets are the display
+        // offsets `x_for_index` measures in and no source→display remapping is
+        // needed on the way back out.
+        let painted_text = hitbox.painted_text.clone();
+        let Some(range) = self.painted_search_range(painted_text.as_ref(), matcher) else {
+            return true;
+        };
+        let Some(hitbox) = self.diff_text_hitboxes.get(&(visible_ix, region)) else {
+            return true;
+        };
+
+        let (local_left, local_right) =
+            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+                (
+                    cell_width * range.start as f32,
+                    cell_width * range.end as f32,
+                )
+            } else {
+                let Some(entry) = self.diff_text_layout_cache.get(&hitbox.layout_key) else {
+                    return true;
+                };
+                let layout = &entry.layout;
+                (
+                    layout.x_for_index(range.start.min(layout.len())),
+                    layout.x_for_index(range.end.min(layout.len())),
+                )
+            };
+
+        let row_left = hitbox.bounds.left();
+        let handle = self.scroll_handle_for_diff_text_autoscroll_target(
+            self.diff_text_autoscroll_target_for_region(region),
+        );
+        let viewport = handle.bounds();
+        let offset = handle.offset();
+        // Hitbox bounds are window space with the scroll already applied.
+        let to_content = |x: Pixels| row_left + x - viewport.origin.x - offset.x;
+        let match_left = to_content(local_left);
+        let match_right = to_content(local_right);
+        // A newly visible long line records its width during paint. The list
+        // uses that width in the following layout, so a hitbox can be ready
+        // while the scroll range still describes the previous, shorter rows.
+        // Retry instead of claiming a reveal clamped to that stale range.
+        if viewport.size.width <= px(0.0)
+            || match_right > viewport.size.width + handle.max_offset().x + px(1.0)
+        {
+            return false;
+        }
+        let Some(target_x) = super::helpers::reveal_scroll_x(
+            match_left,
+            match_right,
+            viewport.size.width,
+            handle.max_offset().x,
+            offset.x,
+        ) else {
+            return true;
+        };
+        handle.set_offset(point(target_x, offset.y));
+        true
+    }
+
+    /// Which scrollable a region's rows live in, without needing a mouse
+    /// position to disambiguate the split columns.
+    fn diff_text_autoscroll_target_for_region(
+        &self,
+        region: DiffTextRegion,
+    ) -> DiffTextAutoscrollTarget {
+        if self.is_file_preview_active() {
+            return DiffTextAutoscrollTarget::WorktreePreview;
+        }
+        match region {
+            DiffTextRegion::SplitRight => DiffTextAutoscrollTarget::DiffSplitRight,
+            _ => DiffTextAutoscrollTarget::DiffLeftOrInline,
+        }
+    }
+
+    fn diff_text_pos_for_mouse(&self, position: Point<Pixels>) -> Option<DiffTextPos> {
+        let restrict_region = self
+            .diff_text_selecting
+            .then_some(self.diff_text_anchor)
+            .flatten()
+            .map(|p| p.region)
+            .filter(|r| matches!(r, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight));
+
+        for ((visible_ix, region), hitbox) in &self.diff_text_hitboxes {
+            if restrict_region.is_some_and(|restrict| restrict != *region) {
+                continue;
+            }
+            if hitbox.bounds.contains(&position) {
+                return self.diff_text_pos_from_hitbox(*visible_ix, *region, position);
+            }
+        }
+        for target in &self.diff_text_motion_targets {
+            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
+                continue;
+            }
+            if target.bounds.contains(&position) {
+                return Some(self.diff_text_pos_from_motion_target(target, position));
+            }
+        }
+
+        // Vertical distance decides first. Text runs in lines, so the row a
+        // point off the text belongs to is the one beside it, however far along
+        // the line it is — adding the two distances instead let a point in the
+        // margin between two blocks pick a row several blocks away that merely
+        // shared its column.
+        let mut best: Option<((usize, DiffTextRegion), (Pixels, Pixels))> = None;
+        for (key, hitbox) in &self.diff_text_hitboxes {
+            if restrict_region.is_some_and(|restrict| restrict != key.1) {
+                continue;
+            }
+            let dy = if position.y < hitbox.bounds.top() {
+                hitbox.bounds.top() - position.y
+            } else if position.y > hitbox.bounds.bottom() {
+                position.y - hitbox.bounds.bottom()
+            } else {
+                px(0.0)
+            };
+            let dx = if position.x < hitbox.bounds.left() {
+                hitbox.bounds.left() - position.x
+            } else if position.x > hitbox.bounds.right() {
+                position.x - hitbox.bounds.right()
+            } else {
+                px(0.0)
+            };
+            // Rows are stored in a hash map, so ties are broken on the row
+            // itself rather than on iteration order.
+            let rank = (dy, dx, key.0, key.1.order());
+            let closer = match best {
+                None => true,
+                Some((best_key, (best_dy, best_dx))) => {
+                    rank < (best_dy, best_dx, best_key.0, best_key.1.order())
+                }
+            };
+            if closer {
+                best = Some((*key, (dy, dx)));
+            }
+        }
+
+        let mut best_motion: Option<(usize, (Pixels, Pixels, usize, u8))> = None;
+        for (target_ix, target) in self.diff_text_motion_targets.iter().enumerate() {
+            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
+                continue;
+            }
+            let dy = if position.y < target.bounds.top() {
+                target.bounds.top() - position.y
+            } else if position.y > target.bounds.bottom() {
+                position.y - target.bounds.bottom()
+            } else {
+                px(0.0)
+            };
+            let dx = if position.x < target.bounds.left() {
+                target.bounds.left() - position.x
+            } else if position.x > target.bounds.right() {
+                position.x - target.bounds.right()
+            } else {
+                px(0.0)
+            };
+            let rank = (
+                dy,
+                dx,
+                target.start.source_visible_ix,
+                target.start.region.order(),
+            );
+            if best_motion.is_none_or(|(_, best_rank)| rank < best_rank) {
+                best_motion = Some((target_ix, rank));
+            }
+        }
+
+        match (best, best_motion) {
+            (None, None) => None,
+            (Some(((visible_ix, region), _)), None) => {
+                self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+            }
+            (None, Some((target_ix, _))) => Some(self.diff_text_pos_from_motion_target(
+                &self.diff_text_motion_targets[target_ix],
+                position,
+            )),
+            (Some(((visible_ix, region), (dy, dx))), Some((target_ix, motion_rank))) => {
+                let text_rank = (dy, dx, visible_ix, region.order());
+                if text_rank <= motion_rank {
+                    self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+                } else {
+                    Some(self.diff_text_pos_from_motion_target(
+                        &self.diff_text_motion_targets[target_ix],
+                        position,
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Resolve the logical final caret boundary in one selectable text region.
+    /// Markdown uses its document rows because some blocks have no text
+    /// hitbox; other surfaces clamp against their final painted row so wrapped
+    /// and display-mapped text keeps the exact painted offset mapping.
+    fn diff_text_eof_target(&self, region: DiffTextRegion) -> (usize, DiffTextPos) {
+        // Flowing Markdown deliberately gives pictures and thematic breaks no
+        // text hitbox, but those document rows still carry selectable/copyable
+        // text (notably an image's alt text). Resolve its logical EOF from the
+        // document before consulting painted text so a trailing non-text block
+        // cannot move EOF back to the preceding paragraph.
+        if self.is_markdown_preview_active()
+            && let Some((last_visible_ix, last_offset)) = self.markdown_preview_region_eof(region)
+        {
+            return (
+                last_visible_ix,
+                DiffTextPos {
+                    source_visible_ix: last_visible_ix,
+                    region,
+                    offset: last_offset,
+                },
+            );
+        }
+
+        let last = self
+            .diff_text_hitboxes
+            .iter()
+            .filter(|((_, hit_region), _)| *hit_region == region)
+            .max_by_key(|((visible_ix, _), hitbox)| (hitbox.source_visible_ix, *visible_ix));
+
+        if let Some(((visible_ix, _), hitbox)) = last {
+            let below = point(hitbox.bounds.left(), hitbox.bounds.bottom() + px(1.0));
+            if let Some(pos) = self.diff_text_pos_in_hitbox(hitbox, region, below) {
+                return (*visible_ix, pos);
+            }
+        }
+
+        // A source-backed empty document has no row hitbox, but EOF is still a
+        // real text position and its context menu still has a file target.
+        (
+            0,
+            DiffTextPos {
+                source_visible_ix: 0,
+                region,
+                offset: 0,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_hitbox_bounds_for_tests(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<Bounds<Pixels>> {
+        self.diff_text_hitboxes
+            .get(&(visible_ix, region))
+            .map(|hitbox| hitbox.bounds)
+    }
+
+    /// Byte offset in the text a row painted, for a point inside that row.
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_offset_for_position(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<usize> {
+        self.diff_text_pos_from_hitbox(visible_ix, region, position)
+            .map(|pos| pos.offset)
+    }
+
+    /// As above, but `None` beside or past the painted text, where the hit is
+    /// only the nearest edge.
+    pub(in crate::view) fn diff_text_offset_on_text(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<usize> {
+        let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        let hit = self.diff_text_hit_in_hitbox(hitbox, region, position)?;
+        (!hit.past_painted_text).then_some(hit.pos.offset)
+    }
+
+    pub(in super::super::super) fn diff_text_visual_source_range_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> (usize, Range<usize>) {
+        let source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+        let range = if let Some(wrap) = self.diff_text_wrap_for_visible_ix(visible_ix) {
+            wrap.range_for_region(region)
+        } else {
+            0..self.diff_text_line_len_for_region(visible_ix, region)
+        };
+        (source_visible_ix, range)
+    }
+
+    fn diff_text_full_line_len_for_region(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> usize {
+        self.diff_text_full_line_for_region(source_visible_ix, region)
+            .len()
+    }
+
+    fn diff_text_visible_ix_for_source_pos(
+        &self,
+        pos: DiffTextPos,
+        bias: DiffTextOffsetBias,
+    ) -> usize {
+        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+            return pos.source_visible_ix;
+        }
+
+        let target_offset = match bias {
+            DiffTextOffsetBias::Start => pos.offset,
+            DiffTextOffsetBias::End => pos.offset.saturating_sub(1),
+        };
+        let mut first_for_source = None;
+        let mut last_for_source = None;
+        for (visible_ix, row) in self.diff_wrap_visible_rows.iter().enumerate() {
+            if row.source_visible_ix != pos.source_visible_ix {
+                continue;
+            }
+            first_for_source.get_or_insert(visible_ix);
+            last_for_source = Some(visible_ix);
+            let (_, range) = self.diff_text_visual_source_range_for_region(visible_ix, pos.region);
+            if range.is_empty() {
+                if pos.offset == range.start {
+                    return visible_ix;
+                }
+                continue;
+            }
+            if range.start <= target_offset && target_offset < range.end {
+                return visible_ix;
+            }
+        }
+
+        match bias {
+            DiffTextOffsetBias::Start => first_for_source,
+            DiffTextOffsetBias::End => last_for_source.or(first_for_source),
+        }
+        .unwrap_or(pos.source_visible_ix)
+    }
+
+    fn diff_text_visible_range_for_source_range(
+        &self,
+        start_source_visible_ix: usize,
+        end_source_visible_ix: usize,
+    ) -> Option<(usize, usize)> {
+        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+            return Some((start_source_visible_ix, end_source_visible_ix));
+        }
+
+        let mut start_visible_ix = None;
+        let mut end_visible_ix = None;
+        for (visible_ix, row) in self.diff_wrap_visible_rows.iter().enumerate() {
+            if row.source_visible_ix < start_source_visible_ix
+                || row.source_visible_ix > end_source_visible_ix
+            {
+                continue;
+            }
+            start_visible_ix.get_or_insert(visible_ix);
+            end_visible_ix = Some(visible_ix);
+        }
+        Some((start_visible_ix?, end_visible_ix?))
+    }
+
+    fn set_diff_text_selection(
+        &mut self,
+        anchor: DiffTextPos,
+        head: DiffTextPos,
+        suppress_clicks: usize,
+    ) {
+        self.diff_text_selecting = false;
+        self.diff_text_anchor = Some(anchor);
+        self.diff_text_head = Some(head);
+        self.diff_selection_range = None;
+        self.sync_diff_focus_to_text_selection();
+        self.diff_suppress_clicks_remaining = suppress_clicks.min(u8::MAX as usize) as u8;
+    }
+
+    fn select_diff_text_token_at_mouse(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) {
+        let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
+            return;
+        };
+        let text = self.diff_text_full_line_for_region(pos.source_visible_ix, pos.region);
+        let range = crate::text_selection::token_range_for_offset(text.as_ref(), pos.offset);
+        let anchor = DiffTextPos {
+            source_visible_ix: pos.source_visible_ix,
+            region: pos.region,
+            offset: range.start,
+        };
+        let head = DiffTextPos {
+            source_visible_ix: pos.source_visible_ix,
+            region: pos.region,
+            offset: range.end,
+        };
+        self.set_diff_text_selection(anchor, head, 1);
+    }
+
+    fn select_diff_text_line_at_mouse(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) {
+        let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
+            return;
+        };
+        let line_len = self.diff_text_full_line_len_for_region(pos.source_visible_ix, pos.region);
+        let anchor = DiffTextPos {
+            source_visible_ix: pos.source_visible_ix,
+            region: pos.region,
+            offset: 0,
+        };
+        let head = DiffTextPos {
+            source_visible_ix: pos.source_visible_ix,
+            region: pos.region,
+            offset: line_len,
+        };
+        self.set_diff_text_selection(anchor, head, 1);
+    }
+
+    /// Open the link menu when a plain click lands on a link in the rendered
+    /// markdown preview, and report whether it did. With `follow` (Ctrl/Cmd
+    /// held) the link opens straight away instead.
+    ///
+    /// A double or triple click is still a text selection — only a single
+    /// click follows the link, so selecting the words of a link keeps working.
+    pub(in super::super::super) fn handle_markdown_preview_link_click(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        click_count: usize,
+        follow: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if click_count > 1 || self.diff_text_has_selection() {
+            return false;
+        }
+        let Some((destination, span)) =
+            self.markdown_preview_link_span_at(visible_ix, region, position)
+        else {
+            return false;
+        };
+
+        // A row can contain several links: pairing the row alone is not enough.
+        if self.markdown_preview_link_span_at(visible_ix, region, window.mouse_position())
+            != Some((destination.clone(), span.clone()))
+        {
+            return false;
+        }
+        // An in-document anchor scrolls; it has no menu.
+        if self.scroll_markdown_preview_to_anchor(region, &destination, cx) {
+            return true;
+        }
+        // A link the preview cannot open is a click on plain words.
+        let Some(kind) =
+            self.markdown_preview_link_popover_kind(region, visible_ix, &destination, None)
+        else {
+            return false;
+        };
+        if follow && self.follow_markdown_preview_link(&kind, cx) {
+            return true;
+        }
+        // Anchor on the link's own box, so the menu opens flush under the words
+        // it describes rather than under the row that happens to hold them.
+        let anchor = self
+            .diff_text_hitboxes
+            .get(&(visible_ix, region))
+            .and_then(|hitbox| self.diff_text_bounds_in_hitbox(hitbox, span, position));
+        self.open_markdown_preview_link_popover(kind, anchor, position, window, cx);
+        true
+    }
+
+    /// Open the link menu for something that is a link in its own right — a
+    /// badge or any other picture wrapped in one — rather than a span of text.
+    ///
+    /// The picture's own box is what the menu wants to hang off; the click
+    /// point stands in for the frames where it has not been painted yet.
+    /// With `follow` (Ctrl/Cmd held) the link opens straight away instead.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::view) fn open_markdown_preview_link_menu(
+        &mut self,
+        region: DiffTextRegion,
+        row_ix: usize,
+        destination: SharedString,
+        load_remote_image_url: Option<SharedString>,
+        anchor_bounds: Option<Bounds<Pixels>>,
+        position: Point<Pixels>,
+        follow: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match self.markdown_preview_link_popover_kind(
+            region,
+            row_ix,
+            &destination,
+            load_remote_image_url.clone(),
+        ) {
+            Some(kind) if follow && self.follow_markdown_preview_link(&kind, cx) => {}
+            Some(kind) => {
+                self.open_markdown_preview_link_popover(kind, anchor_bounds, position, window, cx)
+            }
+            // An anchor, or a link that cannot open, has no menu to carry Load
+            // image: a click on a blocked picture approves it, and once shown
+            // the picture follows its anchor.
+            None => match load_remote_image_url {
+                Some(image_url) => self.approve_remote_markdown_image(image_url, cx),
+                None => {
+                    self.scroll_markdown_preview_to_anchor(region, &destination, cx);
+                }
+            },
+        }
+    }
+
+    fn open_markdown_preview_link_popover(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Option<Bounds<Pixels>>,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match anchor_bounds {
+            Some(bounds) => self.open_popover_for_bounds(kind, bounds, window, cx),
+            None => self.open_popover_at(kind, position, window, cx),
+        }
+    }
+
+    /// Run what a link menu's main entry would, and report whether it did.
+    /// A missing file has nothing to open, so its menu still explains why.
+    fn follow_markdown_preview_link(
+        &mut self,
+        kind: &PopoverKind,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        use crate::view::LocalFileLinkSource;
+
+        match kind {
+            PopoverKind::WebLinkMenu { url, .. } => {
+                self.open_markdown_preview_web_link(url.clone(), cx);
+            }
+            PopoverKind::LocalFileLinkMenu {
+                repo_id,
+                source,
+                path,
+                missing: false,
+                ..
+            } => self.store.dispatch(match source {
+                LocalFileLinkSource::Version(source) => Msg::OpenFileContent {
+                    repo_id: *repo_id,
+                    source: source.clone(),
+                    path: path.clone(),
+                },
+                LocalFileLinkSource::ParentOf(commit_id) => Msg::OpenFileAtCommitParent {
+                    repo_id: *repo_id,
+                    commit_id: commit_id.clone(),
+                    path: path.clone(),
+                },
+            }),
+            _ => return false,
+        }
+        true
+    }
+
+    fn open_markdown_preview_web_link(&mut self, url: SharedString, cx: &mut gpui::Context<Self>) {
+        // Tests record the link rather than start a browser.
+        #[cfg(test)]
+        {
+            let _ = cx;
+            OPENED_WEB_LINKS.with(|links| links.borrow_mut().push(url.to_string()));
+        }
+        #[cfg(not(test))]
+        crate::view::platform_open::spawn_launch(
+            cx,
+            move || crate::view::platform_open::open_url_blocking(&url),
+            |this, result, cx| {
+                if let Err(err) = result {
+                    this.commands.send(
+                        DiffCommand::Toast(
+                            components::ToastKind::Error,
+                            format!("Failed to open link: {err}").into(),
+                        ),
+                        cx,
+                    );
+                }
+            },
+        );
+    }
+
+    pub(in super::super::super) fn handle_diff_text_mouse_down(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        click_count: usize,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.hosted_decor.is_some() && !self.store.policy.select_lines {
+            return;
+        }
+        // Deliberately does not claim the press: the diff row's own release
+        // handler reads the claim, and this gesture starts on that same row.
+        // A drag that actually moved is suppressed by
+        // `diff_suppress_clicks_remaining` instead, which a plain click leaves
+        // alone.
+        // Cleared for every press, not just the ones that resolve to a position:
+        // a double- or triple-click selects a span, and a press that misses the
+        // text entirely is a press away from the pair. Both must dismiss it, and
+        // both skip `begin_diff_text_selection`'s set below.
+        self.diff_text_selection_owner.adopt(window, cx);
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+        self.diff_text_pending_syntax_click = None;
+        match click_count {
+            3.. => {
+                self.select_diff_text_line_at_mouse(visible_ix, region, position);
+            }
+            2 => {
+                self.select_diff_text_token_at_mouse(visible_ix, region, position);
+            }
+            _ if self.diff_text_has_selection() => {
+                self.begin_diff_text_selection(visible_ix, region, position, cx);
+                if self.diff_text_selecting {
+                    self.diff_suppress_clicks_remaining = 1;
+                }
+                self.begin_diff_text_scroll_tracking(position, cx);
+            }
+            _ => {
+                self.begin_diff_text_selection(visible_ix, region, position, cx);
+                self.begin_diff_text_scroll_tracking(position, cx);
+            }
+        }
+    }
+
+    /// Handle a press anywhere in a rendered Markdown row, including the
+    /// visual padding above, below, or beside its shaped text. Ordinary text
+    /// presses keep the full link/token/line behavior; a single press in the
+    /// surrounding whitespace clamps to the nearest boundary of that row so a
+    /// drag can cross paragraph, list, and fenced-code block edges.
+    pub(in crate::view) fn handle_markdown_preview_row_mouse_down(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        click_count: usize,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if click_count == 1
+            && self
+                .diff_text_hit_from_hitbox(visible_ix, region, position)
+                .is_none()
+            && let Some(pos) = self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+        {
+            self.begin_diff_text_selection_from_document_space(pos, position, window, cx);
+            return;
+        }
+
+        self.handle_diff_text_mouse_down(visible_ix, region, position, click_count, window, cx);
+    }
+
+    pub(in crate::view) fn handle_diff_text_empty_space_mouse_down(
+        &mut self,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (_, pos) = self.diff_text_eof_target(region);
+        self.begin_diff_text_selection_from_document_space(pos, position, window, cx);
+    }
+
+    /// Start a selection at the document boundary represented by a Markdown
+    /// gap. The gap sits immediately before `next_source_visible_ix`, so
+    /// dragging upward selects the preceding block and dragging downward starts
+    /// with the following one.
+    pub(in crate::view) fn handle_diff_text_document_gap_mouse_down(
+        &mut self,
+        next_source_visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.begin_diff_text_selection_from_document_space(
+            DiffTextPos {
+                source_visible_ix: next_source_visible_ix,
+                region,
+                offset: 0,
+            },
+            position,
+            window,
+            cx,
+        );
+    }
+
+    fn begin_diff_text_selection_from_document_space(
+        &mut self,
+        pos: DiffTextPos,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.hosted_decor.is_some() && !self.store.policy.select_lines {
+            return;
+        }
+        self.diff_text_selection_owner.adopt(window, cx);
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+        self.diff_text_pending_syntax_click = None;
+        self.diff_text_selecting = true;
+        self.diff_text_anchor = Some(pos);
+        self.diff_text_head = Some(pos);
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.diff_text_last_mouse_pos = position;
+        self.diff_suppress_clicks_remaining = 0;
+        self.begin_diff_text_scroll_tracking(position, cx);
+    }
+
+    pub(in super::super::super) fn begin_diff_text_selection(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.hosted_decor.is_some() && !self.store.policy.select_lines {
+            return;
+        }
+        let Some(hit) = self.diff_text_hit_from_hitbox(visible_ix, region, position) else {
+            return;
+        };
+        let pos = hit.pos;
+        self.diff_text_selecting = true;
+        self.diff_text_anchor = Some(pos);
+        self.diff_text_head = Some(pos);
+        self.diff_selection_range = None;
+        self.diff_text_last_mouse_pos = position;
+        self.diff_suppress_clicks_remaining = 0;
+        if let Some(document_region) =
+            self.set_diff_text_click_highlights(&pos, hit.past_painted_text)
+        {
+            self.diff_text_pending_syntax_click = Some((pos, document_region));
+            // The preview builds its own document from the render path and
+            // replays the click when that lands; the file-diff worker reads
+            // `file_diff_*` state, which is not the preview's document.
+            if !self.is_file_preview_active() {
+                self.request_file_diff_click_syntax_document(document_region, cx);
+            }
+        }
+    }
+
+    pub(in super::super::super) fn begin_diff_text_scroll_tracking(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.diff_text_selecting {
+            return;
+        }
+
+        self.diff_text_last_mouse_pos = position;
+        self.diff_text_autoscroll_target =
+            Some(self.diff_text_autoscroll_target_for_position(position));
+        self.diff_text_autoscroll_seq = self.diff_text_autoscroll_seq.wrapping_add(1);
+
+        let autoscroll_seq = self.diff_text_autoscroll_seq;
+        cx.spawn(
+            async move |view: WeakEntity<DiffRenderer>, cx: &mut gpui::AsyncApp| loop {
+                cx.background_executor().timer(DRAG_AUTOSCROLL_TICK).await;
+                let mut keep_going = false;
+                let _ = view.update(cx, |this, cx| {
+                    if !this.diff_text_selecting {
+                        return;
+                    }
+                    if this.diff_text_autoscroll_seq != autoscroll_seq {
+                        return;
+                    }
+
+                    keep_going = true;
+                    let changed = this.tick_diff_text_selection_autoscroll();
+                    if changed {
+                        cx.notify();
+                    }
+                });
+
+                if !keep_going {
+                    break;
+                }
+            },
+        )
+        .detach();
+    }
+
+    pub(in super::super::super) fn update_diff_text_selection_from_mouse(
+        &mut self,
+        position: Point<Pixels>,
+    ) {
+        if !self.diff_text_selecting {
+            return;
+        }
+        self.diff_text_last_mouse_pos = position;
+        let Some(pos) = self.diff_text_pos_for_mouse(position) else {
+            return;
+        };
+        if self.diff_text_head != Some(pos) {
+            self.diff_text_head = Some(pos);
+            if self
+                .diff_text_normalized_selection()
+                .is_some_and(|(a, b)| a != b)
+            {
+                // A selection is the user working on a span, not sitting in one;
+                // a pair lit at each end of it reads as part of the selection.
+                self.diff_text_pair_match = None;
+                self.diff_text_occurrences.clear();
+                self.diff_text_pending_syntax_click = None;
+                self.sync_diff_focus_to_text_selection();
+                self.diff_suppress_clicks_remaining = 1;
+            }
+        }
+    }
+
+    pub(in super::super::super) fn end_diff_text_selection(&mut self) {
+        self.diff_text_selecting = false;
+        self.diff_text_autoscroll_target = None;
+    }
+
+    pub(in super::super::super) fn diff_text_has_selection(&self) -> bool {
+        self.diff_text_normalized_selection()
+            .is_some_and(|(a, b)| a != b)
+    }
+
+    pub(in super::super::super) fn diff_text_local_selection_range(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<Range<usize>> {
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_selection_range_in(region, resolved)
+    }
+
+    /// As above, for a caller that already resolved the row's visual range.
+    ///
+    /// The paint path asks three of these per row -- selection, pair,
+    /// occurrences -- and resolving the range is not free: its non-wrapped arm
+    /// re-fetches the row model and can re-measure the row's display text.
+    pub(in super::super::super) fn diff_text_local_selection_range_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> Option<Range<usize>> {
+        let (source_visible_ix, visual_range) = resolved;
+        let selected =
+            self.diff_text_source_selection_range(source_visible_ix, region, visual_range.end)?;
+        diff_text_local_range_from_source_ranges(selected, visual_range)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_pair_match_for_tests(&self) -> Option<&DiffTextPairMatch> {
+        self.diff_text_pair_match.as_ref()
+    }
+
+    pub(in super::super::super) fn diff_text_pair_match_color(&self) -> gpui::Rgba {
+        self.theme.colors.editor.bracket_match_background
+    }
+
+    /// Whether the row's painted text is a truncated stand-in for its line.
+    ///
+    /// `file_diff_display_text` replaces lines past a size gate with a prefix
+    /// plus an ellipsis, so display offsets into them do not convert back to
+    /// real bytes.
+    fn diff_text_row_is_display_truncated(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> bool {
+        use crate::view::file_diff_display::should_truncate_file_diff_display as truncated;
+        if self.is_file_preview_active() {
+            return self
+                .worktree_preview_line_raw_text(source_visible_ix)
+                .is_some_and(|raw| truncated(&raw));
+        }
+        let Some(row_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
+            return false;
+        };
+        match self.diff_view {
+            DiffViewMode::Inline => self
+                .file_diff_inline_render_data(row_ix)
+                .is_some_and(|row| truncated(&row.text)),
+            DiffViewMode::Split => self
+                .file_diff_split_render_data(row_ix)
+                .and_then(|row| match region {
+                    DiffTextRegion::SplitLeft => row.old,
+                    DiffTextRegion::SplitRight => row.new,
+                    DiffTextRegion::Inline => None,
+                })
+                .is_some_and(|text| truncated(&text)),
+        }
+    }
+
+    /// Which real document a row's text came from.
+    ///
+    /// A diff interleaves two file versions, so a pair found in one of them can
+    /// only ever be projected back through that same side's line map. This is
+    /// also why a pair can never span the two halves of a split view: the two
+    /// sides are different documents and the matcher only ever walks one tree.
+    fn diff_text_pair_document_for_row(
+        &mut self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> DiffTextPairDocumentLookup {
+        if self.is_markdown_preview_active() {
+            return DiffTextPairDocumentLookup::Unavailable;
+        }
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return DiffTextPairDocumentLookup::Unavailable;
+            }
+            let Some(document) = self.worktree_preview_prepared_syntax_document() else {
+                // Pending, not unavailable: the preview schedules its own
+                // prepare, so a cold document here means "not yet", exactly as
+                // it does for a file diff. Reporting it as unavailable recorded
+                // no pending click, and a click made during the warm-up window
+                // then produced nothing and was never replayed.
+                return DiffTextPairDocumentLookup::Pending(DiffTextRegion::Inline);
+            };
+            return DiffTextPairDocumentLookup::Ready(
+                document,
+                source_visible_ix,
+                DiffTextPairSide::Preview,
+            );
+        }
+
+        // Deliberately not gated on `is_file_diff_view_active()`: that is a
+        // *mode* flag (it requires `DiffContentMode::Full`), and file-diff rows
+        // also render under the collapsed projection. Asking the row model and
+        // the document cache directly covers every mode and fails closed when
+        // either is absent, which is what a patch/commit diff does.
+        let Some(row_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
+            return DiffTextPairDocumentLookup::Unavailable;
+        };
+        // `line_to_row` maps are indexed by 0-based line; the row models carry
+        // 1-based diff line numbers.
+        let zero_based = |line: Option<u32>| {
+            line.and_then(|line| usize::try_from(line).ok())
+                .and_then(|line| line.checked_sub(1))
+        };
+
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                if region != DiffTextRegion::Inline {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                }
+                use gitcomet_core::domain::DiffLineKind;
+                let Some(row) = self.file_diff_inline_render_data(row_ix) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let (side, line) = match row.kind {
+                    DiffLineKind::Remove => (DiffTextPairSide::Old, row.old_line),
+                    DiffLineKind::Add | DiffLineKind::Context => {
+                        (DiffTextPairSide::New, row.new_line)
+                    }
+                    // Headers and hunk markers are not document text.
+                    DiffLineKind::Header | DiffLineKind::Hunk => {
+                        return DiffTextPairDocumentLookup::Unavailable;
+                    }
+                };
+                let document_region = match side {
+                    DiffTextPairSide::Old => DiffTextRegion::SplitLeft,
+                    _ => DiffTextRegion::SplitRight,
+                };
+                let Some(line_ix) = zero_based(line) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let Some(document) = self.file_diff_pair_syntax_document(document_region) else {
+                    return DiffTextPairDocumentLookup::Pending(document_region);
+                };
+                DiffTextPairDocumentLookup::Ready(document, line_ix, side)
+            }
+            DiffViewMode::Split => {
+                let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let (side, line) = match region {
+                    DiffTextRegion::SplitLeft => (DiffTextPairSide::Old, row.old_line),
+                    DiffTextRegion::SplitRight => (DiffTextPairSide::New, row.new_line),
+                    DiffTextRegion::Inline => return DiffTextPairDocumentLookup::Unavailable,
+                };
+                let Some(line_ix) = zero_based(line) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let Some(document) = self.file_diff_pair_syntax_document(region) else {
+                    return DiffTextPairDocumentLookup::Pending(region);
+                };
+                DiffTextPairDocumentLookup::Ready(document, line_ix, side)
+            }
+        }
+    }
+
+    /// The inverse: a document line back onto the row rendering it, if any.
+    ///
+    /// `None` means that end is simply not on screen as a row -- outside the
+    /// diff, or folded into a collapsed hunk. Its partner is still painted.
+    fn diff_text_pair_row_for_document_line(
+        &self,
+        side: DiffTextPairSide,
+        line_ix: usize,
+    ) -> Option<(usize, DiffTextRegion)> {
+        self.diff_text_pair_row_for_document_line_with(side, line_ix, None)
+    }
+
+    fn diff_text_pair_row_for_document_line_with(
+        &self,
+        side: DiffTextPairSide,
+        line_ix: usize,
+        collapsed_rows: Option<&FxHashMap<usize, usize>>,
+    ) -> Option<(usize, DiffTextRegion)> {
+        if side == DiffTextPairSide::Preview {
+            return Some((line_ix, DiffTextRegion::Inline));
+        }
+        let inline = self.diff_view == DiffViewMode::Inline;
+        let map: &[Option<usize>] = match (side, inline) {
+            (DiffTextPairSide::Old, true) => self.file_diff_old_line_to_inline_row.as_ref(),
+            (DiffTextPairSide::Old, false) => self.file_diff_old_line_to_row.as_ref(),
+            (_, true) => self.file_diff_new_line_to_inline_row.as_ref(),
+            (_, false) => self.file_diff_new_line_to_row.as_ref(),
+        };
+        let row_ix = (*map.get(line_ix)?)?;
+        let source_visible_ix = match collapsed_rows {
+            Some(index) => index.get(&row_ix).copied()?,
+            None => self.diff_text_pair_source_visible_ix_for_row(row_ix)?,
+        };
+        let region = match (inline, side) {
+            (true, _) => DiffTextRegion::Inline,
+            (false, DiffTextPairSide::Old) => DiffTextRegion::SplitLeft,
+            (false, _) => DiffTextRegion::SplitRight,
+        };
+        Some((source_visible_ix, region))
+    }
+
+    /// The inverse of [`Self::diff_source_mapped_ix_for_visible_ix`].
+    ///
+    /// Only the collapsed arm is new: that projection keeps no reverse index, so
+    /// it scans. Everything else delegates to the existing inverse rather than
+    /// growing a second one, and the scan runs twice per click, never per frame.
+    fn diff_text_pair_source_visible_ix_for_row(&self, row_ix: usize) -> Option<usize> {
+        if self.is_collapsed_diff_projection_active() {
+            return self
+                .collapsed_diff_visible_rows
+                .iter()
+                .position(|row| row.row_ix() == Some(row_ix));
+        }
+        self.diff_source_visible_ix_for_mapped_ix(row_ix)
+    }
+
+    /// Both of a click's highlights, off one resolution of the row.
+    ///
+    /// The pair and the occurrences need the same three answers -- is this row's
+    /// text a truncated stand-in, which document does it belong to, and which
+    /// line of it -- and that resolution is the expensive half: it re-fetches
+    /// the row model through the paged providers, and on a cold cache it reads a
+    /// source-backed side's file back off disk and parses it. Asking for the two
+    /// highlights separately paid all of it twice on every mouse-down.
+    fn set_diff_text_click_highlights(
+        &mut self,
+        pos: &DiffTextPos,
+        past_painted_text: bool,
+    ) -> Option<DiffTextRegion> {
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+
+        if past_painted_text {
+            return None;
+        }
+
+        // A row the display truncated is not the tab-expansion of its line, so
+        // offsets into it do not convert. Better no answer than a confident one
+        // pointing at the wrong character.
+        if self.diff_text_row_is_display_truncated(pos.source_visible_ix, pos.region) {
+            return None;
+        }
+        let (document, line_ix, side) = match self
+            .diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)
+        {
+            DiffTextPairDocumentLookup::Ready(document, line_ix, side) => (document, line_ix, side),
+            DiffTextPairDocumentLookup::Pending(region) => return Some(region),
+            DiffTextPairDocumentLookup::Unavailable => return None,
+        };
+        self.diff_text_pair_match = self.diff_text_pair_match_in(document, line_ix, side, pos);
+        self.diff_text_occurrences = self.diff_text_occurrences_in(document, line_ix, side, pos);
+        None
+    }
+
+    /// Replays a click whose full syntax document was cold when the pointer
+    /// landed. The byte/row position is valid only while it is still the active
+    /// caret and no projection rebuild has cleared it.
+    pub(in crate::view) fn retry_pending_diff_text_syntax_click(&mut self) {
+        let Some((pos, document_region)) = self.diff_text_pending_syntax_click.take() else {
+            return;
+        };
+        if self.diff_text_head != Some(pos) {
+            return;
+        }
+        if let Some(still_pending_region) = self.set_diff_text_click_highlights(&pos, false) {
+            debug_assert_eq!(still_pending_region, document_region);
+            self.diff_text_pending_syntax_click = Some((pos, still_pending_region));
+        }
+    }
+
+    pub(in crate::view) fn clear_pending_diff_text_syntax_click_for(
+        &mut self,
+        document_region: DiffTextRegion,
+    ) {
+        if self
+            .diff_text_pending_syntax_click
+            .is_some_and(|(_, pending_region)| pending_region == document_region)
+        {
+            self.diff_text_pending_syntax_click = None;
+        }
+    }
+
+    /// The matching delimiter pair for a click, projected onto rows.
+    fn diff_text_pair_match_in(
+        &mut self,
+        document: rows::PreparedDiffSyntaxDocument,
+        line_ix: usize,
+        side: DiffTextPairSide,
+        pos: &DiffTextPos,
+    ) -> Option<DiffTextPairMatch> {
+        let tab_width = self.display_tab_width;
+
+        let hit = rows::prepared_diff_syntax_pair_at_display_offset(
+            tab_width, document, line_ix, pos.offset,
+        )?;
+
+        let spans: Vec<DiffTextPairSpan> = hit
+            .open
+            .into_iter()
+            .chain(hit.close)
+            .filter_map(|end| {
+                let (source_visible_ix, region) =
+                    self.diff_text_pair_row_for_document_line(side, end.line_ix)?;
+                Some(DiffTextPairSpan {
+                    source_visible_ix,
+                    region,
+                    range: end.display_range,
+                })
+            })
+            .collect();
+        // Both ends off-screen is not a pair worth remembering.
+        (!spans.is_empty()).then_some(DiffTextPairMatch {
+            #[cfg(test)]
+            kind: hit.kind,
+            spans,
+        })
+    }
+
+    /// Every place the clicked name appears, projected onto rows.
+    ///
+    /// Shares the pair path's row resolution: both answer "which document and
+    /// line is this row", and both project document lines back onto rows, so a
+    /// name's uses land on rows exactly the way a delimiter's partner does.
+    fn diff_text_occurrences_in(
+        &mut self,
+        document: rows::PreparedDiffSyntaxDocument,
+        line_ix: usize,
+        side: DiffTextPairSide,
+        pos: &DiffTextPos,
+    ) -> FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> {
+        let tab_width = self.display_tab_width;
+
+        let ends = rows::prepared_diff_syntax_occurrences_at_display_offset(
+            tab_width, document, line_ix, pos.offset,
+        );
+        if ends.is_empty() {
+            return FxHashMap::default();
+        }
+        // The collapsed projection keeps no reverse index, and the per-occurrence
+        // lookup would otherwise scan every projected row for every match. Build
+        // it once here instead -- O(rows + matches) rather than rows times
+        // matches.
+        let collapsed_rows = self.diff_text_collapsed_row_index();
+        let mut buckets: FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> =
+            FxHashMap::default();
+        for end in ends {
+            let Some((source_visible_ix, region)) = self.diff_text_pair_row_for_document_line_with(
+                side,
+                end.line_ix,
+                collapsed_rows.as_ref(),
+            ) else {
+                continue;
+            };
+            buckets
+                .entry((source_visible_ix, region))
+                .or_default()
+                .push(end.display_range);
+        }
+        for ranges in buckets.values_mut() {
+            ranges.sort_by_key(|range| range.start);
+        }
+        buckets
+    }
+
+    /// `row_ix -> source_visible_ix` for the collapsed projection, or `None`
+    /// when that projection is not active and the mapping is not a scan.
+    fn diff_text_collapsed_row_index(&self) -> Option<FxHashMap<usize, usize>> {
+        self.is_collapsed_diff_projection_active().then(|| {
+            self.collapsed_diff_visible_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(visible_ix, row)| Some((row.row_ix()?, visible_ix)))
+                .collect()
+        })
+    }
+
+    pub(in super::super::super) fn diff_text_occurrence_color(&self) -> gpui::Rgba {
+        self.theme.colors.editor.occurrence_highlight_background
+    }
+
+    /// The occurrences falling on one row, resolving the row itself. See the
+    /// note on the pair equivalent.
+    #[cfg(test)]
+    pub(in super::super::super) fn diff_text_local_occurrence_ranges(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_occurrence_ranges_in(region, resolved)
+    }
+
+    pub(in super::super::super) fn diff_text_local_occurrence_ranges_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        if self.diff_text_occurrences.is_empty() {
+            return smallvec::SmallVec::new();
+        }
+        let (source_visible_ix, visual_range) = resolved;
+        let Some(ranges) = self.diff_text_occurrences.get(&(source_visible_ix, region)) else {
+            return smallvec::SmallVec::new();
+        };
+        // Already sorted when the buckets were built.
+        ranges
+            .iter()
+            .filter_map(|range| {
+                diff_text_local_range_from_source_ranges(range.clone(), visual_range.clone())
+            })
+            .collect()
+    }
+
+    /// Every occurrence span, flattened and ordered, for assertions.
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_occurrences_for_tests(&self) -> Vec<(usize, Range<usize>)> {
+        let mut out: Vec<(usize, Range<usize>)> = self
+            .diff_text_occurrences
+            .iter()
+            .flat_map(|((source_visible_ix, _), ranges)| {
+                ranges
+                    .iter()
+                    .map(move |range| (*source_visible_ix, range.clone()))
+            })
+            .collect();
+        out.sort_by_key(|(row, range)| (*row, range.start));
+        out
+    }
+
+    /// The parts of the pair that fall on one row, resolving the row itself.
+    ///
+    /// The paint path uses the `_in` form, which shares one resolution across
+    /// all three row queries; this is the standalone form the tests read.
+    #[cfg(test)]
+    pub(in super::super::super) fn diff_text_local_pair_ranges(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> smallvec::SmallVec<[Range<usize>; 2]> {
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_pair_ranges_in(region, resolved)
+    }
+
+    pub(in super::super::super) fn diff_text_local_pair_ranges_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> smallvec::SmallVec<[Range<usize>; 2]> {
+        let Some(pair) = self.diff_text_pair_match.as_ref() else {
+            return smallvec::SmallVec::new();
+        };
+        let (source_visible_ix, visual_range) = resolved;
+        pair.ranges_on_row(source_visible_ix, region)
+            .into_iter()
+            .filter_map(|range| {
+                diff_text_local_range_from_source_ranges(range, visual_range.clone())
+            })
+            .collect()
+    }
+
+    /// The part of one row a selection covers, or `None` when the selection
+    /// does not reach that row at all.
+    ///
+    /// An empty range is a real answer, not a miss: a blank line inside a
+    /// selection covers no characters and is still one of its lines, and so is
+    /// a line the selection only touches the edge of. Callers that paint the
+    /// highlight ignore an empty range; the one that copies has to keep it, or
+    /// every blank line falls out of the text.
+    fn diff_text_source_selection_range(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+        text_len: usize,
+    ) -> Option<Range<usize>> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end {
+            return None;
+        }
+        if source_visible_ix < start.source_visible_ix || source_visible_ix > end.source_visible_ix
+        {
+            return None;
+        }
+
+        let split_region = (self.diff_view == DiffViewMode::Split
+            && start.region == end.region
+            && matches!(
+                start.region,
+                DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+            ))
+        .then_some(start.region);
+        if split_region.is_some_and(|r| r != region) {
+            return None;
+        }
+
+        let region_order = region.order();
+        let start_order = start.region.order();
+        let end_order = end.region.order();
+
+        let mut a = 0usize;
+        let mut b = text_len;
+
+        if start.source_visible_ix == end.source_visible_ix
+            && source_visible_ix == start.source_visible_ix
+        {
+            if region_order < start_order || region_order > end_order {
+                return None;
+            }
+            if region == start.region {
+                a = start.offset.min(text_len);
+            }
+            if region == end.region {
+                b = end.offset.min(text_len);
+            }
+        } else if source_visible_ix == start.source_visible_ix {
+            if region_order < start_order {
+                return None;
+            }
+            if region == start.region {
+                a = start.offset.min(text_len);
+            }
+        } else if source_visible_ix == end.source_visible_ix {
+            if region_order > end_order {
+                return None;
+            }
+            if region == end.region {
+                b = end.offset.min(text_len);
+            }
+        }
+
+        Some(a..b.max(a))
+    }
+
+    fn diff_text_wrap_range_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<Range<usize>> {
+        let wrap = self.diff_text_wrap_for_visible_ix(visible_ix)?;
+        Some(wrap.range_for_region(region))
+    }
+
+    fn diff_text_apply_wrap_to_line(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        text: SharedString,
+    ) -> SharedString {
+        let Some(range) = self.diff_text_wrap_range_for_region(visible_ix, region) else {
+            return text;
+        };
+        if range.start >= range.end {
+            return SharedString::default();
+        }
+        text.as_ref()
+            .get(range)
+            .map(|slice| SharedString::from(slice.to_owned()))
+            .unwrap_or_default()
+    }
+
+    pub(in super::super::super) fn diff_text_line_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> SharedString {
+        let source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+        let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+        self.diff_text_apply_wrap_to_line(visible_ix, region, text)
+    }
+
+    pub(in crate::view) fn diff_text_full_line_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> SharedString {
+        let tab_width = self.display_tab_width;
+
+        let fallback = SharedString::default();
+        let expand_tabs = |s: &str| -> SharedString {
+            crate::view::tab_width::expand_tabs(tab_width, s)
+                .into_owned()
+                .into()
+        };
+
+        // When markdown rendered preview is active, rows come from the
+        // markdown preview document rather than from source text lines or
+        // patch diff rows.
+        if self.is_markdown_preview_active() {
+            return self.markdown_preview_row_text(visible_ix, region);
+        }
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return fallback;
+            }
+            return self
+                .worktree_preview_line_raw_text(visible_ix)
+                .map(|line| file_diff_display_text(tab_width, &line))
+                .unwrap_or(fallback);
+        }
+
+        if self.is_collapsed_diff_projection_active() {
+            let Some(row) = self.collapsed_visible_row(visible_ix) else {
+                return fallback;
+            };
+            match row {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                    if self.diff_view == DiffViewMode::Inline && region != DiffTextRegion::Inline {
+                        return fallback;
+                    }
+                    if self.diff_view == DiffViewMode::Split
+                        && !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        )
+                    {
+                        return fallback;
+                    }
+                    return row
+                        .header_display_src_ix()
+                        .and_then(|src_ix| self.collapsed_diff_hunk_header_display(src_ix))
+                        .unwrap_or(fallback);
+                }
+                CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {
+                    DiffViewMode::Inline => {
+                        if region != DiffTextRegion::Inline {
+                            return fallback;
+                        }
+                        let Some(row) = self.file_diff_inline_render_data(row_ix) else {
+                            return fallback;
+                        };
+                        let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                        if let Some(styled) = self.diff_text_segments_cache_get(row_ix, cache_epoch)
+                        {
+                            return styled.text.clone();
+                        }
+                        return file_diff_display_text(tab_width, &row.text);
+                    }
+                    DiffViewMode::Split => {
+                        if !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        ) {
+                            return fallback;
+                        }
+                        let cache_epoch = self.file_diff_split_style_cache_epoch(region);
+                        if let Some(key) = self.file_diff_split_cache_key(row_ix, region)
+                            && let Some(styled) =
+                                self.diff_text_segments_cache_get(key, cache_epoch)
+                        {
+                            return styled.text.clone();
+                        }
+                        let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                            return fallback;
+                        };
+                        let text = match region {
+                            DiffTextRegion::SplitLeft => row.old.as_ref(),
+                            DiffTextRegion::SplitRight => row.new.as_ref(),
+                            DiffTextRegion::Inline => unreachable!(),
+                        };
+                        return text
+                            .map(|text| file_diff_display_text(tab_width, text))
+                            .unwrap_or(fallback);
+                    }
+                },
+            }
+        }
+
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(visible_ix) else {
+            return fallback;
+        };
+
+        if self.diff_view == DiffViewMode::Inline {
+            if region != DiffTextRegion::Inline {
+                return fallback;
+            }
+            if self.is_file_diff_view_active() {
+                if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
+                    let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.clone();
+                    }
+                    return file_diff_display_text(tab_width, &row.text);
+                } else if let Some(line) = self.file_diff_inline_row(mapped_ix) {
+                    let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.clone();
+                    }
+                    return expand_tabs(diff_content_text(&line));
+                }
+                return fallback;
+            }
+
+            if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, 0) {
+                return styled.text.clone();
+            }
+            let Some(line) = self.patch_diff_row(mapped_ix) else {
+                return fallback;
+            };
+            let click_kind = self
+                .diff_click_kinds
+                .get(mapped_ix)
+                .copied()
+                .unwrap_or(DiffClickKind::Line);
+            if matches!(
+                click_kind,
+                DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+            ) && let Some(display) = self.diff_header_display_cache.get(&mapped_ix)
+            {
+                return display.clone();
+            }
+            return crate::view::tab_width::expand_patch_tabs(tab_width, line.text.as_ref())
+                .into_owned()
+                .into();
+        }
+
+        match region {
+            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => {}
+            DiffTextRegion::Inline => return fallback,
+        }
+
+        if self.is_file_diff_view_active() {
+            let cache_epoch = self.file_diff_split_style_cache_epoch(region);
+            if let Some(key) = self.file_diff_split_cache_key(mapped_ix, region)
+                && let Some(styled) = self.diff_text_segments_cache_get(key, cache_epoch)
+            {
+                return styled.text.clone();
+            }
+            let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
+                return fallback;
+            };
+            let text = match region {
+                DiffTextRegion::SplitLeft => row.old.as_ref(),
+                DiffTextRegion::SplitRight => row.new.as_ref(),
+                DiffTextRegion::Inline => unreachable!(),
+            };
+            return text
+                .map(|text| file_diff_display_text(tab_width, text))
+                .unwrap_or(fallback);
+        }
+
+        let Some(split_row) = self.patch_diff_split_row(mapped_ix) else {
+            return fallback;
+        };
+        match split_row {
+            PatchSplitRow::Raw { src_ix, click_kind } => {
+                let Some(line) = self.patch_diff_row(src_ix) else {
+                    return fallback;
+                };
+                if matches!(
+                    click_kind,
+                    DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+                ) && let Some(display) = self.diff_header_display_cache.get(&src_ix)
+                {
+                    return display.clone();
+                }
+                expand_tabs(line.text.as_ref())
+            }
+            PatchSplitRow::Aligned { row, .. } => {
+                let text = match region {
+                    DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
+                    DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                    DiffTextRegion::Inline => unreachable!(),
+                };
+                expand_tabs(text)
+            }
+        }
+    }
+
+    pub(in super::super::super) fn diff_text_line_len_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> usize {
+        let tab_width = self.display_tab_width;
+
+        let display_len = crate::view::diff_utils::diff_text_display_len;
+
+        if self.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
+            return self.diff_text_line_for_region(visible_ix, region).len();
+        }
+
+        // Markdown preview rows already come from pre-rendered preview text, so
+        // fall back to the existing materialized path there.
+        if self.is_markdown_preview_active() {
+            return self.markdown_preview_row_text_len(visible_ix, region);
+        }
+
+        // Below a wrapped line the row position runs ahead of the line number.
+        let source_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return 0;
+            }
+            return self
+                .worktree_preview_line_raw_text(source_ix)
+                .map(|line| file_diff_display_len(tab_width, &line))
+                .unwrap_or(0);
+        }
+
+        if self.is_collapsed_diff_projection_active() {
+            let Some(row) = self.collapsed_visible_row(source_ix) else {
+                return 0;
+            };
+            match row {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                    if self.diff_view == DiffViewMode::Inline && region != DiffTextRegion::Inline {
+                        return 0;
+                    }
+                    if self.diff_view == DiffViewMode::Split
+                        && !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        )
+                    {
+                        return 0;
+                    }
+                    return row
+                        .header_display_src_ix()
+                        .and_then(|src_ix| {
+                            self.collapsed_diff_hunk_header_display(src_ix)
+                                .map(|display| display_len(tab_width, display.as_ref()))
+                        })
+                        .unwrap_or(0);
+                }
+                CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {
+                    DiffViewMode::Inline => {
+                        if region != DiffTextRegion::Inline {
+                            return 0;
+                        }
+                        let Some(row) = self.file_diff_inline_render_data(row_ix) else {
+                            return 0;
+                        };
+                        let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                        if let Some(styled) = self.diff_text_segments_cache_get(row_ix, cache_epoch)
+                        {
+                            return styled.text.len();
+                        }
+                        return file_diff_display_len(tab_width, &row.text);
+                    }
+                    DiffViewMode::Split => {
+                        if !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        ) {
+                            return 0;
+                        }
+                        let cache_epoch = self.file_diff_split_style_cache_epoch(region);
+                        if let Some(key) = self.file_diff_split_cache_key(row_ix, region)
+                            && let Some(styled) =
+                                self.diff_text_segments_cache_get(key, cache_epoch)
+                        {
+                            return styled.text.len();
+                        }
+                        let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                            return 0;
+                        };
+                        let text = match region {
+                            DiffTextRegion::SplitLeft => row.old.as_ref(),
+                            DiffTextRegion::SplitRight => row.new.as_ref(),
+                            DiffTextRegion::Inline => unreachable!(),
+                        };
+                        return text
+                            .map(|text| file_diff_display_len(tab_width, text))
+                            .unwrap_or(0);
+                    }
+                },
+            }
+        }
+
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(source_ix) else {
+            return 0;
+        };
+
+        if self.diff_view == DiffViewMode::Inline {
+            if region != DiffTextRegion::Inline {
+                return 0;
+            }
+            if self.is_file_diff_view_active() {
+                if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
+                    let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.len();
+                    }
+                    return file_diff_display_len(tab_width, &row.text);
+                } else if let Some(line) = self.file_diff_inline_row(mapped_ix) {
+                    let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.len();
+                    }
+                    return display_len(tab_width, diff_content_text(&line));
+                }
+                return 0;
+            }
+
+            if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, 0) {
+                return styled.text.len();
+            }
+            let Some(line) = self.patch_diff_row(mapped_ix) else {
+                return 0;
+            };
+            let click_kind = self
+                .diff_click_kinds
+                .get(mapped_ix)
+                .copied()
+                .unwrap_or(DiffClickKind::Line);
+            if matches!(
+                click_kind,
+                DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+            ) && let Some(display) = self.diff_header_display_cache.get(&mapped_ix)
+            {
+                return display.len();
+            }
+            return crate::view::tab_width::expanded_patch_len(tab_width, line.text.as_ref());
+        }
+
+        match region {
+            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => {}
+            DiffTextRegion::Inline => return 0,
+        }
+
+        if self.is_file_diff_view_active() {
+            let cache_epoch = self.file_diff_split_style_cache_epoch(region);
+            if let Some(key) = self.file_diff_split_cache_key(mapped_ix, region)
+                && let Some(styled) = self.diff_text_segments_cache_get(key, cache_epoch)
+            {
+                return styled.text.len();
+            }
+            let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
+                return 0;
+            };
+            let text = match region {
+                DiffTextRegion::SplitLeft => row.old.as_ref(),
+                DiffTextRegion::SplitRight => row.new.as_ref(),
+                DiffTextRegion::Inline => unreachable!(),
+            };
+            return text
+                .map(|text| file_diff_display_len(tab_width, text))
+                .unwrap_or(0);
+        }
+
+        let Some(split_row) = self.patch_diff_split_row(mapped_ix) else {
+            return 0;
+        };
+        match split_row {
+            PatchSplitRow::Raw { src_ix, click_kind } => {
+                let Some(line) = self.patch_diff_row(src_ix) else {
+                    return 0;
+                };
+                if matches!(
+                    click_kind,
+                    DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+                ) && let Some(display) = self.diff_header_display_cache.get(&src_ix)
+                {
+                    return display.len();
+                }
+                display_len(tab_width, line.text.as_ref())
+            }
+            PatchSplitRow::Aligned { row, .. } => {
+                let text = match region {
+                    DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
+                    DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                    DiffTextRegion::Inline => unreachable!(),
+                };
+                display_len(tab_width, text)
+            }
+        }
+    }
+
+    fn diff_text_combined_offset(&self, pos: DiffTextPos, left_len: usize) -> usize {
+        match self.diff_view {
+            DiffViewMode::Inline => pos.offset,
+            DiffViewMode::Split => match pos.region {
+                DiffTextRegion::SplitLeft => pos.offset,
+                DiffTextRegion::SplitRight => left_len.saturating_add(1).saturating_add(pos.offset),
+                DiffTextRegion::Inline => pos.offset,
+            },
+        }
+    }
+
+    fn diff_text_source_combined_selection_range(
+        &self,
+        source_visible_ix: usize,
+        left_len: usize,
+        right_len: usize,
+    ) -> Option<Range<usize>> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end
+            || source_visible_ix < start.source_visible_ix
+            || source_visible_ix > end.source_visible_ix
+        {
+            return None;
+        }
+
+        let combined_len = left_len.saturating_add(1).saturating_add(right_len);
+        let mut a = 0usize;
+        let mut b = combined_len;
+
+        if start.source_visible_ix == end.source_visible_ix
+            && source_visible_ix == start.source_visible_ix
+        {
+            a = self
+                .diff_text_combined_offset(start, left_len)
+                .min(combined_len);
+            b = self
+                .diff_text_combined_offset(end, left_len)
+                .min(combined_len);
+        } else if source_visible_ix == start.source_visible_ix {
+            a = self
+                .diff_text_combined_offset(start, left_len)
+                .min(combined_len);
+        } else if source_visible_ix == end.source_visible_ix {
+            b = self
+                .diff_text_combined_offset(end, left_len)
+                .min(combined_len);
+        }
+
+        (a < b).then_some(a..b)
+    }
+
+    fn append_diff_text_region_slice(
+        &self,
+        out: &mut String,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        range: Range<usize>,
+        expanded_tabs: &mut String,
+    ) {
+        let tab_width = self.display_tab_width;
+
+        if range.start >= range.end {
+            return;
+        }
+
+        if self.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
+            let text = self.diff_text_line_for_region(visible_ix, region);
+            append_diff_display_text_slice(tab_width, out, text.as_ref(), range, expanded_tabs);
+            return;
+        }
+
+        let source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+        self.append_diff_text_source_region_slice(
+            out,
+            source_visible_ix,
+            region,
+            range,
+            expanded_tabs,
+        );
+    }
+
+    fn append_diff_text_source_region_slice(
+        &self,
+        out: &mut String,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+        range: Range<usize>,
+        expanded_tabs: &mut String,
+    ) {
+        let tab_width = self.display_tab_width;
+
+        if range.start >= range.end {
+            return;
+        }
+
+        if self.is_markdown_preview_active() {
+            // Preview selections are in raw row coordinates: a tab is one byte
+            // there (and separates table cells), not the spaces it paints as.
+            let text = self.markdown_preview_row_text(source_visible_ix, region);
+            let end = range.end.min(text.len());
+            if let Some(slice) = text.get(range.start.min(end)..end) {
+                out.push_str(slice);
+            }
+            return;
+        }
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return;
+            }
+            if let Some(raw_text) = self.worktree_preview_line_raw_text(source_visible_ix) {
+                append_file_diff_display_text_slice(
+                    tab_width,
+                    out,
+                    &raw_text,
+                    range,
+                    expanded_tabs,
+                );
+            }
+            return;
+        }
+
+        if self.is_collapsed_diff_projection_active() {
+            if let Some(row) = self.collapsed_visible_row(source_visible_ix) {
+                match (row, self.diff_view, region) {
+                    (
+                        CollapsedDiffVisibleRow::FileRow { row_ix },
+                        DiffViewMode::Inline,
+                        DiffTextRegion::Inline,
+                    ) => {
+                        if let Some(row) = self.file_diff_inline_render_data(row_ix) {
+                            append_file_diff_display_text_slice(
+                                tab_width,
+                                out,
+                                &row.text,
+                                range,
+                                expanded_tabs,
+                            );
+                            return;
+                        }
+                    }
+                    (
+                        CollapsedDiffVisibleRow::FileRow { row_ix },
+                        DiffViewMode::Split,
+                        DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight,
+                    ) => {
+                        let raw_text =
+                            self.file_diff_split_render_data(row_ix)
+                                .and_then(|row| match region {
+                                    DiffTextRegion::SplitLeft => row.old,
+                                    DiffTextRegion::SplitRight => row.new,
+                                    DiffTextRegion::Inline => None,
+                                });
+                        if let Some(raw_text) = raw_text {
+                            append_file_diff_display_text_slice(
+                                tab_width,
+                                out,
+                                &raw_text,
+                                range,
+                                expanded_tabs,
+                            );
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+            append_diff_display_text_slice(tab_width, out, text.as_ref(), range, expanded_tabs);
+            return;
+        }
+
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
+            return;
+        };
+
+        if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
+            if region != DiffTextRegion::Inline {
+                return;
+            }
+            if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
+                append_file_diff_display_text_slice(
+                    tab_width,
+                    out,
+                    &row.text,
+                    range,
+                    expanded_tabs,
+                );
+            }
+            return;
+        }
+
+        if self.diff_view == DiffViewMode::Split && self.is_file_diff_view_active() {
+            let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
+                return;
+            };
+            let text = match region {
+                DiffTextRegion::SplitLeft => row.old.as_ref(),
+                DiffTextRegion::SplitRight => row.new.as_ref(),
+                DiffTextRegion::Inline => return,
+            };
+            if let Some(text) = text {
+                append_file_diff_display_text_slice(tab_width, out, text, range, expanded_tabs);
+            }
+            return;
+        }
+
+        let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+        append_diff_display_text_slice(tab_width, out, text.as_ref(), range, expanded_tabs);
+    }
+
+    fn diff_text_string_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<String> {
+        let line_len = self.diff_text_line_len_for_region(visible_ix, region);
+        if line_len == 0 {
+            return None;
+        }
+
+        let mut out = String::with_capacity(line_len);
+        let mut expanded_tabs = String::new();
+        self.append_diff_text_region_slice(
+            &mut out,
+            visible_ix,
+            region,
+            0..line_len,
+            &mut expanded_tabs,
+        );
+        (!out.is_empty()).then_some(out)
+    }
+
+    fn selected_diff_text_string(&self) -> Option<String> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end {
+            return None;
+        }
+
+        let force_inline = self.is_file_preview_active();
+        let selected_line_count = end
+            .source_visible_ix
+            .saturating_sub(start.source_visible_ix)
+            .saturating_add(1);
+
+        let mut out = String::with_capacity(
+            crate::view::diff_utils::multiline_text_copy_capacity_hint(selected_line_count),
+        );
+        let mut expanded_tabs = String::new();
+        // Separators are counted rather than inferred from `out` being empty:
+        // the first row of a selection can be a blank line, and it still opens
+        // the text with a line of its own.
+        let mut rows_written = 0usize;
+        // A picture is one line of the document however many rows it was given,
+        // and every one of them carries its description; a diff's alignment
+        // padding is no line at all. The row the selection starts on always
+        // contributes, so a selection that begins inside a picture still
+        // describes it once.
+        let copies_nothing = |this: &Self, source_visible_ix: usize, region| {
+            source_visible_ix != start.source_visible_ix
+                && this.markdown_preview_row_copies_nothing(source_visible_ix, region)
+        };
+        for source_visible_ix in start.source_visible_ix..=end.source_visible_ix {
+            if force_inline || self.diff_view == DiffViewMode::Inline {
+                if copies_nothing(self, source_visible_ix, DiffTextRegion::Inline) {
+                    continue;
+                }
+                let line_len = self
+                    .diff_text_full_line_len_for_region(source_visible_ix, DiffTextRegion::Inline);
+                let Some(range) = self.diff_text_source_selection_range(
+                    source_visible_ix,
+                    DiffTextRegion::Inline,
+                    line_len,
+                ) else {
+                    continue;
+                };
+                if rows_written > 0 {
+                    out.push('\n');
+                }
+                rows_written += 1;
+                self.append_diff_text_source_region_slice(
+                    &mut out,
+                    source_visible_ix,
+                    DiffTextRegion::Inline,
+                    range,
+                    &mut expanded_tabs,
+                );
+                continue;
+            }
+
+            let split_region = (start.region == end.region
+                && matches!(
+                    start.region,
+                    DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                ))
+            .then_some(start.region);
+
+            if let Some(region) = split_region {
+                if copies_nothing(self, source_visible_ix, region) {
+                    continue;
+                }
+                let line_len = self.diff_text_full_line_len_for_region(source_visible_ix, region);
+                let Some(range) =
+                    self.diff_text_source_selection_range(source_visible_ix, region, line_len)
+                else {
+                    continue;
+                };
+                if rows_written > 0 {
+                    out.push('\n');
+                }
+                rows_written += 1;
+                self.append_diff_text_source_region_slice(
+                    &mut out,
+                    source_visible_ix,
+                    region,
+                    range,
+                    &mut expanded_tabs,
+                );
+            } else {
+                if copies_nothing(self, source_visible_ix, DiffTextRegion::SplitLeft)
+                    && copies_nothing(self, source_visible_ix, DiffTextRegion::SplitRight)
+                {
+                    continue;
+                }
+                let left_full_len = self.diff_text_full_line_len_for_region(
+                    source_visible_ix,
+                    DiffTextRegion::SplitLeft,
+                );
+                let right_full_len = self.diff_text_full_line_len_for_region(
+                    source_visible_ix,
+                    DiffTextRegion::SplitRight,
+                );
+                let combined_source_range = self.diff_text_source_combined_selection_range(
+                    source_visible_ix,
+                    left_full_len,
+                    right_full_len,
+                );
+                let left_range = self.diff_text_source_selection_range(
+                    source_visible_ix,
+                    DiffTextRegion::SplitLeft,
+                    left_full_len,
+                );
+                let right_range = self.diff_text_source_selection_range(
+                    source_visible_ix,
+                    DiffTextRegion::SplitRight,
+                    right_full_len,
+                );
+                let include_tab = combined_source_range.as_ref().is_some_and(|range| {
+                    range.start < left_full_len.saturating_add(1) && range.end > left_full_len
+                });
+                if left_range.is_none() && right_range.is_none() && !include_tab {
+                    continue;
+                }
+
+                if rows_written > 0 {
+                    out.push('\n');
+                }
+                rows_written += 1;
+                if let Some(range) = left_range {
+                    self.append_diff_text_source_region_slice(
+                        &mut out,
+                        source_visible_ix,
+                        DiffTextRegion::SplitLeft,
+                        range,
+                        &mut expanded_tabs,
+                    );
+                }
+                if include_tab {
+                    out.push('\t');
+                }
+                if let Some(range) = right_range {
+                    self.append_diff_text_source_region_slice(
+                        &mut out,
+                        source_visible_ix,
+                        DiffTextRegion::SplitRight,
+                        range,
+                        &mut expanded_tabs,
+                    );
+                }
+            }
+        }
+
+        // A selection of nothing but blank lines is still a selection, so this
+        // asks whether any row was written rather than whether text came out.
+        if rows_written == 0 { None } else { Some(out) }
+    }
+
+    pub(in super::super::super) fn copy_selected_diff_text_to_clipboard(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(text) = self.selected_diff_text_string() else {
+            return;
+        };
+        crate::clipboard::write_text(cx, text, self.diff_copy_source());
+    }
+
+    pub(in super::super::super) fn copy_diff_text_for_context_menu_to_clipboard(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(text) = self
+            .selected_diff_text_string()
+            .or_else(|| self.diff_text_string_for_region(visible_ix, region))
+        else {
+            return;
+        };
+        crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::DiffContextMenu);
+    }
+
+    fn diff_copy_source(&self) -> crate::clipboard::CopySource {
+        match self
+            .active_repo()
+            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
+        {
+            Some(DiffTarget::Commit { .. }) => crate::clipboard::CopySource::CommitDetailsDiff,
+            Some(DiffTarget::CommitRange { .. }) => crate::clipboard::CopySource::CommitRangeDiff,
+            Some(DiffTarget::WorkingTree {
+                area: DiffArea::Staged,
+                ..
+            }) => crate::clipboard::CopySource::StagedDiff,
+            Some(DiffTarget::WorkingTree { .. }) | None => {
+                crate::clipboard::CopySource::UnstagedDiff
+            }
+        }
+    }
+
+    pub(in crate::view) fn open_diff_editor_context_menu_at_eof(
+        &mut self,
+        region: DiffTextRegion,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (visible_ix, _) = self.diff_text_eof_target(region);
+        self.open_diff_editor_context_menu(visible_ix, region, anchor, window, cx);
+    }
+}
+
+impl DiffRenderer {
+    /// The pointer is `diff_text_last_mouse_pos`, which the window-wide
+    /// `DiffTextSelectionTracker` keeps even past the window edge; the root
+    /// view's own position stops at it.
+    fn tick_diff_text_selection_autoscroll(&mut self) -> bool {
+        let Some(target) = self.diff_text_autoscroll_target else {
+            // Still update selection periodically so it can expand while the user scrolls.
+            let before = self.diff_text_head;
+            self.update_diff_text_selection_from_mouse(self.diff_text_last_mouse_pos);
+            return self.diff_text_head != before;
+        };
+
+        let handle = self.scroll_handle_for_diff_text_autoscroll_target(target);
+        let bounds = handle.bounds();
+        if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+            return false;
+        }
+
+        let max_offset = handle.max_offset();
+        let old_offset = handle.offset();
+        let mouse = self.diff_text_last_mouse_pos;
+
+        let delta_x = drag_autoscroll_step(mouse.x, bounds.left(), bounds.right());
+        let delta_y = drag_autoscroll_step(mouse.y, bounds.top(), bounds.bottom());
+
+        let new_x = (old_offset.x + delta_x).clamp(-max_offset.x, px(0.0));
+        let new_y = (old_offset.y + delta_y).clamp(-max_offset.y, px(0.0));
+
+        let scrolled = new_x != old_offset.x || new_y != old_offset.y;
+        if scrolled {
+            handle.set_offset(point(new_x, new_y));
+        }
+
+        let before_head = self.diff_text_head;
+        self.update_diff_text_selection_from_mouse(mouse);
+        let selection_changed = self.diff_text_head != before_head;
+
+        scrolled || selection_changed
+    }
+
+    fn diff_text_autoscroll_target_for_position(
+        &self,
+        position: Point<Pixels>,
+    ) -> DiffTextAutoscrollTarget {
+        if self.is_file_preview_active() {
+            return DiffTextAutoscrollTarget::WorktreePreview;
+        }
+
+        if self.is_conflict_resolver_active() {
+            return DiffTextAutoscrollTarget::ConflictResolvedPreview;
+        }
+
+        if self.diff_view == DiffViewMode::Split {
+            let right_bounds = self.diff_split_right_scroll.0.borrow().base_handle.bounds();
+            if right_bounds.contains(&position) {
+                return DiffTextAutoscrollTarget::DiffSplitRight;
+            }
+        }
+
+        DiffTextAutoscrollTarget::DiffLeftOrInline
+    }
+
+    fn scroll_handle_for_diff_text_autoscroll_target(
+        &self,
+        target: DiffTextAutoscrollTarget,
+    ) -> ScrollHandle {
+        match target {
+            DiffTextAutoscrollTarget::DiffLeftOrInline => {
+                self.diff_scroll.0.borrow().base_handle.clone()
+            }
+            DiffTextAutoscrollTarget::DiffSplitRight => {
+                self.diff_split_right_scroll.0.borrow().base_handle.clone()
+            }
+            DiffTextAutoscrollTarget::WorktreePreview => {
+                self.worktree_preview_scroll.0.borrow().base_handle.clone()
+            }
+            DiffTextAutoscrollTarget::ConflictResolvedPreview => self
+                .conflict_resolved_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diff_text_local_range_from_source_ranges;
+
+    #[test]
+    fn local_selection_range_returns_none_when_selection_ends_before_visual_slice() {
+        assert_eq!(diff_text_local_range_from_source_ranges(4..8, 12..20), None);
+    }
+
+    #[test]
+    fn local_selection_range_clips_to_visual_slice() {
+        assert_eq!(
+            diff_text_local_range_from_source_ranges(8..16, 12..20),
+            Some(0..4)
+        );
+        assert_eq!(
+            diff_text_local_range_from_source_ranges(14..24, 12..20),
+            Some(2..8)
+        );
+    }
+}

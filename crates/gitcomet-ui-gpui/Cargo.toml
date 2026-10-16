@@ -21,21 +21,32 @@ benchmarks = [
     "gitcomet-state/test-support",
     "gitcomet-git-gix/benchmarks",
     "dep:gitcomet-git-gix",
+    "dep:gitcomet-perf",
+    "gitcomet-conflict-resolver/benchmarks",
+    "gitcomet-markdown/benchmarks",
+    "gitcomet-ui-media/benchmarks",
+    "gitcomet-syntax/benchmarks",
     "gpui/test-support",
 ]
 
 [dependencies]
 alacritty_terminal = { workspace = true }
-dekobon-tree-sitter-groovy = { workspace = true }
 fontdb = { workspace = true }
 futures = { workspace = true }
+gitcomet-conflict-resolver = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-diagrams = { workspace = true }
 gitcomet-extension-api = { workspace = true }
+gitcomet-markdown = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
+gitcomet-perf = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
+gitcomet-syntax = { workspace = true }
+gitcomet-text = { workspace = true }
 gitcomet-tree-sitter-alloc = { workspace = true }
 gitcomet-ui-kit = { workspace = true }
+gitcomet-ui-media = { workspace = true }
+gitcomet-ui-terminal = { workspace = true }
 # `ui_probe` uses GPUI's opt-in frame event collector in normal app builds.
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform = { workspace = true }
@@ -63,83 +74,6 @@ smol = { workspace = true }
 stats_alloc = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
-tree-sitter = { workspace = true }
-tree-sitter-asm = { workspace = true }
-tree-sitter-bash = { workspace = true }
-tree-sitter-bicep = { workspace = true }
-tree-sitter-c = { workspace = true }
-tree-sitter-c-sharp = { workspace = true }
-tree-sitter-clojure-orchard = { workspace = true }
-tree-sitter-caddyfile = { workspace = true }
-tree-sitter-cil = { workspace = true }
-tree-sitter-cmake = { workspace = true }
-tree-sitter-containerfile = { workspace = true }
-tree-sitter-coffee = { workspace = true }
-tree-sitter-cpp = { workspace = true }
-tree-sitter-crontab = { workspace = true }
-tree-sitter-csv = { workspace = true }
-tree-sitter-cue = { workspace = true }
-tree-sitter-css = { workspace = true }
-tree-sitter-dart = { workspace = true }
-tree-sitter-dhall = { workspace = true }
-tree-sitter-diff = { workspace = true }
-tree-sitter-ebnf = { workspace = true }
-tree-sitter-elixir = { workspace = true }
-tree-sitter-erlang = { workspace = true }
-tree-sitter-fsharp = { workspace = true }
-tree-sitter-gitcommit = { workspace = true }
-tree-sitter-gleam = { workspace = true }
-tree-sitter-go = { workspace = true }
-tree-sitter-gomod = { workspace = true }
-tree-sitter-gowork = { workspace = true }
-tree-sitter-haskell = { workspace = true }
-tree-sitter-gitignore = { workspace = true }
-tree-sitter-hcl = { workspace = true }
-tree-sitter-html = { workspace = true }
-tree-sitter-jinja-dialects = { workspace = true }
-tree-sitter-ini = { workspace = true }
-tree-sitter-javascript = { workspace = true }
-tree-sitter-java = { workspace = true }
-tree-sitter-jsdoc = { workspace = true }
-tree-sitter-jsonnet = { workspace = true }
-tree-sitter-json = { workspace = true }
-tree-sitter-kdl = { workspace = true }
-tree-sitter-julia = { workspace = true }
-tree-sitter-kotlin-sg = { workspace = true }
-tree-sitter-llvm = { workspace = true }
-tree-sitter-just = { workspace = true }
-tree-sitter-lua = { workspace = true }
-tree-sitter-make = { workspace = true }
-tree-sitter-md = { workspace = true }
-tree-sitter-nix = { workspace = true }
-tree-sitter-objc = { workspace = true }
-tree-sitter-ocaml = { workspace = true }
-tree-sitter-perl = { workspace = true }
-tree-sitter-php = { workspace = true }
-tree-sitter-powershell = { workspace = true }
-tree-sitter-pascal = { workspace = true }
-tree-sitter-properties = { workspace = true }
-tree-sitter-proto = { workspace = true }
-tree-sitter-python = { workspace = true }
-tree-sitter-r = { workspace = true }
-tree-sitter-regex = { workspace = true }
-tree-sitter-ron = { workspace = true }
-tree-sitter-ruby = { workspace = true }
-tree-sitter-rust = { workspace = true }
-tree-sitter-scala = { workspace = true }
-tree-sitter-sequel = { workspace = true }
-tree-sitter-solidity = { workspace = true }
-tree-sitter-spirv = { workspace = true }
-tree-sitter-svelte-ng = { workspace = true }
-tree-sitter-swift = { workspace = true }
-tree-sitter-toml-ng = { workspace = true }
-tree-sitter-typescript = { workspace = true }
-tree-sitter-v = { workspace = true }
-tree-sitter-vue = { workspace = true }
-tree-sitter-wat = { workspace = true }
-tree-sitter-xml = { workspace = true }
-tree-sitter-yaml = { workspace = true }
-tree-sitter-zig = { workspace = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 ureq = { workspace = true }
@@ -159,18 +93,25 @@ metal = "0.33"
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui_platform = { workspace = true, features = ["windows-wgpu"] }
 gpui_wgpu = { workspace = true }
-gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 
 [dev-dependencies]
 # Activate the optional backend for history activation tests with real Git data.
 gitcomet-git-gix = { workspace = true }
+# Activate the optional sidecar writer for the measurement tests.
+gitcomet-perf = { workspace = true }
+gitcomet-conflict-resolver = { workspace = true, features = ["test-support"] }
+gitcomet-markdown = { workspace = true, features = ["test-support"] }
+gitcomet-syntax = { workspace = true, features = ["test-support"] }
 # Only entries that add features over `[dependencies]` belong here — a plain
 # restatement is dead weight, since tests already see every regular dependency.
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 # The example product's extension, run against the real host.
 gitcomet-extension-example = { path = "../gitcomet-extension-example" }
 gitcomet-state = { workspace = true, features = ["test-support"] }
+gitcomet-text = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
+gitcomet-ui-media = { workspace = true, features = ["test-support"] }
+gitcomet-ui-terminal = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
 

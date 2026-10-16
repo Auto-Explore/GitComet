@@ -54,7 +54,7 @@ jobs:
       - name: Compile and link Criterion and support targets
         shell: bash
         run: |
-          python3 scripts/ci/run.py command --name compile-benchmark-targets -- cargo build --locked --profile "$CI_BENCHMARK_PROFILE" --timings -p gitcomet-ui-gpui --features benchmarks --bench performance --bin perf_budget_report --bin perf_idle_resource
+          python3 scripts/ci/run.py command --name compile-benchmark-targets -- cargo build --locked --profile "$CI_BENCHMARK_PROFILE" --timings -p gitcomet-ui-gpui --features gitcomet-ui-gpui/benchmarks --bench performance --bin perf_idle_resource -p gitcomet-perf --bin perf_budget_report
           python3 scripts/ci/run.py command --name compile-app-launch-harness -- cargo build --locked --profile "$CI_BENCHMARK_PROFILE" --timings -p gitcomet --bin perf-app-launch
       - uses: ./.github/actions/ci-finish
         if: always()

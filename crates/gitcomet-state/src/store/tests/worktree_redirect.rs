@@ -399,9 +399,7 @@ fn rapid_linked_worktree_switches_and_reopening_finish_with_the_correct_checkout
                 .iter()
                 .find(|repo| repo.id == id)
                 .is_some_and(|repo| {
-                    !repo
-                        .loads_in_flight
-                        .is_in_flight(!crate::model::RepoLoadsInFlight::WORKTREE_DIRTY)
+                    !repo.loads_in_flight.any_foreground_in_flight()
                         && matches!(repo.status, Loadable::Ready(_))
                         && matches!(repo.head_branch, Loadable::Ready(_))
                 })

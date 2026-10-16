@@ -16,13 +16,7 @@ impl Render for SettingsWindowView {
         }
         self.theme = self.theme.with_appearance(metrics);
         let theme = self.theme;
-        for input in &self.font_size_inputs {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        self.terminal_external_program_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.terminal_external_args_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
+        crate::theme::set_window_theme(cx, window.window_handle().window_id(), theme);
         let decorations = window.window_decorations();
         let show_custom_window_chrome =
             crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
@@ -39,18 +33,9 @@ impl Render for SettingsWindowView {
 
         let cursor = self
             .hover_resize_edge
-            .map(chrome::cursor_style_for_resize_edge)
+            .map(crate::kit::window_chrome::cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
-        let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
-
-        self.git_executable_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.external_editor_custom_path_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.external_editor_custom_arguments_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.search_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
+        let frame_rounding = crate::kit::window_chrome::client_frame_corner_rounding(theme, window);
 
         #[cfg(test)]
         let show_overflow_probe =
@@ -125,7 +110,7 @@ impl Render for SettingsWindowView {
             };
 
             let size = window.viewport_size();
-            let next = chrome::resize_edge(
+            let next = crate::kit::window_chrome::resize_edge(
                 e.position,
                 settings_window_client_inset_for_scale(this.ui_scale_percent),
                 size,
@@ -146,7 +131,7 @@ impl Render for SettingsWindowView {
                     };
 
                     let size = window.viewport_size();
-                    let edge = chrome::resize_edge(
+                    let edge = crate::kit::window_chrome::resize_edge(
                         e.position,
                         settings_window_client_inset_for_scale(this.ui_scale_percent),
                         size,
@@ -157,7 +142,7 @@ impl Render for SettingsWindowView {
                     };
 
                     cx.stop_propagation();
-                    crate::app::begin_window_resize(window, edge);
+                    crate::kit::window_chrome::begin_window_resize(window, edge);
                 }),
             );
         } else {
@@ -297,7 +282,7 @@ fn settings_window_control(
     cx: &mut gpui::Context<SettingsWindowView>,
 ) -> AnyElement {
     match button {
-        gpui::WindowButton::Minimize => chrome::titlebar_control_button(
+        gpui::WindowButton::Minimize => crate::kit::window_chrome::titlebar_control_button(
             "settings_window_min_btn",
             "icons/generic_minimize.svg",
             theme.colors.foreground.secondary,
@@ -315,7 +300,7 @@ fn settings_window_control(
             }),
         )
         .into_any_element(),
-        gpui::WindowButton::Maximize => chrome::titlebar_control_button(
+        gpui::WindowButton::Maximize => crate::kit::window_chrome::titlebar_control_button(
             "settings_window_max_btn",
             if is_maximized {
                 "icons/generic_restore.svg"
@@ -333,12 +318,12 @@ fn settings_window_control(
             controls::ControlActivation::Action,
             cx.listener(|_this, _e: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                crate::app::toggle_window_zoom(window);
+                crate::kit::window_chrome::toggle_window_zoom(window);
                 cx.notify();
             }),
         )
         .into_any_element(),
-        gpui::WindowButton::Close => chrome::titlebar_control_button(
+        gpui::WindowButton::Close => crate::kit::window_chrome::titlebar_control_button(
             "settings_window_close_btn",
             "icons/generic_close.svg",
             theme.colors.foreground.secondary,
@@ -394,7 +379,7 @@ impl SettingsWindowView {
             .px(px(12.0))
             .window_control_area(WindowControlArea::Drag)
             .when(is_macos, |this| {
-                this.pl(chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET)
+                this.pl(crate::kit::window_chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET)
             })
             .on_activate(
                 false,
@@ -402,7 +387,7 @@ impl SettingsWindowView {
                 cx.listener(|this, e: &ClickEvent, window, cx| {
                     this.title_drag_state.clear();
                     cx.notify();
-                    if !chrome::should_handle_titlebar_double_click(
+                    if !crate::kit::window_chrome::should_handle_titlebar_double_click(
                         e.click_count(),
                         e.standard_click(),
                     ) {
@@ -410,13 +395,13 @@ impl SettingsWindowView {
                     }
 
                     cx.stop_propagation();
-                    chrome::handle_titlebar_double_click(window);
+                    crate::kit::window_chrome::handle_titlebar_double_click(window);
                 }),
             )
             .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(|_this, e: &MouseDownEvent, window, cx| {
-                    chrome::show_titlebar_secondary_menu(e.position, window, cx);
+                    crate::kit::window_chrome::show_titlebar_secondary_menu(e.position, window, cx);
                 }),
             )
             .on_mouse_down(
@@ -442,7 +427,7 @@ impl SettingsWindowView {
             )
             .on_mouse_move(cx.listener(|this, _e, window, _cx| {
                 if this.title_drag_state.take_move_request() {
-                    crate::app::begin_window_move(window);
+                    crate::kit::window_chrome::begin_window_move(window);
                 }
             }))
             .child(
@@ -456,7 +441,7 @@ impl SettingsWindowView {
             );
 
         let is_maximized = window.is_maximized();
-        let control_layout = crate::window_controls::resolve_visibility(
+        let control_layout = crate::kit::window_chrome::controls::resolve_visibility(
             self.window_controls_mode,
             cx.button_layout(),
             cfg!(any(target_os = "linux", target_os = "freebsd")),
@@ -485,7 +470,7 @@ impl SettingsWindowView {
         let has_left_controls = !left_controls.is_empty();
         div()
             .id("settings_window_header")
-            .h(chrome::TITLE_BAR_HEIGHT)
+            .h(crate::kit::window_chrome::TITLE_BAR_HEIGHT)
             .w_full()
             .flex()
             .items_center()
@@ -493,7 +478,7 @@ impl SettingsWindowView {
             .border_color(header_border)
             .bg(header_bg)
             .when_some(
-                chrome::client_frame_corner_rounding(theme, window),
+                crate::kit::window_chrome::client_frame_corner_rounding(theme, window),
                 |d, rounding| {
                     d.when(rounding.top_left, |d| d.rounded_tl(rounding.radius))
                         .when(rounding.top_right, |d| d.rounded_tr(rounding.radius))
@@ -511,7 +496,9 @@ impl SettingsWindowView {
                 )
             })
             .child(drag_region)
-            .child(chrome::window_controls_cluster(right_controls))
+            .child(crate::kit::window_chrome::window_controls_cluster(
+                right_controls,
+            ))
     }
 
     fn root_page(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> Stateful<gpui::Div> {

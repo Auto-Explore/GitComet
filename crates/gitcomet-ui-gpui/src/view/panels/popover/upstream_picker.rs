@@ -430,6 +430,7 @@ pub(super) fn panel(
         .icon(components::ContextMenuIconSlot::Icon(
             "icons/unlink.svg".into(),
         ))
+        .tone(components::ContextMenuTone::Accent)
         .selected(selected_index == Some(0))
         .tooltip_host(this.tooltip_host.clone())
         .on_select(theme, ui_scale, cx, move |this, _e, _window, cx| {
@@ -446,6 +447,7 @@ pub(super) fn panel(
         .icon(components::ContextMenuIconSlot::Icon(
             "icons/plus.svg".into(),
         ))
+        .tone(components::ContextMenuTone::Success)
         .selected(selected_index == Some(0))
         .tooltip_host(this.tooltip_host.clone())
         .on_select(theme, ui_scale, cx, move |this, _e, window, cx| {

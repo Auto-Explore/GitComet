@@ -210,6 +210,16 @@ fn drain_stop_cancels_pending_acknowledgements() {
     assert!(monitor.rx.try_recv().is_err());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+#[should_panic(expected = "unexpected refresh while quiet")]
+fn native_quiet_reports_a_refresh_from_an_earlier_edit() {
+    let (_temp, root) = repository();
+    let monitor = RunningMonitor::start(&root);
+    fs::write(root.join("edited-before-quiet.txt"), "edit").unwrap();
+    monitor.quiet();
+}
+
 #[test]
 fn native_sync_positive_checks_use_operation_unique_paths() {
     let (_temp, root) = repository();
@@ -317,7 +327,7 @@ fn native_sync_ntfs_cookies_cover_all_roots_without_git_or_callback_noise() {
     let status = gitcomet_git_gix::GixBackend
         .open(&linked)
         .unwrap()
-        .status()
+        .status(&gitcomet_core::services::CancellationToken::new())
         .unwrap();
     assert_eq!(
         status.unstaged.len(),

@@ -21,6 +21,41 @@ use std::{
 fn failed(message: impl Into<String>) -> Error {
     Error::new(ErrorKind::Backend(message.into()))
 }
+
+#[derive(Debug)]
+struct WorktreeRecoveryError {
+    original: Error,
+    recovery: Vec<Error>,
+}
+
+impl WorktreeRecoveryError {
+    fn combine(original: Error, recovery: Vec<Error>, workdir: &Path) -> Error {
+        let cause = Self { original, recovery };
+        failed(cause.to_string())
+            .with_source(cause)
+            .with_context("recover branch-update worktrees", Some(workdir))
+    }
+}
+
+impl std::fmt::Display for WorktreeRecoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}; worktree recovery: ", self.original)?;
+        for (index, error) in self.recovery.iter().enumerate() {
+            if index > 0 {
+                write!(f, "; ")?;
+            }
+            write!(f, "{error}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for WorktreeRecoveryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.original)
+    }
+}
+
 fn valid_updates(updates: &[RefUpdate]) -> Result<String> {
     if updates.is_empty() {
         return Err(failed("No refs were selected"));
@@ -66,7 +101,12 @@ impl RefTransaction {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = command.spawn().map_err(|e| failed(e.to_string()))?;
+        let child = command.spawn().map_err(|e| {
+            failed(e.to_string()).with_source(e).with_context(
+                "start Git reference transaction",
+                Some(Path::new(command.get_program())),
+            )
+        })?;
         let mut transaction = Self {
             child: Some(child),
             stdin: None,
@@ -89,8 +129,16 @@ impl RefTransaction {
             .ok_or_else(|| failed("Missing transaction input"))?;
         stdin
             .write_all(format!("start\n{input}prepare\n").as_bytes())
-            .map_err(|e| failed(e.to_string()))?;
-        stdin.flush().map_err(|e| failed(e.to_string()))?;
+            .map_err(|e| {
+                failed(e.to_string())
+                    .with_source(e)
+                    .with_context("write Git reference transaction preparation", None)
+            })?;
+        stdin.flush().map_err(|e| {
+            failed(e.to_string())
+                .with_source(e)
+                .with_context("flush Git reference transaction preparation", None)
+        })?;
         for expected in ["start: ok", "prepare: ok"] {
             let mut line = String::new();
             transaction
@@ -98,7 +146,11 @@ impl RefTransaction {
                 .as_mut()
                 .expect("transaction owns stdout")
                 .read_line(&mut line)
-                .map_err(|e| failed(e.to_string()))?;
+                .map_err(|e| {
+                    failed(e.to_string())
+                        .with_source(e)
+                        .with_context("read Git reference transaction acknowledgement", None)
+                })?;
             if line.trim() != expected {
                 transaction.stdin.take();
                 let output = transaction
@@ -106,7 +158,11 @@ impl RefTransaction {
                     .take()
                     .expect("transaction owns its child")
                     .wait_with_output()
-                    .map_err(|e| failed(e.to_string()))?;
+                    .map_err(|e| {
+                        failed(e.to_string())
+                            .with_source(e)
+                            .with_context("wait for rejected Git reference transaction", None)
+                    })?;
                 return Err(failed(String::from_utf8_lossy(&output.stderr)));
             }
         }
@@ -118,14 +174,22 @@ impl RefTransaction {
             .as_mut()
             .expect("prepared transaction has stdin")
             .write_all(b"commit\n")
-            .map_err(|e| failed(e.to_string()))?;
+            .map_err(|e| {
+                failed(e.to_string())
+                    .with_source(e)
+                    .with_context("write Git reference transaction commit", None)
+            })?;
         self.stdin.take();
         let output = self
             .child
             .take()
             .expect("transaction owns its child")
             .wait_with_output()
-            .map_err(|e| failed(e.to_string()))?;
+            .map_err(|e| {
+                failed(e.to_string())
+                    .with_source(e)
+                    .with_context("wait for Git reference transaction commit", None)
+            })?;
         if !output.status.success() {
             return Err(failed(format!(
                 "Ref transaction needs recovery: {}",
@@ -170,7 +234,11 @@ impl GixRepo {
         ]);
         if !ancestry
             .status()
-            .map_err(|e| failed(e.to_string()))?
+            .map_err(|e| {
+                failed(e.to_string())
+                    .with_source(e)
+                    .with_context("check rebase ancestry", Some(&self.spec.workdir))
+            })?
             .success()
         {
             return Err(failed(
@@ -207,10 +275,12 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         let mut refs: Vec<_> = updates.iter().map(|u| u.update.clone()).collect();
         valid_updates(&refs)?;
-        let common = self
-            .common_dir_impl()
-            .canonicalize()
-            .map_err(|e| failed(e.to_string()))?;
+        let common_dir = self.common_dir_impl();
+        let common = common_dir.canonicalize().map_err(|e| {
+            failed(e.to_string())
+                .with_source(e)
+                .with_context("resolve repository common directory", Some(&common_dir))
+        })?;
         let worktrees = self.list_worktrees_impl()?;
         let mut paths = BTreeSet::new();
         let mut syncs = Vec::new();
@@ -221,12 +291,24 @@ impl GixRepo {
             let declared: BTreeSet<_> = u
                 .worktrees
                 .iter()
-                .map(|p| p.canonicalize().map_err(|e| failed(e.to_string())))
+                .map(|p| {
+                    p.canonicalize().map_err(|e| {
+                        failed(e.to_string())
+                            .with_source(e)
+                            .with_context("resolve declared worktree", Some(p))
+                    })
+                })
                 .collect::<Result<_>>()?;
             let actual: BTreeSet<_> = worktrees
                 .iter()
                 .filter(|w| w.branch.as_deref() == u.update.reference.strip_prefix("refs/heads/"))
-                .map(|w| w.path.canonicalize().map_err(|e| failed(e.to_string())))
+                .map(|w| {
+                    w.path.canonicalize().map_err(|e| {
+                        failed(e.to_string())
+                            .with_source(e)
+                            .with_context("resolve checked-out worktree", Some(&w.path))
+                    })
+                })
                 .collect::<Result<_>>()?;
             if declared != actual {
                 return Err(failed(
@@ -243,17 +325,23 @@ impl GixRepo {
                 }
             }
             for path in &u.worktrees {
-                if !paths.insert(path.canonicalize().map_err(|e| failed(e.to_string()))?) {
+                if !paths.insert(path.canonicalize().map_err(|e| {
+                    failed(e.to_string())
+                        .with_source(e)
+                        .with_context("resolve transaction worktree", Some(path))
+                })?) {
                     return Err(failed("A worktree occurs more than once"));
                 }
                 let repo = crate::GixBackend.open(path)?;
                 let mut common_cmd = git_workdir_cmd_for(path);
                 common_cmd.args(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
                 let dir = run_git_capture(common_cmd, "git common directory")?;
-                if Path::new(dir.trim())
-                    .canonicalize()
-                    .map_err(|e| failed(e.to_string()))?
-                    != common
+                if Path::new(dir.trim()).canonicalize().map_err(|e| {
+                    failed(e.to_string()).with_source(e).with_context(
+                        "resolve worktree common directory",
+                        Some(Path::new(dir.trim())),
+                    )
+                })? != common
                 {
                     return Err(failed("The worktree belongs to another repository"));
                 }
@@ -272,7 +360,8 @@ impl GixRepo {
                     "MERGE_HEAD",
                 ]);
                 let marker = run_git_capture(marker_cmd, "git merge marker")?;
-                if repo.sequencer_state()? != gitcomet_core::services::SequencerState::None
+                if repo.sequencer_state(&gitcomet_core::services::CancellationToken::new())?
+                    != gitcomet_core::services::SequencerState::None
                     || Path::new(marker.trim()).exists()
                 {
                     return Err(failed("Finish the current Git operation before applying"));
@@ -318,7 +407,11 @@ impl GixRepo {
                     untracked.args(["ls-files", "--others", "--exclude-standard"]);
                     if !tracked
                         .status()
-                        .map_err(|e| failed(e.to_string()))?
+                        .map_err(|e| {
+                            failed(e.to_string())
+                                .with_source(e)
+                                .with_context("check worktree recovery changes", Some(path))
+                        })?
                         .success()
                         || !run_git_capture(untracked, "git recovery untracked files")?.is_empty()
                     {
@@ -348,14 +441,15 @@ impl GixRepo {
                 let mut recovery = Vec::new();
                 for (path, old, new) in synced.iter().rev() {
                     if let Err(e) = sync_tree(path, new, old, false) {
-                        recovery.push(e.to_string());
+                        recovery.push(e);
                     }
                 }
                 drop(transaction);
-                return Err(failed(format!(
-                    "{error}; worktree recovery: {}",
-                    recovery.join("; ")
-                )));
+                return Err(WorktreeRecoveryError::combine(
+                    error,
+                    recovery,
+                    &self.spec.workdir,
+                ));
             }
             synced.push((path, old, new));
         }
@@ -412,6 +506,60 @@ fn sync_tree(path: &Path, old: &CommitId, new: &CommitId, dry: bool) -> Result<C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn worktree_recovery_failure_keeps_every_cause_in_recovery_order() {
+        let original = Error::new(ErrorKind::Backend("synchronization failed".into()))
+            .with_source(std::io::Error::from_raw_os_error(5));
+        let recovery = vec![
+            Error::new(ErrorKind::Backend("second worktree failed".into()))
+                .with_source(std::io::Error::from_raw_os_error(28)),
+            Error::new(ErrorKind::Backend("first worktree failed".into()))
+                .with_source(std::io::Error::from_raw_os_error(13)),
+        ];
+        let workdir = Path::new("transaction-workdir");
+        let error = WorktreeRecoveryError::combine(original, recovery, workdir);
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Backend(message)
+                if message == "synchronization failed; worktree recovery: second worktree failed; first worktree failed"
+        ));
+        assert_eq!(error.context().unwrap().path(), Some(workdir));
+        let cloned = error.clone();
+        drop(error);
+        let cause = cloned
+            .source()
+            .unwrap()
+            .downcast_ref::<WorktreeRecoveryError>()
+            .unwrap();
+        assert_eq!(cause.recovery.len(), 2);
+        for (error, expected) in std::iter::once(&cause.original)
+            .chain(&cause.recovery)
+            .zip([5, 28, 13])
+        {
+            assert_eq!(
+                error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(expected)
+            );
+        }
+        assert!(std::ptr::addr_eq(cause.source().unwrap(), &cause.original));
+        let no_recovery = WorktreeRecoveryError::combine(
+            Error::new(ErrorKind::Backend("synchronization failed".into())),
+            Vec::new(),
+            workdir,
+        );
+        assert!(matches!(
+            no_recovery.kind(),
+            ErrorKind::Backend(message) if message == "synchronization failed; worktree recovery: "
+        ));
+    }
+
     fn git(root: &Path, args: &[&str]) -> String {
         let out = gitcomet_core::test_support::git_fixture::git_command()
             .current_dir(root)
