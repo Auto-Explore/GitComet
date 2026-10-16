@@ -486,6 +486,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let _stage = gitcomet_core::startup_trace::span("view_init");
         let GitCometViewConfig {
             mut initial_path,
             initial_repository_launch_mode,
@@ -595,7 +596,10 @@ impl GitCometView {
         // This window's scale: the default, unless the window has its own zoom.
         let ui_scale = crate::ui_scale::current(cx);
         ui_preferences.appearance.ui_scale_percent = ui_scale.percent;
-        let _font_preferences = crate::session_ui::font_preferences(window, &ui_session, cx);
+        let _font_preferences = {
+            let _stage = gitcomet_core::startup_trace::span("font_preferences");
+            crate::session_ui::font_preferences(window, &ui_session, cx)
+        };
         if should_seed_initial_repository_from_session(
             view_mode,
             initial_path.as_deref(),

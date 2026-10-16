@@ -50,15 +50,20 @@ pub(super) fn request(cx: &mut gpui::App, force: bool) {
     };
     let (work, adopted) = match begin_git_runtime_probe(force) {
         Some(probe) => (
-            cx.background_executor().spawn(async move { probe.run() }),
+            cx.background_executor().spawn(async move {
+                let _stage = gitcomet_core::startup_trace::span("git_runtime_probe_background");
+                probe.run()
+            }),
             false,
         ),
         // Nothing to start: a probe is running or has settled. The browser
         // probes before its first window exists, and that probe reports to no
         // store, so a window created meanwhile adopts its result.
         None => (
-            cx.background_executor()
-                .spawn(async move { wait_for_git_runtime_probe(ADOPT_TIMEOUT) }),
+            cx.background_executor().spawn(async move {
+                let _stage = gitcomet_core::startup_trace::span("git_runtime_adopt_background");
+                wait_for_git_runtime_probe(ADOPT_TIMEOUT)
+            }),
             true,
         ),
     };
@@ -73,6 +78,11 @@ pub(super) fn request(cx: &mut gpui::App, force: bool) {
             if current_git_runtime() != runtime {
                 return;
             }
+            gitcomet_core::startup_trace::mark(if runtime.is_available() {
+                "git_runtime_available_for_ui"
+            } else {
+                "git_runtime_unavailable_for_ui"
+            });
             crate::environment::refresh_git(cx);
             for handle in cx.windows() {
                 if let Some(handle) = handle.downcast::<GitCometView>() {

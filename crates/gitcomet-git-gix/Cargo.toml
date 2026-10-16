@@ -26,6 +26,10 @@ required-features = ["benchmarks", "test-support"]
 name = "interaction-probe"
 required-features = ["benchmarks"]
 
+[[example]]
+name = "repository-load-probe"
+required-features = ["benchmarks"]
+
 # Cargo builds this fixture for integration tests. Application packages depend
 # only on this package's library, so it is not part of application distributions.
 [[bin]]

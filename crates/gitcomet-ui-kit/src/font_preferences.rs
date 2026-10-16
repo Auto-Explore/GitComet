@@ -320,6 +320,7 @@ fn system_font_catalog(window: Option<&Window>) -> &'static SystemFontCatalog {
 }
 
 fn collect_system_font_catalog(window: &Window) -> SystemFontCatalog {
+    let _stage = gitcomet_base::startup_trace::span("system_font_catalog");
     let (_, fontdb_monospace_families) = collect_fontdb_families();
     let all_families = normalize_font_names(window.text_system().all_font_names());
     let available_family_keys = all_families
@@ -351,6 +352,7 @@ fn collect_fontdb_system_font_catalog() -> SystemFontCatalog {
 }
 
 fn collect_fontdb_families() -> (Vec<String>, Vec<String>) {
+    let _stage = gitcomet_base::startup_trace::span("fontdb_scan");
     let mut db = fontdb::Database::new();
     bundled_fonts::load_into_fontdb(&mut db);
     db.load_system_fonts();
