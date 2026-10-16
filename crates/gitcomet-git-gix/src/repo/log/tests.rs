@@ -1,22 +1,15 @@
 use super::*;
+use crate::repo::status::tests::{git_command, git_success, init_test_repo, open_repo, write_file};
 use gitcomet_core::domain::UpstreamDivergence;
 use std::fs;
 
-fn git_success(workdir: &Path, args: &[&str]) {
-    let mut cmd = crate::util::git_workdir_cmd_for(workdir);
-    let output = cmd.args(args).output().expect("spawn git");
-    assert!(
-        output.status.success(),
-        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 fn git_stdout(workdir: &Path, args: &[&str]) -> String {
-    let mut cmd = crate::util::git_workdir_cmd_for(workdir);
-    let output = cmd.args(args).output().expect("spawn git");
+    let output = git_command()
+        .arg("-C")
+        .arg(workdir)
+        .args(args)
+        .output()
+        .expect("spawn git");
     assert!(output.status.success(), "git {args:?} failed");
     String::from_utf8(output.stdout)
         .expect("utf8 stdout")
@@ -24,37 +17,10 @@ fn git_stdout(workdir: &Path, args: &[&str]) -> String {
         .to_string()
 }
 
-fn init_test_repo(workdir: &Path) {
-    git_success(workdir, &["init"]);
-    gitcomet_core::test_support::git_fixture::append_config(
-        workdir,
-        &[
-            ("core.autocrlf", "false"),
-            ("core.eol", "lf"),
-            ("commit.gpgsign", "false"),
-            ("user.name", "Test User"),
-            ("user.email", "test@example.com"),
-        ],
-    );
-}
-
-fn write_file(workdir: &Path, relative: &str, contents: &str) {
-    let path = workdir.join(relative);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("create parent directories");
-    }
-    fs::write(path, contents).expect("write file");
-}
-
 fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
     write_file(workdir, path, contents);
     git_success(workdir, &["add", path]);
     git_success(workdir, &["commit", "-m", message]);
-}
-
-fn open_repo(workdir: &Path) -> GixRepo {
-    let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-    GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
 }
 
 /// Classification costs a header lookup and a small read per file (~2 us), so

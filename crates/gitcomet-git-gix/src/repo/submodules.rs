@@ -1918,7 +1918,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::repo::status::tests::open_repo;
+    use crate::repo::status::tests::{git_success, init_test_repo, open_repo};
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
@@ -1977,34 +1977,6 @@ mod tests {
         }
     }
 
-    fn run_git(workdir: &Path, args: &[&str]) {
-        let output = gitcomet_core::test_support::git_fixture::git_command()
-            .arg("-C")
-            .arg(workdir)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn init_test_repo(workdir: &Path) {
-        run_git(workdir, &["init"]);
-        gitcomet_core::test_support::git_fixture::append_config(
-            workdir,
-            &[
-                ("commit.gpgsign", "false"),
-                ("user.name", "Test User"),
-                ("user.email", "test@example.com"),
-            ],
-        );
-    }
-
     /// A submodule whose own nested submodule pointer `vendor/x` moves in
     /// two commits and once more in the index. Returns the two commits.
     fn nested_pointer_moves(dir: &Path) -> (CommitId, CommitId) {
@@ -2013,7 +1985,7 @@ mod tests {
             let id = digit
                 .to_string()
                 .repeat(gix::open(dir).unwrap().object_hash().len_in_hex());
-            run_git(
+            git_success(
                 dir,
                 &[
                     "update-index",
@@ -2034,10 +2006,10 @@ mod tests {
             )
         };
         point('1');
-        run_git(dir, &["commit", "-q", "-m", "first"]);
+        git_success(dir, &["commit", "-q", "-m", "first"]);
         let first = head();
         point('2');
-        run_git(dir, &["commit", "-q", "-m", "second"]);
+        git_success(dir, &["commit", "-q", "-m", "second"]);
         let second = head();
         point('3');
         (first, second)
@@ -2084,11 +2056,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         let (_, second) = nested_pointer_moves(dir);
-        run_git(dir, &["rm", "--cached", "-q", "vendor/x"]);
+        git_success(dir, &["rm", "--cached", "-q", "vendor/x"]);
         std::fs::create_dir_all(dir.join("vendor")).unwrap();
         std::fs::write(dir.join("vendor/x"), "a\nb\nc\n").unwrap();
-        run_git(dir, &["add", "vendor/x"]);
-        run_git(dir, &["commit", "-q", "-m", "third"]);
+        git_success(dir, &["add", "vendor/x"]);
+        git_success(dir, &["commit", "-q", "-m", "third"]);
         let third = CommitId(
             gix::open(dir)
                 .unwrap()
@@ -2377,7 +2349,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let submodule_path = Path::new("vendor/submodule");
         init_test_repo(tmp.path());
-        run_git(
+        git_success(
             tmp.path(),
             &[
                 "update-index",
@@ -2389,8 +2361,8 @@ mod tests {
                 ),
             ],
         );
-        run_git(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
-        run_git(
+        git_success(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
+        git_success(
             tmp.path(),
             &["update-index", "--force-remove", "vendor/submodule"],
         );

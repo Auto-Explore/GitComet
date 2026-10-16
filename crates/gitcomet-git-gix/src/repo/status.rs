@@ -1524,7 +1524,7 @@ pub(crate) mod tests {
         })
     }
 
-    fn git_command() -> Command {
+    pub(crate) fn git_command() -> Command {
         let env = ensure_isolated_git_test_env();
         let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
         cmd.env("GIT_CONFIG_NOSYSTEM", "1");
@@ -2282,8 +2282,7 @@ pub(crate) mod tests {
         fs::write(workdir.join("tracked.txt"), "base\nchanged\n").expect("rewrite tracked file");
         git_success(workdir, &["add", "tracked.txt"]);
 
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        let gix_repo = super::super::GixRepo::new(workdir.to_path_buf(), thread_safe_repo);
+        let gix_repo = open_repo(workdir);
 
         let head_commit_id = super::super::history::gix_head_id_or_none(
             &gix_repo.reopen_repo().expect("reopen repo"),

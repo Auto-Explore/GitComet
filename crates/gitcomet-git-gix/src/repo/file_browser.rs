@@ -275,7 +275,9 @@ fn collect_tree_entries(
 
 #[cfg(test)]
 mod tests {
-    use crate::repo::status::tests::open_repo;
+    use crate::repo::status::tests::{
+        git_command, git_success, init_test_repo, open_repo, write_file,
+    };
     use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
     use std::fs;
     use std::path::Path;
@@ -285,41 +287,6 @@ mod tests {
             .iter()
             .map(|e| e.path.to_string_lossy().into_owned())
             .collect()
-    }
-
-    fn git_success(workdir: &Path, args: &[&str]) {
-        let output = gitcomet_core::test_support::git_fixture::git_command()
-            .arg("-C")
-            .arg(workdir)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn init_test_repo(workdir: &Path) {
-        git_success(workdir, &["init"]);
-        gitcomet_core::test_support::git_fixture::append_config(
-            workdir,
-            &[
-                ("user.name", "Test User"),
-                ("user.email", "test@example.com"),
-            ],
-        );
-    }
-
-    fn write_file(workdir: &Path, relative: &str, contents: &str) {
-        let path = workdir.join(relative);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("create parent directories");
-        }
-        fs::write(path, contents).expect("write file");
     }
 
     fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
@@ -443,7 +410,7 @@ mod tests {
 
         let head_entries = repo.list_worktree_files_impl().expect("head tree");
 
-        let output = gitcomet_core::test_support::git_fixture::git_command()
+        let output = git_command()
             .arg("-C")
             .arg(workdir)
             .args(["rev-parse", "HEAD"])
@@ -476,7 +443,7 @@ mod tests {
 
         commit_file(workdir, "only_in_first.txt", "first", "first commit");
 
-        let output = gitcomet_core::test_support::git_fixture::git_command()
+        let output = git_command()
             .arg("-C")
             .arg(workdir)
             .args(["rev-parse", "HEAD"])
