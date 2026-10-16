@@ -430,35 +430,34 @@ fn resolve_mergetool_name_with_trust_mode(
     gui_default: GuiDefault,
     has_display: bool,
 ) -> Result<String> {
-    let trusted_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Trusted)?;
-    let trusted_guitool =
-        git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Trusted)?;
+    let vetted_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Trusted)?;
+    let vetted_guitool = git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Trusted)?;
     let local_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Repository)?;
     let local_guitool =
         git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Repository)?;
 
-    let trusted_choice = choose_mergetool_name(
-        trusted_tool.clone(),
-        trusted_guitool.clone(),
+    let vetted_choice = choose_mergetool_name(
+        vetted_tool.clone(),
+        vetted_guitool.clone(),
         gui_default,
         has_display,
     )
     .ok();
     let tool_name = choose_mergetool_name(
-        local_tool.clone().or(trusted_tool),
-        local_guitool.clone().or(trusted_guitool),
+        local_tool.clone().or(vetted_tool),
+        local_guitool.clone().or(vetted_guitool),
         gui_default,
         has_display,
     )?;
 
-    if trusted_choice.as_deref() == Some(tool_name.as_str())
+    if vetted_choice.as_deref() == Some(tool_name.as_str())
         || builtin_tool_key(&tool_name).is_some()
         || repo_local_mergetool_command_allowed(repo, &tool_name)?
     {
         return Ok(tool_name);
     }
-    if let Some(trusted) = trusted_choice {
-        return Ok(trusted);
+    if let Some(vetted) = vetted_choice {
+        return Ok(vetted);
     }
 
     let key = if local_guitool.as_deref() == Some(tool_name.as_str())
