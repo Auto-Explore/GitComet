@@ -271,3 +271,48 @@ fn every_batch_language_produces_treesitter_tokens() {
         assert_token_ranges_are_utf8_safe(sample, &tokens);
     }
 }
+
+/// Every block comment a language declares also resumes from a checkpoint: a
+/// slice deep inside one is still a comment.
+#[test]
+fn every_declared_block_comment_resumes_inside_a_streamed_slice() {
+    const CHECKPOINT_SPACING: usize = 32 * 1024;
+
+    let mut broken = Vec::new();
+    let mut checked = 0;
+    for language in all_supported_languages() {
+        let Some(spec) = crate::heuristic::heuristic_comment_config(language).block_comment else {
+            continue;
+        };
+        reset_streamed_heuristic_line_cache();
+        let body = "b".repeat(CHECKPOINT_SPACING + 192);
+        let text = format!("{}{body}{} x", spec.start, spec.end);
+        let slice_start = spec.start.len() + CHECKPOINT_SPACING;
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text));
+        let (_, resolved) = raw_text
+            .slice_text_resolved(slice_start..slice_start + 96)
+            .expect("ASCII slice should resolve");
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &raw_text,
+            language,
+            slice_start..slice_start + 96,
+            resolved,
+        )
+        .expect("streamed slice should be supported");
+        checked += 1;
+        if !tokens
+            .iter()
+            .any(|token| token.kind == SyntaxTokenKind::Comment)
+        {
+            broken.push(language);
+        }
+    }
+    assert!(
+        checked > 20,
+        "only {checked} languages declare a block comment"
+    );
+    assert!(
+        broken.is_empty(),
+        "block comments that do not resume: {broken:?}"
+    );
+}

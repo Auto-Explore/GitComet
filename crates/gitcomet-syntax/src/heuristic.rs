@@ -113,6 +113,8 @@ thread_local! {
 pub(super) struct HeuristicBlockCommentSpec {
     pub(super) start: &'static str,
     pub(super) end: &'static str,
+    /// How the multi-line scan carries this comment from one line to the next.
+    kind: HeuristicBlockCommentKind,
 }
 
 #[derive(Clone, Copy)]
@@ -233,9 +235,10 @@ struct HeuristicOpenStateScanConfig {
 
 impl HeuristicOpenStateScanConfig {
     fn for_language(language: DiffSyntaxLanguage) -> Self {
+        let comment = heuristic_comment_config(language);
         Self {
-            comment: heuristic_comment_config(language),
-            block_comment_kind: heuristic_block_comment_kind(language),
+            comment,
+            block_comment_kind: comment.block_comment.map(|spec| spec.kind),
             allow_backtick_strings: heuristic_allows_backtick_strings(language),
             single_quote: heuristic_single_quote_role(language),
         }
@@ -245,26 +248,32 @@ impl HeuristicOpenStateScanConfig {
 const HEURISTIC_HTML_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "<!--",
     end: "-->",
+    kind: HeuristicBlockCommentKind::Html,
 };
 const HEURISTIC_FSHARP_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "(*",
     end: "*)",
+    kind: HeuristicBlockCommentKind::FSharp,
 };
 const HEURISTIC_LUA_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "--[[",
     end: "]]",
+    kind: HeuristicBlockCommentKind::Lua,
 };
 const HEURISTIC_HASKELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "{-",
     end: "-}",
+    kind: HeuristicBlockCommentKind::Haskell,
 };
 const HEURISTIC_C_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "/*",
     end: "*/",
+    kind: HeuristicBlockCommentKind::C,
 };
 const HEURISTIC_POWERSHELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "<#",
     end: "#>",
+    kind: HeuristicBlockCommentKind::PowerShell,
 };
 
 pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> HeuristicCommentConfig {
@@ -414,7 +423,10 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Bicep => HeuristicCommentConfig {
             line_comment: Some("//"),
             block_comment: match language {
-                DiffSyntaxLanguage::GoMod | DiffSyntaxLanguage::GoWork => None,
+                DiffSyntaxLanguage::GoMod
+                | DiffSyntaxLanguage::GoWork
+                | DiffSyntaxLanguage::Gleam
+                | DiffSyntaxLanguage::Cue => None,
                 _ => Some(HEURISTIC_C_BLOCK_COMMENT),
             },
             ..HeuristicCommentConfig::base()
@@ -440,55 +452,6 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Json
         | DiffSyntaxLanguage::Diff
         | DiffSyntaxLanguage::Regex => HeuristicCommentConfig::none(),
-    }
-}
-
-fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<HeuristicBlockCommentKind> {
-    match language {
-        DiffSyntaxLanguage::Html
-        | DiffSyntaxLanguage::Xml
-        | DiffSyntaxLanguage::Vue
-        | DiffSyntaxLanguage::Svelte
-        | DiffSyntaxLanguage::Jinja => Some(HeuristicBlockCommentKind::Html),
-        // EBNF's comment is `(* ... *)`, the same as Pascal's and F#'s.
-        DiffSyntaxLanguage::Ebnf
-        | DiffSyntaxLanguage::Pascal
-        | DiffSyntaxLanguage::FSharp
-        | DiffSyntaxLanguage::OCaml
-        | DiffSyntaxLanguage::OCamlInterface => Some(HeuristicBlockCommentKind::FSharp),
-        DiffSyntaxLanguage::Haskell | DiffSyntaxLanguage::Elm => {
-            Some(HeuristicBlockCommentKind::Haskell)
-        }
-        DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
-        DiffSyntaxLanguage::PowerShell => Some(HeuristicBlockCommentKind::PowerShell),
-        DiffSyntaxLanguage::Sql
-        | DiffSyntaxLanguage::Rust
-        | DiffSyntaxLanguage::JavaScript
-        | DiffSyntaxLanguage::TypeScript
-        | DiffSyntaxLanguage::Tsx
-        | DiffSyntaxLanguage::Go
-        | DiffSyntaxLanguage::C
-        | DiffSyntaxLanguage::Cpp
-        | DiffSyntaxLanguage::ObjectiveC
-        | DiffSyntaxLanguage::CSharp
-        | DiffSyntaxLanguage::Java
-        | DiffSyntaxLanguage::Kotlin
-        | DiffSyntaxLanguage::Swift
-        | DiffSyntaxLanguage::Dart
-        | DiffSyntaxLanguage::Scala
-        | DiffSyntaxLanguage::Zig
-        | DiffSyntaxLanguage::Bicep
-        | DiffSyntaxLanguage::Groovy
-        | DiffSyntaxLanguage::Solidity
-        | DiffSyntaxLanguage::Assembly
-        | DiffSyntaxLanguage::Hcl
-        | DiffSyntaxLanguage::Nix
-        | DiffSyntaxLanguage::DeviceTree
-        | DiffSyntaxLanguage::Apex
-        | DiffSyntaxLanguage::Qml
-        | DiffSyntaxLanguage::Vhdl
-        | DiffSyntaxLanguage::Php => Some(HeuristicBlockCommentKind::C),
-        _ => None,
     }
 }
 
