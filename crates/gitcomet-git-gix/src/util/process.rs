@@ -57,21 +57,22 @@ pub(crate) fn push_literal_paths<P: AsRef<std::ffi::OsStr>>(
     paths: impl IntoIterator<Item = P>,
 ) {
     cmd.env("GIT_LITERAL_PATHSPECS", "1").arg("--").args(paths);
-    #[cfg(windows)]
-    cmd.env("MSYS", msys_without_globbing(std::env::var_os("MSYS")));
 }
 
-/// Git for Windows runs `git submodule` through MSYS2 `sh` without quoting
-/// `[`, and the MSYS2 runtime globs unquoted arguments against the working
-/// directory, so `[z]` reached Git as a tracked `z`. A later option wins.
-#[cfg(any(windows, test))]
-pub(super) fn msys_without_globbing(inherited: Option<std::ffi::OsString>) -> std::ffi::OsString {
-    let mut options = inherited.unwrap_or_default();
-    if !options.is_empty() {
-        options.push(" ");
+/// A path for `git submodule`, a shell script on Git for Windows. Git starts
+/// its MSYS2 `sh` without quoting `[`, and the runtime globs unquoted
+/// arguments against the working tree, so `[z]` reached Git as a tracked `z`.
+/// A `\` gets the argument quoted, and Git normalizes `.\[z]` back to `[z]`.
+/// (`MSYS=noglob` would also drop the runtime's `\"` unescaping.)
+pub(crate) fn submodule_script_path(path: &Path) -> std::borrow::Cow<'_, std::ffi::OsStr> {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    if cfg!(windows) && path.is_relative() && bytes.contains(&b'[') && !bytes.contains(&b'\\') {
+        let mut quoted = std::ffi::OsString::from(".\\");
+        quoted.push(path);
+        std::borrow::Cow::Owned(quoted)
+    } else {
+        std::borrow::Cow::Borrowed(path.as_os_str())
     }
-    options.push("noglob");
-    options
 }
 
 /// [`push_literal_paths`] for a NUL-separated `--pathspec-from-file` list.

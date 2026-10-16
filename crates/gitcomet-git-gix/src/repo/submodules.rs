@@ -6,7 +6,7 @@ use super::{GixRepo, object_id_from_commit_id, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
     push_literal_paths, run_git_capture_bytes_cancellable, run_git_simple, run_git_with_output,
-    stable_path_bytes,
+    stable_path_bytes, submodule_script_path,
 };
 use gitcomet_core::domain::{
     CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -331,7 +331,7 @@ impl GixRepo {
 
         let mut cmd1 = self.git_workdir_cmd();
         cmd1.arg("submodule").arg("deinit").arg("-f");
-        push_literal_paths(&mut cmd1, [path]);
+        push_literal_paths(&mut cmd1, [submodule_script_path(path)]);
         let out1 =
             run_git_with_output(cmd1, &format!("git submodule deinit -f {}", path.display()))?;
 
@@ -501,7 +501,10 @@ fn push_submodule_add_args(
     }
     // The label stays a human-readable summary; `--` is an argv concern only,
     // and credentials in the URL are masked because the label is displayed.
-    push_literal_paths(cmd, [std::ffi::OsStr::new(url), path.as_os_str()]);
+    push_literal_paths(
+        cmd,
+        [std::ffi::OsStr::new(url), &*submodule_script_path(path)],
+    );
     command.push_str(&format!(" {} {}", redact_url_userinfo(url), path.display()));
     command
 }
@@ -587,7 +590,7 @@ fn update_repo_submodules_recursive(
         }
 
         cmd.arg("submodule").arg("update").arg("--init");
-        push_literal_paths(&mut cmd, [&relative_path]);
+        push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
         outputs.push(run_git_with_output(
             cmd,
             &format!("git submodule update --init -- {}", full_path.display()),
@@ -709,7 +712,7 @@ fn load_target_submodule_recursive(
             }
 
             cmd.arg("submodule").arg("update").arg("--init");
-            push_literal_paths(&mut cmd, [&relative_path]);
+            push_literal_paths(&mut cmd, [submodule_script_path(&relative_path)]);
             outputs.push(run_git_with_output(
                 cmd,
                 &format!("git submodule update --init -- {}", full_path.display()),
