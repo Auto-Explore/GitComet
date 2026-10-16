@@ -166,6 +166,14 @@ fn formatting_only_change_is_unchanged() {
 }
 
 #[test]
+fn cls_files_are_apex_classes() {
+    assert_eq!(
+        compare_texts("Invoice.cls", "", "public class Invoice {}\n"),
+        "Created { language: \"Apex\" }"
+    );
+}
+
+#[test]
 fn created_and_deleted_files_report_their_language() {
     assert_eq!(
         compare_texts("main.py", "", "x = 1\n"),

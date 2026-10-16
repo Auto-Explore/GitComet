@@ -61,6 +61,11 @@ const ELM_HIGHLIGHTS_QUERY: &str = include_str!("queries/elm_highlights.scm");
 const DEVICETREE_HIGHLIGHTS_QUERY: &str = include_str!("queries/devicetree_highlights.scm");
 const FISH_HIGHLIGHTS_QUERY: &str = include_str!("queries/fish_highlights.scm");
 const NEWICK_HIGHLIGHTS_QUERY: &str = include_str!("queries/newick_highlights.scm");
+const LATEX_HIGHLIGHTS_QUERY: &str = include_str!("queries/latex_highlights.scm");
+const APEX_HIGHLIGHTS_QUERY: &str = include_str!("queries/apex_highlights.scm");
+const QML_SUPPLEMENT_QUERY: &str = include_str!("queries/qml_supplement.scm");
+const VHDL_HIGHLIGHTS_QUERY: &str = include_str!("queries/vhdl_highlights.scm");
+const ADA_HIGHLIGHTS_QUERY: &str = include_str!("queries/ada_highlights.scm");
 const CRONTAB_HIGHLIGHTS_QUERY: &str = include_str!("queries/crontab_highlights.scm");
 const CRONTAB_INJECTIONS_QUERY: &str = include_str!("queries/crontab_injections.scm");
 const GITIGNORE_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitignore_highlights.scm");
@@ -420,6 +425,17 @@ pub enum DiffSyntaxLanguage {
     Fish,
     /// Newick / New Hampshire X phylogenetic trees (`.nwk`, `.nh`, `.nhx`).
     Newick,
+    /// `.tex`, `.sty`, `.aux`. Not `.cls`, which is Apex's.
+    Latex,
+    /// Salesforce Apex (`.cls`, `.trigger`, `.apex`), with SOQL and SOSL inside
+    /// `[...]`.
+    Apex,
+    /// `.qml` -- Qt's QML, a TypeScript grammar with object declarations.
+    Qml,
+    /// `.vhd`, `.vhdl`.
+    Vhdl,
+    /// `.adb`, `.ads`, `.ada`.
+    Ada,
     Rust,
     Python,
     JavaScript,

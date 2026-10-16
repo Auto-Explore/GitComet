@@ -78,7 +78,8 @@ Changes against the baseline (`git log -- vendor/difftastic`):
 - tree-sitter 0.27: `QueryMatch::captures()` is a method.
 - Grammars: every language uses the workspace's grammar crate. Kotlin, Perl,
   Rust, Java and Dart replace upstream's forks; janet-simple, LaTeX and Smali
-  moved into their own crates here; Verilog and Fortran are dropped. Perl's
+  moved into their own crates here; Verilog and Fortran are dropped. `*.cls` is
+  Apex's, not LaTeX's, matching GitComet's highlighter. Perl's
   config and `vendored_parsers/highlights/perl.scm` are written for GitComet's
   Perl grammar; the other `.scm` files there are upstream's.
 - Fallback reasons are a typed `TextFallbackReason`, and `display/json.rs` builds

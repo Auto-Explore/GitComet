@@ -501,6 +501,31 @@ const LANGUAGE_BASELINES: &[(DiffSyntaxLanguage, &str, &[SyntaxTokenKind])] = {
             &[K::Type, K::Number, K::PunctuationBracket],
         ),
         (
+            DiffSyntaxLanguage::Latex,
+            "% c\n\\section{Intro}\nCosts 5\\% more, see \\cite{knuth}.\n",
+            &[K::Comment, K::StringEscape],
+        ),
+        (
+            DiffSyntaxLanguage::Apex,
+            "// c\npublic class Invoice {\n    Integer total = 42;\n    List<Account> rows = [SELECT Id FROM Account];\n}\n",
+            &[K::Comment, K::Keyword, K::Type, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Qml,
+            "// c\nimport QtQuick\n\nRectangle {\n    width: 640\n    color: \"red\"\n}\n",
+            &[K::Comment, K::Keyword, K::Type, K::Number, K::String],
+        ),
+        (
+            DiffSyntaxLanguage::Vhdl,
+            "-- c\nentity counter is\n    port (clk : in std_logic);\nend entity;\n",
+            &[K::Comment, K::Keyword],
+        ),
+        (
+            DiffSyntaxLanguage::Ada,
+            "-- c\nprocedure Hello is\nbegin\n   Put_Line (\"hi\");\nend Hello;\n",
+            &[K::Comment, K::Keyword, K::String],
+        ),
+        (
             DiffSyntaxLanguage::Dhall,
             "-- c\nlet name = \"demo\"\nin  { greeting = name }\n",
             &[K::Comment, K::String, K::Keyword],

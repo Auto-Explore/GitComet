@@ -24,6 +24,7 @@ memchr = { workspace = true }
 rustc-hash = { workspace = true }
 dekobon-tree-sitter-groovy = { workspace = true }
 tree-sitter = { workspace = true }
+tree-sitter-ada = { workspace = true }
 tree-sitter-asm = { workspace = true }
 tree-sitter-bash = { workspace = true }
 tree-sitter-bicep = { workspace = true }
@@ -69,6 +70,7 @@ tree-sitter-json = { workspace = true }
 tree-sitter-kdl = { workspace = true }
 tree-sitter-julia = { workspace = true }
 tree-sitter-kotlin-sg = { workspace = true }
+tree-sitter-latex = { workspace = true }
 tree-sitter-llvm = { workspace = true }
 tree-sitter-just = { workspace = true }
 tree-sitter-lua = { workspace = true }
@@ -85,6 +87,7 @@ tree-sitter-pascal = { workspace = true }
 tree-sitter-properties = { workspace = true }
 tree-sitter-proto = { workspace = true }
 tree-sitter-python = { workspace = true }
+tree-sitter-qmljs = { workspace = true }
 tree-sitter-r = { workspace = true }
 tree-sitter-regex = { workspace = true }
 tree-sitter-ron = { workspace = true }
@@ -92,6 +95,7 @@ tree-sitter-ruby = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-scala = { workspace = true }
 tree-sitter-sequel = { workspace = true }
+tree-sitter-sfapex = { workspace = true }
 tree-sitter-smali = { workspace = true }
 tree-sitter-solidity = { workspace = true }
 tree-sitter-spirv = { workspace = true }
@@ -100,6 +104,7 @@ tree-sitter-swift = { workspace = true }
 tree-sitter-toml-ng = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-v = { workspace = true }
+tree-sitter-vhdl = { workspace = true }
 tree-sitter-vue = { workspace = true }
 tree-sitter-wat = { workspace = true }
 tree-sitter-xml = { workspace = true }
@@ -115,4 +120,3 @@ gpui = { workspace = true }
 tempfile = { workspace = true }
 # Grammars only vendor/difftastic uses yet; the ABI test covers every vendored grammar.
 tree-sitter-janet-simple = { workspace = true }
-tree-sitter-latex = { workspace = true }

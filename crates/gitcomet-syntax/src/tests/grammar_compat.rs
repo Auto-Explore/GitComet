@@ -1545,6 +1545,12 @@ const UNEVALUATED_PREDICATES: &[(DiffSyntaxLanguage, &str, usize, &str)] = &[
         "an evaluated #match?/#eq? names the builtins",
     ),
     (
+        DiffSyntaxLanguage::Qml,
+        "is-not?",
+        2,
+        "the TypeScript query it extends; an evaluated #match?/#eq? names the builtins",
+    ),
+    (
         DiffSyntaxLanguage::Nix,
         "is-not?",
         2,

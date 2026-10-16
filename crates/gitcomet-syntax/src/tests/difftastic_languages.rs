@@ -76,3 +76,47 @@ fn newick_leaves_support_values_and_lengths_keep_their_kinds() {
     assert_eq!(kinds("95"), [K::Number]);
     assert_eq!(kinds("0.1"), [K::Number]);
 }
+
+#[test]
+fn latex_commands_are_not_control_keywords_and_escaped_percent_is_not_a_comment() {
+    let text = "\\section{Intro} % note\nCosts 5\\% more.\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Latex, text, line, fragment);
+    assert!(!kinds(0, "\\section").contains(&K::KeywordControl));
+    assert_eq!(kinds(0, "% note"), [K::Comment]);
+    assert_eq!(kinds(1, "\\%"), [K::StringEscape]);
+}
+
+#[test]
+fn apex_names_are_not_constants_unless_upper_case_and_soql_objects_are_types() {
+    let text = "public class Invoice {\n    Integer total = MAX_TOTAL;\n    List<Account> rows = [SELECT Id FROM Account];\n}\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Apex, text, line, fragment);
+    assert!(!kinds(1, "total").contains(&K::Constant));
+    assert_eq!(kinds(1, "MAX_TOTAL"), [K::Constant]);
+    assert_eq!(kinds(2, "SELECT"), [K::Keyword]);
+    assert_eq!(kinds(2, "Account]"), [K::Type, K::PunctuationBracket]);
+}
+
+#[test]
+fn qml_object_declarations_name_their_type() {
+    let text = "import QtQuick\n\nRectangle {\n    width: 640\n}\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Qml, text, line, fragment);
+    assert_eq!(kinds(2, "Rectangle"), [K::Type]);
+    assert_eq!(kinds(3, "width"), [K::Property]);
+}
+
+#[test]
+fn vhdl_block_comments_are_plain_comments() {
+    let text = "/* block */\nentity counter is\nend entity;\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Vhdl, text, line, fragment);
+    assert_eq!(kinds(0, "block"), [K::Comment]);
+    assert_eq!(kinds(1, "entity"), [K::Keyword]);
+}
+
+#[test]
+fn ada_loops_are_control_flow_and_packages_namespaces() {
+    let text = "package body Queues is\n   procedure Drain is\n   begin\n      for I in 1 .. 10 loop\n         null;\n      end loop;\n   end Drain;\n   package Int_Vectors is new Ada.Containers.Vectors (Positive, Integer);\nend Queues;\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Ada, text, line, fragment);
+    assert_eq!(kinds(0, "Queues"), [K::Namespace]);
+    assert_eq!(kinds(3, "loop"), [K::KeywordControl]);
+    assert_eq!(kinds(7, "Int_Vectors"), [K::Namespace]);
+}

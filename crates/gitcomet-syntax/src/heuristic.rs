@@ -307,6 +307,15 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             HeuristicCommentConfig::line_block("--", HEURISTIC_HASKELL_BLOCK_COMMENT)
         }
         DiffSyntaxLanguage::Erlang => HeuristicCommentConfig::line("%"),
+        // LaTeX has no block comment. `\%` is an escaped percent this fallback
+        // cannot tell from a comment; the tree-sitter path can.
+        DiffSyntaxLanguage::Latex => HeuristicCommentConfig::line("%"),
+        // No Ada operator starts with `--`, unlike Haskell's.
+        DiffSyntaxLanguage::Ada => HeuristicCommentConfig::line("--"),
+        // VHDL-2008 adds C's block comments to `--`.
+        DiffSyntaxLanguage::Vhdl => {
+            HeuristicCommentConfig::line_block("--", HEURISTIC_C_BLOCK_COMMENT)
+        }
         // `.properties` takes `!` as well as `#`, and only at the head of a line;
         // `line_comment` carries the second marker.
         DiffSyntaxLanguage::JavaProperties => HeuristicCommentConfig::line_and_hash("!"),
@@ -394,6 +403,8 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Gleam
         // Not `#`: `#include` and the `#address-cells` property both start with it.
         | DiffSyntaxLanguage::DeviceTree
+        | DiffSyntaxLanguage::Apex
+        | DiffSyntaxLanguage::Qml
         | DiffSyntaxLanguage::Dhall
         | DiffSyntaxLanguage::Kdl
         | DiffSyntaxLanguage::Ron
@@ -472,6 +483,10 @@ fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<Heuristi
         | DiffSyntaxLanguage::Assembly
         | DiffSyntaxLanguage::Hcl
         | DiffSyntaxLanguage::Nix
+        | DiffSyntaxLanguage::DeviceTree
+        | DiffSyntaxLanguage::Apex
+        | DiffSyntaxLanguage::Qml
+        | DiffSyntaxLanguage::Vhdl
         | DiffSyntaxLanguage::Php => Some(HeuristicBlockCommentKind::C),
         _ => None,
     }
@@ -1151,7 +1166,9 @@ pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> Heuri
         | DiffSyntaxLanguage::Haskell
         | DiffSyntaxLanguage::OCaml
         | DiffSyntaxLanguage::OCamlInterface
-        | DiffSyntaxLanguage::Clojure => HeuristicSingleQuote::Identifier,
+        | DiffSyntaxLanguage::Clojure
+        // LaTeX has no quoted strings: `'` is an apostrophe or a closing quote.
+        | DiffSyntaxLanguage::Latex => HeuristicSingleQuote::Identifier,
         // Julia's postfix `'` is the adjoint operator: `A'` transposes, `'c'` is a
         // character. The two are told apart by what precedes the quote, which is
         // what ValuePositionOnly already tests for.
@@ -1171,9 +1188,13 @@ pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> Heuri
         // dotenv loader, and treating it as a quote runs a string to the end of
         // the file. That is exactly what mapping `.env` to Bash used to do, and
         // the dedicated dotenv grammars error on the same line.
-        DiffSyntaxLanguage::Julia | DiffSyntaxLanguage::Assembly | DiffSyntaxLanguage::Dotenv => {
-            HeuristicSingleQuote::ValuePositionOnly
-        }
+        // Ada's and VHDL's attribute tick follows a name (`X'First`, `clk'event`);
+        // a character literal (`'A'`) never does.
+        DiffSyntaxLanguage::Julia
+        | DiffSyntaxLanguage::Assembly
+        | DiffSyntaxLanguage::Dotenv
+        | DiffSyntaxLanguage::Ada
+        | DiffSyntaxLanguage::Vhdl => HeuristicSingleQuote::ValuePositionOnly,
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
@@ -1207,6 +1228,7 @@ fn heuristic_allows_backtick_strings(language: DiffSyntaxLanguage) -> bool {
         DiffSyntaxLanguage::JavaScript
             | DiffSyntaxLanguage::TypeScript
             | DiffSyntaxLanguage::Tsx
+            | DiffSyntaxLanguage::Qml
             | DiffSyntaxLanguage::Go
             | DiffSyntaxLanguage::Bash
             | DiffSyntaxLanguage::Sql

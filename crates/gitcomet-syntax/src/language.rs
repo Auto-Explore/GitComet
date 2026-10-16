@@ -83,6 +83,14 @@ language_registry! {
     DiffSyntaxLanguage::DeviceTree => ["dts", "dtsi", "dtso", "its", "devicetree"],
     DiffSyntaxLanguage::Fish => ["fish"],
     DiffSyntaxLanguage::Newick => ["nwk", "nh", "nhx", "newick"],
+    // Not `.cls`: detection is by path alone, and a Salesforce project holds a
+    // `.cls` per class where a LaTeX project holds one document class at most.
+    // (Linguist tells them apart by content, which this lookup never reads.)
+    DiffSyntaxLanguage::Latex => ["tex", "sty", "aux", "latex"],
+    DiffSyntaxLanguage::Apex => ["cls", "trigger", "apex", "apexc"],
+    DiffSyntaxLanguage::Qml => ["qml"],
+    DiffSyntaxLanguage::Vhdl => ["vhd", "vhdl"],
+    DiffSyntaxLanguage::Ada => ["adb", "ads", "ada"],
     DiffSyntaxLanguage::Kotlin => ["kt", "kts", "kotlin"],
     DiffSyntaxLanguage::Zig => ["zig"],
     // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
@@ -449,6 +457,30 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Newick => Some((
             tree_sitter_newick::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(NEWICK_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Latex => Some((
+            tree_sitter_latex::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(LATEX_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Apex => Some((
+            tree_sitter_sfapex::apex::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(APEX_HIGHLIGHTS_QUERY),
+        )),
+        // qmljs extends the TypeScript grammar, so TypeScript's query is its base.
+        DiffSyntaxLanguage::Qml => Some((
+            tree_sitter_qmljs::LANGUAGE.into(),
+            TreesitterQueryAsset::with_supplement(
+                TYPESCRIPT_HIGHLIGHTS_QUERY,
+                QML_SUPPLEMENT_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Vhdl => Some((
+            tree_sitter_vhdl::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(VHDL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Ada => Some((
+            tree_sitter_ada::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(ADA_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Crontab => Some((
             tree_sitter_crontab::LANGUAGE.into(),
@@ -911,6 +943,11 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::DeviceTree => highlight_spec_entry!(DeviceTree),
         DiffSyntaxLanguage::Fish => highlight_spec_entry!(Fish),
         DiffSyntaxLanguage::Newick => highlight_spec_entry!(Newick),
+        DiffSyntaxLanguage::Latex => highlight_spec_entry!(Latex),
+        DiffSyntaxLanguage::Apex => highlight_spec_entry!(Apex),
+        DiffSyntaxLanguage::Qml => highlight_spec_entry!(Qml),
+        DiffSyntaxLanguage::Vhdl => highlight_spec_entry!(Vhdl),
+        DiffSyntaxLanguage::Ada => highlight_spec_entry!(Ada),
         DiffSyntaxLanguage::Crontab => highlight_spec_entry!(Crontab),
         DiffSyntaxLanguage::Caddyfile => highlight_spec_entry!(Caddyfile),
         DiffSyntaxLanguage::Gitignore => highlight_spec_entry!(Gitignore),

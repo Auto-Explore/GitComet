@@ -210,7 +210,7 @@ pub(crate) fn language_globs(language: Language) -> Vec<glob::Pattern> {
             "zshenv",
             "zshrc",
         ],
-        Apex => &["*.apexc", "*.trigger"],
+        Apex => &["*.apex", "*.apexc", "*.cls", "*.trigger"],
         C => &["*.c"],
         Clojure => &[
             "*.bb", "*.boot", "*.clj", "*.cljc", "*.clje", "*.cljs", "*.cljx", "*.edn", "*.joke",
@@ -296,7 +296,7 @@ pub(crate) fn language_globs(language: Language) -> Vec<glob::Pattern> {
         JavascriptJsx => &["*.jsx"],
         Julia => &["*.jl"],
         Kotlin => &["*.kt", "*.ktm", "*.kts"],
-        LaTeX => &["*.aux", "*.cls", "*.sty", "*.tex"],
+        LaTeX => &["*.aux", "*.sty", "*.tex"],
         Lua => &["*.lua"],
         Make => &[
             "*.mak",
