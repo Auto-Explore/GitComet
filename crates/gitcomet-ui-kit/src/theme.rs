@@ -58,6 +58,7 @@ pub struct AppTheme {
     /// array here made each of those closures a kilobyte heavier for data every
     /// theme shares. See `intern_lane_palette`.
     pub graph_lane_palette: &'static GraphLanePalette,
+    pub graph_fade_opacity: f32,
     pub radii: Radii,
 }
 
@@ -721,16 +722,38 @@ struct ThemeBundleEntry {
     key: String,
     name: String,
     appearance: ThemeAppearance,
+    #[serde(
+        default = "default_graph_fade_opacity",
+        deserialize_with = "deserialize_graph_fade_opacity"
+    )]
+    graph_fade_opacity: f32,
     colors: ThemeFileColors,
     #[serde(default)]
     syntax: Option<ThemeFileSyntaxColors>,
     radii: Radii,
 }
 
+fn default_graph_fade_opacity() -> f32 {
+    0.10
+}
+
+fn deserialize_graph_fade_opacity<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f32, D::Error> {
+    let opacity = f64::deserialize(deserializer)?;
+    if (0.0..=1.0).contains(&opacity) {
+        return Ok(opacity as f32);
+    }
+    Err(serde::de::Error::custom(
+        "graph_fade_opacity must be a finite number between 0 and 1",
+    ))
+}
+
 impl ThemeBundleEntry {
     fn into_app_theme(self) -> AppTheme {
         ThemeFile {
             appearance: self.appearance,
+            graph_fade_opacity: self.graph_fade_opacity,
             colors: self.colors,
             syntax: self.syntax,
             radii: self.radii,
@@ -741,6 +764,7 @@ impl ThemeBundleEntry {
 
 struct ThemeFile {
     appearance: ThemeAppearance,
+    graph_fade_opacity: f32,
     colors: ThemeFileColors,
     syntax: Option<ThemeFileSyntaxColors>,
     radii: Radii,
@@ -1098,6 +1122,7 @@ impl From<ThemeFile> for AppTheme {
         let is_dark = theme.is_dark();
         let ThemeFile {
             appearance: _,
+            graph_fade_opacity,
             colors,
             syntax,
             radii,
@@ -1228,6 +1253,7 @@ impl From<ThemeFile> for AppTheme {
             colors,
             syntax,
             graph_lane_palette: intern_lane_palette(graph_lane_palette),
+            graph_fade_opacity,
             radii,
         }
     }

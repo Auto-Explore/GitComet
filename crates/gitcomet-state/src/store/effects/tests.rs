@@ -105,6 +105,8 @@ fn messages_without_selected_diff_work_skip_the_selection_index() {
         session_persist_executor: &executor,
         backend: &backend,
         publication: &std::sync::atomic::AtomicU64::new(0),
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
+        deferred_acknowledgements: &mut Vec::new(),
     };
 
     let builds = selection_index_builds_for_test();

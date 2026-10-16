@@ -311,7 +311,6 @@ fn mouse_down(
 
 #[gpui::test]
 fn focusing_click_activates_controls_and_canvas_once(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for (kind, button) in [
         (FixtureKind::Button(ButtonStyle::Subtle), MouseButton::Left),
         (FixtureKind::BoundedButton, MouseButton::Left),
@@ -426,7 +425,6 @@ fn focusing_click_activates_text_subtarget_once() {
 
 #[gpui::test]
 fn mouse_focus_does_not_latch_control_backgrounds(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for theme in themes() {
         for kind in [
             FixtureKind::Button(ButtonStyle::Filled),
@@ -484,7 +482,6 @@ fn mouse_focus_does_not_latch_control_backgrounds(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn disabled_buttons_share_activation_and_tab_policy(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for explicit in [false, true] {
         for kind in [
             FixtureKind::Button(ButtonStyle::Subtle),
@@ -522,7 +519,6 @@ fn disabled_buttons_share_activation_and_tab_policy(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn split_segments_track_open_and_busy_independently(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for theme in themes() {
         let (view, cx) =
             cx.add_window_view(|_, cx| Fixture::new(theme, FixtureKind::Split, true, cx));
@@ -587,7 +583,6 @@ fn semantic_state_can_be_cleared_without_losing_selection_under_an_open_menu() {
 
 #[gpui::test]
 fn selected_controls_keep_their_fill_through_pointer_and_keyboard_focus(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for theme in themes() {
         for kind in [
             FixtureKind::Button(ButtonStyle::Subtle),
@@ -633,7 +628,6 @@ fn selected_controls_keep_their_fill_through_pointer_and_keyboard_focus(cx: &mut
 
 #[gpui::test]
 fn nested_close_consumes_its_press_without_selecting_the_tab(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) =
         cx.add_window_view(|_, cx| Fixture::new(themes()[0], FixtureKind::PanelTab, true, cx));
     redraw(cx);
@@ -651,7 +645,6 @@ fn nested_close_consumes_its_press_without_selecting_the_tab(cx: &mut TestAppCon
 
 #[gpui::test]
 fn nested_actions_cancel_on_release_outside_and_support_keyboard(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) =
         cx.add_window_view(|_, cx| Fixture::new(themes()[0], FixtureKind::PanelTab, false, cx));
     redraw(cx);
@@ -692,7 +685,6 @@ fn nested_actions_cancel_on_release_outside_and_support_keyboard(cx: &mut TestAp
 
 #[gpui::test]
 fn focused_actions_consume_activation_keys_before_parent_shortcuts(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for kind in [
         FixtureKind::PanelTab,
         FixtureKind::Button(ButtonStyle::Subtle),
@@ -737,7 +729,6 @@ fn focused_actions_consume_activation_keys_before_parent_shortcuts(cx: &mut Test
 
 #[gpui::test]
 fn menu_activation_requires_a_completed_click_on_the_same_entry(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for kind in [FixtureKind::Menu, FixtureKind::AppMenu] {
         let (view, cx) = cx.add_window_view(|_, cx| Fixture::new(themes()[0], kind, false, cx));
         redraw(cx);
@@ -772,7 +763,6 @@ fn canvas_decorations_follow_the_whole_row_through_hover_press_and_rerender(
     cx: &mut TestAppContext,
 ) {
     use palette::IntoColor;
-    let _guard = crate::test_support::lock_visual_test();
     fn assert_matching_fill(cx: &mut VisualTestContext) {
         let row: gpui::Rgba = paint(cx, "subject")[0].0.as_solid().unwrap().into_color();
         let mask: gpui::Rgba = paint(cx, "painted_mask")[0]
@@ -832,7 +822,6 @@ fn canvas_decorations_follow_the_whole_row_through_hover_press_and_rerender(
 
 #[gpui::test]
 fn canvas_press_feedback_survives_secondary_button_movement(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for button in [MouseButton::Right, MouseButton::Middle] {
         let (_view, cx) = cx
             .add_window_view(|_, cx| Fixture::new(themes()[0], FixtureKind::PaintedRow, false, cx));
@@ -893,7 +882,6 @@ fn discrete_control_styles_and_activation_are_owned_by_the_interaction_kit() {
 
 #[gpui::test]
 fn controls_never_transfer_clicks_to_another_element(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for kind in [
         FixtureKind::Button(ButtonStyle::Subtle),
         FixtureKind::BoundedButton,
@@ -939,7 +927,6 @@ fn controls_never_transfer_clicks_to_another_element(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn split_button_segments_cannot_complete_each_others_press(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) =
         cx.add_window_view(|_, cx| Fixture::new(themes()[0], FixtureKind::Split, false, cx));
     redraw(cx);
@@ -958,7 +945,6 @@ fn split_button_segments_cannot_complete_each_others_press(cx: &mut TestAppConte
 
 #[gpui::test]
 fn disabling_a_pressed_button_cancels_the_pending_action(cx: &mut TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = cx.add_window_view(|_, cx| {
         Fixture::new(
             themes()[0],
@@ -985,7 +971,6 @@ fn disabling_a_pressed_button_cancels_the_pending_action(cx: &mut TestAppContext
 fn keyboard_activation_cancels_after_focus_changes_and_keeps_modified_shortcuts(
     cx: &mut TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = cx.add_window_view(|_, cx| {
         Fixture::new(
             themes()[0],
@@ -1076,7 +1061,6 @@ fn repeated_local_ids_do_not_transfer_nested_click_ownership(cx: &mut TestAppCon
                 )
         }
     }
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = cx.add_window_view(|_, _| NestedFixture {
         parent_clicks: 0,
         child_clicks: 0,
@@ -1113,7 +1097,6 @@ fn repeated_local_ids_do_not_transfer_nested_click_ownership(cx: &mut TestAppCon
 fn idle_pointer_moves_leave_the_press_state_alone(cx: &mut TestAppContext) {
     // Clearing the shared press state writes a new global and queues an
     // observer effect; with no press pending there is nothing to clear.
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) =
         cx.add_window_view(|_, cx| Fixture::new(themes()[0], FixtureKind::Row, false, cx));
     redraw(cx);

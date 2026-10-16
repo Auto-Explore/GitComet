@@ -4,7 +4,6 @@ use gpui::{
     Action, Context, FocusHandle, InteractiveElement, IntoElement, Render, Styled, Window, div,
 };
 
-use crate::test_support::lock_visual_test;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitRepository, Result};
 use gitcomet_state::msg::Msg;
@@ -17,7 +16,6 @@ struct TestBackend;
 #[gpui::test]
 fn dismissing_a_restart_terminal_guard_retains_the_saved_renderer(cx: &mut gpui::TestAppContext) {
     use crate::windows_renderer::{RendererPreference, RendererSession, RendererState};
-    let _visual_guard = lock_visual_test();
     let renderer = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(
         RendererState::new(RendererPreference::Auto, true),
     )));
@@ -112,7 +110,6 @@ fn manual_update_menu_is_disabled_without_a_feedback_window() {
 
 #[gpui::test]
 fn manual_update_check_activates_its_feedback_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -467,7 +464,6 @@ fn review_regression_followup_startup_path_is_routed_when_no_workspace_restores(
 fn review_regression_manual_and_picker_opens_use_the_initiating_window(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (opened_tx, opened_rx) = mpsc::channel();
     let backend: Arc<dyn GitBackend> = Arc::new(RecordingOpenBackend { opened: opened_tx });
     let path = std::env::temp_dir().join("gitcomet-app-wide-owned-repository");
@@ -608,7 +604,6 @@ fn pr530_browser_request_handler_closes_its_receiver_on_shutdown(cx: &mut gpui::
 fn pr530_closing_last_main_window_with_settings_keeps_workspace_restorable(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     cx.update(|app| {
         crate::workspaces::initialize_for_test(app, Vec::new());
         let main = open_gitcomet_window(
@@ -640,7 +635,6 @@ fn pr530_closing_last_main_window_with_settings_keeps_workspace_restorable(
 fn review_regression_restoring_overlapping_workspaces_keeps_both_windows(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let shared = std::env::temp_dir().join("gitcomet-restored-shared");
     let other = std::env::temp_dir().join("gitcomet-restored-other");
@@ -708,7 +702,6 @@ fn review_regression_restoring_overlapping_workspaces_keeps_both_windows(
 
 #[gpui::test]
 fn review_regression_native_picker_keeps_its_initiating_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let launch = normal_empty_launch_config(None);
@@ -739,7 +732,6 @@ fn review_regression_native_picker_keeps_its_initiating_window(cx: &mut gpui::Te
 fn review_regression_folder_drop_reuses_only_the_destination_windows_tab(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (opened_tx, opened_rx) = mpsc::channel();
     let (result_tx, result_rx) = mpsc::channel();
     let backend: Arc<dyn GitBackend> = Arc::new(ControlledOpenBackend {
@@ -874,7 +866,6 @@ fn review_regression_forwarded_open_falls_back_to_the_last_focused_normal_window
 fn review_regression_recovering_a_saved_workspace_keeps_overlapping_repositories(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let duplicate_path = std::env::temp_dir().join("gitcomet-app-test-repo");
     let mut saved = session::Workspace::new(vec![duplicate_path.clone()]);
@@ -926,7 +917,6 @@ fn review_regression_recovering_a_saved_workspace_keeps_overlapping_repositories
 fn review_regression_move_to_a_saved_workspace_with_the_same_repository(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let path = std::env::temp_dir().join("gitcomet-app-test-repo");
     let mut saved = session::Workspace::new(vec![path.clone()]);
@@ -1029,7 +1019,6 @@ fn review_regression_closing_the_last_window_keeps_its_workspace_restorable(
 /// even when that workspace contains the same repository as the source.
 #[gpui::test]
 fn review_regression_move_noop_check_ignores_closed_windows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let path = std::env::temp_dir().join("gitcomet-app-test-repo");
     let mut saved = session::Workspace::new(vec![path.clone()]);
@@ -1153,7 +1142,6 @@ fn review_regression_forwarded_opens_activate_the_application_after_routing(
 }
 
 fn check_provisional_drop_window_locality(cx: &mut gpui::TestAppContext, succeeds: bool) {
-    let _visual_guard = lock_visual_test();
     let (opened_tx, opened_rx) = mpsc::channel();
     let (result_tx, result_rx) = mpsc::channel();
     let backend: Arc<dyn GitBackend> = Arc::new(ControlledOpenBackend {
@@ -1406,7 +1394,6 @@ fn review_regression_failed_provisional_drop_does_not_remove_another_windows_cop
 fn review_regression_pending_new_window_opens_allow_the_same_repository(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let path = std::env::temp_dir().join("gitcomet-pending-new-window-owner");
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
@@ -1438,7 +1425,6 @@ fn review_regression_pending_new_window_opens_allow_the_same_repository(
 
 #[gpui::test]
 fn review_regression_confirmed_failed_open_releases_pending_path(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(NotARepositoryBackend);
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
@@ -1505,7 +1491,6 @@ fn review_regression_confirmed_existing_window_open_waits_for_git_recovery(
     };
     use gitcomet_state::model::AppState;
 
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     store.replace_snapshot_for_test(Arc::new(AppState {
@@ -1536,6 +1521,7 @@ fn review_regression_confirmed_existing_window_open_waits_for_git_recovery(
         );
     });
     cx.run_until_parked();
+    crate::view::test_support::drain_store_worker(&view, cx);
     assert!(
         store.snapshot().repos.is_empty(),
         "the unavailable reducer must not start the repository open yet"
@@ -1585,7 +1571,6 @@ fn review_regression_confirmed_existing_window_open_waits_for_git_recovery(
 fn review_regression_lifecycle_cold_start_activates_a_requested_inactive_saved_tab(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let initially_active = std::env::temp_dir().join("gitcomet-cold-start-initially-active");
     let requested = std::env::temp_dir().join("gitcomet-cold-start-requested-inactive");
@@ -1673,7 +1658,6 @@ fn review_regression_lifecycle_cold_start_activates_a_requested_inactive_saved_t
 fn review_regression_closing_immediately_flushes_the_current_workspace_layout(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| {
         crate::workspaces::initialize_for_test(app, Vec::new());
@@ -2607,7 +2591,6 @@ fn external_editor_shortcut_respects_configured_setting_override(cx: &mut gpui::
 
 #[gpui::test]
 fn settings_shortcut_opens_a_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -2629,7 +2612,6 @@ fn settings_shortcut_opens_a_window(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn settings_shortcut_reuses_existing_window_and_activates_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -2681,7 +2663,6 @@ fn settings_shortcut_reuses_existing_window_and_activates_it(cx: &mut gpui::Test
 
 #[gpui::test]
 fn recent_picker_shortcut_toggles_the_popover(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -2715,7 +2696,6 @@ fn recent_picker_shortcut_toggles_the_popover(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn new_window_shortcuts_open_new_windows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -2787,7 +2767,6 @@ fn empty_window_for_adoption(
 
 #[gpui::test]
 fn adopting_an_overlapping_workspace_reuses_the_empty_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repositories = vec![PathBuf::from("/tmp/adopt-a"), PathBuf::from("/tmp/adopt-b")];
     let mut workspace = session::Workspace::new(repositories.clone());
     workspace.restore_on_launch = false;
@@ -2826,7 +2805,6 @@ fn adopting_an_overlapping_workspace_reuses_the_empty_window(cx: &mut gpui::Test
 fn opening_a_workspace_owned_by_another_window_leaves_this_window_empty(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let mut workspace = session::Workspace::new(vec![PathBuf::from("/tmp/adopt-owned")]);
     // Test views do not auto-restore repositories; a name keeps the owner's
     // workspace alive while its window stays empty.
@@ -2872,7 +2850,6 @@ fn opening_a_workspace_owned_by_another_window_leaves_this_window_empty(
 
 #[gpui::test]
 fn adopting_an_empty_customized_workspace_keeps_the_window_on_home(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let mut workspace = session::Workspace::new(Vec::new());
     workspace.custom_name = Some("Later".to_string());
     workspace.restore_on_launch = false;
@@ -2893,7 +2870,6 @@ fn adopting_an_empty_customized_workspace_keeps_the_window_on_home(cx: &mut gpui
 fn closing_the_active_window_saves_a_layout_change_the_debounce_has_not_written(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let mut workspace = session::Workspace::new(Vec::new());
     workspace.custom_name = Some("Layout".to_string());
     let id = workspace.id;
@@ -2926,7 +2902,6 @@ fn closing_the_active_window_saves_a_layout_change_the_debounce_has_not_written(
 fn deleting_a_workspace_closes_its_window_when_another_window_remains(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let mut alpha = session::Workspace::new(Vec::new());
     alpha.custom_name = Some("Alpha".into());
     let alpha_id = alpha.id;
@@ -2963,7 +2938,6 @@ fn deleting_a_workspace_closes_its_window_when_another_window_remains(
 
 #[gpui::test]
 fn deleting_the_last_windows_workspace_returns_it_to_home(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -3025,7 +2999,6 @@ fn deleting_the_last_windows_workspace_returns_it_to_home(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn deleting_a_saved_workspace_only_forgets_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let mut saved = session::Workspace::new(vec![PathBuf::from("/tmp/saved-workspace")]);
     saved.restore_on_launch = false;
     let saved_id = saved.id;
@@ -3049,7 +3022,6 @@ fn deleting_a_saved_workspace_only_forgets_it(cx: &mut gpui::TestAppContext) {
 fn moving_the_last_repository_out_of_a_customized_workspace_keeps_the_window(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -3135,7 +3107,6 @@ fn moving_the_last_repository_out_of_a_customized_workspace_keeps_the_window(
 
 #[gpui::test]
 fn moving_the_only_repository_to_a_new_window_closes_the_source(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -3212,7 +3183,6 @@ fn moving_the_only_repository_to_a_new_window_closes_the_source(cx: &mut gpui::T
 fn review_regression_confirmed_final_tab_move_reserves_durable_target_first(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
@@ -3258,7 +3228,6 @@ fn close_button_closes_only_the_clicked_window_after_opening_a_new_window(
         return;
     }
 
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -3322,7 +3291,6 @@ fn close_button_closes_only_the_clicked_window_after_opening_a_new_window(
 fn close_shortcut_closes_the_active_window_when_no_repo_tab_can_close(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -3342,7 +3310,6 @@ fn close_shortcut_closes_the_active_window_when_no_repo_tab_can_close(
 
 #[gpui::test]
 fn close_window_shortcut_closes_the_active_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -3363,7 +3330,6 @@ fn close_window_shortcut_closes_the_active_window(cx: &mut gpui::TestAppContext)
 #[cfg(not(target_os = "macos"))]
 #[gpui::test]
 fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -3418,6 +3384,8 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
     assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
 
     cx.simulate_keystrokes("ctrl-tab");
+    // The switch reaches the store's worker; the next shortcut reads the result.
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)
@@ -3428,6 +3396,7 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
     assert_eq!(store.snapshot().active_repo, Some(repo_ids[1]));
 
     cx.simulate_keystrokes("ctrl-shift-tab");
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)
@@ -3438,6 +3407,7 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
     assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
 
     cx.simulate_keystrokes("ctrl-shift-tab");
+    crate::view::test_support::drain_store_worker(&view, cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx)
@@ -3450,7 +3420,6 @@ fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::Te
 
 #[gpui::test]
 fn repository_picker_fallback_reuses_existing_normal_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (view, cx) =
@@ -3479,7 +3448,6 @@ fn repository_picker_fallback_reuses_existing_normal_window(cx: &mut gpui::TestA
 fn repository_picker_fallback_opens_new_normal_window_when_none_exist(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
 
     assert_eq!(cx.update(|app| app.windows().len()), 0);
@@ -3504,7 +3472,6 @@ fn repository_picker_fallback_opens_new_normal_window_when_none_exist(
 
 #[gpui::test]
 fn command_palette_opens_new_normal_window_when_none_exist(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
 
     assert_eq!(cx.update(|app| app.windows().len()), 0);
@@ -3530,7 +3497,6 @@ fn command_palette_opens_new_normal_window_when_none_exist(cx: &mut gpui::TestAp
 #[cfg(target_os = "macos")]
 #[gpui::test]
 fn macos_clone_repository_action_opens_native_clone_prompt(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -3556,7 +3522,6 @@ fn macos_clone_repository_action_opens_native_clone_prompt(cx: &mut gpui::TestAp
 #[cfg(target_os = "macos")]
 #[gpui::test]
 fn macos_initialize_repository_action_requests_folder_picker(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -3593,7 +3558,6 @@ fn macos_repository_actions_validate_background_normal_window(cx: &mut gpui::Tes
     };
     use gitcomet_state::model::AppState;
 
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (view, cx) =
@@ -3662,7 +3626,6 @@ fn macos_repository_actions_validate_background_normal_window(cx: &mut gpui::Tes
 #[cfg(target_os = "macos")]
 #[gpui::test]
 fn locate_file_action_activates_background_normal_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -3711,7 +3674,6 @@ fn locate_file_action_activates_background_normal_window(cx: &mut gpui::TestAppC
 fn focus_existing_repository_window_for_path_avoids_reading_the_active_window_on_stack(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =
@@ -3737,7 +3699,6 @@ fn focus_existing_repository_window_for_path_avoids_reading_the_active_window_on
 fn update_active_normal_gitcomet_window_avoids_reading_the_active_window_on_stack(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (_view, cx) =

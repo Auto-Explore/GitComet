@@ -197,6 +197,23 @@ impl AppState {
         }
     }
 
+    /// Queues a notification for the window.
+    pub fn push_notification(&mut self, notification: AppNotification) {
+        self.notifications_seq = self.notifications_seq.wrapping_add(1);
+        self.notifications.push(notification);
+    }
+
+    /// Notifications queued after notification number `seq`.
+    pub fn notifications_after(&self, seq: u64) -> &[AppNotification] {
+        super::feedback_after(&self.notifications, self.notifications_seq, seq)
+    }
+
+    /// Releases the notifications the window has shown, up to number
+    /// `through_seq`.
+    pub fn acknowledge_notifications(&mut self, through_seq: u64) {
+        super::acknowledge_feedback(&mut self.notifications, self.notifications_seq, through_seq);
+    }
+
     /// The signature formats to verify: none when the preference is off,
     /// otherwise those whose verifier was not found missing.
     pub fn signature_verification_formats(&self) -> SignatureFormats {

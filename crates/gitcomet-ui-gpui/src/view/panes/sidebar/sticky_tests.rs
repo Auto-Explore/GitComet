@@ -33,7 +33,6 @@ fn selector(ix: usize) -> &'static str {
 
 #[gpui::test]
 fn review_selected_pin_falls_back_to_tree_when_its_copy_disappears(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -117,7 +116,6 @@ fn review_selected_pin_falls_back_to_tree_when_its_copy_disappears(cx: &mut gpui
 
 #[gpui::test]
 fn review_rail_popovers_preserve_expanded_tree_scroll(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -211,7 +209,6 @@ fn review_rail_popovers_preserve_expanded_tree_scroll(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn review_rail_group_rows_use_the_popover_surface(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -249,7 +246,6 @@ fn review_rail_group_rows_use_the_popover_surface(cx: &mut gpui::TestAppContext)
 fn sticky_sidebar_headers_scroll_navigate_and_respect_group_collapse(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -414,7 +410,6 @@ fn sticky_sidebar_headers_scroll_navigate_and_respect_group_collapse(
 
 #[gpui::test]
 fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -565,7 +560,6 @@ fn sticky_sidebar_section_gaps_close_when_headers_stick(cx: &mut gpui::TestAppCo
 fn sticky_sidebar_pins_share_scrolling_filtering_and_virtualized_overflow(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -670,7 +664,6 @@ fn sticky_sidebar_pinned_branch_interactions_highlight_only_the_clicked_copy(
     use crate::test_support::painted_control_quads as paint;
     use gitcomet_core::domain::{Commit, LogPage};
 
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -898,7 +891,6 @@ fn sticky_sidebar_double_click_keeps_the_scrolled_branch_under_the_pointer(
 ) {
     use gitcomet_core::domain::{Commit, LogPage};
 
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1010,7 +1002,6 @@ fn sticky_sidebar_double_click_keeps_the_scrolled_branch_under_the_pointer(
 fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1146,7 +1137,6 @@ fn sticky_selected_branches_follow_both_edges_and_survive_compaction(
 fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1390,7 +1380,6 @@ fn sticky_groups_navigate_at_edges_and_toggle_at_their_natural_position(
 
 #[gpui::test]
 fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1521,7 +1510,6 @@ fn sticky_sidebar_selection_updates_without_rebuilding_rows(cx: &mut gpui::TestA
 fn sticky_sidebar_short_viewports_and_resizing_keep_content_accessible(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1704,7 +1692,6 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
     cx: &mut gpui::TestAppContext,
 ) {
     use crate::test_support::painted_control_quads as paint;
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1884,7 +1871,6 @@ fn sticky_sidebar_surfaces_and_pin_alignment_follow_theme_density_and_scale(
 fn sticky_sidebar_pinned_groups_expand_cache_and_unpin_as_single_roots(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

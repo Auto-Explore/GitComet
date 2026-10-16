@@ -216,18 +216,6 @@ fn view_selected(
     })
 }
 
-/// The test runtime has no live store poller, so the view only sees what the
-/// reducer did once a test pulls the store's snapshot into it.
-fn sync_view_with_store(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
-    cx.update(|window, app| {
-        view.update(app, |this, cx| {
-            crate::view::test_support::sync_store_snapshot(this, cx);
-        });
-        let _ = window.draw(app);
-    });
-    cx.run_until_parked();
-}
-
 /// Waits for `expected` to be selected in the store and for the history view
 /// to have caught up with it.
 fn wait_for_selection(
@@ -432,7 +420,6 @@ fn run_script(
 fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, _store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     assert!(!find_is_open(cx, &view));
@@ -477,7 +464,6 @@ fn secondary_f_over_history_opens_the_find_bar_and_focuses_its_input(
 fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let mut repo = find_fixture_repo(find_fixture_commits());
     let target = gitcomet_core::domain::DiffTarget::working_tree(
         PathBuf::from("src/lib.rs"),
@@ -536,7 +522,6 @@ fn secondary_f_with_a_diff_visible_opens_diff_search_not_history_find(
 fn history_find_selects_the_first_match_and_steps_with_keys_and_buttons(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     assert_eq!(store_selected(&store), None);
 
@@ -578,7 +563,6 @@ fn history_find_selects_the_first_match_and_steps_with_keys_and_buttons(
 /// leaves the selection alone.
 #[gpui::test]
 fn history_find_matches_and_labels(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     open_find_with_shortcut(cx, &view);
@@ -612,7 +596,6 @@ fn history_find_matches_and_labels(cx: &mut gpui::TestAppContext) {
 fn history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::TestAppContext) {
     use crate::view::panes::history::find::history_find_row_marks;
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let mut commits = find_fixture_commits();
     commits.insert(
         1,
@@ -663,7 +646,6 @@ fn history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::TestAppConte
 fn history_find_over_a_partial_page_is_not_final_while_the_index_builds(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let mut repo = find_fixture_repo(find_fixture_commits());
     let page = Arc::new(log_page(find_fixture_commits(), Some("ffff5555")));
     repo.log = Loadable::Ready(Arc::clone(&page));
@@ -701,7 +683,6 @@ fn history_find_over_a_partial_page_is_not_final_while_the_index_builds(
 /// the input focused. The SHA prefix does not apply to a regex.
 #[gpui::test]
 fn history_find_option_toggles_change_the_matches(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     open_find_with_shortcut(cx, &view);
@@ -726,7 +707,6 @@ fn history_find_option_toggles_change_the_matches(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn history_find_escape_closes_and_secondary_f_restores_the_query(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     open_find_with_shortcut(cx, &view);
@@ -780,7 +760,6 @@ fn history_find_escape_closes_and_secondary_f_restores_the_query(cx: &mut gpui::
 fn history_find_selects_the_first_match_once_typing_settles_or_on_enter(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     open_find_with_shortcut(cx, &view);
@@ -810,7 +789,6 @@ fn history_find_selects_the_first_match_once_typing_settles_or_on_enter(
 
 #[gpui::test]
 fn history_find_dims_misses_but_not_matches_or_the_selection(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
 
     open_find_with_shortcut(cx, &view);
@@ -1138,7 +1116,6 @@ fn details_find_washes(
 /// bar closes.
 #[gpui::test]
 fn history_find_highlights_the_selected_commit_details(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx, id) = mount_details_find_fixture(cx);
     let short_shown = |cx: &mut gpui::VisualTestContext| {
         cx.debug_bounds("commit_details_sha_find_short").is_some()
@@ -1511,8 +1488,7 @@ fn wait_for_find_request(
     store: &AppStore,
     query: Option<HistoryFindQuery>,
 ) -> u64 {
-    wait_until(cx, "the search request", |cx| {
-        sync_view_with_store(cx, view);
+    wait_for_store(cx, view, "the search request", || {
         store_find(store).query == query
     });
     store_find(store).generation()
@@ -1543,8 +1519,7 @@ fn report_scan(
         seq: before.generation(),
         result,
     }));
-    wait_until(cx, "the scan report", |cx| {
-        sync_view_with_store(cx, view);
+    wait_for_store(cx, view, "the scan report", || {
         store_find(store).rev != before.rev
     });
     draw_and_park(cx);
@@ -1747,15 +1722,11 @@ fn step_to(
 fn indexed_history_find_scans_the_whole_index_and_selects_the_first_match(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
 
     open_find_with_shortcut(cx, &view);
     type_query(cx, "fix");
-    wait_until(cx, "the scan to finish", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "the scan to finish", || store_find(&store).done);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
 
     let results = store_find(&store);
@@ -1800,7 +1771,6 @@ fn indexed_history_find_scans_the_whole_index_and_selects_the_first_match(
 fn indexed_history_find_selects_from_the_first_chunk_and_steps_across_chunks(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
     open_and_find(cx, &view, &store, "fix");
@@ -1866,7 +1836,6 @@ fn indexed_history_find_selects_from_the_first_chunk_and_steps_across_chunks(
 
 #[gpui::test]
 fn indexed_history_find_ignores_matches_on_hidden_stash_helper_rows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     cx.update(|_window, app| {
         let history = history_view(&view, app);
@@ -1909,7 +1878,6 @@ fn indexed_history_find_ignores_matches_on_hidden_stash_helper_rows(cx: &mut gpu
 /// the row's fading does, rather than the hidden prefix.
 #[gpui::test]
 fn indexed_history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
 
     open_find_with_shortcut(cx, &view);
@@ -1918,8 +1886,7 @@ fn indexed_history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::Test
         ("1234567 wip", vec![STASH_ROW]),
     ] {
         retype_query(cx, query);
-        wait_until(cx, "the scan to finish", |cx| {
-            sync_view_with_store(cx, &view);
+        wait_for_store(cx, &view, "the scan to finish", || {
             let results = store_find(&store);
             results.query == plain_query(query) && results.done
         });
@@ -1941,7 +1908,6 @@ fn indexed_history_find_matches_stash_rows_on_what_they_show(cx: &mut gpui::Test
 fn indexed_history_find_edit_dims_at_once_and_resets_the_label_until_answered(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
     open_and_find(cx, &view, &store, "fix");
@@ -2002,7 +1968,6 @@ fn indexed_history_find_edit_dims_at_once_and_resets_the_label_until_answered(
 fn indexed_history_find_asks_again_when_an_unfinished_scan_is_dropped(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
     let generation = open_and_find(cx, &view, &store, "fix");
@@ -2016,8 +1981,7 @@ fn indexed_history_find_asks_again_when_an_unfinished_scan_is_dropped(
         query: None,
         index: None,
     }));
-    wait_until(cx, "the search to be asked for again", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "the search to be asked for again", || {
         let results = store_find(&store);
         results.query == plain_query("fix") && results.generation() == generation + 2
     });
@@ -2043,7 +2007,6 @@ fn indexed_history_find_asks_again_when_an_unfinished_scan_is_dropped(
 /// new one starts with the new options, and its first match is selected.
 #[gpui::test]
 fn indexed_history_find_option_toggles_restart_the_scan(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
     let generation = open_and_find(cx, &view, &store, "fix");
@@ -2104,7 +2067,6 @@ fn indexed_history_find_option_toggles_restart_the_scan(cx: &mut gpui::TestAppCo
 /// reaches the store, no scan starts, nothing fades and nothing is selected.
 #[gpui::test]
 fn indexed_history_find_does_not_search_an_invalid_regex(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
     open_find_with_shortcut(cx, &view);
@@ -2138,13 +2100,11 @@ fn indexed_history_find_does_not_search_an_invalid_regex(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn indexed_history_find_reports_a_failed_scan(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Fail);
 
     open_find_with_shortcut(cx, &view);
     type_query(cx, "fix");
-    wait_until(cx, "the scan to fail", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "the scan to fail", || {
         store_find(&store).error.is_some()
     });
     draw_and_park(cx);
@@ -2157,7 +2117,6 @@ fn indexed_history_find_reports_a_failed_scan(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn indexed_history_find_keeps_partial_matches_after_a_failure(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
 
     open_and_find(cx, &view, &store, "fix");
@@ -2178,7 +2137,6 @@ fn indexed_history_find_keeps_partial_matches_after_a_failure(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn history_find_input_tracks_theme_changes_while_open_and_closed(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, _store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     open_find_with_shortcut(cx, &view);
     let input = find_input(cx, &view);
@@ -2200,7 +2158,6 @@ fn history_find_input_tracks_theme_changes_while_open_and_closed(cx: &mut gpui::
 fn indexed_history_find_manual_navigation_cancels_the_first_match_jump(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     select_next_row(cx, &view);
@@ -2217,7 +2174,6 @@ fn indexed_history_find_manual_navigation_cancels_the_first_match_jump(
 
 #[gpui::test]
 fn history_find_two_steps_before_a_store_snapshot_reach_two_matches(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     open_find_with_shortcut(cx, &view);
     type_query(cx, "fix");
@@ -2235,7 +2191,6 @@ fn history_find_two_steps_before_a_store_snapshot_reach_two_matches(cx: &mut gpu
 fn indexed_history_find_step_waits_for_the_next_chunk_before_wrapping(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     report_matches(cx, &view, &store, &[0, 5], false);
@@ -2250,7 +2205,6 @@ fn indexed_history_find_step_waits_for_the_next_chunk_before_wrapping(
 fn history_find_paged_matches_are_reused_until_the_projection_changes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, _store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     open_find_with_shortcut(cx, &view);
     type_query(cx, "fix");
@@ -2285,7 +2239,6 @@ fn history_find_paged_matches_are_reused_until_the_projection_changes(
 
 #[gpui::test]
 fn history_find_quick_down_up_keeps_the_last_selection(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     store.dispatch(Msg::SelectCommit {
         request_id: None,
@@ -2315,7 +2268,6 @@ fn history_find_quick_down_up_keeps_the_last_selection(cx: &mut gpui::TestAppCon
 fn indexed_history_find_keeps_its_matches_while_a_refreshed_index_is_searched(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     report_matches(cx, &view, &store, &ALL_FIX_ROWS, true);
@@ -2418,7 +2370,6 @@ fn history_find_in_one_store_does_not_wait_for_another_stores_scan() {
 fn indexed_history_rejected_selections_do_not_move_where_down_starts(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     cx.update(|_window, app| {
         history_view(&view, app).update(app, |history, cx| {
@@ -2461,8 +2412,7 @@ fn indexed_history_rejected_selections_do_not_move_where_down_starts(
             assert!(history.history_select_adjacent_commit(1, cx));
         });
     });
-    wait_until(cx, "the next selection", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "the next selection", || {
         store_selected(&store).as_deref() != Some(&indexed_find_id(0))
     });
     assert_selection_settles_on(
@@ -2476,7 +2426,6 @@ fn indexed_history_rejected_selections_do_not_move_where_down_starts(
 
 #[gpui::test]
 fn indexed_history_find_quick_down_up_keeps_the_last_selection(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     cx.update(|_window, app| {
         history_view(&view, app).update(app, |history, cx| {
@@ -2503,7 +2452,6 @@ fn indexed_history_find_quick_down_up_keeps_the_last_selection(cx: &mut gpui::Te
 fn indexed_history_find_does_not_resend_while_the_snapshot_is_pending(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_find_with_shortcut(cx, &view);
     let (unrelated, _unrelated_events) = AppStore::new_test(Arc::new(BlockingBackend));
@@ -2532,17 +2480,12 @@ fn indexed_history_find_does_not_resend_while_the_snapshot_is_pending(
 
 #[gpui::test]
 fn indexed_history_find_reuses_commit_text_between_queries(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
     open_and_find(cx, &view, &store, "fix");
-    wait_until(cx, "first scan", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "first scan", || store_find(&store).done);
     let reads = backend.scans_started();
     retype_query(cx, "fix typo");
-    wait_until(cx, "narrower scan", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "narrower scan", || {
         let find = store_find(&store);
         find.query == plain_query("fix typo") && find.done
     });
@@ -2553,8 +2496,7 @@ fn indexed_history_find_reuses_commit_text_between_queries(cx: &mut gpui::TestAp
         "a second query must reuse decoded text"
     );
     retype_query(cx, "bob");
-    wait_until(cx, "unrelated query", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "unrelated query", || {
         let find = store_find(&store);
         find.query == plain_query("bob") && find.done
     });
@@ -2571,7 +2513,6 @@ fn indexed_history_find_reuses_commit_text_between_queries(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn history_find_reselecting_a_commit_leaves_range_comparison(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let mut repo = find_fixture_repo(find_fixture_commits());
     repo.history_state.selected_commit = Some(CommitId("aaaa0000".into()));
     repo.history_state.range_selection = Some(gitcomet_state::model::RangeSelection {
@@ -2585,11 +2526,11 @@ fn history_find_reselecting_a_commit_leaves_range_comparison(cx: &mut gpui::Test
     let (view, store, cx) = mount_find_fixture(cx, repo);
     open_find_with_shortcut(cx, &view);
     type_query(cx, "Fix login");
-    wait_until(
+    wait_for_store(
         cx,
+        &view,
         "single commit details instead of the range comparison",
-        |cx| {
-            sync_view_with_store(cx, &view);
+        || {
             store.snapshot().repos[0]
                 .history_state
                 .range_selection
@@ -2600,7 +2541,6 @@ fn history_find_reselecting_a_commit_leaves_range_comparison(cx: &mut gpui::Test
 
 #[gpui::test]
 fn indexed_history_find_jump_during_render_requests_another_frame(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     report_matches(cx, &view, &store, &[FAR_FIX_ROW], true);
@@ -2650,7 +2590,6 @@ fn indexed_history_find_jump_during_render_requests_another_frame(cx: &mut gpui:
 
 #[gpui::test]
 fn history_find_input_observes_typed_text(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, _store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     open_find_with_shortcut(cx, &view);
     cx.simulate_input("fix");
@@ -2675,11 +2614,9 @@ fn history_find_input_observes_typed_text(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn indexed_history_find_enter_retries_a_transient_failure(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::FailOnce);
     open_and_find(cx, &view, &store, "fix");
-    wait_until(cx, "transient failure", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "transient failure", || {
         store_find(&store).error.is_some()
     });
     assert_eq!(find_label(cx, &view), "Search failed");
@@ -2692,10 +2629,7 @@ fn indexed_history_find_enter_retries_a_transient_failure(cx: &mut gpui::TestApp
         "failure must not cause a busy retry loop"
     );
     cx.simulate_keystrokes("enter");
-    wait_until(cx, "retry to finish", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "retry to finish", || store_find(&store).done);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
     assert_eq!(backend.scans_started(), 2);
     assert_eq!(find_label(cx, &view), "1/3");
@@ -2703,7 +2637,6 @@ fn indexed_history_find_enter_retries_a_transient_failure(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn indexed_history_find_click_cancels_a_pending_jump_and_step(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     // Both an initial jump and a step waiting on the scan yield to a click.
@@ -2732,7 +2665,6 @@ fn indexed_history_find_click_cancels_a_pending_jump_and_step(cx: &mut gpui::Tes
 fn indexed_history_find_clearing_and_reopening_do_not_restore_a_stale_count(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     report_matches(cx, &view, &store, &[0, 5], true);
@@ -2747,8 +2679,7 @@ fn indexed_history_find_clearing_and_reopening_do_not_restore_a_stale_count(
     report_matches(cx, &view, &store, &[2, 7], true);
     wait_for_selection(cx, &view, &store, &indexed_find_id(2));
     cx.simulate_keystrokes("escape");
-    wait_until(cx, "closed search", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "closed search", || {
         store_find(&store).query.is_none()
     });
     open_find_with_shortcut(cx, &view);
@@ -2760,7 +2691,6 @@ fn indexed_history_find_clearing_and_reopening_do_not_restore_a_stale_count(
 fn indexed_history_find_switching_repos_releases_the_previous_search(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     report_matches(cx, &view, &store, &[0, 5], true);
@@ -2781,8 +2711,7 @@ fn indexed_history_find_switching_repos_releases_the_previous_search(
         model.update(app, |model, cx| model.set_state(state, cx));
     });
     cx.run_until_parked();
-    wait_until(cx, "search in the second repo", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "search in the second repo", || {
         let state = store.snapshot();
         state.repos[0].history_state.find.query.is_none()
             && state.repos[1].history_state.find.query == plain_query("fix")
@@ -2804,7 +2733,6 @@ fn indexed_history_find_switching_repos_releases_the_previous_search(
 fn history_find_repeated_destinations_acknowledge_only_the_request_that_arrived(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx) = mount_find_fixture(cx, find_fixture_repo(find_fixture_commits()));
     store.dispatch(Msg::SelectCommit {
         request_id: None,
@@ -2844,7 +2772,6 @@ fn history_find_repeated_destinations_acknowledge_only_the_request_that_arrived(
 fn indexed_history_find_store_selection_preserves_pending_navigation(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_and_find(cx, &view, &store, "fix");
     for step in [false, true] {
@@ -2867,7 +2794,6 @@ fn indexed_history_find_store_selection_preserves_pending_navigation(
 
 #[gpui::test]
 fn history_find_toggle_deselect_uses_the_remaining_focus(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let mut repo = find_fixture_repo(find_fixture_commits());
     repo.history_state.selected_commit = Some(CommitId("cccc2222".into()));
     repo.history_state.multi_selection.commits = Arc::new(vec![
@@ -2897,7 +2823,6 @@ fn history_find_toggle_deselect_uses_the_remaining_focus(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn history_find_stash_details_highlight_only_the_row_summary(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let id = "abab7777";
     let message = "WIP on main: saved work\n\nmain in the body";
     let parents = vec![CommitId("bbbb1111".into()), CommitId("9999ffff".into())];
@@ -2935,26 +2860,20 @@ fn history_find_stash_details_highlight_only_the_row_summary(cx: &mut gpui::Test
 
 #[gpui::test]
 fn indexed_history_find_panic_reports_failure_and_can_retry(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::PanicOnce);
     open_and_find(cx, &view, &store, "fix");
-    wait_until(cx, "panic reported as search failure", |cx| {
-        sync_view_with_store(cx, &view);
+    wait_for_store(cx, &view, "panic reported as search failure", || {
         store_find(&store).error.is_some()
     });
     assert_eq!(find_label(cx, &view), "Search failed");
     cx.simulate_keystrokes("enter");
-    wait_until(cx, "retry after panic", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "retry after panic", || store_find(&store).done);
     assert_eq!(backend.scans_started(), 2);
     wait_for_selection(cx, &view, &store, &indexed_find_id(0));
 }
 
 #[gpui::test]
 fn history_find_step_after_tab_switch_uses_the_active_repos_page(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     open_find_with_shortcut(cx, &view);
     cx.update(|_window, app| {
@@ -2990,13 +2909,9 @@ fn history_find_step_after_tab_switch_uses_the_active_repos_page(cx: &mut gpui::
 
 #[gpui::test]
 fn indexed_history_find_loading_stashes_restarts_the_same_query(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, backend) = mount_indexed_find_fixture(cx, ScanMode::Serve);
     open_and_find(cx, &view, &store, "main");
-    wait_until(cx, "initial search", |cx| {
-        sync_view_with_store(cx, &view);
-        store_find(&store).done
-    });
+    wait_for_store(cx, &view, "initial search", || store_find(&store).done);
     assert!(find_matches(cx, &view).is_empty());
     let old_index = store.snapshot().repos[0]
         .history_state
@@ -3046,7 +2961,6 @@ fn indexed_history_find_loading_stashes_restarts_the_same_query(cx: &mut gpui::T
 
 #[gpui::test]
 fn indexed_history_find_range_then_toggle_predicts_the_store_focus(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, store, cx, _backend) = mount_indexed_find_fixture(cx, ScanMode::Hold);
     cx.update(|_window, app| {
         history_view(&view, app).update(app, |history, cx| {

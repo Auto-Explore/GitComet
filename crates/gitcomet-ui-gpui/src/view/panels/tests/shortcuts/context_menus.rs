@@ -75,7 +75,6 @@ fn context_menu_model_for(
 
 #[gpui::test]
 fn recent_repository_shortcut_does_not_select_diff_content(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -248,7 +247,6 @@ fn author_filter_repo_with_many_authors(repo_id: RepoId, count: usize) -> RepoSt
 /// to — but they do exist, rather than being cut off the end of the list.
 #[gpui::test]
 fn history_author_filter_scrolls_to_every_author(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -295,7 +293,6 @@ fn history_author_filter_scrolls_to_every_author(cx: &mut gpui::TestAppContext) 
 /// keeping the invoker active explicitly.
 #[gpui::test]
 fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -328,7 +325,6 @@ fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppCont
 /// the sibling column menus (which sit at 220 design px).
 #[gpui::test]
 fn history_author_filter_is_wide_enough_for_full_names(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -353,7 +349,6 @@ fn history_author_filter_is_wide_enough_for_full_names(cx: &mut gpui::TestAppCon
 /// Enter applies the highlighted suggestion, and closes the popover.
 #[gpui::test]
 fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -404,7 +399,6 @@ fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppConte
 /// typed rather than being a dead end.
 #[gpui::test]
 fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -446,7 +440,6 @@ fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
 /// query — which would apply a filter the user never highlighted.
 #[gpui::test]
 fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1520,7 +1513,6 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
 fn open_workspace_shortcut_opens_the_workspace_chooser_with_nothing_focused(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

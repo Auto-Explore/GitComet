@@ -1485,3 +1485,44 @@ fn line_stats_revs_move_per_lane_only_when_that_lane_changes() {
         "the untouched lane keeps its rev so its rows are not rebuilt"
     );
 }
+
+fn diagnostic(message: &str) -> DiagnosticEntry {
+    DiagnosticEntry {
+        time: SystemTime::UNIX_EPOCH,
+        kind: DiagnosticKind::Error,
+        message: message.into(),
+    }
+}
+
+fn messages(entries: &[DiagnosticEntry]) -> Vec<&str> {
+    entries.iter().map(|entry| entry.message.as_str()).collect()
+}
+
+#[test]
+fn feedback_queues_number_entries_and_release_only_acknowledged_ones() {
+    let mut feedback = RepoFeedbackState::default();
+    for ix in 1..=6 {
+        feedback.push_diagnostic(diagnostic(&format!("d{ix}")));
+    }
+    assert_eq!(messages(feedback.diagnostics_after(4)), ["d5", "d6"]);
+
+    feedback.acknowledge(3, 0);
+    assert_eq!(messages(&feedback.diagnostics), ["d4", "d5", "d6"]);
+    // Dropped entries keep their numbers counted.
+    assert_eq!(messages(feedback.diagnostics_after(4)), ["d5", "d6"]);
+    assert!(feedback.diagnostics_after(6).is_empty());
+
+    feedback.acknowledge(6, 0);
+    assert!(feedback.diagnostics.is_empty());
+    assert_eq!(feedback.diagnostics_seq, 6);
+}
+
+#[test]
+fn feedback_numbers_from_before_a_restart_count_every_entry_as_new() {
+    let mut feedback = RepoFeedbackState::default();
+    feedback.push_diagnostic(diagnostic("new"));
+
+    assert_eq!(messages(feedback.diagnostics_after(6)), ["new"]);
+    feedback.acknowledge(6, 6);
+    assert_eq!(messages(&feedback.diagnostics), ["new"]);
+}

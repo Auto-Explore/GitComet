@@ -168,7 +168,6 @@ fn drag_activity_text(cx: &mut gpui::VisualTestContext, key: &'static str) {
 
 #[gpui::test]
 fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -274,7 +273,6 @@ fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -475,7 +473,6 @@ fn hook_activity_minimized_indicator_is_repository_specific(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn hook_activity_text_layout_and_selected_fill_across_appearances(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

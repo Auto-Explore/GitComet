@@ -105,7 +105,6 @@ fn right_click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 /// each layout's shape. Groups puts the files under their change kinds.
 #[gpui::test]
 fn the_layout_icon_steps_through_every_layout_in_its_shape(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = gitcomet_state::model::RepoId(640);
     let repo = commit_with_kinds(
         repo_id,
@@ -160,7 +159,6 @@ fn the_layout_icon_steps_through_every_layout_in_its_shape(cx: &mut gpui::TestAp
 /// checked, and choosing one applies it without stepping.
 #[gpui::test]
 fn right_clicking_the_layout_icon_offers_every_layout(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = gitcomet_state::model::RepoId(641);
     let repo = commit_with_kinds(
         repo_id,
@@ -214,7 +212,6 @@ fn right_clicking_the_layout_icon_offers_every_layout(cx: &mut gpui::TestAppCont
 fn grouped_status_sections_keep_their_drawn_order_and_reveal_hidden_files(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let repo_id = gitcomet_state::model::RepoId(642);
     let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-status-groups"));
     repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -282,7 +279,6 @@ fn grouped_status_sections_keep_their_drawn_order_and_reveal_hidden_files(
 /// Scrolled into a long group, its header stays pinned above the rows.
 #[gpui::test]
 fn a_long_group_keeps_its_header_pinned(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = gitcomet_state::model::RepoId(643);
     let paths: Vec<String> = (0..80).map(|n| format!("src/file_{n:02}.rs")).collect();
     let files: Vec<(&str, FileStatusKind)> = paths
@@ -315,7 +311,6 @@ fn a_long_group_keeps_its_header_pinned(cx: &mut gpui::TestAppContext) {
 /// files in edit order, the shared edit first.
 #[gpui::test]
 fn groups_and_the_edits_sort_mix_in_one_list(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = gitcomet_state::model::RepoId(644);
     let edited = |path: &str, kind, text: &str| {
         let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();

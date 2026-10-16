@@ -5,7 +5,6 @@ pub(super) use super::main::{
     show_external_mergetool_actions,
 };
 pub(super) use super::*;
-pub(super) use crate::test_support::{lock_clipboard_test, lock_visual_test};
 pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
 pub(super) use crate::view::show_diff_file_navigation;
 pub(super) use crate::view::test_support::TestBackend;
@@ -15,19 +14,17 @@ pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Holds the shared filesystem worker, so editor saves queued meanwhile stay
-/// in flight until [`HeldEditorSaves::release`]. The UI thread must not read
-/// through the editor while held: that read takes the same lock.
+/// Holds a test store's filesystem engine, so that store's editor saves queued
+/// meanwhile stay in flight until [`HeldEditorSaves::release`]. The UI thread
+/// must not read through the editor while held: that read takes the same lock.
 pub(super) struct HeldEditorSaves(
     Option<std::sync::MutexGuard<'static, gitcomet_core::filesystem::Filesystem>>,
 );
 
-pub(super) fn hold_editor_saves() -> HeldEditorSaves {
-    HeldEditorSaves(Some(
-        gitcomet_core::filesystem::global()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-    ))
+pub(super) fn hold_editor_saves(
+    filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
+) -> HeldEditorSaves {
+    HeldEditorSaves(Some(filesystem.lock().unwrap_or_else(|e| e.into_inner())))
 }
 
 impl HeldEditorSaves {
@@ -38,7 +35,7 @@ impl HeldEditorSaves {
     }
 }
 
-/// Filesystem effects run on the real shared worker. Pump the results into the
+/// Filesystem effects run on the store's real filesystem worker. Pump the results into the
 /// pane without replacing the synthetic repository the fixture pushed.
 pub(super) fn finish_editor_saves(
     view: &gpui::Entity<GitCometView>,
@@ -910,7 +907,6 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     status_kind: gitcomet_core::domain::FileStatusKind,
     lines: Arc<Vec<String>>,
 ) {
-    let _clipboard_guard = lock_clipboard_test();
     let expected = lines.join("\n");
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1024,7 +1020,6 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
     new_text: Option<&str>,
     create_worktree_file: bool,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)

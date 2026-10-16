@@ -197,7 +197,6 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
 
 #[gpui::test]
 fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1109,7 +1108,6 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
 fn image_toolbar_preserves_file_navigation_and_staging_at_normal_window_widths(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

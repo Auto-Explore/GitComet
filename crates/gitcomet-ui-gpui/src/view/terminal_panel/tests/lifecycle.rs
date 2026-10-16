@@ -3,7 +3,6 @@ use super::support::*;
 
 #[gpui::test]
 fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     assert_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx);
 }
 
@@ -24,7 +23,6 @@ impl gitcomet_extension_api::Extension for StatusBarTerminal {
 
 #[gpui::test]
 fn relocated_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.update(|app| {
         crate::view::extension_host::install(
             gitcomet_extension_api::Registry::build(vec![Box::new(StatusBarTerminal)]).unwrap(),
@@ -96,7 +94,6 @@ fn assert_terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::
 
 #[gpui::test]
 fn the_terminal_toggle_defaults_to_the_action_bar(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, _repo_id, cx) = test_root_view_with_active_repo(cx);
     cx.update(|_, app| {
         view.update(app, |view, cx| {
@@ -129,7 +126,6 @@ fn the_terminal_toggle_defaults_to_the_action_bar(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn shell_exit_closes_the_matching_tab_after_indices_shift(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let events_tx = cx.update(|window, app| {
@@ -173,7 +169,6 @@ fn shell_exit_closes_the_matching_tab_after_indices_shift(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn shell_exit_of_the_last_tab_closes_the_terminal_panel(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let events_tx = cx.update(|_window, app| {
@@ -205,7 +200,6 @@ fn shell_exit_of_the_last_tab_closes_the_terminal_panel(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn stale_shell_exit_after_manual_close_does_not_close_another_tab(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let events_tx = cx.update(|window, app| {
@@ -242,7 +236,6 @@ fn stale_shell_exit_after_manual_close_does_not_close_another_tab(cx: &mut gpui:
 fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     let (events_tx, prompt) = cx.update(|_window, app| {
@@ -299,7 +292,6 @@ fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
 #[gpui::test]
 fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppContext) {
     use crate::appearance::{Appearance, UiDensity};
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
 
     cx.update(|_window, app| {

@@ -150,7 +150,6 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 
 #[gpui::test]
 fn a_views_own_tabs_open_with_it_and_give_way_when_it_is_left(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_view, cx) = open_view(cx);
     // History lists only the tab that belongs to every view.
     assert!(!shows(cx, "details_tab_0"), "Notes belongs to Review");
@@ -191,7 +190,6 @@ fn a_views_own_tabs_open_with_it_and_give_way_when_it_is_left(cx: &mut gpui::Tes
 /// and Details comes back, selected as before, when it is left.
 #[gpui::test]
 fn a_view_can_replace_the_details_tab(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_view, cx) = open_view(cx);
     assert!(shows(cx, "details_tab_details"));
 
@@ -222,7 +220,6 @@ fn a_view_can_replace_the_details_tab(cx: &mut gpui::TestAppContext) {
 /// again, so the choice has to wait until the click is handled.
 #[gpui::test]
 fn clicking_between_the_sidebars_tabs_and_a_contributed_one(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_view, cx) = open_view(cx);
     click(cx, "repository_view_0");
     assert!(shows(cx, "panels_files"));
@@ -243,7 +240,6 @@ fn clicking_between_the_sidebars_tabs_and_a_contributed_one(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn show_selects_a_listed_tab_and_reveals_its_pane(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = open_view(cx);
     let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
     let repository = cx.update(|_window, app| host.active_repository(app).unwrap().unwrap());
@@ -289,7 +285,6 @@ fn show_selects_a_listed_tab_and_reveals_its_pane(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn a_markdown_view_renders_the_source_it_is_given(cx: &mut gpui::TestAppContext) {
     use crate::view::markdown_preview::MarkdownPreviewRowKind as Kind;
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = open_view(cx);
     let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
     let markdown = cx.update(|_window, app| host.create_markdown_view(app).unwrap());
@@ -321,7 +316,6 @@ fn a_markdown_view_renders_the_source_it_is_given(cx: &mut gpui::TestAppContext)
 /// workflow-specific API. A default tab is built even without an opener.
 #[gpui::test]
 fn panel_policy_applies_to_both_areas_and_restores_host_tabs(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_, cx) = open_view(cx);
     click(cx, "repository_view_1");
     assert!(shows(cx, "panels_facts"));

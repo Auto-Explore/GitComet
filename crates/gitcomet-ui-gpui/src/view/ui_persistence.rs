@@ -151,6 +151,8 @@ impl GitCometView {
                             .history_tag_preferences(cx);
                         let history_relative_dates =
                             this.main_pane.read(cx).history_relative_dates(cx);
+                        let history_show_graph_gradient =
+                            this.main_pane.read(cx).history_show_graph_gradient(cx);
                         let history_highlight_commit_chain =
                             this.main_pane.read(cx).history_highlight_commit_chain(cx);
                         let (
@@ -246,6 +248,7 @@ impl GitCometView {
                             // The settings window owns branch-name placement.
                             history_branch_names: None,
                             history_show_graph: Some(history_show_graph),
+                            history_show_graph_gradient: Some(history_show_graph_gradient),
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),

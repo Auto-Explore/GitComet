@@ -223,7 +223,6 @@ impl Harness {
 async fn external_write_to_the_open_editor_file_raises_the_notice_and_reload_keeps_the_caret(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_editor", 960, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input
@@ -269,7 +268,6 @@ async fn external_write_to_the_open_editor_file_raises_the_notice_and_reload_kee
 async fn dirty_buffer_keeps_its_edits_on_dismiss_until_the_disk_moves_again(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_dirty", 961, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {
@@ -308,7 +306,6 @@ async fn dirty_buffer_keeps_its_edits_on_dismiss_until_the_disk_moves_again(
 async fn own_save_does_not_raise_the_notice_before_or_after_the_write_lands(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_own_save", 962, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {
@@ -321,7 +318,8 @@ async fn own_save_does_not_raise_the_notice_before_or_after_the_write_lands(
     });
     // The worker holds this lock for the whole save, so the write stays
     // queued until it is released.
-    let worker = gitcomet_core::filesystem::global()
+    let worker = h
+        .with_pane(cx, |pane, _| pane.store.filesystem())
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     h.update_pane(cx, |pane, cx| assert!(pane.save_file_editor_buffer(cx)));
@@ -362,7 +360,6 @@ async fn own_save_does_not_raise_the_notice_before_or_after_the_write_lands(
 
 #[gpui::test]
 async fn unrelated_file_change_does_not_raise_the_notice(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_unrelated", 963, "fn main() {}\n", true);
     std::fs::write(h.workdir.join("other.rs"), "other\n").expect("write other");
     h.bump(cx, 1, 0);
@@ -373,7 +370,6 @@ async fn unrelated_file_change_does_not_raise_the_notice(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 async fn git_operation_change_on_a_clean_editor_reloads_silently(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_git_op_clean", 964, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input
@@ -414,7 +410,6 @@ async fn git_operation_change_on_a_clean_editor_reloads_silently(cx: &mut gpui::
 async fn git_operation_change_on_a_dirty_editor_is_attributed_to_git(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_git_op_dirty", 965, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {
@@ -431,7 +426,6 @@ async fn git_operation_change_on_a_dirty_editor_is_attributed_to_git(
 
 #[gpui::test]
 async fn deleting_the_open_file_raises_a_deleted_notice_once(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_deleted", 966, "fn main() {}\n", true);
     std::fs::remove_file(h.file()).expect("delete");
     h.bump(cx, 1, 0);
@@ -452,7 +446,6 @@ async fn deleting_the_open_file_raises_a_deleted_notice_once(cx: &mut gpui::Test
 async fn preview_external_write_raises_the_notice_and_reload_keeps_the_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let old: String = (0..400).map(|ix| format!("line {ix}\n")).collect();
     let (h, cx) = Harness::open(cx, "disk_notice_preview", 967, &old, false);
     assert_eq!(
@@ -507,7 +500,6 @@ async fn preview_external_write_raises_the_notice_and_reload_keeps_the_scroll(
 
 #[gpui::test]
 async fn preview_follows_a_git_operation_silently(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_preview_git_op", 968, "alpha\n", false);
     std::fs::write(h.file(), "beta\n").expect("checkout wrote");
     h.bump(cx, 1, 1);
@@ -525,7 +517,6 @@ async fn preview_follows_a_git_operation_silently(cx: &mut gpui::TestAppContext)
 async fn external_write_back_of_the_loaded_version_after_a_save_raises_the_notice(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_write_back", 969, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {
@@ -551,7 +542,6 @@ async fn external_write_back_of_the_loaded_version_after_a_save_raises_the_notic
 
 #[gpui::test]
 async fn returning_to_the_editor_catches_up_a_clean_buffer(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(
         cx,
         "disk_notice_back_to_editor",
@@ -588,7 +578,6 @@ async fn returning_to_the_editor_catches_up_a_clean_buffer(cx: &mut gpui::TestAp
 
 #[gpui::test]
 async fn returning_to_the_preview_catches_it_up(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_back_to_preview", 971, "alpha\n", false);
     assert_eq!(h.preview_text(cx), "alpha\n");
 
@@ -612,7 +601,6 @@ async fn returning_to_the_preview_catches_it_up(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 async fn a_failed_read_retries_when_the_file_comes_back(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_retry", 972, "fn main() {}\n", true);
     std::fs::remove_file(h.file()).expect("delete");
     h.bump(cx, 1, 0);
@@ -636,7 +624,6 @@ async fn a_failed_read_retries_when_the_file_comes_back(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 async fn reopening_a_file_the_editor_still_holds_catches_up(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_reopen", 973, "fn main() {}\n", true);
     std::fs::write(h.workdir.join("other.rs"), "other\n").expect("write other");
 
@@ -666,7 +653,6 @@ async fn reopening_a_file_the_editor_still_holds_catches_up(cx: &mut gpui::TestA
 async fn auto_save_flush_keeps_edits_unwritten_while_the_notice_is_up(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_autosave", 974, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.auto_save_file_edits = true;
@@ -692,7 +678,6 @@ async fn auto_save_flush_keeps_edits_unwritten_while_the_notice_is_up(
 async fn review_regression_auto_saved_repo_move_preserves_disk_conflicts(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_repo_move", 981, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.auto_save_file_edits = true;
@@ -754,7 +739,6 @@ async fn review_regression_auto_saved_repo_move_preserves_disk_conflicts(
 async fn review_regression_auto_saved_repo_move_keeps_stashed_edits_for_explicit_resolution(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(
         cx,
         "disk_notice_stashed_repo_move",
@@ -815,7 +799,6 @@ async fn review_regression_auto_saved_repo_move_keeps_stashed_edits_for_explicit
 async fn review_regression_auto_saved_repo_move_waits_for_a_nonconflicting_write(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(
         cx,
         "disk_notice_safe_repo_move",
@@ -850,7 +833,6 @@ async fn review_regression_auto_saved_repo_move_waits_for_a_nonconflicting_write
 
 #[gpui::test]
 async fn an_explicit_save_answers_the_notice(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_explicit_save", 975, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {
@@ -881,7 +863,6 @@ async fn an_explicit_save_answers_the_notice(cx: &mut gpui::TestAppContext) {
 async fn keeping_my_edits_lets_the_next_save_replace_the_other_version(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(
         cx,
         "disk_notice_keep_then_save",
@@ -912,7 +893,6 @@ async fn keeping_my_edits_lets_the_next_save_replace_the_other_version(
 
 #[gpui::test]
 async fn a_refused_save_keeps_the_edits_when_the_worktree_moves(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_refused_save", 977, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {
@@ -942,7 +922,6 @@ async fn a_refused_save_keeps_the_edits_when_the_worktree_moves(cx: &mut gpui::T
 
 #[gpui::test]
 async fn a_preview_behind_the_diff_view_is_not_checked(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_hidden_preview", 976, "alpha\n", false);
     assert_eq!(h.preview_text(cx), "alpha\n");
 
@@ -965,7 +944,6 @@ async fn a_preview_behind_the_diff_view_is_not_checked(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 async fn a_pending_scroll_restore_does_not_leak_into_the_next_file(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let old: String = (0..400).map(|ix| format!("line {ix}\n")).collect();
     let (h, cx) = Harness::open(cx, "disk_notice_scroll_leak", 977, &old, false);
     std::fs::write(h.workdir.join("other.rs"), &old).expect("write other");
@@ -998,7 +976,6 @@ async fn a_pending_scroll_restore_does_not_leak_into_the_next_file(cx: &mut gpui
 
 #[gpui::test]
 async fn the_notice_clears_when_the_disk_returns_to_known_bytes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_reverted", 978, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {
@@ -1022,7 +999,6 @@ async fn the_notice_clears_when_the_disk_returns_to_known_bytes(cx: &mut gpui::T
 
 #[gpui::test]
 async fn edits_made_while_a_reload_reads_are_kept(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(
         cx,
         "disk_notice_edit_during_reload",
@@ -1056,7 +1032,6 @@ async fn edits_made_while_a_reload_reads_are_kept(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 async fn a_check_in_flight_does_not_bring_back_a_dismissed_notice(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_dismiss_race", 980, "fn main() {}\n", true);
     std::fs::write(h.file(), "fn main() { theirs(); }\n").expect("external write");
     h.bump(cx, 1, 0);
@@ -1080,7 +1055,6 @@ async fn a_check_in_flight_does_not_bring_back_a_dismissed_notice(cx: &mut gpui:
 
 #[gpui::test]
 async fn a_preview_recovers_after_a_failed_follow(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_preview_retry", 981, "alpha\n", false);
     // A checkout to a branch without the file, then back.
     std::fs::remove_file(h.file()).expect("delete");
@@ -1098,7 +1072,6 @@ async fn a_preview_recovers_after_a_failed_follow(cx: &mut gpui::TestAppContext)
 #[cfg(unix)]
 #[gpui::test]
 async fn a_same_length_write_that_keeps_the_mtime_is_still_noticed(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let workdir = unique_workdir("disk_notice_mtime_kept_seed");
     let old_mtime = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     let set_mtime = |path: &Path| {
@@ -1127,7 +1100,6 @@ async fn a_same_length_write_that_keeps_the_mtime_is_still_noticed(cx: &mut gpui
 
 #[gpui::test]
 async fn a_failed_read_retries_once_per_worktree_change(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_retry_storm", 983, "fn main() {}\n", true);
     std::fs::remove_file(h.file()).expect("delete");
     h.bump(cx, 1, 0);
@@ -1157,7 +1129,6 @@ async fn a_failed_read_retries_once_per_worktree_change(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 async fn an_external_write_during_a_fetch_still_raises_the_notice(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_fetch_running", 984, "fn main() {}\n", true);
     // A fetch is running; it never touches the checkout.
     let mut fetching = AppState::clone(&h.current());
@@ -1178,7 +1149,6 @@ async fn an_external_write_during_a_fetch_still_raises_the_notice(cx: &mut gpui:
 
 #[gpui::test]
 async fn the_notice_is_one_row_with_its_buttons_beside_the_message(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (h, cx) = Harness::open(cx, "disk_notice_one_row", 985, "fn main() {}\n", true);
     h.update_pane(cx, |pane, cx| {
         pane.file_editor_input.update(cx, |input, cx| {

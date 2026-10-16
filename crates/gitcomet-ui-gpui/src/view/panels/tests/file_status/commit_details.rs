@@ -1392,7 +1392,6 @@ fn a_preserved_press_does_not_blur_a_focused_input(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn commit_details_shows_a_badge_for_a_verified_signature(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_view, cx) = commit_details_signature_fixture(
         cx,
         Some(test_signature(gitcomet_core::domain::SignatureStatus::Good)),
@@ -1406,7 +1405,6 @@ fn commit_details_shows_a_badge_for_a_verified_signature(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn commit_details_shows_a_badge_for_a_bad_signature(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_view, cx) = commit_details_signature_fixture(
         cx,
         Some(test_signature(gitcomet_core::domain::SignatureStatus::Bad)),
@@ -1420,7 +1418,6 @@ fn commit_details_shows_a_badge_for_a_bad_signature(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn commit_details_shows_no_badge_without_a_signature_verdict(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_view, cx) = commit_details_signature_fixture(cx, None);
 
     assert!(
@@ -1431,7 +1428,6 @@ fn commit_details_shows_no_badge_without_a_signature_verdict(cx: &mut gpui::Test
 
 #[gpui::test]
 fn commit_links_cancel_cross_link_and_outside_releases(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

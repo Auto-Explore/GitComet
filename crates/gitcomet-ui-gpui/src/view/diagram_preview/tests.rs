@@ -265,7 +265,6 @@ impl Render for InteractionHarness {
 fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = cx.add_window_view(|_, cx| {
         let cache = cache(cx);
         InteractionHarness {
@@ -364,7 +363,6 @@ impl Render for Harness {
 
 #[gpui::test]
 fn embedded_diagram_uses_preview_code_and_markdown_source_fallback(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let source: Arc<str> = "flowchart LR\nA-->B".into();
     let (view, cx) = cx.add_window_view(|_, _| Harness {
         input: DiagramInput::Text {

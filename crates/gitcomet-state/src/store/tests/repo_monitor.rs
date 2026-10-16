@@ -581,6 +581,8 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         session_persist_executor: &session_persist_executor,
         backend: &backend,
         publication: &std::sync::atomic::AtomicU64::new(0),
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
+        deferred_acknowledgements: &mut Vec::new(),
     }
     .handle_effects(&repos, std::iter::empty::<Effect>());
     let elapsed = started.elapsed();
@@ -775,6 +777,8 @@ fn a_watch_lease_keeps_a_background_repositorys_monitor_running() {
             session_persist_executor: &session_persist_executor,
             backend: &backend,
             publication: &std::sync::atomic::AtomicU64::new(0),
+            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
+            deferred_acknowledgements: &mut Vec::new(),
         }
         .handle_effects(&repos, std::iter::empty::<Effect>());
     };

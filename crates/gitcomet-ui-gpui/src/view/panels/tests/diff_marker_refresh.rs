@@ -55,15 +55,11 @@ fn show(
         draw_and_drain_test_window(cx);
         let caught_up = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            if pane
-                .active_repo()
-                .is_some_and(|repo| repo.diff_state.edit_mode)
-            {
-                return true;
-            }
-            pane.diff_cache_rev == diff_rev
-                && pane.file_diff_cache_rev == diff_file_rev
-                && pane.file_diff_cache_inflight.is_none()
+            let builds_file_rows = pane.main_pane_surface().supports_diff_content_toggle;
+            !builds_file_rows
+                || (pane.diff_cache_rev == diff_rev
+                    && pane.file_diff_cache_rev == diff_file_rev
+                    && pane.file_diff_cache_inflight.is_none())
         });
         if caught_up {
             break;
@@ -104,7 +100,6 @@ fn markers_follow_an_in_place_external_edit(
     view_mode: DiffViewMode,
     content_mode: DiffContentMode,
 ) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
@@ -220,7 +215,6 @@ fn inline_collapsed_markers_follow_an_in_place_external_edit(cx: &mut gpui::Test
 fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);

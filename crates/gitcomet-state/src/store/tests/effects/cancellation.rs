@@ -27,6 +27,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
             history_find_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
+            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         };
         let repo_id = RepoId(1);
         let spec = RepoSpec {
@@ -373,6 +374,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
             history_find_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
+            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         },
         &thread_state,
         &backend,
@@ -401,6 +403,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
             history_find_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
+            filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         },
         &thread_state,
         &backend,
@@ -501,6 +504,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         history_find_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
     };
 
     super::super::effects::schedule_effect(
@@ -645,6 +649,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         history_find_executor: &std::sync::LazyLock::new(|| {
             super::super::executor::TaskExecutor::new(1)
         }),
+        filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
     };
 
     super::super::effects::schedule_effect(

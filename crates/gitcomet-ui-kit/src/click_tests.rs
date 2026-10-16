@@ -1,5 +1,5 @@
 use super::{canvas_target, on_canvas_click, on_click};
-use crate::test_support::{lock_visual_test, refresh_and_draw};
+use crate::test_support::refresh_and_draw;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, Context, ElementId, Entity, HitboxBehavior, Modifiers, MouseButton, Render,
@@ -120,7 +120,6 @@ fn fixture(
 
 #[gpui::test]
 fn pointer_clicks_survive_movement_on_the_same_target(cx: &mut TestAppContext) {
-    let _guard = lock_visual_test();
     for kind in [TargetKind::Element, TargetKind::Canvas] {
         for button in MouseButton::all() {
             for window_reset in [false, true] {
@@ -166,7 +165,6 @@ fn pointer_clicks_survive_movement_on_the_same_target(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn pointer_clicks_do_not_transfer_to_another_target(cx: &mut TestAppContext) {
-    let _guard = lock_visual_test();
     for source in [TargetKind::Element, TargetKind::Canvas] {
         for destination in [TargetKind::Element, TargetKind::Canvas] {
             for button in MouseButton::all() {
@@ -197,7 +195,6 @@ fn pointer_clicks_do_not_transfer_to_another_target(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn unheld_pointer_movement_cancels_a_missed_release(cx: &mut TestAppContext) {
-    let _guard = lock_visual_test();
     for kind in [TargetKind::Element, TargetKind::Canvas] {
         for button in MouseButton::all() {
             for window_reset in [false, true] {

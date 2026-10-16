@@ -164,7 +164,6 @@ mod tests {
     /// the theme's interstitial colours, light and dark.
     #[gpui::test]
     fn call_to_action_buttons_paint_the_themes_interstitial_colors(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let (_view, cx) = cx.add_window_view(|_, _| Ctas { theme });
             // The pointer starts at the origin, over the first button.

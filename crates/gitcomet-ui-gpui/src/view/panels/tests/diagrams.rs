@@ -2,7 +2,6 @@ use super::*;
 
 #[gpui::test]
 fn active_search_switches_to_source_on_mermaid_navigation(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -81,7 +80,6 @@ fn active_search_switches_to_source_on_mermaid_navigation(cx: &mut gpui::TestApp
 fn mermaid_file_modes_follow_current_target_and_removed_formats_stay_code(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

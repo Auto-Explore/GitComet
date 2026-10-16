@@ -88,7 +88,6 @@ fn assert_ref_node_paint(
 /// there. Pane animations follow the same runtime policy.
 #[gpui::test]
 fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -105,8 +104,6 @@ fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::
             workdir: PathBuf::from("/tmp/history-author-deterministic"),
         },
     );
-    // An opening repository's tab spinner requests frames of its own.
-    repo.open = Loadable::Ready(());
     repo.log = Loadable::Ready(page.clone());
     repo.log_rev = 1;
     repo.history_state.log = Loadable::Ready(page);
@@ -120,7 +117,6 @@ fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::
     wait_until(cx, "history rows", |cx| {
         cx.debug_bounds("history_row_4").is_some()
     });
-    // Other panes' spinners request frames too; count the history view's own.
     let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
     let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let _observer = cx.update(|_, app| {
@@ -155,7 +151,6 @@ fn history_selection_settles_frames_in_the_deterministic_runtime(cx: &mut gpui::
 fn history_repeated_author_dot_animates_with_cached_selection_frames(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
@@ -311,7 +306,6 @@ fn history_repeated_author_dot_animates_with_cached_selection_frames(
 fn history_branch_names_repositions_headers_and_separates_hover_regions(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.update(crate::appearance::pin_compact_for_test);
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =

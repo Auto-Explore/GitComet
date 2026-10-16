@@ -1092,7 +1092,6 @@ fn merge_view_temporarily_collapses_and_restores_sidebar(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1119,7 +1118,6 @@ fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn pane_resize_grips_paint_on_hover_in_the_application_layout(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1177,7 +1175,6 @@ fn pane_resize_grips_paint_on_hover_in_the_application_layout(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1242,7 +1239,6 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -1345,7 +1341,6 @@ fn collapsed_branch_popover_search_keeps_its_section_scope(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1409,7 +1404,6 @@ fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn collapsed_files_popover_offers_the_files_settings_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1488,7 +1482,6 @@ fn cubic_bezier_matches_a_linear_curve_for_the_identity_control_points() {
 fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::TestAppContext) {
     // The action is reachable from a shortcut, the app menu and the palette, so
     // it has to work with the sidebar on Branches and the folders collapsed.
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1549,7 +1542,6 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn sidebar_tabs_grow_vertically_with_density_at_each_ui_scale(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1608,7 +1600,6 @@ fn sidebar_tabs_grow_vertically_with_density_at_each_ui_scale(cx: &mut gpui::Tes
 fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppContext) {
     // The trailing action stays put as its data becomes available; switching
     // tabs swaps it for the action belonging to that tree.
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1654,7 +1645,6 @@ fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppCo
 fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1787,7 +1777,6 @@ fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
 #[gpui::test]
 fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::TestAppContext) {
     use crate::appearance::{Appearance, UiDensity};
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1858,7 +1847,6 @@ fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -1960,7 +1948,6 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
 /// attached. This drives the real row to catch a regression back to that.
 #[gpui::test]
 fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2030,7 +2017,6 @@ fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::Test
 /// look like the edits were lost.
 #[gpui::test]
 fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2139,7 +2125,6 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2218,7 +2203,6 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
 fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui::TestAppContext) {
     // Measures Compact layout; a fresh session now defaults to Comfortable.
     cx.update(crate::appearance::pin_compact_for_test);
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -2290,7 +2274,6 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
 
 #[gpui::test]
 fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let repository = directory.path().join("repository");
     let destination = repository.join("target");
@@ -2373,7 +2356,6 @@ fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui
 fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -2547,7 +2529,6 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
 
 #[gpui::test]
 fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (view, cx) =
@@ -2642,7 +2623,6 @@ fn explorer_ctrl_x_after_a_plain_click_cuts_the_clicked_file(cx: &mut gpui::Test
 fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_folder(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -2816,7 +2796,6 @@ fn explorer_chevron_click_keeps_the_selection_and_keyboard_paste_uses_focused_fo
 
 #[gpui::test]
 fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -2933,7 +2912,6 @@ fn explorer_folder_row_click_selects_focuses_and_toggles(cx: &mut gpui::TestAppC
 fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
