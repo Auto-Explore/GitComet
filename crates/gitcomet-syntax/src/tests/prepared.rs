@@ -773,6 +773,7 @@ fn parser_fast_path_reconfigures_after_recovered_query_panic() {
 
 #[test]
 fn parser_fast_path_reconfigures_after_interrupted_parse() {
+    reset_prepared_syntax_cache();
     reset_ts_parser_test_state();
 
     let baseline =
@@ -797,14 +798,35 @@ fn parser_fast_path_reconfigures_after_interrupted_parse() {
         "zero-budget parse should interrupt before producing a tree"
     );
 
-    let reparsed =
-        syntax_tokens_for_line_treesitter("fn helper() { let y = 2; }", DiffSyntaxLanguage::Rust)
-            .expect("rust parse after interrupted parse should succeed");
+    let recovery_text = "/* recovered */\nstruct Recovered { count: u64 }\n";
+    let prepared = prepare_test_document_in_background(DiffSyntaxLanguage::Rust, recovery_text)
+        .expect("background preparation after interrupted parse should succeed");
+    let recovered_tree = &prepared
+        .tree_state
+        .as_ref()
+        .expect("background preparation should retain its tree")
+        .tree;
+    let mut fresh_parser = tree_sitter::Parser::new();
+    fresh_parser.set_language(&spec.ts_language).unwrap();
+    let fresh_tree = fresh_parser.parse(recovery_text, None).unwrap();
+    assert_eq!(
+        recovered_tree.root_node().to_sexp(),
+        fresh_tree.root_node().to_sexp(),
+        "a stopped parser must not resume the old input when preparing different text"
+    );
+    assert_eq!(recovered_tree.root_node().end_byte(), recovery_text.len());
+
+    let document = inject_prepared_document_data(prepared);
+    let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+        .expect("background-prepared document should have tokens");
     assert!(
-        reparsed
-            .iter()
-            .any(|token| token.kind == SyntaxTokenKind::Keyword),
-        "rust parse after interrupted parse should still contain keyword highlights: {reparsed:?}"
+        has_token_kind_and_text(
+            recovery_text,
+            &tokens,
+            SyntaxTokenKind::Comment,
+            "/* recovered */",
+        ),
+        "background preparation should highlight the new text: {tokens:?}"
     );
     assert_eq!(ts_parser_set_language_call_count(), 2);
 }

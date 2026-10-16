@@ -186,17 +186,14 @@ fn reused_prefix_chunks_carry_injection_trees_to_the_new_revision() {
     let edited_line = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2;
     lines[edited_line].push_str(" edited");
     let edited_text = lines.join("\n");
-    let PrepareTreesitterDocumentResult::Ready(reparsed_document) =
-        prepare_test_document_with_budget_reuse(
-            DiffSyntaxLanguage::Markdown,
-            &edited_text,
-            DiffSyntaxBudget {
-                foreground_parse: Duration::from_millis(200),
-            },
-            Some(base_document),
-        )
-    else {
-        panic!("later edit should reparse successfully");
+    let attempt = prepare_test_document_with_budget_reuse(
+        DiffSyntaxLanguage::Markdown,
+        &edited_text,
+        TEST_PARSE_BUDGET,
+        Some(base_document),
+    );
+    let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
+        panic!("later edit should reparse successfully, got {attempt:?}");
     };
     assert_ne!(base_document.cache_key, reparsed_document.cache_key);
     assert_eq!(

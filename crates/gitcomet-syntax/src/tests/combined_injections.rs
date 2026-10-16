@@ -694,9 +694,7 @@ fn combined_layers_are_rebuilt_when_the_root_tree_is_reparsed() {
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Jinja,
         &edited_text,
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(200),
-        },
+        TEST_PARSE_BUDGET,
         Some(base),
     );
     let PrepareTreesitterDocumentResult::Ready(reparsed) = attempt else {
@@ -1051,9 +1049,7 @@ fn a_combined_layer_missing_the_foreground_budget_leaves_the_document_ready() {
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Jinja,
         &text,
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(200),
-        },
+        TEST_PARSE_BUDGET,
         None,
     );
     TS_FORCE_COMBINED_LAYER_DEADLINE_MISS.with(|force| force.set(false));

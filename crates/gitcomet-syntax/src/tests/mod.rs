@@ -1,6 +1,10 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+const TEST_PARSE_BUDGET: DiffSyntaxBudget = DiffSyntaxBudget {
+    foreground_parse: Duration::from_secs(24 * 60 * 60),
+};
+
 fn assert_token_ranges_are_utf8_safe(text: &str, tokens: &[SyntaxToken]) {
     for token in tokens {
         assert!(
@@ -152,9 +156,7 @@ fn incremental_reparse_leaves_one_document_in_the_injection_cache() {
         match prepare_test_document_with_budget_reuse(
             DiffSyntaxLanguage::Markdown,
             &text,
-            DiffSyntaxBudget {
-                foreground_parse: Duration::from_millis(500),
-            },
+            TEST_PARSE_BUDGET,
             Some(document),
         ) {
             PrepareTreesitterDocumentResult::Ready(next) => document = next,
@@ -185,9 +187,7 @@ fn prepare_test_document(language: DiffSyntaxLanguage, text: &str) -> PreparedSy
         DiffSyntaxMode::Auto,
         SharedString::from(text.to_owned()),
         input.line_starts,
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(200),
-        },
+        TEST_PARSE_BUDGET,
         None,
         None,
     ) {

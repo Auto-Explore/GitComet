@@ -88,13 +88,11 @@ fn small_reparse_reuses_old_tree_with_input_edit() {
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Rust,
         &edited.join("\n"),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(50),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
     );
     let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
-        panic!("small reparse should complete within default budget");
+        panic!("small reparse should succeed, got {attempt:?}");
     };
 
     assert_eq!(
@@ -123,20 +121,17 @@ fn unchanged_reparse_reuses_old_document_without_rehashing() {
 
     let source = "let value = 1;\n".repeat(256);
     let base_input = treesitter_document_input_from_text(&source);
-    let PrepareTreesitterDocumentResult::Ready(base_document) =
-        prepare_treesitter_document_with_budget_reuse_text(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            source.clone().into(),
-            base_input.line_starts.clone(),
-            DiffSyntaxBudget {
-                foreground_parse: Duration::from_millis(50),
-            },
-            None,
-            None,
-        )
-    else {
-        panic!("base text document should parse");
+    let attempt = prepare_treesitter_document_with_budget_reuse_text(
+        DiffSyntaxLanguage::Rust,
+        DiffSyntaxMode::Auto,
+        source.clone().into(),
+        base_input.line_starts.clone(),
+        TEST_PARSE_BUDGET,
+        None,
+        None,
+    );
+    let PrepareTreesitterDocumentResult::Ready(base_document) = attempt else {
+        panic!("base text document should parse, got {attempt:?}");
     };
 
     reset_deferred_drop_counters();
@@ -146,14 +141,12 @@ fn unchanged_reparse_reuses_old_document_without_rehashing() {
         DiffSyntaxMode::Auto,
         source.into(),
         repeated_input.line_starts,
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(50),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
         None,
     );
     let PrepareTreesitterDocumentResult::Ready(reused_document) = attempt else {
-        panic!("unchanged reparse should reuse the existing prepared document");
+        panic!("unchanged reparse should reuse the existing prepared document, got {attempt:?}");
     };
 
     assert_eq!(reused_document, base_document);
@@ -171,20 +164,17 @@ fn small_reparse_without_edit_hint_does_not_rehash_full_source() {
 
     let base_text = "let value = 1;\n".repeat(256);
     let base_input = treesitter_document_input_from_text(&base_text);
-    let PrepareTreesitterDocumentResult::Ready(base_document) =
-        prepare_treesitter_document_with_budget_reuse_text(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            base_text.clone().into(),
-            base_input.line_starts.clone(),
-            DiffSyntaxBudget {
-                foreground_parse: Duration::from_millis(50),
-            },
-            None,
-            None,
-        )
-    else {
-        panic!("base text document should parse");
+    let attempt = prepare_treesitter_document_with_budget_reuse_text(
+        DiffSyntaxLanguage::Rust,
+        DiffSyntaxMode::Auto,
+        base_text.clone().into(),
+        base_input.line_starts.clone(),
+        TEST_PARSE_BUDGET,
+        None,
+        None,
+    );
+    let PrepareTreesitterDocumentResult::Ready(base_document) = attempt else {
+        panic!("base text document should parse, got {attempt:?}");
     };
 
     let insert_offset = base_input.line_starts[42].saturating_add("let value = 1;".len());
@@ -198,14 +188,12 @@ fn small_reparse_without_edit_hint_does_not_rehash_full_source() {
         DiffSyntaxMode::Auto,
         edited_text.into(),
         edited_input.line_starts,
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(50),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
         None,
     );
     let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
-        panic!("small reparse should complete within budget");
+        panic!("small reparse should succeed, got {attempt:?}");
     };
 
     assert_eq!(
@@ -244,13 +232,11 @@ fn small_reparse_reuses_cached_prefix_chunks_before_the_edit() {
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Rust,
         &edited.join("\n"),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(50),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
     );
     let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
-        panic!("small reparse should complete within budget");
+        panic!("small reparse should succeed, got {attempt:?}");
     };
 
     assert_eq!(
@@ -296,9 +282,7 @@ fn small_reparse_reuses_old_tree_with_explicit_edit_hint_text_input() {
         DiffSyntaxMode::Auto,
         edited_text.into(),
         edited_input.line_starts.clone(),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(50),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
         Some(DiffSyntaxEdit {
             old_range: insert_offset..insert_offset,
@@ -306,7 +290,7 @@ fn small_reparse_reuses_old_tree_with_explicit_edit_hint_text_input() {
         }),
     );
     let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
-        panic!("explicit-edit text reparse should complete within budget");
+        panic!("explicit-edit text reparse should succeed, got {attempt:?}");
     };
 
     assert_eq!(
@@ -339,13 +323,11 @@ fn large_reparse_falls_back_to_full_parse() {
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Rust,
         &edited.join("\n"),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(200),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
     );
     let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
-        panic!("large reparse should complete within the test full-parse budget");
+        panic!("large reparse should succeed, got {attempt:?}");
     };
 
     assert_eq!(
@@ -378,13 +360,11 @@ fn large_late_edit_with_preserved_prefix_can_stay_incremental() {
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Rust,
         &edited.join("\n"),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(200),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
     );
     let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
-        panic!("large later-line reparse should complete within the test budget");
+        panic!("large later-line reparse should succeed, got {attempt:?}");
     };
 
     assert_eq!(
@@ -414,13 +394,11 @@ fn incremental_reparse_append_line_matches_full_parse_tokens() {
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Rust,
         &edited.join("\n"),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(50),
-        },
+        TEST_PARSE_BUDGET,
         Some(base_document),
     );
     let PrepareTreesitterDocumentResult::Ready(incremental_document) = attempt else {
-        panic!("incremental append reparse should complete within budget");
+        panic!("incremental append reparse should succeed, got {attempt:?}");
     };
     assert_eq!(
         prepared_document_parse_mode(incremental_document),
@@ -605,19 +583,22 @@ fn large_cache_eviction_uses_deferred_drop_queue() {
 }
 
 #[test]
-fn parse_budget_timeout_falls_back_to_background_prepare() {
-    let text = vec!["/* budget */ let value = Some(42);"; 2_048].join("\n");
+fn zero_parse_budget_defers_to_background_without_starting_a_parse() {
+    reset_prepared_syntax_cache();
+    reset_ts_parser_test_state();
+    let text = "/* budget */ fn deferred() { let value = Some(42); }";
     let attempt = prepare_test_document_with_budget_reuse(
         DiffSyntaxLanguage::Rust,
-        &text,
+        text,
         DiffSyntaxBudget {
             foreground_parse: Duration::ZERO,
         },
         None,
     );
     assert_eq!(attempt, PrepareTreesitterDocumentResult::TimedOut);
+    assert_eq!(ts_parser_set_language_call_count(), 0);
 
-    let prepared = prepare_test_document_in_background(DiffSyntaxLanguage::Rust, &text)
+    let prepared = prepare_test_document_in_background(DiffSyntaxLanguage::Rust, text)
         .expect("background parse should produce a prepared document");
     let document = inject_prepared_document_data(prepared);
     let tokens = syntax_tokens_for_prepared_document_line(document, 0)

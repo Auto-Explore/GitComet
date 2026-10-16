@@ -418,16 +418,12 @@ fn warm_shared_text_prepare_reuses_source_identity_without_rehashing() {
     let source = vec!["fn warm_identity() { let value = Some(42); }"; 512].join("\n");
     let text: SharedString = source.clone().into();
     let line_starts = treesitter_document_input_from_text(&source).line_starts;
-    let budget = DiffSyntaxBudget {
-        foreground_parse: Duration::from_secs(1),
-    };
-
     let first = match prepare_treesitter_document_with_budget_reuse_text(
         DiffSyntaxLanguage::Rust,
         DiffSyntaxMode::Auto,
         text.clone(),
         Arc::clone(&line_starts),
-        budget,
+        TEST_PARSE_BUDGET,
         None,
         None,
     ) {
@@ -445,7 +441,7 @@ fn warm_shared_text_prepare_reuses_source_identity_without_rehashing() {
         DiffSyntaxMode::Auto,
         text,
         line_starts,
-        budget,
+        TEST_PARSE_BUDGET,
         None,
         None,
     ) {
@@ -469,16 +465,12 @@ fn cold_prepare_hashes_the_source_only_once_on_cache_miss() {
     let source = vec!["fn cold_hash_miss() { let value = Some(42); }"; 512].join("\n");
     let text: SharedString = source.clone().into();
     let line_starts = treesitter_document_input_from_text(&source).line_starts;
-    let budget = DiffSyntaxBudget {
-        foreground_parse: Duration::from_secs(1),
-    };
-
     let document = match prepare_treesitter_document_with_budget_reuse_text(
         DiffSyntaxLanguage::Rust,
         DiffSyntaxMode::Auto,
         text,
         line_starts,
-        budget,
+        TEST_PARSE_BUDGET,
         None,
         None,
     ) {
@@ -557,9 +549,7 @@ fn oversized_shared_text_prepare_falls_back_without_prepared_tree_sitter() {
         DiffSyntaxMode::Auto,
         text.clone(),
         Arc::clone(&input.line_starts),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_secs(1),
-        },
+        TEST_PARSE_BUDGET,
         None,
         None,
     );

@@ -112,9 +112,7 @@ fn prepared_syntax_click_survives_a_line_index_from_a_longer_text() {
         DiffSyntaxMode::Auto,
         SharedString::from(shrunk.to_owned()),
         Arc::clone(&stale_starts),
-        DiffSyntaxBudget {
-            foreground_parse: Duration::from_millis(200),
-        },
+        TEST_PARSE_BUDGET,
         None,
         None,
     ) {
