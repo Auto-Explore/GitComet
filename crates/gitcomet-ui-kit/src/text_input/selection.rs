@@ -789,78 +789,84 @@ impl TextInput {
         crate::text_selection::is_word_char(ch)
     }
 
-    pub(super) fn skip_left_while(
-        s: &str,
+    /// Walks left over characters matching `predicate`, a row at a time: a
+    /// whitespace run crosses rows, since the newline above counts as one.
+    fn skip_left_while(
+        content: &TextModelSnapshot,
         mut offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        offset = offset.min(s.len());
+        offset = offset.min(content.len());
         while offset > 0 {
-            let Some((idx, ch)) = s[..offset].char_indices().next_back() else {
-                return 0;
-            };
-            if !predicate(ch) {
-                break;
+            let row_start = content
+                .line_range_with_terminator(content.row_for_offset(offset - 1))
+                .start;
+            for (ix, ch) in content.slice(row_start..offset).char_indices().rev() {
+                if !predicate(ch) {
+                    return offset;
+                }
+                offset = row_start + ix;
             }
-            offset = idx;
         }
         offset
     }
 
-    pub(super) fn skip_right_while(
-        s: &str,
+    /// Walks right over characters matching `predicate`, a row at a time.
+    fn skip_right_while(
+        content: &TextModelSnapshot,
         mut offset: usize,
         mut predicate: impl FnMut(char) -> bool,
     ) -> usize {
-        offset = offset.min(s.len());
-        while offset < s.len() {
-            let Some(ch) = s[offset..].chars().next() else {
-                break;
-            };
-            if !predicate(ch) {
-                break;
+        offset = offset.min(content.len());
+        while offset < content.len() {
+            let row_end = content
+                .line_range_with_terminator(content.row_for_offset(offset))
+                .end;
+            for ch in content.slice(offset..row_end).chars() {
+                if !predicate(ch) {
+                    return offset;
+                }
+                offset += ch.len_utf8();
             }
-            offset += ch.len_utf8();
         }
         offset
     }
 
     pub(super) fn previous_word_start(&self, offset: usize) -> usize {
-        let s = self.content.as_ref();
-        let mut offset = offset.min(s.len());
+        let content = self.content.snapshot();
+        let mut offset = offset.min(content.len());
 
         // Skip any whitespace to the left of the cursor.
-        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
+        offset = Self::skip_left_while(&content, offset, |ch| ch.is_whitespace());
 
         // Skip punctuation/symbols (e.g. '.' '/' '-') so word navigation doesn't get stuck on them.
-        offset = Self::skip_left_while(s, offset, |ch| {
+        offset = Self::skip_left_while(&content, offset, |ch| {
             !ch.is_whitespace() && !Self::is_word_char(ch)
         });
 
         // Skip any whitespace again, then skip the word itself.
-        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
-        Self::skip_left_while(s, offset, Self::is_word_char)
+        offset = Self::skip_left_while(&content, offset, |ch| ch.is_whitespace());
+        Self::skip_left_while(&content, offset, Self::is_word_char)
     }
 
     pub(super) fn next_word_end(&self, offset: usize) -> usize {
-        let s = self.content.as_ref();
-        let offset = offset.min(s.len());
-        if offset >= s.len() {
-            return s.len();
-        }
-
-        let Some(ch) = s[offset..].chars().next() else {
-            return s.len();
+        let content = self.content.snapshot();
+        let offset = offset.min(content.len());
+        let row_end = content
+            .line_range_with_terminator(content.row_for_offset(offset))
+            .end;
+        let Some(ch) = content.slice(offset..row_end).chars().next() else {
+            return content.len();
         };
 
         if ch.is_whitespace() {
-            return Self::skip_right_while(s, offset, |ch| ch.is_whitespace());
+            return Self::skip_right_while(&content, offset, |ch| ch.is_whitespace());
         }
         if Self::is_word_char(ch) {
-            return Self::skip_right_while(s, offset, Self::is_word_char);
+            return Self::skip_right_while(&content, offset, Self::is_word_char);
         }
 
-        Self::skip_right_while(s, offset, |ch| {
+        Self::skip_right_while(&content, offset, |ch| {
             !ch.is_whitespace() && !Self::is_word_char(ch)
         })
     }

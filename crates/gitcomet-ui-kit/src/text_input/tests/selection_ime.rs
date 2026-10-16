@@ -96,6 +96,81 @@ fn row_bounds_and_protected_checks_do_not_flatten_the_document(cx: &mut gpui::Te
     });
 }
 
+/// The word moves as they ran on a flattened copy of the text.
+fn word_moves_on_flat_text(text: &str, offset: usize) -> (usize, usize) {
+    let left = |mut offset: usize, keep: &dyn Fn(char) -> bool| {
+        while let Some((ix, ch)) = text[..offset].char_indices().next_back() {
+            if !keep(ch) {
+                break;
+            }
+            offset = ix;
+        }
+        offset
+    };
+    let right = |mut offset: usize, keep: &dyn Fn(char) -> bool| {
+        while let Some(ch) = text[offset..].chars().next() {
+            if !keep(ch) {
+                break;
+            }
+            offset += ch.len_utf8();
+        }
+        offset
+    };
+    let space = |ch: char| ch.is_whitespace();
+    let word = TextInput::is_word_char;
+    let symbol = |ch: char| !ch.is_whitespace() && !TextInput::is_word_char(ch);
+    let start = left(left(left(left(offset, &space), &symbol), &space), &word);
+    let end = match text[offset..].chars().next() {
+        None => text.len(),
+        Some(ch) if space(ch) => right(offset, &space),
+        Some(ch) if word(ch) => right(offset, &word),
+        Some(_) => right(offset, &symbol),
+    };
+    (start, end)
+}
+
+/// Word moves walk the document a row at a time while whitespace runs cross
+/// rows, and must land where they did on the flattened text.
+#[gpui::test]
+fn word_moves_cross_rows_like_the_flat_text(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "fn alpha(b: u8) {\r\n\n   \n  šeta_2 = ö.ä;\n}\n";
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text, cx);
+            for offset in (0..=text.len()).filter(|ix| text.is_char_boundary(*ix)) {
+                assert_eq!(
+                    (
+                        input.previous_word_start(offset),
+                        input.next_word_end(offset)
+                    ),
+                    word_moves_on_flat_text(text, offset),
+                    "at {offset}"
+                );
+            }
+        });
+    });
+}
+
+/// Word moves after an edit read rows, not a flattened copy of the document.
+#[gpui::test]
+fn word_moves_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+
+            input.previous_word_start(middle);
+            input.next_word_end(middle);
+
+            assert!(!input.content.snapshot().is_materialized());
+        });
+    });
+}
+
 // The identical-replacement shortcut compared by copying the replaced range
 // first, so select-all and typing copied the whole buffer on every keystroke.
 #[gpui::test]
