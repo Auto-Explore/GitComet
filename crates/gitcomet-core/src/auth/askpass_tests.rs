@@ -22,11 +22,27 @@ fn explicit_auth(challenge: &AuthChallenge, secret: &str) -> PromptAuth {
     })
 }
 
+/// Runs the freshly written helper. A test forking on another thread while
+/// `create_askpass_script` writes the script keeps that writable fd until its
+/// child execs, and exec'ing the script meanwhile fails with ETXTBSY.
+/// https://github.com/rust-lang/rust/issues/114554
+fn run_helper(command: &mut Command) -> std::process::Output {
+    for _ in 0..500 {
+        match command.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result.expect("run real askpass helper"),
+        }
+    }
+    panic!("askpass helper stayed busy");
+}
+
 fn answer(askpass: &AskPassScript, auth: Option<&PromptAuth>, prompt: &str) -> String {
     let mut command = Command::new(askpass.path());
     command.arg(prompt).stdin(Stdio::null());
     configure_git_auth_prompt(&mut command, auth, askpass);
-    let output = command.output().expect("run real askpass helper");
+    let output = run_helper(&mut command);
     assert!(output.status.success(), "askpass helper did not complete");
     assert!(output.stderr.is_empty(), "askpass helper wrote an error");
     String::from_utf8(output.stdout)
@@ -558,7 +574,7 @@ Are you sure you want to continue connecting (yes/no/[fingerprint])?";
     let askpass = create_askpass_script().expect("askpass helper");
     let mut command = multiline_prompt_command(&askpass, prompt);
     configure_git_auth_prompt(&mut command, None, &askpass);
-    let output = command.output().expect("run real askpass helper");
+    let output = run_helper(&mut command);
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "");
     let AuthOutcome::NeedsInput(request) =
@@ -610,7 +626,7 @@ fn host_key_confirmation_answers_only_the_host_the_user_saw() {
     let answer_multiline = |prompt: &str| {
         let mut command = multiline_prompt_command(&askpass, prompt);
         configure_git_auth_prompt(&mut command, Some(&auth), &askpass);
-        let output = command.output().expect("run real askpass helper");
+        let output = run_helper(&mut command);
         assert!(output.status.success());
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     };
@@ -638,7 +654,7 @@ fn host_key_confirmation_answers_only_the_host_the_user_saw() {
     });
     let mut command = multiline_prompt_command(&askpass, &confirmed);
     configure_git_auth_prompt(&mut command, Some(&unbound), &askpass);
-    let output = command.output().expect("run real askpass helper");
+    let output = run_helper(&mut command);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
         "",
@@ -686,13 +702,7 @@ fn a_replay_asks_about_an_earlier_host_left_unanswered() {
         for prompt in [&first, &second] {
             let mut command = multiline_prompt_command(&askpass, prompt);
             configure_git_auth_prompt(&mut command, Some(&auth), &askpass);
-            assert!(
-                command
-                    .output()
-                    .expect("run real askpass helper")
-                    .status
-                    .success()
-            );
+            assert!(run_helper(&mut command).status.success());
         }
 
         assert_eq!(
@@ -740,7 +750,7 @@ fn non_ascii_prompts_survive_a_fresh_console_code_page() {
         .stdin(Stdio::null())
         .creation_flags(0x0800_0000);
     configure_git_auth_prompt(&mut command, None, &askpass);
-    assert!(command.output().expect("run helper").status.success());
+    assert!(run_helper(&mut command).status.success());
     assert_eq!(
         resolve_auth_outcome(None, &askpass, REFUSED_PUBLIC_KEY, false),
         AuthOutcome::NeedsInput(challenge(prompt)),
