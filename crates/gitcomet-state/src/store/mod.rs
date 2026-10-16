@@ -763,10 +763,15 @@ impl AppStore {
                         let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
                             continue;
                         };
-                        let Some(change) = refresh.into_change(repo) else {
+                        let Some(refresh) = refresh.into_refresh(repo) else {
                             continue;
                         };
-                        (Msg::RepoExternallyChanged { repo_id, change }, None)
+                        if refresh.refresh_worktree_dirty && state.active_repo == Some(repo_id) {
+                            deferred_commands.push_front(StoreWorkerCommand::Msg(Box::new(
+                                Msg::LoadWorktreeDirty { repo_id },
+                            )));
+                        }
+                        (Msg::RepoExternallyChanged { repo_id, change: refresh.change }, None)
                     }
                     StoreWorkerCommand::Shutdown => break,
                     StoreWorkerCommand::Repository {

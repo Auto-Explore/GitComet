@@ -975,18 +975,8 @@ pub(super) fn repo_monitor_thread(
                     change.git_state,
                     change.tags,
                 );
-                // Other checkouts can have working-file edits without any
-                // changed Git metadata. Keep their background status fallback
-                // when the current repository's history refresh is skipped.
-                if !change.git_state
-                    && worktree_owner.is_none()
-                    && active_repo_id.load(Ordering::SeqCst) == repo_id.0
-                {
-                    msg_tx.send_repo_monitor_or_log(
-                        Msg::LoadWorktreeDirty { repo_id },
-                        "repo activation worktree refresh",
-                    );
-                }
+                // The store validates this reply against current state before
+                // deciding whether linked checkouts need a dirty scan.
                 due_change = Some(
                     due_change.map_or(change.clone(), |pending| merge_change(pending, change)),
                 );

@@ -422,8 +422,8 @@ fn activation_checks_missed_changes_without_reloading_unchanged_git_metadata() {
     assert!(!unchanged.git_state && !unchanged.tags);
     assert!(unchanged.worktree && unchanged.index);
     assert!(
-        worktree_scan,
-        "other checkouts still need status revalidation"
+        !worktree_scan,
+        "the store decides about linked scans after validating this reply"
     );
     fs::write(root.join("source.txt"), "unseen working edit").unwrap();
     assert!(!activate().0.git_state);

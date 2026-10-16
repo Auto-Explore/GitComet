@@ -85,22 +85,45 @@ pub(in crate::store) struct CheckedActivation {
     pub change: RepoExternalChange,
 }
 
+pub(in crate::store) struct ActivationDecision {
+    pub change: RepoExternalChange,
+    pub refresh_worktree_dirty: bool,
+}
+
 impl CheckedActivation {
     /// Loads can finish while the monitor is inspecting the filesystem. Only
     /// the store can decide whether its current view still matches the input.
-    pub(in crate::store) fn into_change(
+    pub(in crate::store) fn into_refresh(
         self,
         repo: &crate::model::RepoState,
-    ) -> Option<RepoExternalChange> {
+    ) -> Option<ActivationDecision> {
         if repo.lifetime() != self.context.lifetime {
             return None;
         }
-        Some(if self.context == ActivationContext::for_repo(repo) {
+        let change = if self.context == ActivationContext::for_repo(repo) {
             self.change
         } else {
             self.change.union(RepoExternalChange::all())
+        };
+        Some(ActivationDecision {
+            // Full refreshes already request this scan. For a checked,
+            // unchanged single checkout, its last successful empty result is
+            // still complete: there is no other worktree to inspect. Linked
+            // checkouts must still scan working files that native events miss.
+            refresh_worktree_dirty: !change.git_state && !settled_single_checkout(repo),
+            change,
         })
     }
+}
+
+fn settled_single_checkout(repo: &crate::model::RepoState) -> bool {
+    use crate::model::Loadable;
+    matches!(repo.open, Loadable::Ready(()))
+        && matches!(&repo.worktrees, Loadable::Ready(worktrees)
+            if worktrees.len() == 1 && worktrees[0].path == repo.spec.workdir)
+        && matches!(&repo.worktree_dirty, Loadable::Ready(dirty) if dirty.is_empty())
+        && !repo.loads_in_flight.any_in_flight()
+        && repo.local_actions_in_flight == 0
 }
 
 impl ActivationRefresh {
@@ -676,6 +699,8 @@ mod tests {
         let moved = ActivationRefresh::prepare(dir.path(), &inputs);
         assert!(refresh.needs_discovery(moved.as_ref()));
         assert!(refresh.change(dir.path(), &backend).git_state);
+        fs::remove_dir_all(&linked).unwrap();
+        assert!(refresh.change(dir.path(), &backend).git_state);
         fs::create_dir_all(dir.path().join(".git/worktrees/new")).unwrap();
         let current = ActivationRefresh::prepare(dir.path(), &inputs);
         assert!(refresh.needs_discovery(current.as_ref()));
@@ -810,18 +835,99 @@ mod tests {
                 ..RepoExternalChange::all()
             },
         };
-        assert!(!checked().into_change(&repo).unwrap().git_state);
+        assert!(!checked().into_refresh(&repo).unwrap().change.git_state);
         // The UI accepted a different history result while metadata was read.
         let pending = checked();
         repo.log_rev += 1;
-        assert!(pending.into_change(&repo).unwrap().git_state);
+        assert!(pending.into_refresh(&repo).unwrap().change.git_state);
         let reopened = crate::model::RepoState::new_opening(repo.id, repo.spec.clone());
         let pending = CheckedActivation {
             repo_id: repo.id,
             context,
             change: RepoExternalChange::all(),
         };
-        assert!(pending.into_change(&reopened).is_none());
+        assert!(pending.into_refresh(&reopened).is_none());
+    }
+
+    #[test]
+    fn activation_only_skips_a_settled_empty_single_checkout_scan() {
+        use crate::model::{LoadKind, Loadable, RepoState};
+        use gitcomet_core::domain::{RepoSpec, Worktree, WorktreeDirtySummary};
+
+        let make_repo = || {
+            let mut repo = RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("repo"),
+                },
+            );
+            repo.set_open(Loadable::Ready(()));
+            repo.set_worktrees(Loadable::Ready(vec![Worktree {
+                path: repo.spec.workdir.clone(),
+                head: None,
+                branch: Some("main".into()),
+                detached: false,
+            }]));
+            repo.set_worktree_dirty(Loadable::Ready(Vec::new()));
+            repo
+        };
+        let decide = |repo: &RepoState| {
+            CheckedActivation {
+                repo_id: repo.id,
+                context: ActivationContext::for_repo(repo),
+                change: RepoExternalChange {
+                    git_state: false,
+                    tags: false,
+                    ..RepoExternalChange::all()
+                },
+            }
+            .into_refresh(repo)
+            .unwrap()
+        };
+        assert!(!decide(&make_repo()).refresh_worktree_dirty);
+        type Invalidate = fn(&mut RepoState);
+        let cases: [(&str, Invalidate); 8] = [
+            ("unknown list", |repo| {
+                repo.set_worktrees(Loadable::NotLoaded)
+            }),
+            ("failed list", |repo| {
+                repo.set_worktrees(Loadable::Error("unavailable".into()))
+            }),
+            ("unknown dirty scan", |repo| {
+                repo.set_worktree_dirty(Loadable::NotLoaded)
+            }),
+            ("failed dirty scan", |repo| {
+                repo.set_worktree_dirty(Loadable::Error("unavailable".into()))
+            }),
+            ("retained dirty rows", |repo| {
+                repo.set_worktree_dirty(Loadable::Ready(vec![WorktreeDirtySummary::default()]))
+            }),
+            ("list in flight", |repo| {
+                repo.loads_in_flight.request(LoadKind::Worktrees);
+            }),
+            ("scan in flight", |repo| {
+                repo.loads_in_flight
+                    .request_worktree_dirty(crate::model::WorktreeDirtyScope::All);
+            }),
+            ("local action", |repo| repo.local_actions_in_flight = 1),
+        ];
+        for (case, invalidate) in cases {
+            let mut repo = make_repo();
+            invalidate(&mut repo);
+            assert!(decide(&repo).refresh_worktree_dirty, "{case}");
+        }
+        let mut repo = make_repo();
+        let mut list = repo.worktrees.ready().unwrap().as_ref().clone();
+        let mut linked = list[0].clone();
+        linked.path = PathBuf::from("linked");
+        list.push(linked.clone());
+        repo.set_worktrees(Loadable::Ready(list));
+        assert!(decide(&repo).refresh_worktree_dirty, "linked checkout");
+        repo.set_worktrees(Loadable::Ready(vec![linked]));
+        assert!(
+            decide(&repo).refresh_worktree_dirty,
+            "sole path is not the current checkout"
+        );
     }
 
     #[test]

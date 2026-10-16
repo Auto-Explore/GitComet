@@ -541,6 +541,110 @@ fn repo_activation_reuses_one_worktree_listing_and_file_edits_add_none() {
 }
 
 #[test]
+fn checked_activation_skips_only_the_settled_single_checkout_listing() {
+    use crate::store::repo_monitor::{ActivationContext, CheckedActivation};
+    use gitcomet_core::domain::Worktree;
+
+    for (case, expected_lists) in [
+        ("unchanged", 0),
+        ("linked checkout", 1),
+        ("unknown list", 1),
+        ("failed list", 1),
+        ("unknown dirty scan", 1),
+        ("failed dirty scan", 1),
+        ("stale context", 1),
+        ("explicit refresh", 1),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = canonicalize_or_original(dir.path().to_path_buf());
+        let repo_id = RepoId(24);
+        let calls = Arc::new(RepoActivationCallCounts::default());
+        let mut state = active_ready_repo_state(repo_id, workdir.clone());
+        let repo = &mut state.repos[0];
+        repo.set_head_branch(Loadable::Ready("main".into()));
+        repo.set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })));
+        repo.set_branches(Loadable::Ready(Vec::new()));
+        repo.set_remote_branches(Loadable::Ready(Vec::new()));
+        repo.set_tags(Loadable::Ready(Vec::new()));
+        repo.upstream_divergence = Loadable::Ready(None);
+        repo.sequencer_state = Loadable::Ready(Default::default());
+        repo.merge_commit_message = Loadable::Ready(None);
+        let own = Worktree {
+            path: workdir.clone(),
+            head: None,
+            branch: Some("main".into()),
+            detached: false,
+        };
+        repo.set_worktrees(Loadable::Ready(vec![own.clone()]));
+        repo.set_worktree_dirty(Loadable::Ready(Vec::new()));
+        match case {
+            "linked checkout" => repo.set_worktrees(Loadable::Ready(vec![
+                own,
+                Worktree {
+                    path: workdir.join("linked"),
+                    head: None,
+                    branch: Some("linked".into()),
+                    detached: false,
+                },
+            ])),
+            "unknown list" => repo.set_worktrees(Loadable::NotLoaded),
+            "failed list" => repo.set_worktrees(Loadable::Error("unavailable".into())),
+            "unknown dirty scan" => repo.set_worktree_dirty(Loadable::NotLoaded),
+            "failed dirty scan" => repo.set_worktree_dirty(Loadable::Error("unavailable".into())),
+            _ => {}
+        }
+        let checked = CheckedActivation {
+            repo_id,
+            context: ActivationContext::for_repo(repo),
+            change: RepoExternalChange {
+                git_state: false,
+                tags: false,
+                ..RepoExternalChange::all()
+            },
+        };
+        if case == "stale context" {
+            repo.log_rev += 1;
+        }
+        let (store, _events) = AppStore::new_test(Arc::new(FailingBackend));
+        store.disable_repo_monitors_for_test();
+        store.replace_snapshot_for_test(Arc::new(state));
+        store.insert_repo_for_test(
+            repo_id,
+            Arc::new(RepoActivationRecordingRepo::new(workdir, calls.clone())),
+        );
+        if case == "explicit refresh" {
+            store.dispatch(Msg::LoadWorktreeDirty { repo_id });
+        } else {
+            store.msg_tx.send_activation_refresh_or_log(checked);
+        }
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        super::worktree_redirect::wait_until(case, || {
+            !store.snapshot().repos[0].loads_in_flight.any_in_flight()
+        });
+        store
+            .shutdown_for_test()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(
+            calls.worktree_lists.load(Ordering::Relaxed),
+            expected_lists,
+            "{case}"
+        );
+        assert_eq!(
+            calls.log.load(Ordering::Relaxed) > 0,
+            case == "stale context",
+            "{case}"
+        );
+    }
+}
+
+#[test]
 fn repo_monitor_stop_send_failures_are_recorded() {
     let before = monitor_impl::monitor_failure_count(monitor_impl::MonitorFailureKind::Stop);
 
