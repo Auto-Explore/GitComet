@@ -1,37 +1,44 @@
 use super::*;
+use unicode_segmentation::UnicodeSegmentation as _;
 
-/// Caret steps segment only the caret's row, which must agree with the whole
-/// document everywhere: CR LF, combining marks, ZWJ emoji and flag pairs, at
-/// row starts and ends.
+/// Caret steps segment only the chunks around the caret, which must agree with
+/// the whole document everywhere: CR LF, combining marks, ZWJ emoji and flag
+/// pairs, at row edges and split across rope chunk seams. The dense texts are
+/// shifted a byte at a time so the seams land inside every kind of cluster.
 #[gpui::test]
 fn caret_steps_agree_with_whole_document_graphemes(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
-    let text = "a\r\nb\u{301}\n👩\u{200d}👩\u{200d}👧\r\n🇫🇮🇸🇪\n\ne\u{301}\u{302}x\r\n";
-    let starts: Vec<usize> = text.grapheme_indices(true).map(|(ix, _)| ix).collect();
-    cx.update(|_, app| {
-        input.update(app, |input, cx| {
-            input.set_text(text, cx);
-            for offset in 0..=text.len() {
-                let previous = starts.iter().rev().find(|ix| **ix < offset);
-                let next = starts.iter().find(|ix| **ix > offset);
-                assert_eq!(
-                    input.previous_boundary(offset),
-                    previous.copied().unwrap_or(0),
-                    "before {offset}"
-                );
-                assert_eq!(
-                    input.next_boundary(offset),
-                    next.copied().unwrap_or(text.len()),
-                    "after {offset}"
-                );
-            }
+    let unit = "a\r\nb\u{301}\n👩\u{200d}👩\u{200d}👧\r\n🇫🇮🇸🇪\n\ne\u{301}\u{302}x\r\n";
+    let dense = "👩\u{200d}👩\u{200d}👧🇫🇮🇸🇪e\u{301}\u{302}\r\n".repeat(60);
+    let texts = std::iter::once(unit.to_owned())
+        .chain((0..12).map(|pad| format!("{}{dense}", "x".repeat(pad))));
+    for text in texts {
+        let starts: Vec<usize> = text.grapheme_indices(true).map(|(ix, _)| ix).collect();
+        cx.update(|_, app| {
+            input.update(app, |input, cx| {
+                input.set_text(text.as_str(), cx);
+                for offset in 0..=text.len() {
+                    let before = starts.partition_point(|ix| *ix < offset);
+                    let after = starts.partition_point(|ix| *ix <= offset);
+                    assert_eq!(
+                        input.previous_boundary(offset),
+                        before.checked_sub(1).map_or(0, |ix| starts[ix]),
+                        "before {offset}"
+                    );
+                    assert_eq!(
+                        input.next_boundary(offset),
+                        starts.get(after).copied().unwrap_or(text.len()),
+                        "after {offset}"
+                    );
+                }
+            });
         });
-    });
+    }
 }
 
-/// Arrow keys, Backspace and Delete after an edit read the caret's row, not
-/// a flattened copy of the document; at 4.8 MB that copy plus a scan from the
-/// far end took 23-29 ms per key.
+/// Arrow keys, Backspace and Delete after an edit read the text around the
+/// caret, not a flattened copy of the document; at 4.8 MB that copy plus a
+/// scan from the far end took 23-29 ms per key.
 #[gpui::test]
 fn caret_steps_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
@@ -197,6 +204,28 @@ fn word_moves_on_a_long_row_copy_nothing(cx: &mut gpui::TestAppContext) {
 
             input.previous_word_start(middle);
             input.next_word_end(middle);
+
+            assert_eq!(OWNED_SLICES.with(|count| count.get()), 0);
+        });
+    });
+}
+
+/// On one long row, a minified file, a caret step copies nothing: reading the
+/// caret's row as a slice copied the whole row on every key, 39.6 ms at 4.8 MB.
+#[gpui::test]
+fn caret_steps_on_a_long_row_copy_nothing(cx: &mut gpui::TestAppContext) {
+    use crate::text_model::OWNED_SLICES;
+    let (input, cx) = multiline_input(cx);
+    let text = "alpha beta.gamma ".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+            OWNED_SLICES.with(|count| count.set(0));
+
+            input.previous_boundary(middle);
+            input.next_boundary(middle);
 
             assert_eq!(OWNED_SLICES.with(|count| count.get()), 0);
         });

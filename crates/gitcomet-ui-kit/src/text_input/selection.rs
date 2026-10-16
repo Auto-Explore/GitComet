@@ -3,6 +3,8 @@ use super::state::*;
 use super::wrap::*;
 use super::*;
 use crate::text_selection::is_word_char;
+use gitcomet_text::rope::Rope;
+use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
 impl TextInput {
     /// Collapses the selection once another surface has taken the window's.
@@ -752,38 +754,64 @@ impl TextInput {
         offset
     }
 
-    /// The grapheme boundary before `offset`. A cluster never spans a line
-    /// break (CR LF ends on its LF), so segmenting the row that holds the
-    /// previous character answers for the whole document.
+    /// The grapheme boundary before `offset`. The segmenter reads the rope's
+    /// chunks back from the caret only as far as the cluster needs, so a step
+    /// costs the same however long the row is.
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
-        let content = self.content.snapshot();
-        let offset = offset.min(content.len());
-        if offset == 0 {
-            return 0;
+        let rope = self.content.snapshot().rope();
+        // Inside a character, step from its end: no boundary lies between.
+        let mut offset = offset.min(rope.len());
+        while !rope.is_char_boundary(offset) {
+            offset += 1;
         }
-        let row = content.line_range_with_terminator(content.row_for_offset(offset - 1));
-        content
-            .slice(row.clone())
-            .grapheme_indices(true)
-            .map(|(ix, _)| row.start + ix)
-            .take_while(|ix| *ix < offset)
-            .last()
-            .unwrap_or(row.start)
+        let mut cursor = GraphemeCursor::new(offset, rope.len(), true);
+        let mut chunk_end = offset;
+        for chunk in rope.reversed_chunks_in_range(0..offset) {
+            let chunk_start = chunk_end - chunk.len();
+            loop {
+                match cursor.prev_boundary(chunk, chunk_start) {
+                    Ok(boundary) => return boundary.unwrap_or(0),
+                    Err(GraphemeIncomplete::PreContext(end)) => {
+                        provide_grapheme_context(&mut cursor, &rope, end)
+                    }
+                    Err(GraphemeIncomplete::PrevChunk) => break,
+                    Err(GraphemeIncomplete::NextChunk | GraphemeIncomplete::InvalidOffset) => {
+                        unreachable!("the chunk ends at or after the grapheme cursor")
+                    }
+                }
+            }
+            chunk_end = chunk_start;
+        }
+        0
     }
 
-    /// The grapheme boundary after `offset`, from the caret's row alone.
+    /// The grapheme boundary after `offset`, read forward the same way.
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
-        let content = self.content.snapshot();
-        if offset >= content.len() {
-            return content.len();
+        let rope = self.content.snapshot().rope();
+        let len = rope.len();
+        // Inside a character, step from its start: no boundary lies between.
+        let mut offset = offset.min(len);
+        while !rope.is_char_boundary(offset) {
+            offset -= 1;
         }
-        let row = content.line_range_with_terminator(content.row_for_offset(offset));
-        content
-            .slice(row.clone())
-            .grapheme_indices(true)
-            .map(|(ix, _)| row.start + ix)
-            .find(|ix| *ix > offset)
-            .unwrap_or(row.end)
+        let mut cursor = GraphemeCursor::new(offset, len, true);
+        let mut chunk_start = offset;
+        for chunk in rope.chunks_in_range(offset..len) {
+            loop {
+                match cursor.next_boundary(chunk, chunk_start) {
+                    Ok(boundary) => return boundary.unwrap_or(len),
+                    Err(GraphemeIncomplete::PreContext(end)) => {
+                        provide_grapheme_context(&mut cursor, &rope, end)
+                    }
+                    Err(GraphemeIncomplete::NextChunk) => break,
+                    Err(GraphemeIncomplete::PrevChunk | GraphemeIncomplete::InvalidOffset) => {
+                        unreachable!("the chunk starts at or before the grapheme cursor")
+                    }
+                }
+            }
+            chunk_start += chunk.len();
+        }
+        len
     }
 
     /// Walks left over characters matching `predicate`, reading only the ones
@@ -1338,4 +1366,14 @@ impl TextInput {
             }
         }
     }
+}
+
+/// Hands `cursor` the text ending at `end`, which it asks for when its own
+/// chunk cannot settle a boundary: a flag pair or ZWJ sequence that started in
+/// an earlier chunk.
+fn provide_grapheme_context(cursor: &mut GraphemeCursor, rope: &Rope, end: usize) {
+    let Some(context) = rope.reversed_chunks_in_range(0..end).next() else {
+        unreachable!("pre-context is only requested after a nonzero chunk start");
+    };
+    cursor.provide_context(context, end - context.len());
 }
