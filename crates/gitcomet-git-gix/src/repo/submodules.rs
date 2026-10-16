@@ -69,13 +69,6 @@ impl GixRepo {
         list_submodules_in(&repo, cancellation)
     }
 
-    pub(super) fn submodule_diff_summary_impl(
-        &self,
-        target: &DiffTarget,
-    ) -> Result<SubmoduleDiffSummary> {
-        self.submodule_diff_summary_cancellable_impl(target, &CancellationToken::new())
-    }
-
     pub(super) fn submodule_diff_summary_cancellable_impl(
         &self,
         target: &DiffTarget,
@@ -351,8 +344,8 @@ impl GixRepo {
             Error::new(ErrorKind::Backend(format!(
                 "Removed submodule '{}' from the worktree and index, but failed to clean metadata: {err}",
                 path.display()
-            )))
-        })?;
+            ))).with_source(err)
+})?;
 
         Ok(CommandOutput {
             command: format!("Remove submodule {}", path.display()),
@@ -404,9 +397,9 @@ fn collect_repo_submodules(
 ) -> Result<()> {
     cancellation.check_cancelled()?;
     let mut gitlinks = collect_gitlinks(repo, cancellation)?;
-    if let Some(submodules) = crate::refs::submodules(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
-    {
+    if let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })? {
         for submodule in submodules {
             cancellation.check_cancelled()?;
             let relative_path = submodule
@@ -520,8 +513,9 @@ fn collect_repo_untrusted_submodule_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = crate::refs::submodules(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(());
     };
@@ -562,8 +556,9 @@ fn update_repo_submodules_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
-    let Some(submodules) = crate::refs::submodules(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(());
     };
@@ -623,8 +618,9 @@ fn collect_target_submodule_untrusted_sources(
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = crate::refs::submodules(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(false);
     };
@@ -685,8 +681,9 @@ fn load_target_submodule_recursive(
     outputs: &mut Vec<CommandOutput>,
     remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
-    let Some(submodules) = crate::refs::submodules(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(false);
     };
@@ -841,7 +838,7 @@ fn submodule_worktree_diff_summary(
 ) -> Result<SubmoduleDiffSummary> {
     cancellation.check_cancelled()?;
     let index = crate::refs::index_or_load_from_head_or_empty(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
     let gitlink = index_gitlink_at_path(&index, path);
     if gitlink.is_none() {
         // The sidebar includes nested paths. Resolve their pointers against
@@ -865,9 +862,9 @@ fn submodule_worktree_diff_summary(
     let mut submodule = None;
     let mut configured_repo = None;
     if let Some(gitlink) = gitlink {
-        if let Some(configured) = crate::refs::submodules(repo)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
-        {
+        if let Some(configured) = crate::refs::submodules(repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+        })? {
             for candidate in configured {
                 cancellation.check_cancelled()?;
                 let candidate_path = candidate.path().map_err(|e| {
@@ -1170,11 +1167,12 @@ fn resolve_submodule_target_commit_id(
     reference: &str,
 ) -> Result<gix::ObjectId> {
     let object = crate::refs::resolve_required(repo, reference)
-        .map_err(|_| {
+        .map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
                 "submodule reference '{}' did not resolve to an object",
                 reference
             )))
+            .with_source(error)
         })?
         .object()
         .map_err(|e| {
@@ -1223,6 +1221,7 @@ fn gitlink_commit_id_at_revision(
                 "resolve revision '{revision}' for submodule '{}': {e}",
                 path.display()
             )))
+            .with_source(e)
         })?;
     gitlink_commit_id_in_object(repo, object_id, path)
 }
@@ -1266,8 +1265,9 @@ fn head_gitlink_commit_id(repo: &gix::Repository, path: &Path) -> Result<Option<
 }
 
 fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result<Option<PathBuf>> {
-    let Some(submodules) = crate::refs::submodules(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(None);
     };
@@ -1310,6 +1310,8 @@ fn cleanup_failed_submodule_add_error(
                     "{} could not inspect failed submodule add state: {probe_err}",
                     gitcomet_core::identity::current().display_name()
                 ),
+                probe_err,
+                workdir,
             );
         }
     };
@@ -1323,6 +1325,8 @@ fn cleanup_failed_submodule_add_error(
         Err(cleanup_err) => append_failed_submodule_add_note(
             err,
             &format!("Cleanup after failed submodule add also failed: {cleanup_err}"),
+            cleanup_err,
+            workdir,
         ),
     }
 }
@@ -1345,8 +1349,9 @@ fn submodule_path_registered(repo: &gix::Repository, path: &Path) -> Result<bool
 }
 
 fn configured_submodule_path_exists(repo: &gix::Repository, path: &Path) -> Result<bool> {
-    let Some(submodules) = crate::refs::submodules(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    let Some(submodules) = crate::refs::submodules(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))).with_source(e)
+    })?
     else {
         return Ok(false);
     };
@@ -1418,6 +1423,8 @@ fn remove_failed_submodule_checkout(
             "remove failed submodule checkout {}: {e}",
             checkout_path.display()
         )))
+        .with_source(e)
+        .with_context("remove failed submodule checkout", Some(&checkout_path))
     })
 }
 
@@ -1439,14 +1446,20 @@ fn checkout_git_dir_reference(checkout_path: &Path) -> Result<Option<PathBuf>> {
     let metadata = match fs::metadata(&dot_git) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(Error::new(ErrorKind::Io(err.kind()))),
+        Err(err) => {
+            return Err(
+                Error::from(err).with_context("inspect submodule Git directory", Some(&dot_git))
+            );
+        }
     };
 
     if metadata.is_dir() {
         return Ok(Some(canonicalize_or_original(dot_git)));
     }
 
-    let bytes = fs::read(&dot_git).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let bytes = fs::read(&dot_git).map_err(|error| {
+        Error::from(error).with_context("read submodule Git directory", Some(&dot_git))
+    })?;
     let text = bytes_to_text_preserving_utf8(&bytes);
     let Some(git_dir) = text.strip_prefix("gitdir:") else {
         return Ok(None);
@@ -1461,8 +1474,31 @@ fn checkout_git_dir_reference(checkout_path: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(canonicalize_or_original(resolved)))
 }
 
-fn append_failed_submodule_add_note(err: Error, note: &str) -> Error {
-    match err.kind() {
+#[derive(Debug)]
+struct SubmoduleCleanupError {
+    original: Error,
+    cleanup: Error,
+}
+
+impl std::fmt::Display for SubmoduleCleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}; {}", self.original, self.cleanup)
+    }
+}
+
+impl std::error::Error for SubmoduleCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.original)
+    }
+}
+
+fn append_failed_submodule_add_note(
+    err: Error,
+    note: &str,
+    cleanup: Error,
+    workdir: &Path,
+) -> Error {
+    let error = match err.kind() {
         ErrorKind::Git(failure) => {
             let mut detailed_failure = GitFailure::new(
                 failure.command(),
@@ -1481,7 +1517,13 @@ fn append_failed_submodule_add_note(err: Error, note: &str) -> Error {
             Error::new(ErrorKind::Git(detailed_failure))
         }
         _ => Error::new(ErrorKind::Backend(format!("{err}\n\n{note}"))),
-    }
+    };
+    error
+        .with_source(SubmoduleCleanupError {
+            original: err,
+            cleanup,
+        })
+        .with_context("clean up failed submodule add", Some(workdir))
 }
 
 fn remove_local_submodule_config_section_if_present(
@@ -1500,9 +1542,7 @@ fn remove_local_submodule_config_section_if_present(
         .arg("--local")
         .arg("--remove-section")
         .arg(&section);
-    let output = cmd
-        .output()
-        .map_err(|err| Error::new(ErrorKind::Io(err.kind())))?;
+    let output = cmd.output().map_err(Error::from)?;
     if output.status.success() {
         return Ok(());
     }
@@ -1566,6 +1606,8 @@ fn remove_submodule_git_dir(git_dir: &Path, logical_name: &Path) -> Result<()> {
             "remove submodule git dir {}: {e}",
             module_dir.display()
         )))
+        .with_source(e)
+        .with_context("remove submodule Git directory", Some(&module_dir))
     })?;
     prune_empty_module_parent_dirs(&modules_root, &module_dir)
 }
@@ -1582,6 +1624,8 @@ fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Re
                 "read module metadata dir {}: {e}",
                 dir.display()
             )))
+            .with_source(e)
+            .with_context("read module metadata directory", Some(dir))
         })?;
         match entries.next() {
             None => {
@@ -1590,6 +1634,8 @@ fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Re
                         "remove empty module metadata dir {}: {e}",
                         dir.display()
                     )))
+                    .with_source(e)
+                    .with_context("remove empty module metadata directory", Some(dir))
                 })?;
                 current = dir.parent();
             }
@@ -1598,7 +1644,9 @@ fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Re
                 return Err(Error::new(ErrorKind::Backend(format!(
                     "read module metadata dir entry {}: {e}",
                     dir.display()
-                ))));
+                )))
+                .with_source(e)
+                .with_context("read module metadata directory entry", Some(dir)));
             }
         }
     }
@@ -1611,7 +1659,7 @@ fn collect_gitlinks(
 ) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {
     cancellation.check_cancelled()?;
     let index = crate::refs::index_or_load_from_head_or_empty(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))).with_source(e))?;
     let path_backing = index.path_backing();
 
     let mut gitlinks: BTreeMap<PathBuf, GitlinkIndexState> = BTreeMap::new();
@@ -1648,7 +1696,8 @@ fn open_gitlink_repo(
         Err(e) if e.is_not_found() => Ok(None),
         Err(e) => Err(crate::open::map_open_error(
             e,
-            &format!("gix open nested submodule repo {}", path.display()),
+            "gix open nested submodule repo",
+            &path,
         )),
     }
 }
@@ -1656,8 +1705,9 @@ fn open_gitlink_repo(
 fn open_configured_submodule_repo(
     submodule: &gix::Submodule<'_>,
 ) -> Result<Option<gix::Repository>> {
-    let state = crate::refs::submodule_state(submodule)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule state: {e}"))))?;
+    let state = crate::refs::submodule_state(submodule).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix submodule state: {e}"))).with_source(e)
+    })?;
     if !(state.repository_exists && state.worktree_checkout) {
         return Ok(None);
     }
@@ -1857,9 +1907,7 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
         .arg("--get")
         .arg(key);
 
-    let output = cmd
-        .output()
-        .map_err(|err| Error::new(ErrorKind::Io(err.kind())))?;
+    let output = cmd.output().map_err(Error::from)?;
 
     if output.status.success() {
         let value = bytes_to_text_preserving_utf8(&output.stdout);
@@ -1916,9 +1964,68 @@ mod tests {
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
     use std::cell::Cell;
+    use std::error::Error as _;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
+
+    #[test]
+    fn submodule_cleanup_failure_keeps_original_git_details_and_both_causes() {
+        let failure = GitFailure::new(
+            "git submodule add",
+            GitFailureId::CommandFailed,
+            Some(128),
+            vec![0xff, b'\n'],
+            vec![0xfe, b'\n'],
+            Some("clone failed".into()),
+        );
+        for kind in [
+            ErrorKind::Backend("clone failed".into()),
+            ErrorKind::Git(failure.clone()),
+        ] {
+            let original = Error::new(kind).with_source(std::io::Error::from_raw_os_error(5));
+            let cleanup = Error::new(ErrorKind::Backend("cleanup failed".into()))
+                .with_source(std::io::Error::from_raw_os_error(28));
+            let workdir = Path::new("submodule-workdir");
+            let note = "Cleanup after failed submodule add also failed: cleanup failed";
+            let error = append_failed_submodule_add_note(original, note, cleanup, workdir);
+            match error.kind() {
+                ErrorKind::Backend(message) => {
+                    assert_eq!(message, &format!("clone failed\n\n{note}"));
+                }
+                ErrorKind::Git(actual) => {
+                    assert_eq!(actual.command(), "git submodule add");
+                    assert_eq!(actual.id(), GitFailureId::CommandFailed);
+                    assert_eq!(actual.exit_code(), Some(128));
+                    assert_eq!(actual.stdout(), &[0xff, b'\n']);
+                    assert_eq!(actual.stderr(), &[0xfe, b'\n']);
+                    assert_eq!(
+                        actual.detail(),
+                        Some(format!("clone failed\n\n{note}").as_str())
+                    );
+                }
+                other => panic!("classification changed: {other:?}"),
+            }
+            assert_eq!(error.context().unwrap().path(), Some(workdir));
+            let cause = error
+                .source()
+                .unwrap()
+                .downcast_ref::<SubmoduleCleanupError>()
+                .unwrap();
+            for (error, expected) in [(&cause.original, 5), (&cause.cleanup, 28)] {
+                assert_eq!(
+                    error
+                        .source()
+                        .unwrap()
+                        .downcast_ref::<std::io::Error>()
+                        .unwrap()
+                        .raw_os_error(),
+                    Some(expected)
+                );
+            }
+            assert!(std::ptr::addr_eq(cause.source().unwrap(), &cause.original));
+        }
+    }
 
     /// One unreadable submodule costs its own subtree and nothing else.
     #[test]
@@ -2295,10 +2402,10 @@ mod tests {
 
         let repo = open_repo(tmp.path());
         let summary = repo
-            .submodule_diff_summary_impl(&DiffTarget::working_tree(
-                submodule_path.into(),
-                DiffArea::Staged,
-            ))
+            .submodule_diff_summary_cancellable_impl(
+                &DiffTarget::working_tree(submodule_path.into(), DiffArea::Staged),
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("staged submodule removal summary");
         let staged_range = summary
             .ranges

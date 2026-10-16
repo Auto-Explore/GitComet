@@ -175,7 +175,13 @@ fn status_select_all_is_scoped_to_each_focused_section(cx: &mut gpui::TestAppCon
                 selection.untracked.len() + selection.unstaged.len() + selection.staged.len(),
                 expected.len()
             );
-            assert!(!view.read(app).main_pane.read(app).diff_text_has_selection());
+            assert!(
+                !view
+                    .read(app)
+                    .diff_renderer
+                    .read(app)
+                    .diff_text_has_selection()
+            );
         });
     }
 }
@@ -620,7 +626,13 @@ fn status_select_all_on_empty_or_loading_sections_never_selects_diff_text(
         draw_and_drain_test_window(cx);
         assert!(selected(cx, &view, DiffArea::Staged).is_empty());
         cx.update(|_window, app| {
-            assert!(!view.read(app).main_pane.read(app).diff_text_has_selection());
+            assert!(
+                !view
+                    .read(app)
+                    .diff_renderer
+                    .read(app)
+                    .diff_text_has_selection()
+            );
             assert_eq!(
                 view.read(app).store.snapshot().repos[0].local_actions_in_flight,
                 0

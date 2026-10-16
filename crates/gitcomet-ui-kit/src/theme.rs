@@ -11,6 +11,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod window;
+pub use window::{follow_window_theme, forget_window_theme, set_window_theme};
+
 pub const DEFAULT_DARK_THEME_KEY: &str = "gitcomet_dark";
 pub const DEFAULT_LIGHT_THEME_KEY: &str = "gitcomet_light";
 pub const AMBER_DARK_THEME_KEY: &str = "amber_dark";
@@ -1552,7 +1555,7 @@ fn house_theme_label(key: &str, label: String) -> String {
     };
     format!(
         "{} {appearance}",
-        gitcomet_core::identity::current().display_name()
+        gitcomet_base::identity::current().display_name()
     )
 }
 

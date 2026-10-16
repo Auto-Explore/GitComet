@@ -2,7 +2,7 @@
 //! external write to the file they show, and never swap content unasked.
 
 use super::*;
-use crate::view::panes::main::DiskSurface;
+use crate::view::panes::diff::DiskSurface;
 
 fn unique_workdir(label: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -69,7 +69,7 @@ impl Harness {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 push_test_state(this, Arc::clone(&state), cx);
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     if edit {
                         pane.ensure_file_editor_loaded(cx);
                     } else {
@@ -123,7 +123,7 @@ impl Harness {
         cx.update(|_window, app| {
             self.view.update(app, |this, cx| {
                 push_test_state(this, next, cx);
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     if edit {
                         pane.ensure_file_editor_loaded(cx);
                     } else {
@@ -151,10 +151,10 @@ impl Harness {
     fn with_pane<R>(
         &self,
         cx: &mut gpui::VisualTestContext,
-        f: impl FnOnce(&MainPaneView, &gpui::App) -> R,
+        f: impl FnOnce(&DiffRenderer, &gpui::App) -> R,
     ) -> R {
         cx.update(|_window, app| {
-            let pane = self.view.read(app).main_pane.read(app);
+            let pane = self.view.read(app).diff_renderer.read(app);
             f(pane, app)
         })
     }
@@ -162,11 +162,11 @@ impl Harness {
     fn update_pane(
         &self,
         cx: &mut gpui::VisualTestContext,
-        f: impl FnOnce(&mut MainPaneView, &mut gpui::Context<MainPaneView>),
+        f: impl FnOnce(&mut DiffRenderer, &mut gpui::Context<DiffRenderer>),
     ) {
         cx.update(|_window, app| {
             self.view.update(app, |this, cx| {
-                this.main_pane.update(cx, f);
+                this.diff_renderer.update(cx, f);
             });
         });
         cx.run_until_parked();
@@ -192,12 +192,11 @@ impl Harness {
         for _ in 0..200 {
             cx.run_until_parked();
             let drained = cx.update(|_, app| {
-                let main = self.view.read(app).main_pane.clone();
-                main.update(app, |pane, cx| {
-                    let snapshot = pane.store.snapshot();
-                    pane.process_file_editor_saves(&snapshot, cx);
-                    pane.file_editor_saves.is_empty()
-                })
+                let main = self.view.read(app).diff_renderer.clone();
+                let owner = self.view.read(app).ui_model.read(app).documents.clone();
+                let snapshot = main.read(app).store.snapshot().expect("window store");
+                owner.finish_saves(&snapshot, app);
+                main.read(app).editor_documents.pending().is_empty()
             });
             if drained {
                 cx.run_until_parked();
@@ -210,7 +209,7 @@ impl Harness {
 
     fn editor_error(&self, cx: &mut gpui::VisualTestContext) -> Option<String> {
         self.with_pane(cx, |pane, _| {
-            pane.file_editor_error.as_ref().map(|e| e.to_string())
+            pane.file_editor_error().as_ref().map(|e| e.to_string())
         })
     }
 
@@ -608,13 +607,13 @@ async fn a_failed_read_retries_when_the_file_comes_back(cx: &mut gpui::TestAppCo
 
     h.update_pane(cx, |pane, cx| pane.reload_file_from_disk_notice(cx));
     assert!(
-        h.with_pane(cx, |pane, _| pane.file_editor_error.is_some()),
+        h.with_pane(cx, |pane, _| pane.file_editor_error().is_some()),
         "reloading a deleted file shows why there is nothing to edit"
     );
 
     std::fs::write(h.file(), "fn main() { back(); }\n").expect("recreate");
     h.bump(cx, 2, 0);
-    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error.is_none()));
+    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error().is_none()));
     assert_eq!(h.editor_text(cx), "fn main() { back(); }\n");
     assert_eq!(h.notice(cx), None);
     h.cleanup();
@@ -779,13 +778,13 @@ async fn review_regression_auto_saved_repo_move_keeps_stashed_edits_for_explicit
                 .expect("a stashed conflict needs explicit resolution before moving");
             assert_eq!(prompt.files, vec![SharedString::from("main.rs")]);
             assert!(this.pending_unsaved_file_edits_flush.is_none());
-            let pane = this.main_pane.read(cx);
+            let pane = this.diff_renderer.read(cx);
             let key = pane
                 .document_identity(repo_id, &h.file_rel)
                 .expect("open repository");
             let stashed = pane
-                .file_editor_stash
-                .get(&key)
+                .editor_documents
+                .stashed(&key)
                 .expect("keep the stashed edits");
             assert!(stashed.is_dirty());
             assert_eq!(stashed.text.as_ref(), "// my edits\nfn main() {}\n");
@@ -821,7 +820,14 @@ async fn review_regression_auto_saved_repo_move_waits_for_a_nonconflicting_write
                 this.pending_unsaved_file_edits_flush.is_some(),
                 "the move must wait for the pending auto-save write"
             );
-            assert!(!this.main_pane.read(cx).file_editor_saves.is_empty());
+            assert!(
+                !this
+                    .diff_renderer
+                    .read(cx)
+                    .editor_documents
+                    .pending()
+                    .is_empty()
+            );
             assert!(
                 this.state.repos.iter().any(|repo| repo.id == repo_id),
                 "the repository must stay attached while its save is in flight"
@@ -1013,7 +1019,7 @@ async fn edits_made_while_a_reload_reads_are_kept(cx: &mut gpui::TestAppContext)
     // Reload starts a read; a keystroke lands before it does.
     cx.update(|_window, app| {
         h.view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.reload_file_from_disk_notice(cx);
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "// typed\n", cx);
@@ -1039,9 +1045,9 @@ async fn a_check_in_flight_does_not_bring_back_a_dismissed_notice(cx: &mut gpui:
 
     cx.update(|_window, app| {
         h.view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.spawn_file_disk_check(
-                    crate::view::panes::main::DiskCheckCause::WorktreeChanged,
+                    crate::view::panes::diff::DiskCheckCause::WorktreeChanged,
                     cx,
                 );
                 pane.dismiss_file_disk_notice(cx);
@@ -1104,9 +1110,9 @@ async fn a_failed_read_retries_once_per_worktree_change(cx: &mut gpui::TestAppCo
     std::fs::remove_file(h.file()).expect("delete");
     h.bump(cx, 1, 0);
     h.update_pane(cx, |pane, cx| pane.reload_file_from_disk_notice(cx));
-    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error.is_some()));
+    assert!(h.with_pane(cx, |pane, _| pane.file_editor_error().is_some()));
 
-    let seq_before = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq);
+    let seq_before = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq());
     // One worktree change, then a status reload publishing more snapshots
     // before the retry has landed.
     let mut first = AppState::clone(&h.current());
@@ -1122,7 +1128,7 @@ async fn a_failed_read_retries_once_per_worktree_change(cx: &mut gpui::TestAppCo
         });
     }
     cx.run_until_parked();
-    let rereads = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq) - seq_before;
+    let rereads = h.with_pane(cx, |pane, _| pane.file_editor_reread_seq()) - seq_before;
     assert_eq!(rereads, 1, "one change, one retry");
     h.cleanup();
 }

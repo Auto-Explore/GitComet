@@ -12,6 +12,7 @@ workspace = true
 
 [features]
 benchmarks = ["gitcomet-core/benchmarks"]
+test-support = []
 
 [[example]]
 name = "status-refresh-bench"
@@ -19,7 +20,7 @@ required-features = ["benchmarks"]
 
 [[example]]
 name = "operation-context-probe"
-required-features = ["benchmarks"]
+required-features = ["benchmarks", "test-support"]
 
 [[example]]
 name = "interaction-probe"
@@ -33,6 +34,7 @@ path = "tests/support/mergetool_helper.rs"
 test = false
 bench = false
 doc = false
+required-features = ["test-support"]
 
 [dependencies]
 crc32fast = { workspace = true }
@@ -56,5 +58,6 @@ gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 winapi-util = "0.1.11"
 
 [dev-dependencies]
+gitcomet-git-gix = { path = ".", features = ["test-support"] }
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
 syn = { version = "3", features = ["full", "visit"] }

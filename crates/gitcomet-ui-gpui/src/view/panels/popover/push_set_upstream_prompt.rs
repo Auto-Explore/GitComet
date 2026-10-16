@@ -206,6 +206,10 @@ pub(super) fn panel(
                         || (this.push_upstream_remote_selected_index.is_none()
                             && selected_remote.as_deref() == Some(name.as_str()));
                     let selected_name = name.clone();
+                    let tone = crate::view::menu_presentation::context_menu_tone(
+                        name.as_str(),
+                        Some("icons/cloud.svg"),
+                    );
                     options.child(
                         components::ContextMenuEntry::new(
                             ("push_upstream_remote_option", ix),
@@ -214,6 +218,7 @@ pub(super) fn panel(
                         .icon(components::ContextMenuIconSlot::Icon(
                             "icons/cloud.svg".into(),
                         ))
+                        .tone(tone)
                         .selected(is_selected)
                         .tooltip_host(this.tooltip_host.clone())
                         .on_select(

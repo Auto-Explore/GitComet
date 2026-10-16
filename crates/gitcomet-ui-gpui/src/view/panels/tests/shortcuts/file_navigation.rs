@@ -37,7 +37,7 @@ fn set_diff_selection_area(
 ) {
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_selection_anchor = anchor;
                 pane.diff_selection_range = range;
                 cx.notify();
@@ -121,8 +121,8 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
     set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
@@ -184,8 +184,8 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
     set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, -1, window, cx)
         })
     });
@@ -250,8 +250,8 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     );
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
@@ -408,7 +408,7 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
         "file icon and path share a centre: {icon:?}, {text:?}"
     );
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).rendered_file_kind()),
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).rendered_file_kind()),
         Some(FileStatusKind::Modified)
     );
 
@@ -483,7 +483,7 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     focus_commit_message_input(cx, &view);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -907,7 +907,7 @@ fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
     bind_app_keys_and_global_diff_fallback_for_test(cx);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -1093,8 +1093,8 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
     );
 
     let moved = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
@@ -1246,7 +1246,7 @@ fn the_diff_controls_name_their_keys(cx: &mut gpui::TestAppContext) {
         "Stage at the right edge: {stage:?} in {bar:?}"
     );
 
-    let alt = crate::view::shortcut_labels::alt_shortcut;
+    let alt = crate::kit::components::alt_shortcut;
     for (selector, expected) in [
         (
             "diff_prev_file",

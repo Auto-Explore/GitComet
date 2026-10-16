@@ -3,7 +3,7 @@
 use super::LargeFileSettings;
 use super::{
     CommandLogEntry, ConflictState, DiffState, FileBrowserState, GitHookOperation, HistoryState,
-    InteractiveCherryPickSetup, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight,
+    InteractiveCherryPickSetup, InteractiveRebaseSetup, LoadKind, Loadable, RepoLoadsInFlight,
     RepoNavigationState, RepoPendingState, Shared, SubmoduleAddProgressState, TagPushPreviewState,
 };
 use crate::session;
@@ -17,6 +17,28 @@ use std::time::SystemTime;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RepoId(pub u64);
+
+/// Identifies one repository lifetime across all stores in this process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct RepoLifetime(u64);
+
+impl RepoLifetime {
+    pub(crate) fn allocate() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_LIFETIME: AtomicU64 = AtomicU64::new(1);
+        Self(
+            NEXT_LIFETIME
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                    next.checked_add(1)
+                })
+                .expect("repository lifetime identity space exhausted"),
+        )
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// GitComet's side of a repository's maintenance: git's recommendation and a
 /// run the user started. Git never runs it by itself for GitComet's commands.
@@ -37,9 +59,8 @@ pub struct RepoMaintenanceState {
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
-    /// Unique per repository opened in this process. `RepoId`s are per store
-    /// and may be reused; the pair (window, id, lifetime) never is.
-    lifetime: u64,
+    /// Unique per repository opened in this process, including across stores.
+    lifetime: RepoLifetime,
     session_workdir_key: Arc<str>,
     /// A loading tab created from an external folder drop. It remains visible
     /// while the backend validates it, but session persistence must ignore it
@@ -198,9 +219,11 @@ pub struct RepoState {
     /// tab is refreshed on its next activation.
     pub left_mid_refresh: bool,
 
-    pub feedback: RepoFeedbackState,
+    /// Shared until changed: its bounded logs would otherwise be deep-copied
+    /// with the rest of the state on every dispatch.
+    pub feedback: Arc<RepoFeedbackState>,
     pub pending: RepoPendingState,
-    pub load_epoch: u64,
+    pub load_epoch: crate::model::RepoLoadEpoch,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -288,18 +311,26 @@ pub enum DiagnosticKind {
 }
 
 impl RepoState {
+    /// The feedback logs for writing, copied first if a snapshot shares them.
+    pub fn feedback_mut(&mut self) -> &mut RepoFeedbackState {
+        Arc::make_mut(&mut self.feedback)
+    }
+
     /// See the `lifetime` field.
     pub fn lifetime(&self) -> u64 {
+        self.lifetime.get()
+    }
+
+    pub fn lifetime_id(&self) -> RepoLifetime {
         self.lifetime
     }
 
     pub fn new_opening(id: RepoId, spec: RepoSpec) -> Self {
-        static NEXT_LIFETIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let session_workdir_key = session::path_storage_key_shared(&spec.workdir);
         Self {
             id,
             spec,
-            lifetime: NEXT_LIFETIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            lifetime: RepoLifetime::allocate(),
             session_workdir_key,
             provisional_external_drop_open: false,
             external_drop_previous_active_repo: None,
@@ -397,9 +428,9 @@ impl RepoState {
             local_worktree_write_rev: 0,
             last_active_at: None,
             left_mid_refresh: false,
-            feedback: RepoFeedbackState::default(),
+            feedback: Arc::default(),
             pending: RepoPendingState::default(),
-            load_epoch: 0,
+            load_epoch: crate::model::RepoLoadEpoch(0),
         }
     }
 
@@ -600,12 +631,8 @@ impl RepoState {
         // pending so its result schedules a refetch; otherwise that stale map
         // lands as `Ready` and, since callers only refetch on
         // `NotLoaded | Error`, it would never be corrected.
-        if self
-            .loads_in_flight
-            .is_in_flight(RepoLoadsInFlight::REF_METADATA)
-        {
-            self.loads_in_flight
-                .request(RepoLoadsInFlight::REF_METADATA);
+        if self.loads_in_flight.is_in_flight(LoadKind::RefMetadata) {
+            self.loads_in_flight.request(LoadKind::RefMetadata);
         }
         if matches!(self.ref_metadata, Loadable::NotLoaded) {
             return;
@@ -1102,9 +1129,9 @@ impl RepoState {
             || self.commit_in_flight > 0
     }
 
-    pub(crate) fn bump_load_epoch(&mut self) -> u64 {
+    pub(crate) fn bump_load_epoch(&mut self) -> super::RepoLoadEpoch {
         let previous = self.load_epoch;
-        self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.load_epoch = self.load_epoch.next();
         self.history_state.indexed.cancel();
         self.history_state.authors.cancellation.cancel();
         self.history_state.find.interrupt();

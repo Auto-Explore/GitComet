@@ -31,10 +31,8 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let theme = self.theme;
         input.update(cx, |input, cx| {
             input.clear_transient_key_presses();
-            input.set_theme(theme, cx);
             input.set_text("", cx);
         });
         self.picker_prompt_scroll

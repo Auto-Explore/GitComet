@@ -856,14 +856,14 @@ fn explorer_root_creation_follows_pinned_rows_and_pinned_rows_reject_drops(
             view.store.replace_snapshot_for_test(state.clone());
             test_support::push_test_state(view, state.clone(), cx);
             view.set_sidebar_collapsed(false, cx);
-            view.main_pane
+            view.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
         })
     });
     cx.run_until_parked();
     cx.update(|_, app| {
         view.update(app, |view, cx| {
-            view.main_pane.update(cx, |pane, cx| {
+            view.diff_renderer.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, "// unsaved\n", cx)
                 });

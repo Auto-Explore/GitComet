@@ -3,7 +3,7 @@ use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::mod_helpers::TextFormatMenuSection;
 
-impl MainPaneView {
+impl DiffRenderer {
     /// The file view's format chips, `[encoding ▾] [line ending ▾] [Tab ▾]`,
     /// centred in the diff's bottom bar. Only shown when the view knows
     /// how the file was read.

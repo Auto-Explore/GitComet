@@ -12,11 +12,13 @@ use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
+#[cfg(any(test, feature = "test-support"))]
 use rustc_hash::FxHashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 #[cfg(any(not(windows), test))]
 use std::process::Command;
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::{Mutex, OnceLock};
 
 impl GixRepo {
@@ -132,6 +134,8 @@ impl GixRepo {
                     Error::new(ErrorKind::Backend(format!(
                         "Failed to launch mergetool '{tool_name}' ({tool_executable}): {e}"
                     )))
+                    .with_source(e)
+                    .with_context("launch mergetool", Some(Path::new(tool_executable)))
                 })?
         };
 
@@ -279,12 +283,12 @@ fn run_custom_mergetool_command(
         let script_dir = tempfile::Builder::new()
             .prefix("gitcomet-mergetool-shell-")
             .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         let script_path = script_dir.path().join("run-mergetool.cmd");
         let mut script = String::from("@echo off\r\n");
         script.push_str(custom_cmd);
         script.push_str("\r\n");
-        std::fs::write(&script_path, script).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::write(&script_path, script).map_err(Error::from)?;
 
         let mut command = no_window_command("cmd");
         command.arg("/C").arg(&script_path);
@@ -294,9 +298,7 @@ fn run_custom_mergetool_command(
             .env("REMOTE", remote_path)
             .env("MERGED", merged_path)
             .current_dir(workdir);
-        command
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+        command.output().map_err(Error::from)
     }
     #[cfg(not(windows))]
     {
@@ -307,9 +309,7 @@ fn run_custom_mergetool_command(
             .env("REMOTE", remote_path)
             .env("MERGED", merged_path)
             .current_dir(workdir);
-        command
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+        command.output().map_err(Error::from)
     }
 }
 
@@ -430,35 +430,34 @@ fn resolve_mergetool_name_with_trust_mode(
     gui_default: GuiDefault,
     has_display: bool,
 ) -> Result<String> {
-    let trusted_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Trusted)?;
-    let trusted_guitool =
-        git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Trusted)?;
+    let vetted_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Trusted)?;
+    let vetted_guitool = git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Trusted)?;
     let local_tool = git_config_get_with_scope(repo, "merge.tool", GitConfigScope::Repository)?;
     let local_guitool =
         git_config_get_with_scope(repo, "merge.guitool", GitConfigScope::Repository)?;
 
-    let trusted_choice = choose_mergetool_name(
-        trusted_tool.clone(),
-        trusted_guitool.clone(),
+    let vetted_choice = choose_mergetool_name(
+        vetted_tool.clone(),
+        vetted_guitool.clone(),
         gui_default,
         has_display,
     )
     .ok();
     let tool_name = choose_mergetool_name(
-        local_tool.clone().or(trusted_tool),
-        local_guitool.clone().or(trusted_guitool),
+        local_tool.clone().or(vetted_tool),
+        local_guitool.clone().or(vetted_guitool),
         gui_default,
         has_display,
     )?;
 
-    if trusted_choice.as_deref() == Some(tool_name.as_str())
+    if vetted_choice.as_deref() == Some(tool_name.as_str())
         || builtin_tool_key(&tool_name).is_some()
         || repo_local_mergetool_command_allowed(repo, &tool_name)?
     {
         return Ok(tool_name);
     }
-    if let Some(trusted) = trusted_choice {
-        return Ok(trusted);
+    if let Some(vetted) = vetted_choice {
+        return Ok(vetted);
     }
 
     let key = if local_guitool.as_deref() == Some(tool_name.as_str())
@@ -523,6 +522,7 @@ fn untrusted_repo_local_mergetool_config_error(
 fn repo_local_mergetool_command_allowed(repo: &gix::Repository, tool_name: &str) -> Result<bool> {
     let consent_key =
         repo_local_mergetool_command_consent_key(repo_workdir_for_mergetool(repo), tool_name);
+    #[cfg(any(test, feature = "test-support"))]
     if test_repo_local_mergetool_command_allowed(&consent_key) {
         return Ok(true);
     }
@@ -541,9 +541,11 @@ fn repo_local_mergetool_command_consent_key(workdir: &Path, tool_name: &str) -> 
     format!("gitcomet.mergetool.allowrepolocalcmd-{repo_tool_fingerprint}")
 }
 
+#[cfg(any(test, feature = "test-support"))]
 static TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS: OnceLock<Mutex<FxHashSet<String>>> =
     OnceLock::new();
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
     let allowed =
@@ -554,6 +556,7 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
         .insert(consent_key);
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn test_repo_local_mergetool_command_allowed(consent_key: &str) -> bool {
     let Some(allowed) = TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS.get() else {
         return false;
@@ -646,7 +649,7 @@ fn build_stage_paths(
         let tmp_dir = tempfile::Builder::new()
             .prefix("gitcomet-mergetool-")
             .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .map_err(Error::from)?;
         let (tmp_dir_path, temp_dir_guard) = if keep_temporaries {
             (tmp_dir.keep(), None)
         } else {
@@ -748,6 +751,8 @@ fn validated_mergetool_path(path: &Path) -> Result<PathBuf> {
             "invalid mergetool conflict path '{}': {err}",
             path.display()
         )))
+        .with_source(err)
+        .with_context("validate mergetool conflict path", Some(path))
     })
 }
 
@@ -781,6 +786,8 @@ fn mergetool_worktree_target(workdir: &Path, path: &Path) -> Result<PathBuf> {
             "unsafe mergetool conflict path '{}': {err}",
             path.display()
         )))
+        .with_source(err)
+        .with_context("resolve mergetool conflict path", Some(&workdir.join(path)))
     })
 }
 
@@ -797,9 +804,9 @@ fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> Result<PathBuf> {
 fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<()> {
     let path = stage_path_to_fs_path(workdir, stage_path)?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::create_dir_all(parent).map_err(Error::from)?;
     }
-    std::fs::write(path, bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+    std::fs::write(path, bytes).map_err(Error::from)
 }
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
@@ -909,7 +916,7 @@ fn read_merged_file_state(path: &Path) -> Result<MergedFileState> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(MergedFileState::Present(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MergedFileState::Missing),
-        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(e) => Err(Error::from(e)),
     }
 }
 

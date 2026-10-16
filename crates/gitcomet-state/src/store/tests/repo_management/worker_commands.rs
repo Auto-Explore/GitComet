@@ -310,7 +310,11 @@ fn guarded_effect_sender_wraps_repository_load_messages() {
         crate::store::repository_preferences::PreferenceHub::new(None),
         crate::store::isolated_filesystem(),
     );
-    let guarded = sender.with_repo_load_guard(repo_id, 3, CancellationToken::new());
+    let guarded = sender.with_repo_load_guard(
+        repo_id,
+        crate::model::RepoLoadEpoch(3),
+        CancellationToken::new(),
+    );
 
     guarded.send_effect_or_log(
         Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
@@ -329,7 +333,7 @@ fn guarded_effect_sender_wraps_repository_load_messages() {
                 message,
             }) => {
                 assert_eq!(got_repo_id, repo_id);
-                assert_eq!(load_epoch, 3);
+                assert_eq!(load_epoch, crate::model::RepoLoadEpoch(3));
                 assert!(matches!(
                     *message,
                     crate::msg::InternalMsg::TagsLoaded {
@@ -470,4 +474,133 @@ fn shutdown_waits_for_its_tasks_without_draining_another_store() {
     assert!(idle_result.is_ok());
     assert_eq!(busy_pending, Err(std::sync::mpsc::TryRecvError::Empty));
     completion.recv_timeout(Duration::from_secs(3)).unwrap();
+}
+
+struct BlockedWorktreeOpen {
+    path: PathBuf,
+    opened: std::sync::mpsc::Sender<std::sync::Weak<dyn GitRepository>>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl GitBackend for BlockedWorktreeOpen {
+    fn open(&self, path: &Path) -> Result<Arc<dyn GitRepository>> {
+        let repository = gitcomet_git_gix::GixBackend.open(path)?;
+        self.opened.send(Arc::downgrade(&repository)).unwrap();
+        if path == self.path {
+            // Dropping the sender also releases the open if the test fails.
+            let _ = self.release.lock().unwrap().recv();
+        }
+        Ok(repository)
+    }
+}
+
+struct WorktreeHandleLifecycle {
+    store: AppStore,
+    events: smol::channel::Receiver<StoreEvent>,
+    opening: std::sync::mpsc::Receiver<std::sync::Weak<dyn GitRepository>>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+fn store_for_worktree_handle_lifecycle(main: &Path, linked: PathBuf) -> WorktreeHandleLifecycle {
+    let (opened, opening) = std::sync::mpsc::channel();
+    let (release, gate) = std::sync::mpsc::channel();
+    let (store, events) = AppStore::new_test(Arc::new(BlockedWorktreeOpen {
+        path: linked,
+        opened,
+        release: Mutex::new(gate),
+    }));
+    store.disable_repo_monitors_for_test();
+    load_worktree_handles_for_test(&store, RepoId(1), main);
+    WorktreeHandleLifecycle {
+        store,
+        events,
+        opening,
+        release,
+    }
+}
+
+fn load_worktree_handles_for_test(store: &AppStore, repo_id: RepoId, main: &Path) {
+    let repository = gitcomet_git_gix::GixBackend.open(main).unwrap();
+    let mut repo = RepoState::new_opening(repo_id, repository.spec().clone());
+    repo.open = Loadable::Ready(());
+    let mut state = (*store.snapshot()).clone();
+    state.repos.push(repo);
+    state.active_repo = Some(repo_id);
+    store.replace_snapshot_for_test(Arc::new(state));
+    store.insert_repo_for_test(repo_id, repository);
+    store.dispatch(Msg::LoadWorktreeDirty { repo_id });
+}
+
+#[test]
+fn close_during_linked_worktree_open_does_not_retain_handle() {
+    let (_dir, main, linked) = repo_with_linked_worktree();
+    let (_next_dir, next_main, _next_linked) = repo_with_linked_worktree();
+    let WorktreeHandleLifecycle {
+        store,
+        opening,
+        release,
+        events: _events,
+    } = store_for_worktree_handle_lifecycle(&main, linked);
+    let handle = opening.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        handle.upgrade().is_some(),
+        "the blocked open owns the handle"
+    );
+
+    store.dispatch(Msg::CloseRepo { repo_id: RepoId(1) });
+    store
+        .barrier_for_test()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(
+        store.snapshot().repos.is_empty(),
+        "close finishes before open"
+    );
+    release.send(()).unwrap();
+
+    // This store's scan executor has one worker. Entering a different checkout's
+    // open proves the blocked scan finished, without shutting the store down or
+    // depending on a cancelled load publishing a reply.
+    load_worktree_handles_for_test(&store, RepoId(2), &next_main);
+    let next_handle = opening.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(next_handle.upgrade().is_some());
+    let released_while_store_is_alive = handle.upgrade().is_none();
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    assert!(
+        released_while_store_is_alive,
+        "close must release a late backend open before the store shuts down"
+    );
+}
+
+#[test]
+fn shutdown_releases_linked_worktree_handles() {
+    let (_dir, main, linked) = repo_with_linked_worktree();
+    let WorktreeHandleLifecycle {
+        store,
+        events,
+        opening,
+        release,
+    } = store_for_worktree_handle_lifecycle(&main, linked);
+    let handle = opening.recv_timeout(Duration::from_secs(5)).unwrap();
+    release.send(()).unwrap();
+    while !matches!(store.snapshot().repos[0].worktree_dirty, Loadable::Ready(_)) {
+        smol::block_on(events.recv()).unwrap();
+    }
+    assert!(
+        handle.upgrade().is_some(),
+        "the completed scan keeps a warm handle"
+    );
+
+    store
+        .shutdown_for_test()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(
+        handle.upgrade().is_none(),
+        "shutdown releases the store's cached linked-worktree handles"
+    );
 }

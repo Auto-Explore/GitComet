@@ -107,7 +107,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 cx.notify();
             });
@@ -139,7 +139,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 // Output scroll sync on, which is the demanding case: even
                 // then the vertical axis carries no relationship between the
                 // resolved output and the columns.
@@ -161,7 +161,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
         scroll_handle_offset(
             &view
                 .read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .conflict_resolved_output_editor_scroll,
         )
@@ -174,7 +174,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
         uniform_list_max_offset(
             &view
                 .read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .conflict_resolver_diff_scroll,
         )
@@ -185,7 +185,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
         let target = point(px(0.0), px(-row * 20.0));
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, target);
                     pane.record_conflict_vertical_wheel_master(0);
                     cx.notify();
@@ -215,7 +215,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
         scroll_handle_max_offset(
             &view
                 .read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .conflict_resolved_output_editor_scroll,
         )
@@ -226,7 +226,7 @@ fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::
         let target = point(px(0.0), px(-row * 20.0));
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     set_scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll, target);
                     pane.record_conflict_vertical_wheel_master(3);
                     cx.notify();
@@ -303,7 +303,7 @@ fn conflict_resolver_materialized_output_parks_caret_at_the_start(cx: &mut gpui:
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let input = pane.conflict_resolver_input.read(app);
         assert!(
             input.text().len() > 100,
@@ -429,7 +429,7 @@ fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppConte
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 cx.notify();
             });
@@ -462,7 +462,7 @@ fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppConte
     for target in 1..5usize {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     reset_conflict_scroll_matrix_offsets(pane);
                     cx.notify();
                 });
@@ -472,7 +472,7 @@ fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppConte
 
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_jump_to_nav_target(target, cx);
                 });
             });
@@ -569,7 +569,7 @@ fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppCo
     let placeholder = crate::view::conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER;
     let output = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .conflict_resolver_input
             .read(app)
@@ -586,8 +586,8 @@ fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppCo
     let washed_ranges = |cx: &mut gpui::VisualTestContext| -> Vec<std::ops::Range<usize>> {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
-                    let wash = crate::view::panes::main::resolved_output_active_conflict_background(
+                this.diff_renderer.update(cx, |pane, cx| {
+                    let wash = crate::view::panes::diff::helpers::presentation::resolved_output_active_conflict_background(
                         pane.theme,
                     );
                     let len = pane.conflict_resolver_input.read(cx).text().len();
@@ -607,7 +607,7 @@ fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppCo
     for (conflict_ix, expected_start) in [(0usize, first), (1, second), (0, first)] {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_resolver_select_conflict(conflict_ix, cx);
                 });
             });
@@ -626,7 +626,7 @@ fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppCo
     // row the last selection put it on.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.active_conflict = None;
                 cx.notify();
             });
@@ -729,7 +729,7 @@ fn assert_conflict_highlight_ranges_are_bounded(
     stage: &str,
 ) {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let aligned_len = pane.conflict_resolver.three_way_len;
         let ranges =
             &pane.conflict_resolver.three_way_conflict_ranges[crate::view::ThreeWayColumn::Ours];
@@ -858,7 +858,7 @@ fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui:
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
             });
         });
@@ -869,7 +869,7 @@ fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui:
     // Pick a source on a conflict partway down the file — the case the user hit.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_select_conflict(3, cx);
                 pane.conflict_resolver_pick_active_conflict(
                     crate::view::conflict_resolver::ConflictChoice::Theirs,
@@ -888,7 +888,7 @@ fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui:
     // to light up the whole file below the conflict that was just resolved.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver.active_conflict = None;
                 cx.notify();
             });
@@ -963,9 +963,9 @@ fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
         },
         |pane| format!("path={:?}", pane.conflict_resolver.path.clone()),
     );
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
             cx.notify();
         });
@@ -977,7 +977,7 @@ fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
     // any of the numbers below.
     crate::view::perf::reset();
     cx.update(|window, app| {
-        main_pane.update(app, |_pane, cx| cx.notify());
+        diff_renderer.update(app, |_pane, cx| cx.notify());
         let _ = window.draw(app);
     });
     eprintln!(
@@ -989,20 +989,23 @@ fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
     let main_notifies = Arc::new(AtomicUsize::new(0));
     let _main_notify_sub = cx.update(|_window, app| {
         let main_notifies = Arc::clone(&main_notifies);
-        main_pane.update(app, |_pane, cx| {
+        diff_renderer.update(app, |_pane, cx| {
             cx.observe_self(move |_pane, _cx| {
                 main_notifies.fetch_add(1, Ordering::Relaxed);
             })
         })
     });
 
-    let streamed =
-        cx.update(|_window, app| main_pane.read(app).conflict_resolved_output_is_streamed());
+    let streamed = cx.update(|_window, app| {
+        diff_renderer
+            .read(app)
+            .conflict_resolved_output_is_streamed()
+    });
     eprintln!("MEASURE streamed={streamed}");
     eprintln!(
         "MEASURE size_of::<ShapedLine>()={} lines={}",
         std::mem::size_of::<gpui::ShapedLine>(),
-        cx.update(|_window, app| main_pane
+        cx.update(|_window, app| diff_renderer
             .read(app)
             .conflict_resolver_input
             .read(app)
@@ -1012,7 +1015,7 @@ fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
     );
 
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, _cx| {
+        diff_renderer.update(app, |pane, _cx| {
             pane.set_conflict_resolved_outline_background_delay_override_for_tests(
                 std::time::Duration::from_millis(500),
             );
@@ -1035,7 +1038,7 @@ fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
     main_notifies.store(0, Ordering::Relaxed);
     for ix in 0..5usize {
         cx.update(|_window, app| {
-            main_pane.update(app, |_pane, cx| cx.notify());
+            diff_renderer.update(app, |_pane, cx| cx.notify());
         });
         let draw_started = std::time::Instant::now();
         cx.update(|window, app| {
@@ -1056,7 +1059,7 @@ fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
         crate::view::perf::reset();
         let keystroke_started = std::time::Instant::now();
         let buffer_elapsed = cx.update(|_window, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 pane.conflict_resolver_input.update(cx, |input, cx| {
                     let at = input.text().len().min(40);
                     let started = std::time::Instant::now();
@@ -1236,9 +1239,9 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
     draw_and_drain_test_window(cx);
     draw_and_drain_test_window(cx);
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     let before = cx.update(|_window, app| {
-        main_pane
+        diff_renderer
             .read(app)
             .conflict_resolved_output_editor_scroll
             .offset()
@@ -1247,7 +1250,7 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
 
     // Jump far enough down that the target cannot already be on screen.
     let after = cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             for _ in 0..6 {
                 pane.conflict_jump_next(cx);
             }
@@ -1265,7 +1268,7 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
     // that runs on the next prepaint would jerk the view a second time.
     draw_and_drain_test_window(cx);
     let settled = cx.update(|_window, app| {
-        main_pane
+        diff_renderer
             .read(app)
             .conflict_resolved_output_editor_scroll
             .offset()
@@ -1328,11 +1331,11 @@ fn conflict_navigation_does_not_rescan_the_resolved_output(cx: &mut gpui::TestAp
     );
     draw_and_drain_test_window(cx);
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
 
     // An edit legitimately rescans. Navigation must not add any.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             let at = pane.conflict_resolver_input.read(cx).text().len();
             pane.conflict_resolver_input.update(cx, |input, cx| {
                 input.replace_utf8_range(at..at, "\n", cx);
@@ -1341,18 +1344,20 @@ fn conflict_navigation_does_not_rescan_the_resolved_output(cx: &mut gpui::TestAp
     });
     draw_and_drain_test_window(cx);
 
-    let before = cx.update(|_window, app| main_pane.read(app).conflict_resolved_output_full_scans);
+    let before =
+        cx.update(|_window, app| diff_renderer.read(app).conflict_resolved_output_full_scans);
 
     for _ in 0..4 {
         cx.update(|_window, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 pane.conflict_jump_next(cx);
             });
         });
         draw_and_drain_test_window(cx);
     }
 
-    let after = cx.update(|_window, app| main_pane.read(app).conflict_resolved_output_full_scans);
+    let after =
+        cx.update(|_window, app| diff_renderer.read(app).conflict_resolved_output_full_scans);
     assert_eq!(
         after, before,
         "four conflict jumps changed no text, so none of them may rescan the document"
@@ -1412,11 +1417,11 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
     );
     draw_and_drain_test_window(cx);
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
 
     // Nav-target positions of the first three still-open conflicts.
     let open: Vec<usize> = cx.update(|_window, app| {
-        main_pane
+        diff_renderer
             .read(app)
             .conflict_resolver
             .nav_targets
@@ -1431,14 +1436,14 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
     // Resolve the middle one, so it sits between the caret and the next open
     // conflict. This is the conflict the chord must step over.
     let middle_display = cx.update(|_window, app| {
-        main_pane.read(app).conflict_resolver.nav_targets[middle]
+        diff_renderer.read(app).conflict_resolver.nav_targets[middle]
             .display_conflict_index
             .expect("an unresolved conflict target has a display index")
     });
     // Resolve the middle conflict for real — select it and pick a side, the way
     // a user does — so the chord is exercised against genuine resolution state.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_select_conflict(middle_display, cx);
             pane.conflict_resolver_pick_active_conflict(
                 crate::view::conflict_resolver::ConflictChoice::Ours,
@@ -1448,18 +1453,20 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
     });
     draw_and_drain_test_window(cx);
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_jump_to_nav_target(start, cx);
         });
     });
     draw_and_drain_test_window(cx);
 
     let order_of = |cx: &mut gpui::VisualTestContext, target_ix: usize| -> usize {
-        cx.update(|_window, app| main_pane.read(app).conflict_resolver.nav_targets[target_ix].order)
+        cx.update(|_window, app| {
+            diff_renderer.read(app).conflict_resolver.nav_targets[target_ix].order
+        })
     };
     let anchor = |cx: &mut gpui::VisualTestContext| -> Option<usize> {
         cx.update(|_window, app| {
-            main_pane
+            diff_renderer
                 .read(app)
                 .conflict_resolver
                 .nav_anchor
@@ -1469,7 +1476,7 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
     let press = |cx: &mut gpui::VisualTestContext, chord: &str| -> bool {
         let keystroke = gpui::Keystroke::parse(chord).expect("valid chord");
         cx.update(|window, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 pane.handle_diff_shortcut(&keystroke, window, cx)
             })
         })
@@ -1478,7 +1485,7 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
     let (middle_order, beyond_order) = (order_of(cx, middle), order_of(cx, beyond));
     assert!(
         cx.update(|_window, app| {
-            !main_pane.read(app).conflict_resolver.nav_targets[middle].unresolved
+            !diff_renderer.read(app).conflict_resolver.nav_targets[middle].unresolved
         }),
         "the middle conflict must be marked resolved for this test to mean anything"
     );
@@ -1514,7 +1521,7 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
     // The chord must survive focus being in the resolved-output editor, which
     // is where a merge is actually resolved.
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             let handle = pane.conflict_resolver_input.read(cx).focus_handle();
             handle.focus(window, cx);
         });
@@ -1585,10 +1592,10 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
     );
     draw_and_drain_test_window(cx);
 
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     let open_display_indices = |cx: &mut gpui::VisualTestContext| -> Vec<usize> {
         cx.update(|_window, app| {
-            main_pane
+            diff_renderer
                 .read(app)
                 .conflict_resolver
                 .nav_targets
@@ -1607,7 +1614,7 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
         .find(|display| *display != keep_open)
     {
         cx.update(|_window, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 pane.conflict_resolver_select_conflict(display, cx);
                 pane.conflict_resolver_pick_active_conflict(
                     crate::view::conflict_resolver::ConflictChoice::Ours,
@@ -1624,7 +1631,7 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
     );
 
     let sole_target = cx.update(|_window, app| {
-        main_pane
+        diff_renderer
             .read(app)
             .conflict_resolver
             .nav_targets
@@ -1633,7 +1640,7 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
             .expect("the remaining open conflict has a nav target")
     });
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_jump_to_nav_target(sole_target, cx);
         });
     });
@@ -1641,7 +1648,7 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
 
     let anchor = |cx: &mut gpui::VisualTestContext| -> Option<usize> {
         cx.update(|_window, app| {
-            main_pane
+            diff_renderer
                 .read(app)
                 .conflict_resolver
                 .nav_anchor
@@ -1651,21 +1658,21 @@ fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestA
     let press = |cx: &mut gpui::VisualTestContext, chord: &str| -> bool {
         let keystroke = gpui::Keystroke::parse(chord).expect("valid chord");
         cx.update(|window, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 pane.handle_diff_shortcut(&keystroke, window, cx)
             })
         })
     };
 
     let sole_order = cx.update(|_window, app| {
-        main_pane.read(app).conflict_resolver.nav_targets[sole_target].order
+        diff_renderer.read(app).conflict_resolver.nav_targets[sole_target].order
     });
     assert_eq!(anchor(cx), Some(sole_order));
 
     // The toolbar reads the same predicates the chords do, so both arrows have
     // to come back with them.
     cx.update(|_window, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(
             pane.conflict_has_next_unresolved(),
             "next-unresolved must be offered while a conflict is still open"
@@ -1728,9 +1735,14 @@ fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppC
         resolved_by_hand,
     );
     draw_and_drain_test_window(cx);
-    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     let protected = |cx: &mut gpui::VisualTestContext| -> bool {
-        cx.update(|_window, app| main_pane.read(app).conflict_resolver.output_is_protected)
+        cx.update(|_window, app| {
+            diff_renderer
+                .read(app)
+                .conflict_resolver
+                .output_is_protected
+        })
     };
 
     assert!(
@@ -1739,7 +1751,7 @@ fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppC
     );
 
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_reset_output_from_markers(cx);
         });
     });
@@ -1751,7 +1763,7 @@ fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppC
     // same unchanged worktree payload that still reads as hand-resolved. Only
     // the waiver keeps it off.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_select_conflict(0, cx);
             pane.conflict_resolver_pick_active_conflict(
                 crate::view::conflict_resolver::ConflictChoice::Ours,
@@ -1771,7 +1783,7 @@ fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppC
         "protection came back after the first pick, so the reset did nothing"
     );
     assert!(
-        cx.update(|_window, app| main_pane
+        cx.update(|_window, app| diff_renderer
             .read(app)
             .conflict_resolver_active_pick_state()
             .is_some()),
@@ -1894,7 +1906,7 @@ fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext
     let set_canvas_rows = |cx: &mut gpui::VisualTestContext, enabled: bool| {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.conflict_canvas_rows_enabled = enabled;
                     cx.notify();
                 });
@@ -1926,7 +1938,7 @@ fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext
 
     let sample = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             Sample {
                 base_contents: measured_content_height(
                     &pane.conflict_resolver_diff_scroll,
@@ -2059,9 +2071,9 @@ fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext
         &current,
     );
     draw_and_drain_test_window(cx);
-    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             assert_eq!(pane.conflict_resolver.path.as_deref(), Some(path));
             pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
             if pane.conflict_resolver.collapse_context {
@@ -2074,7 +2086,7 @@ fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext
 
     let assert_matches = |cx: &mut gpui::VisualTestContext, expected_lines: &[usize]| {
         cx.update(|_, app| {
-            let pane = main_pane.read(app);
+            let pane = diff_renderer.read(app);
             assert!(!pane.diff_search_worker_running);
             assert!(pane.diff_search_pending_previous_query.is_none());
             let expected: Vec<_> = expected_lines
@@ -2090,7 +2102,7 @@ fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext
     };
     let search = |cx: &mut gpui::VisualTestContext, query: &'static str, expected: &[usize]| {
         cx.update(|_, app| {
-            main_pane.update(app, |pane, cx| {
+            diff_renderer.update(app, |pane, cx| {
                 let previous = std::mem::replace(&mut pane.diff_search_query, query.into());
                 pane.diff_search_schedule_query_recompute(previous, cx);
             });
@@ -2102,7 +2114,7 @@ fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext
     // Warm the snapshot before folding. Query edits must use the new projection.
     search(cx, "needle", &[10, 40, 70]);
     let fold_id = cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_toggle_collapse_context(cx);
             match pane.conflict_resolver.three_way_visible_item(0) {
                 Some(ThreeWayVisibleItem::CollapsedContext { fold_id, .. }) => fold_id,
@@ -2113,19 +2125,19 @@ fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext
     search(cx, "needle context", &[]);
 
     cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_reveal_context_fold(fold_id, true, cx);
         });
     });
     search(cx, "NEEDLE", &[10]);
     cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_reveal_context_fold(fold_id, false, cx);
         });
     });
     search(cx, "needle context", &[10, 70]);
     cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.conflict_resolver_expand_context_fold(fold_id, cx);
         });
     });
@@ -2134,7 +2146,7 @@ fn conflict_background_search_tracks_context_folds(cx: &mut gpui::TestAppContext
     // A worker already using the expanded snapshot must also discard its
     // result and retry if the context folds before it can publish.
     cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             let previous = std::mem::replace(&mut pane.diff_search_query, "need".into());
             pane.diff_search_schedule_query_recompute(previous, cx);
             assert!(pane.diff_search_worker_running);
@@ -2192,16 +2204,16 @@ fn conflict_content_preview_background_search_uses_preview_rows(cx: &mut gpui::T
     });
     draw_and_drain_test_window(cx);
     draw_and_drain_test_window(cx);
-    let main_pane = cx.update(|_, app| view.read(app).main_pane.clone());
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
     cx.update(|_, app| {
-        let pane = main_pane.read(app);
+        let pane = diff_renderer.read(app);
         assert!(pane.is_file_preview_active());
         assert!(pane.active_conflict_target().is_some());
         assert!(pane.worktree_preview_line_count().is_some());
     });
 
     cx.update(|_, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_search_active = true;
             let previous = std::mem::replace(&mut pane.diff_search_query, "needle".into());
             pane.diff_search_schedule_query_recompute(previous, cx);
@@ -2209,7 +2221,7 @@ fn conflict_content_preview_background_search_uses_preview_rows(cx: &mut gpui::T
     });
     cx.run_until_parked();
     let (background, synchronous) = cx.update(|_, app| {
-        main_pane.update(app, |pane, _| {
+        diff_renderer.update(app, |pane, _| {
             assert!(!pane.diff_search_worker_running);
             let background = pane.diff_search_matches.clone();
             pane.diff_search_recompute_matches();
@@ -2288,7 +2300,7 @@ fn assert_conflict_search_reveals_match(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(view_mode, cx);
                 cx.notify();
             });
@@ -2319,7 +2331,7 @@ fn assert_conflict_search_reveals_match(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_conflict_scroll_matrix_offsets(pane);
                 pane.diff_search_active = true;
                 pane.diff_search_query = "line 150".into();
@@ -2334,7 +2346,7 @@ fn assert_conflict_search_reveals_match(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_search_matches.is_empty(),
             "expected the merge tool search to find `line 150`"
@@ -2474,7 +2486,7 @@ fn conflict_resolver_three_way_columns_paint_the_search_wash(cx: &mut gpui::Test
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 cx.notify();
             });
@@ -2486,7 +2498,7 @@ fn conflict_resolver_three_way_columns_paint_the_search_wash(cx: &mut gpui::Test
     // current match and several others without any scrolling.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = "line 00".into();
                 pane.diff_search_input
@@ -2500,7 +2512,7 @@ fn conflict_resolver_three_way_columns_paint_the_search_wash(cx: &mut gpui::Test
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_matches.len() > 1,
             "expected several matches, got {:?}",
@@ -2550,7 +2562,7 @@ fn conflict_resolver_three_way_columns_paint_the_search_wash(cx: &mut gpui::Test
     // matches, so a surviving `line 00` row would mean the cache was not cleared.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = "line 09".into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("line 09", cx));
@@ -2563,7 +2575,7 @@ fn conflict_resolver_three_way_columns_paint_the_search_wash(cx: &mut gpui::Test
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.conflict_three_way_query_segments_cache.is_empty(),
             "expected the new query to paint its own wash"
@@ -2640,7 +2652,7 @@ fn assert_conflict_search_scrolls_sideways(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(view_mode, cx);
                 cx.notify();
             });
@@ -2652,7 +2664,7 @@ fn assert_conflict_search_scrolls_sideways(
     // (Ours) list is tracked by `conflict_resolver_diff_scroll`, and the ours
     // handle is never laid out there.
     fn ours_list(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         view_mode: ConflictResolverViewMode,
     ) -> &gpui::UniformListScrollHandle {
         match view_mode {
@@ -2681,7 +2693,7 @@ fn assert_conflict_search_scrolls_sideways(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_conflict_scroll_matrix_offsets(pane);
                 pane.reveal_whitespace_chars = reveal_whitespace;
                 pane.diff_search_active = true;
@@ -2703,7 +2715,7 @@ fn assert_conflict_search_scrolls_sideways(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_search_matches.is_empty(),
             "expected the merge tool to find the needle"

@@ -6,14 +6,19 @@ fn diff_view_mode(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::super::GitCometView>,
 ) -> DiffViewMode {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_view)
+    cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_view)
 }
 
 fn reveal_whitespace_chars(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::super::GitCometView>,
 ) -> bool {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).reveal_whitespace_chars)
+    cx.update(|_window, app| {
+        view.read(app)
+            .diff_renderer
+            .read(app)
+            .reveal_whitespace_chars
+    })
 }
 
 /// The diff pane is a selection owner like any other: once another surface
@@ -125,7 +130,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -149,7 +154,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.select_all_diff_text(window, cx);
                 cx.notify();
             });
@@ -276,7 +281,7 @@ fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppConte
     cx.simulate_resize(gpui::size(px(2400.0), px(1400.0)));
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -333,7 +338,7 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_word_wrap = true;
                 pane.diff_wrap_visible_cache_key = Some(DiffWrapVisibleCacheKey {
                     source_len: 1,
@@ -363,7 +368,7 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_wrap_visible_cache_key, None,
             "expected reveal-whitespace changes to invalidate wrapped-row cache keys"
@@ -405,7 +410,7 @@ fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppCont
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
@@ -501,7 +506,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.reveal_whitespace_chars = false;
                 cx.notify();
@@ -519,7 +524,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 cx.notify();
             });
@@ -536,7 +541,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
@@ -647,7 +652,7 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.reveal_whitespace_chars = false;
                 pane.diff_search_active = false;

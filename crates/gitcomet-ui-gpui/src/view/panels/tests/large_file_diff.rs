@@ -88,7 +88,7 @@ fn source_backed_pair_text_tracks_accepted_file_diff_generation(cx: &mut gpui::T
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
                     .expect("the first source generation should parse on click");
                 assert_eq!(
@@ -117,7 +117,7 @@ fn source_backed_pair_text_tracks_accepted_file_diff_generation(cx: &mut gpui::T
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
                     .expect("the replacement source generation should parse on click");
                 assert_eq!(
@@ -182,7 +182,7 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
         view.update(app, |this, cx| {
             // This test drives the click-triggered worker, so the eager
             // source-backed prepare must not install the document first.
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.set_eager_source_backed_syntax_prepare_for_tests(false);
             });
             let mut repo = opening_repo_state(repo_id, &workdir);
@@ -240,7 +240,7 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 assert!(
                     pane.file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
@@ -253,7 +253,7 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
     });
     draw_and_drain_test_window(cx);
     let visible_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (0..pane.diff_visible_len())
             .find(|&visible_ix| {
                 pane.diff_mapped_ix_for_visible_ix(visible_ix)
@@ -264,7 +264,7 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
@@ -312,7 +312,7 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let document = pane
                     .file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
                     .expect("a two-megabyte source-backed side should be cached after its worker");
@@ -364,8 +364,9 @@ fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppConte
     ));
     let source_dir = workdir.join(".source-backed");
     std::fs::create_dir_all(&source_dir).expect("create actual syntax.rs click fixture");
-    let path = std::path::PathBuf::from("src/view/rows/diff_text/syntax.rs");
-    let new_source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&path);
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let new_source_path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../gitcomet-syntax/src/lib.rs");
     let old_source_path = source_dir.join("old.rs");
     let new_text = std::fs::read_to_string(&new_source_path).expect("read actual syntax.rs");
     let new_target = "fn ensure_tree_sitter_allocator() {";
@@ -439,7 +440,7 @@ fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppConte
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 cx.notify();
             });
@@ -463,7 +464,7 @@ fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppConte
     );
 
     let visible_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (0..pane.diff_visible_len())
             .find(|&visible_ix| {
                 pane.diff_mapped_ix_for_visible_ix(visible_ix)
@@ -474,7 +475,7 @@ fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppConte
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
@@ -494,7 +495,7 @@ fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppConte
 
     let occurrences = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_text_occurrences_for_tests()
     });
@@ -531,7 +532,7 @@ fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppConte
     );
     simulate_counted_click(cx, brace_click, 1);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_text_pair_match_for_tests().is_some(),
             "clicking the actual syntax.rs function brace should light its pair"
@@ -726,7 +727,7 @@ index 1111111..2222222 100644
         }
     }
 
-    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn split_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             pane.diff_mapped_ix_for_visible_ix(visible_ix)
                 .and_then(|row_ix| pane.file_diff_split_render_data(row_ix))
@@ -734,7 +735,7 @@ index 1111111..2222222 100644
         })
     }
 
-    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+    fn inline_visible_ix_by_new_line(pane: &DiffRenderer, new_line: u32) -> Option<usize> {
         (0..pane.diff_visible_len()).find(|&visible_ix| {
             pane.diff_mapped_ix_for_visible_ix(visible_ix)
                 .and_then(|row_ix| pane.file_diff_inline_render_data(row_ix))
@@ -743,7 +744,7 @@ index 1111111..2222222 100644
     }
 
     fn visible_ix_by_new_line(
-        pane: &MainPaneView,
+        pane: &DiffRenderer,
         diff_view: DiffViewMode,
         new_line: u32,
     ) -> Option<usize> {
@@ -761,7 +762,7 @@ index 1111111..2222222 100644
     ) -> rows::DiffPaintRecord {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                     cx.notify();
                 });
@@ -791,7 +792,7 @@ index 1111111..2222222 100644
         set_diff_content_mode_for_test(cx, view, DiffContentMode::Full);
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_view = diff_view;
                     pane.clear_diff_text_style_caches();
                     cx.notify();
@@ -836,7 +837,7 @@ index 1111111..2222222 100644
     ) {
         activate_file_diff_mode(cx, view, diff_view, content_mode, target_line);
         let visible_ix = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             visible_ix_by_new_line(pane, diff_view, target_line).unwrap_or_else(|| {
                 panic!(
                     "expected visible row for {label} line {target_line}; visible_len={}",
@@ -954,7 +955,7 @@ index 1111111..2222222 100644
         },
     );
 
-    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let theme = cx.update(|_window, app| view.read(app).diff_renderer.read(app).theme);
     let expected = syntax_snapshot(theme, target_line_text, rows::DiffSyntaxMode::Auto);
     let heuristic_only =
         syntax_snapshot(theme, target_line_text, rows::DiffSyntaxMode::HeuristicOnly);
@@ -1134,7 +1135,7 @@ fn source_backed_diff_colours_cross_line_constructs_without_a_click(cx: &mut gpu
     set_diff_content_mode_for_test(cx, &view, DiffContentMode::Full);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1145,7 +1146,7 @@ fn source_backed_diff_colours_cross_line_constructs_without_a_click(cx: &mut gpu
 
     let visible_ix_for = |cx: &mut gpui::VisualTestContext, new_line: u32| {
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (0..pane.diff_visible_len())
                 .find(|&visible_ix| {
                     pane.diff_mapped_ix_for_visible_ix(visible_ix)
@@ -1292,7 +1293,7 @@ fn source_backed_template_diff_click_lights_whole_tags(cx: &mut gpui::TestAppCon
     set_diff_content_mode_for_test(cx, &view, DiffContentMode::Full);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.clear_diff_text_style_caches();
                 cx.notify();
@@ -1303,7 +1304,7 @@ fn source_backed_template_diff_click_lights_whole_tags(cx: &mut gpui::TestAppCon
 
     let visible_ix_for = |cx: &mut gpui::VisualTestContext, new_line: u32| {
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (0..pane.diff_visible_len())
                 .find(|&visible_ix| {
                     pane.diff_mapped_ix_for_visible_ix(visible_ix)
@@ -1328,7 +1329,7 @@ fn source_backed_template_diff_click_lights_whole_tags(cx: &mut gpui::TestAppCon
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("clicking `<div ...>` in a template diff should light the element");
@@ -1365,7 +1366,7 @@ fn file_diff_word_highlight_caches_stay_bounded_for_sparse_deep_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let deep_row = 1_000_000usize;
 
                 assert!(pane.file_diff_inline_word_ranges(deep_row).is_empty());
@@ -1491,7 +1492,7 @@ fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_d
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -1539,7 +1540,7 @@ fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_d
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -1589,7 +1590,7 @@ fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_d
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let split_cached =
             file_diff_split_cached_styled(pane, DiffTextRegion::SplitRight, &visible_json_line)
                 .expect("oversized JSON split diff should cache the visible fallback row");
@@ -1703,7 +1704,7 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -1751,7 +1752,7 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hitbox = pane
             .diff_text_hitboxes
             .get(&(0, DiffTextRegion::Inline))
@@ -1790,7 +1791,7 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let handle = pane.diff_scroll.0.borrow().base_handle.clone();
                 let max_offset = handle.max_offset();
                 handle.set_offset(point(-max_offset.x.min(px(2400.0)), px(0.0)));
@@ -1831,7 +1832,7 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = "streamed-inline-search".into();
                 pane.diff_search_recompute_matches();
@@ -1840,7 +1841,7 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches.len(),
             pane.diff_visible_len(),
@@ -1855,7 +1856,7 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -1877,7 +1878,7 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left_hitbox = pane
             .diff_text_hitboxes
             .get(&(0, DiffTextRegion::SplitLeft))
@@ -1980,7 +1981,7 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -2020,7 +2021,7 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
                          view: &gpui::Entity<super::super::GitCometView>| {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     reset_uniform_list_offsets(&[&pane.diff_scroll, &pane.diff_split_right_scroll]);
                     cx.notify();
                 });
@@ -2043,7 +2044,7 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
             reset_offsets(cx, &view);
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         set_uniform_list_offset(&pane.diff_scroll, left_offset);
                         cx.notify();
                     });
@@ -2052,7 +2053,7 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
             draw_and_drain_test_window(cx);
 
             cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 let left = uniform_list_offset(&pane.diff_scroll);
                 let right = uniform_list_offset(&pane.diff_split_right_scroll);
                 let expected = if axis.includes(mode) {
@@ -2085,7 +2086,7 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
             reset_offsets(cx, &view);
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
+                    this.diff_renderer.update(cx, |pane, cx| {
                         set_uniform_list_offset(&pane.diff_split_right_scroll, right_offset);
                         cx.notify();
                     });
@@ -2094,7 +2095,7 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
             draw_and_drain_test_window(cx);
 
             cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 let left = uniform_list_offset(&pane.diff_scroll);
                 let right = uniform_list_offset(&pane.diff_split_right_scroll);
                 let expected = if axis.includes(mode) {
@@ -2186,7 +2187,7 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_text_anchor = Some(DiffTextPos {
                     source_visible_ix: 0,
@@ -2205,7 +2206,7 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.copy_selected_diff_text_to_clipboard(cx);
             });
         });
@@ -2272,15 +2273,15 @@ fn minified_json_file_diff_context_menu_copy_uses_streamed_inline_row_source(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_view = DiffViewMode::Inline;
             });
         });
     });
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.open_diff_editor_context_menu(
                 0,
                 DiffTextRegion::Inline,
@@ -2373,7 +2374,7 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 pane.diff_text_anchor = Some(DiffTextPos {
@@ -2393,7 +2394,7 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.copy_selected_diff_text_to_clipboard(cx);
             });
         });
@@ -2442,7 +2443,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -2476,14 +2477,14 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
     // Right after the cache build, the deterministic test scheduler may still
     // observe either the fallback path or an already-completed prepared document.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let _ = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
         let _ = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight);
     });
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -2499,7 +2500,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
 
     let (split_epoch_after_first_draw, fallback_split_highlights_hash) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let styled = file_diff_split_cached_styled(
                 pane,
                 DiffTextRegion::SplitLeft,
@@ -2587,7 +2588,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
 
     // Verify both old and new sides have valid document-backed syntax sessions.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let split_styled = file_diff_split_cached_styled(
             pane,
             DiffTextRegion::SplitLeft,
@@ -2627,7 +2628,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -2753,7 +2754,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
     );
 
     let (initial_left_version, initial_right_version) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left_document = pane
             .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
             .expect("initial left syntax document should be ready");
@@ -2780,7 +2781,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -2844,7 +2845,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -2877,7 +2878,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
 
     let (split_epoch_after_first_draw, fallback_split_highlights_hash) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             let styled = file_diff_split_cached_styled(
                 pane,
                 DiffTextRegion::SplitLeft,
@@ -2971,7 +2972,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let left_document = pane
             .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
             .expect("background reparse should produce the edited left syntax document");
@@ -3027,7 +3028,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -3161,7 +3162,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let right_document = pane
                     .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
                     .expect("initial right syntax document should be ready before preseeding");
@@ -3236,14 +3237,14 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
     );
 
     let cached_right_row_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         file_diff_split_row_ix(pane, DiffTextRegion::SplitRight, cached_right_line)
             .expect("expected the cached right row to exist in the rebuilt split diff")
     });
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.diff_scroll
                     .scroll_to_item_strict(cached_right_row_ix, gpui::ScrollStrategy::Top);
@@ -3276,7 +3277,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 cx.notify();
@@ -3318,7 +3319,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
         left_initial_hash,
         left_was_pending,
     ) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
                 .is_some(),
@@ -3414,7 +3415,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let top_cached = file_diff_split_cached_styled(
             pane,
             DiffTextRegion::SplitRight,
@@ -3560,7 +3561,7 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 cx.notify();
             });
@@ -3578,7 +3579,7 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 // A cold side: no prepared document and no retained body, so the
                 // click has to go through the worker.
                 pane.prepared_syntax_documents.clear();
@@ -3599,7 +3600,7 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane
                 .file_diff_click_syntax_inflight
@@ -3614,14 +3615,14 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
     // and resolves the pair.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.begin_diff_text_selection(0, DiffTextRegion::SplitRight, click, cx);
             });
         });
     });
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("the click after the rebuild window should still light its pair");
@@ -3724,7 +3725,7 @@ fn superseded_click_syntax_worker_preserves_a_new_generation_marker(cx: &mut gpu
     let new_worker_saw_marker = Arc::new(std::sync::atomic::AtomicBool::new(false));
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.prepared_syntax_documents.clear();
                 pane.file_diff_pair_syntax_text.clear();
                 pane.file_diff_click_syntax_before_complete_hook = None;
@@ -3863,7 +3864,7 @@ fn click_syntax_worker_rejects_a_source_changed_after_parse(cx: &mut gpui::TestA
     let hook_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.prepared_syntax_documents.clear();
                 pane.file_diff_pair_syntax_text.clear();
                 let hook_path = new_source_path.clone();
@@ -3886,7 +3887,7 @@ fn click_syntax_worker_rejects_a_source_changed_after_parse(cx: &mut gpui::TestA
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             hook_ran.load(std::sync::atomic::Ordering::SeqCst),
             "the regression must mutate after a successful parse"
@@ -4010,7 +4011,7 @@ fn same_shape_worktree_edit_is_not_answered_from_the_indexed_body(cx: &mut gpui:
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 cx.notify();
             });
@@ -4029,7 +4030,7 @@ fn same_shape_worktree_edit_is_not_answered_from_the_indexed_body(cx: &mut gpui:
     let pair_ranges = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_text_pair_match_for_tests()
                 .map(|pair| {
@@ -4050,7 +4051,7 @@ fn same_shape_worktree_edit_is_not_answered_from_the_indexed_body(cx: &mut gpui:
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let document = pane
                     .file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
                     .expect("the indexed source should have a prepared document");
@@ -4144,7 +4145,7 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
         view.update(app, |this, cx| {
             // This test drives the click-triggered worker, so the eager
             // source-backed prepare must not install the document first.
-            this.main_pane.update(cx, |pane, _| {
+            this.diff_renderer.update(cx, |pane, _| {
                 pane.set_eager_source_backed_syntax_prepare_for_tests(false);
             });
             let mut repo = opening_repo_state(repo_id, &workdir);
@@ -4196,7 +4197,7 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 cx.notify();
             });
@@ -4214,7 +4215,7 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 // Cold: no prepared document and no retained body.
                 pane.prepared_syntax_documents.clear();
                 pane.file_diff_pair_syntax_text.clear();
@@ -4237,7 +4238,7 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
 
     cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("the worker landing must replay the click");

@@ -22,6 +22,8 @@ pub use signature_map::CommitSignatureMap;
 
 pub type Shared<T> = Arc<T>;
 
+pub use gitcomet_base::Loadable;
+
 /// The entries of a feedback queue appended after entry number `after`.
 ///
 /// Notifications, diagnostics and command results are numbered from 1 in the
@@ -42,32 +44,6 @@ fn feedback_after<T>(entries: &[T], seq: u64, after: u64) -> &[T] {
 fn acknowledge_feedback<T>(entries: &mut Vec<T>, seq: u64, through: u64) {
     let unacknowledged = feedback_after(entries, seq, through).len();
     entries.drain(..entries.len() - unacknowledged);
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Loadable<T> {
-    NotLoaded,
-    Loading,
-    Ready(T),
-    Error(String),
-}
-
-impl<T> Loadable<T> {
-    pub fn is_loading(&self) -> bool {
-        matches!(self, Self::Loading)
-    }
-
-    /// The loaded value, if there is one.
-    ///
-    /// Exists so the ~160 sites that only care about the `Ready` arm can say so
-    /// in one line instead of spelling out a `match` with a `_ => ..` fallback,
-    /// which is how the same five-line block ended up copied across the pickers.
-    pub fn ready(&self) -> Option<&T> {
-        match self {
-            Self::Ready(value) => Some(value),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]

@@ -108,7 +108,7 @@ fn file_history_repo(this: &PopoverHost) -> Option<(&RepoState, Option<CommitId>
     let repo = this.state.repos.iter().find(|r| r.id == *repo_id)?;
     // The commit the viewer currently shows this file at, so its row can be
     // marked "you are here". `None` for the working-tree view.
-    let current_commit = match &repo.diff_state.diff_target {
+    let current_commit = match &this.bound_diff_state(repo)?.diff_target {
         Some(DiffTarget::Commit { commit_id, .. }) => Some(commit_id.clone()),
         _ => None,
     };

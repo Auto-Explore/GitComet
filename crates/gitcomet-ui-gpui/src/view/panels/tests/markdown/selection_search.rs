@@ -46,7 +46,7 @@ fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
                 "".to_string(),
                 "preview body".to_string(),
             ]);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -69,7 +69,7 @@ fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -91,7 +91,7 @@ fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     // with the `#` marker already consumed by the renderer.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = "preview body".into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("preview body", cx));
@@ -102,7 +102,7 @@ fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_search_matches.is_empty(),
             "expected the rendered markdown preview to report a match"
@@ -163,7 +163,7 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
         view.update(app, |this, cx| {
             let abs_path = abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, abs_path.clone(), preview_lines, source.len(), cx);
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
@@ -180,7 +180,7 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
     });
 
     let expected_line = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_text_line_for_region(0, DiffTextRegion::Inline)
             .to_string()
     });
@@ -193,7 +193,7 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
         "markdown preview multi-click hitbox",
     );
     let expected_word = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let offset = pane
             .diff_text_offset_for_position(0, DiffTextRegion::Inline, click)
             .expect("expected markdown preview text offset");
@@ -203,8 +203,8 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
 
     simulate_counted_click(cx, click, 2);
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -215,8 +215,8 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
 
     simulate_counted_click(cx, click, 3);
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -227,7 +227,7 @@ fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
 
     simulate_counted_click(cx, click, 1);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_text_has_selection(),
             "single click should clear the markdown preview text selection"
@@ -290,7 +290,7 @@ fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert_eq!(
                     pane.conflict_resolver.path.as_ref(),
                     Some(&file_rel),
@@ -311,7 +311,7 @@ fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.conflict_resolver.resolver_preview_mode,
             ConflictResolverPreviewMode::Preview,
@@ -350,7 +350,7 @@ fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
     // heading is not, so only the rendered form is findable.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = "Local".into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("Local", cx));
@@ -361,7 +361,7 @@ fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_search_matches.is_empty(),
             "expected the rendered conflict columns to report a match"
@@ -370,7 +370,7 @@ fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = "# Local".into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("# Local", cx));
@@ -381,7 +381,7 @@ fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_matches.is_empty(),
             "the heading marker is not on screen, so it must not be searchable; got {:?}",
@@ -417,7 +417,7 @@ fn markdown_preview_hitboxes_follow_the_scrolled_viewport(cx: &mut gpui::TestApp
     );
 
     let last_row_ix = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.markdown_preview_row_count()
             .expect("a rendered preview has rows")
             - 1
@@ -426,7 +426,7 @@ fn markdown_preview_hitboxes_follow_the_scrolled_viewport(cx: &mut gpui::TestApp
     let hitbox = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
         cx.update(|_window, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_text_hitbox_bounds_for_tests(row_ix, DiffTextRegion::Inline)
         })
@@ -444,7 +444,7 @@ fn markdown_preview_hitboxes_follow_the_scrolled_viewport(cx: &mut gpui::TestApp
     // Scroll to the bottom; the two ends swap.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
                 let max = scroll_handle_max_offset(&handle).height;
                 set_scroll_handle_offset(&handle, point(px(0.0), -max));
@@ -494,7 +494,7 @@ fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(
                     pane.is_markdown_preview_active(),
                     "the fixture must be showing the rendered document"
@@ -550,7 +550,7 @@ fn source_mode_selection_highlights_whole_lines_after_a_wrapped_paragraph(
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
                 pane.diff_word_wrap = true;
@@ -566,7 +566,7 @@ fn source_mode_selection_highlights_whole_lines_after_a_wrapped_paragraph(
     let last_ix = lines.len() - 1;
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(
                     pane.worktree_preview_wrap_active(),
                     "the fixture must be wrapping"
@@ -589,7 +589,7 @@ fn source_mode_selection_highlights_whole_lines_after_a_wrapped_paragraph(
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let rows = pane
             .worktree_preview_visible_len()
             .expect("the list has rows");
@@ -615,13 +615,13 @@ fn source_mode_selection_highlights_whole_lines_after_a_wrapped_paragraph(
     // Select All ends at the end of the last line, whatever row it sits on.
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.select_all_diff_text(window, cx);
             });
         });
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_text_head,
             Some(DiffTextPos {
@@ -660,7 +660,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
     );
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
                 cx.notify();
@@ -675,7 +675,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
     let last_ix = lines.len() - 1;
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 assert!(
                     !pane.is_markdown_preview_active(),
                     "the fixture must be showing the file, not the rendered document"
@@ -974,7 +974,7 @@ fn press_in_long_preview(
         &source,
     );
     let scroll = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.worktree_preview_scroll.0.borrow().base_handle.clone()
     });
     let first = cx
@@ -1024,7 +1024,10 @@ fn a_drag_past_the_preview_autoscrolls_after_an_earlier_selection(cx: &mut gpui:
             simulate_counted_click(cx, point(first.left() + px(20.0), first.center().y), 2);
             cx.update(|_window, app| {
                 assert!(
-                    view.read(app).main_pane.read(app).diff_text_has_selection(),
+                    view.read(app)
+                        .diff_renderer
+                        .read(app)
+                        .diff_text_has_selection(),
                     "the double-click selects a word"
                 );
             });
@@ -1123,7 +1126,7 @@ fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpu
 
     cx.simulate_click(gap.center(), Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let boundary = DiffTextPos {
             source_visible_ix: middle_row_ix,
             region: DiffTextRegion::Inline,
@@ -1155,7 +1158,7 @@ fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpu
     );
 
     let selection_before_menu = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (pane.diff_text_anchor, pane.diff_text_head)
     });
     cx.simulate_mouse_down(gap.center(), MouseButton::Right, Modifiers::default());
@@ -1163,7 +1166,7 @@ fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpu
     cx.run_until_parked();
     assert_eq!(
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (pane.diff_text_anchor, pane.diff_text_head)
         }),
         selection_before_menu,
@@ -1218,7 +1221,7 @@ fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui
 
     cx.simulate_click(top.center(), Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let boundary = DiffTextPos {
             source_visible_ix: code_ix,
             region: DiffTextRegion::Inline,
@@ -1239,7 +1242,7 @@ fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui
         "the top code boundary must exclude the preceding paragraph: {from_top:?}"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_text_local_selection_range(code_ix, DiffTextRegion::Inline),
             Some(0.."shared_call();".len()),
@@ -1249,7 +1252,7 @@ fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui
 
     cx.simulate_click(bottom.center(), Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let boundary = DiffTextPos {
             source_visible_ix: code_ix,
             region: DiffTextRegion::Inline,
@@ -1398,11 +1401,11 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview =
@@ -1436,7 +1439,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
 
     cx.simulate_click(right_gap.center(), Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let boundary = DiffTextPos {
             source_visible_ix: band_start,
             region: DiffTextRegion::SplitRight,
@@ -1448,7 +1451,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
 
     cx.simulate_click(left_gap.center(), Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let boundary = DiffTextPos {
             source_visible_ix: band_start,
             region: DiffTextRegion::SplitLeft,
@@ -1498,7 +1501,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
 
     let (code_text_bounds, before_list_text_bounds, list_text_bounds) =
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (
                 pane.diff_text_hitbox_bounds_for_tests(code_ix, DiffTextRegion::SplitLeft)
                     .expect("old fenced-code text hitbox"),
@@ -1519,7 +1522,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
 
     cx.simulate_click(code_top_padding, Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let boundary = DiffTextPos {
             source_visible_ix: code_ix,
             region: DiffTextRegion::SplitLeft,
@@ -1543,7 +1546,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
         "the code-top boundary must not reach into the preceding paragraph: {from_code_top:?}"
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_text_local_selection_range(code_ix, DiffTextRegion::SplitLeft),
             Some(0.."shared_call();".len()),
@@ -1553,7 +1556,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
 
     cx.simulate_click(code_bottom_padding, Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let boundary = DiffTextPos {
             source_visible_ix: code_ix,
             region: DiffTextRegion::SplitLeft,
@@ -1583,7 +1586,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     );
     cx.simulate_click(before_list_bottom_padding, Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         // Below the paragraph is the gap before the list's band, which opens
         // at the list: the same boundary, seen from the other side.
         let boundary = DiffTextPos {
@@ -1612,7 +1615,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     );
     cx.simulate_click(list_bottom_padding, Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         // As above: the gap below the list opens the next band.
         let boundary = DiffTextPos {
             source_visible_ix: below_band_start,
@@ -1635,7 +1638,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     );
 
     let selection_before_menu = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (pane.diff_text_anchor, pane.diff_text_head)
     });
     cx.simulate_mouse_down(left_gap.center(), MouseButton::Right, Modifiers::default());
@@ -1643,7 +1646,7 @@ fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::Test
     cx.run_until_parked();
     assert_eq!(
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (pane.diff_text_anchor, pane.diff_text_head)
         }),
         selection_before_menu,
@@ -1750,7 +1753,7 @@ fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui:
         .debug_bounds("diff_text_empty_space_Inline")
         .expect("thematic-break-only document below-EOF surface");
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_text_hitboxes.is_empty(),
             "a thematic break must not need a synthetic painted-text hitbox"
@@ -1798,7 +1801,7 @@ fn markdown_below_eof_resolves_after_a_trailing_thematic_break(cx: &mut gpui::Te
 
     cx.simulate_click(empty_space.center(), Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let last_row_ix = fixture
             .document
             .rows
@@ -1868,7 +1871,7 @@ fn markdown_preview_hit_testing_follows_a_row_onto_its_wrapped_lines(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let top_right = pane
             .diff_text_offset_for_position(0, DiffTextRegion::Inline, near_top_right)
             .expect("the first visual line must resolve to an offset");
@@ -1905,7 +1908,7 @@ fn dragging_the_split_markdown_preview_divider_resizes_its_columns(cx: &mut gpui
         DiffViewMode::Split,
     );
     let intro = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -1914,7 +1917,7 @@ fn dragging_the_split_markdown_preview_divider_resizes_its_columns(cx: &mut gpui
     let left_width = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_text_hitbox_bounds_for_tests(intro, DiffTextRegion::SplitLeft)
                 .expect("the old side's first row is drawn")
@@ -1945,7 +1948,7 @@ fn dragging_the_split_markdown_preview_divider_resizes_its_columns(cx: &mut gpui
     cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
     draw_and_drain_test_window(cx);
 
-    let ratio = cx.update(|_window, app| view.read(app).main_pane.read(app).diff_split_ratio);
+    let ratio = cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_split_ratio);
     assert!(ratio > 0.55, "the drag moves the split, got ratio {ratio}");
     let grown = left_width(cx) - before;
     assert!(
@@ -2013,7 +2016,7 @@ fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
     let source_len = source.len();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -2029,7 +2032,7 @@ fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.markdown_search_surface(),
             Some(MarkdownSearchSurface::Worktree),
@@ -2049,7 +2052,7 @@ fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = "needle".into();
                 pane.diff_search_input
@@ -2063,7 +2066,7 @@ fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches.len(),
             1,
@@ -2146,8 +2149,8 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.diff_markdown.cache_repo_id = Some(repo_id);
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_markdown.cache_repo_id = Some(repo_id.into());
                 pane.diff_markdown.cache_rev = 1;
                 pane.diff_markdown.cache_target = Some(target.clone());
                 pane.diff_markdown.preview = gitcomet_state::model::Loadable::Ready(Arc::new(
@@ -2167,7 +2170,7 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.markdown_search_surface(),
             Some(MarkdownSearchSurface::DiffInline),
@@ -2177,7 +2180,7 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 reset_uniform_list_offsets(&[&pane.diff_scroll]);
                 pane.diff_search_active = true;
                 pane.diff_search_query = "needle".into();
@@ -2192,7 +2195,7 @@ fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::Tes
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_search_matches.is_empty(),
             "expected the rendered markdown diff to report a match"
@@ -2256,7 +2259,7 @@ fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
     let source_len = source.len();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     abs_path.clone(),
@@ -2273,7 +2276,7 @@ fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = "##".into();
                 pane.diff_search_input
@@ -2286,7 +2289,7 @@ fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_search_matches.is_empty(),
             "the rendered preview shows no `##`, so nothing should match; got {:?}",
@@ -2298,7 +2301,7 @@ fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
     // query must now find it.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
                 pane.diff_search_recompute_matches();
@@ -2309,7 +2312,7 @@ fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.markdown_search_surface(),
             None,
@@ -2345,7 +2348,7 @@ fn copying_across_alignment_padding_adds_no_blank_lines(cx: &mut gpui::TestAppCo
         DiffViewMode::Split,
     );
     let (a_ix, b_ix) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview else {
             panic!("the preview is ready");
         };
@@ -2355,7 +2358,7 @@ fn copying_across_alignment_padding_adds_no_blank_lines(cx: &mut gpui::TestAppCo
         )
     });
     let (from, to) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let a = pane
             .diff_text_hitbox_bounds_for_tests(a_ix, DiffTextRegion::SplitLeft)
             .expect("a is drawn");
@@ -2391,7 +2394,7 @@ fn redrawing_under_an_unchanged_search_does_not_rebuild_the_matcher(cx: &mut gpu
     cx.simulate_keystrokes("secondary-f");
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_query = "paragraph".into();
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("paragraph", cx));
@@ -2402,14 +2405,14 @@ fn redrawing_under_an_unchanged_search_does_not_rebuild_the_matcher(cx: &mut gpu
     });
     draw_frames(cx, 1);
 
-    crate::view::panes::main::diff_search::take_search_matchers_built_for_tests();
+    crate::view::panes::diff::diff_search::take_search_matchers_built_for_tests();
     for _ in 0..3 {
         cx.update(|window, app| {
             window.refresh();
             let _ = window.draw(app);
         });
     }
-    let built = crate::view::panes::main::diff_search::take_search_matchers_built_for_tests();
+    let built = crate::view::panes::diff::diff_search::take_search_matchers_built_for_tests();
     assert_eq!(
         built, 0,
         "each frame builds a new search matcher (a regex compile for regex queries) although \
@@ -2449,7 +2452,7 @@ fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
         ["# Base\n", &ours, "# Remote\n"],
     );
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.markdown_search_surface(),
             Some(MarkdownSearchSurface::Conflict)
@@ -2462,7 +2465,7 @@ fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = "needle".into();
                 pane.diff_search_input
@@ -2476,7 +2479,7 @@ fn searching_the_merge_tool_preview_scrolls_the_column_holding_the_match(
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.diff_search_matches.len(), 1);
         assert!(
             uniform_list_offset(&pane.conflict_preview_ours_scroll).y < px(0.0),

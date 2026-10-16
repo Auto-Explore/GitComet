@@ -8,7 +8,7 @@ use crate::view::markdown_preview::{
     MarkdownChangeHint, MarkdownInlineSpan, MarkdownInlineStyle, MarkdownPreviewRow,
     MarkdownPreviewRowKind,
 };
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use gpui::{Bounds, point, px, size};
 use std::sync::Arc;
 

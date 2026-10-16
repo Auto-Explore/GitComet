@@ -93,7 +93,7 @@ pub(super) fn model(
         // is what the status list's discard does and is a different, far more
         // destructive thing.
         if this
-            .main_pane
+            .diff_renderer
             .read(cx)
             .file_edits_are_unsaved_for(repo_id, path)
         {

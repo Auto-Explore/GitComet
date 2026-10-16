@@ -1,8 +1,7 @@
 use crate::conflict_session::ConflictSession;
 use crate::domain::*;
 use crate::error::{Error, ErrorKind};
-use crate::remote_url::RemoteUrlPolicy;
-use crate::text_format::{TextAttributes, TextEncoding};
+use crate::text_format::TextAttributes;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -563,6 +562,12 @@ pub enum SafePushAfterCommitDecision {
     },
 }
 
+/// Backend operations, including optional capabilities with conservative defaults.
+///
+/// Cancellable methods take the caller's token explicitly. Implementations that
+/// perform work check it before starting and before returning a successful
+/// result; a caller without a cancellable task can pass a fresh token. Keep the
+/// same token when delegating so cancellation reaches the underlying work.
 pub trait GitRepository: Send + Sync {
     fn rebase_range_with_output(&self, _range: &RebaseRange) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
@@ -620,8 +625,7 @@ pub trait GitRepository: Send + Sync {
         let mut cursor = None;
         loop {
             cancellation.check_cancelled()?;
-            let page =
-                self.log_history_mode_page_cancellable(mode, 256, cursor.as_ref(), cancellation)?;
+            let page = self.log_history_mode_page(mode, 256, cursor.as_ref(), cancellation)?;
             for commit in &page.commits {
                 if seen.insert(commit.author.clone()) {
                     authors.push(commit.author.clone());
@@ -697,23 +701,16 @@ pub trait GitRepository: Send + Sync {
                 cancellation,
                 on_chunk,
             )?,
-            HistoryReadRequest::Page { limit, cursor, .. } => self
-                .log_history_mode_page_filtered_cancellable(
-                    mode,
-                    author,
-                    *limit,
-                    cursor.as_ref(),
-                    cancellation,
-                )?,
+            HistoryReadRequest::Page { limit, cursor, .. } => self.log_history_mode_page_filtered(
+                mode,
+                author,
+                *limit,
+                cursor.as_ref(),
+                cancellation,
+            )?,
             HistoryReadRequest::Refresh { previous, .. } => {
                 refresh_history_page(previous, cancellation, |limit, cursor| {
-                    self.log_history_mode_page_filtered_cancellable(
-                        mode,
-                        author,
-                        limit,
-                        cursor,
-                        cancellation,
-                    )
+                    self.log_history_mode_page_filtered(mode, author, limit, cursor, cancellation)
                 })?
             }
         };
@@ -729,26 +726,21 @@ pub trait GitRepository: Send + Sync {
         mode: HistoryMode,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<std::sync::Arc<LogPage>> {
-        match mode {
-            HistoryMode::AllBranches => self.log_all_branches_page(limit, cursor),
-            HistoryMode::FullReachable
-            | HistoryMode::FirstParent
-            | HistoryMode::NoMerges
-            | HistoryMode::MergesOnly => self.log_head_page(limit, cursor),
-        }
-    }
-    fn log_history_mode_page_cancellable(
-        &self,
-        mode: HistoryMode,
-        limit: usize,
-        cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
         cancellation.check_cancelled()?;
-        let page = self.log_history_mode_page(mode, limit, cursor)?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            match mode {
+                HistoryMode::AllBranches => self.log_all_branches_page(limit, cursor, cancellation),
+                HistoryMode::FullReachable
+                | HistoryMode::FirstParent
+                | HistoryMode::NoMerges
+                | HistoryMode::MergesOnly => self.log_head_page(limit, cursor, cancellation),
+            }
+        };
+        let result = result?;
         cancellation.check_cancelled()?;
-        Ok(page)
+        Ok(result)
     }
 
     /// Like [`Self::log_history_mode_page`], but restricted to commits whose
@@ -778,14 +770,14 @@ pub trait GitRepository: Send + Sync {
     ) -> Result<std::sync::Arc<LogPage>> {
         let _ = (author, on_chunk);
         cancellation.check_cancelled()?;
-        let page = self.log_history_mode_page(mode, limit, cursor)?;
+        let page = self.log_history_mode_page(mode, limit, cursor, cancellation)?;
         cancellation.check_cancelled()?;
         Ok(page)
     }
 
     /// A filtered, cancellable page without progress snapshots. Backends can
     /// override this to avoid constructing chunks that the caller will discard.
-    fn log_history_mode_page_filtered_cancellable(
+    fn log_history_mode_page_filtered(
         &self,
         mode: HistoryMode,
         author: Option<&str>,
@@ -796,60 +788,26 @@ pub trait GitRepository: Send + Sync {
         self.log_history_mode_page_streaming(mode, author, limit, cursor, cancellation, &mut |_| {})
     }
 
-    /// [`Self::log_history_mode_page_streaming`] for callers with nothing to
-    /// cancel and no use for the intermediate pages.
-    fn log_history_mode_page_filtered(
-        &self,
-        mode: HistoryMode,
-        author: Option<&str>,
-        limit: usize,
-        cursor: Option<&LogCursor>,
-    ) -> Result<std::sync::Arc<LogPage>> {
-        self.log_history_mode_page_filtered_cancellable(
-            mode,
-            author,
-            limit,
-            cursor,
-            &CancellationToken::new(),
-        )
-    }
-
     fn log_head_page(
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<std::sync::Arc<LogPage>>;
-    fn log_head_page_cancellable(
-        &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<std::sync::Arc<LogPage>> {
-        cancellation.check_cancelled()?;
-        let page = self.log_head_page(limit, cursor)?;
-        cancellation.check_cancelled()?;
-        Ok(page)
-    }
+    ) -> Result<std::sync::Arc<LogPage>>;
+
     fn log_all_branches_page(
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
+        cancellation.check_cancelled()?;
+
         Err(Error::new(ErrorKind::Unsupported(
             "all-branches history is not implemented for this backend",
         )))
     }
-    fn log_all_branches_page_cancellable(
-        &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
-        cancellation: &CancellationToken,
-    ) -> Result<std::sync::Arc<LogPage>> {
-        cancellation.check_cancelled()?;
-        let page = self.log_all_branches_page(limit, cursor)?;
-        cancellation.check_cancelled()?;
-        Ok(page)
-    }
+
     fn log_file_page(
         &self,
         _path: &Path,
@@ -864,22 +822,14 @@ pub trait GitRepository: Send + Sync {
     /// Verifies the signatures of `ids`, returning an entry only for commits
     /// that earn a badge. Unsigned commits, and signatures that cannot be
     /// checked because the key is missing, are simply omitted.
+    /// Only signatures in `formats` earn a badge; other formats should cost no
+    /// verifier run. An empty set returns no signatures without verification.
     ///
     /// Batched on purpose: verification shells out to `git`, and one process per
     /// commit costs roughly ten times a single batched call.
     fn verify_commit_signatures(
         &self,
         _ids: &[CommitId],
-    ) -> Result<Vec<(CommitId, CommitSignature)>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "signature verification is not implemented for this backend",
-        )))
-    }
-    /// Like [`Self::verify_commit_signatures`], restricted to signatures in
-    /// `formats`: other formats get no badge and should cost no verifier run.
-    fn verify_commit_signatures_cancellable(
-        &self,
-        ids: &[CommitId],
         formats: crate::domain::SignatureFormats,
         cancellation: &CancellationToken,
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
@@ -887,11 +837,12 @@ pub trait GitRepository: Send + Sync {
         if formats.is_empty() {
             return Ok(Vec::new());
         }
-        let mut result = self.verify_commit_signatures(ids)?;
-        result.retain(|(_, signature)| formats.contains(signature.format));
-        cancellation.check_cancelled()?;
-        Ok(result)
+
+        Err(Error::new(ErrorKind::Unsupported(
+            "signature verification is not implemented for this backend",
+        )))
     }
+
     /// Resolve a possibly abbreviated reference — or any revspec git accepts,
     /// such as a branch, tag, or `HEAD~3` — to the commit it names.
     ///
@@ -986,35 +937,30 @@ pub trait GitRepository: Send + Sync {
     /// when possible; stale stat data can require content reads and clean
     /// filters. Counting reads both sides of changed files. Callers that have
     /// just loaded status should reuse it through the supplied-status method.
-    fn uncommitted_line_stats(&self) -> Result<UncommittedLineStats> {
+    fn uncommitted_line_stats(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        cancellation.check_cancelled()?;
+
         Err(Error::new(ErrorKind::Unsupported(
             "uncommitted line stats are not implemented for this backend",
         )))
     }
-    /// Cancellable [`Self::uncommitted_line_stats`]. It reads every changed
-    /// file, so on a large dirty tree it is the load most worth interrupting.
-    fn uncommitted_line_stats_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<UncommittedLineStats> {
-        cancellation.check_cancelled()?;
-        let stats = self.uncommitted_line_stats()?;
-        cancellation.check_cancelled()?;
-        Ok(stats)
-    }
+
     /// Count the files from a status snapshot the caller just collected, avoiding
     /// another worktree traversal. Contents are read at call time, as with status.
-    fn uncommitted_line_stats_for_status_cancellable(
+    fn uncommitted_line_stats_for_status(
         &self,
         _status: &RepoStatus,
         cancellation: &CancellationToken,
     ) -> Result<UncommittedLineStats> {
-        self.uncommitted_line_stats_cancellable(cancellation)
+        self.uncommitted_line_stats(cancellation)
     }
 
     /// Repository-level Git LFS and git-annex facts from config, attributes and
     /// the local object stores. Must not run either tool.
-    fn large_file_support_cancellable(
+    fn large_file_support(
         &self,
         _cancellation: &CancellationToken,
     ) -> Result<crate::large_files::LargeFileSupport> {
@@ -1023,7 +969,7 @@ pub trait GitRepository: Send + Sync {
 
     /// Large-file state for the rows of a status snapshot the caller just
     /// collected. Must not run either tool.
-    fn uncommitted_large_files_for_status_cancellable(
+    fn uncommitted_large_files_for_status(
         &self,
         _status: &RepoStatus,
         _cancellation: &CancellationToken,
@@ -1042,7 +988,7 @@ pub trait GitRepository: Send + Sync {
     }
 
     /// Where this content key is, including historical or deleted versions.
-    fn annex_whereis_cancellable(
+    fn annex_whereis(
         &self,
         _key: &str,
         _cancellation: &CancellationToken,
@@ -1053,7 +999,7 @@ pub trait GitRepository: Send + Sync {
     }
 
     /// Local content no file uses any more, per `git annex unused`.
-    fn annex_unused_cancellable(
+    fn annex_unused(
         &self,
         _cancellation: &CancellationToken,
     ) -> Result<crate::large_files::AnnexUnused> {
@@ -1063,7 +1009,7 @@ pub trait GitRepository: Send + Sync {
     }
 
     /// Current Git LFS locks for the repository (a server round trip).
-    fn lfs_locks_cancellable(
+    fn lfs_locks(
         &self,
         _cancellation: &CancellationToken,
     ) -> Result<Vec<crate::large_files::LfsLock>> {
@@ -1093,100 +1039,59 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
-    fn current_branch(&self) -> Result<String>;
-    fn current_branch_cancellable(&self, cancellation: &CancellationToken) -> Result<String> {
-        cancellation.check_cancelled()?;
-        let branch = self.current_branch()?;
-        cancellation.check_cancelled()?;
-        Ok(branch)
-    }
+    fn current_branch(&self, cancellation: &CancellationToken) -> Result<String>;
+
     fn head_commit_id(&self) -> Result<Option<CommitId>> {
         Err(Error::new(ErrorKind::Unsupported(
             "reading HEAD commit id is not implemented for this backend",
         )))
     }
-    fn list_branches(&self) -> Result<Vec<Branch>>;
-    fn list_branches_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
+    fn list_branches(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>>;
+
+    fn list_tags(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
         cancellation.check_cancelled()?;
-        let branches = self.list_branches()?;
-        cancellation.check_cancelled()?;
-        Ok(branches)
-    }
-    fn list_tags(&self) -> Result<Vec<Tag>> {
+
         Err(Error::new(ErrorKind::Unsupported(
             "tag listing is not implemented for this backend",
         )))
     }
-    fn list_tags_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
+
+    fn list_remote_tags(&self, cancellation: &CancellationToken) -> Result<Vec<RemoteTag>> {
         cancellation.check_cancelled()?;
-        let tags = self.list_tags()?;
-        cancellation.check_cancelled()?;
-        Ok(tags)
-    }
-    fn list_remote_tags(&self) -> Result<Vec<RemoteTag>> {
+
         Err(Error::new(ErrorKind::Unsupported(
             "remote tag listing is not implemented for this backend",
         )))
     }
-    fn list_remote_tags_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<RemoteTag>> {
+
+    fn list_remotes(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>>;
+
+    fn list_remote_branches(&self, cancellation: &CancellationToken) -> Result<Vec<RemoteBranch>>;
+
+    fn worktree_status(&self, cancellation: &CancellationToken) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
-        let tags = self.list_remote_tags()?;
+        let result: Result<Vec<FileStatus>> = {
+            self.status(cancellation)
+                .map(|status| std::sync::Arc::unwrap_or_clone(status.unstaged))
+        };
+        let result = result?;
         cancellation.check_cancelled()?;
-        Ok(tags)
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>>;
-    fn list_remotes_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>> {
+
+    fn staged_status(&self, cancellation: &CancellationToken) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
-        let remotes = self.list_remotes()?;
+        let result: Result<Vec<FileStatus>> = {
+            self.status(cancellation)
+                .map(|status| std::sync::Arc::unwrap_or_clone(status.staged))
+        };
+        let result = result?;
         cancellation.check_cancelled()?;
-        Ok(remotes)
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
-    fn list_remote_branches_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<RemoteBranch>> {
-        cancellation.check_cancelled()?;
-        let branches = self.list_remote_branches()?;
-        cancellation.check_cancelled()?;
-        Ok(branches)
-    }
-    fn worktree_status(&self) -> Result<Vec<FileStatus>> {
-        self.status()
-            .map(|status| std::sync::Arc::unwrap_or_clone(status.unstaged))
-    }
-    fn worktree_status_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<FileStatus>> {
-        cancellation.check_cancelled()?;
-        let status = self.worktree_status()?;
-        cancellation.check_cancelled()?;
-        Ok(status)
-    }
-    fn staged_status(&self) -> Result<Vec<FileStatus>> {
-        self.status()
-            .map(|status| std::sync::Arc::unwrap_or_clone(status.staged))
-    }
-    fn staged_status_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<FileStatus>> {
-        cancellation.check_cancelled()?;
-        let status = self.staged_status()?;
-        cancellation.check_cancelled()?;
-        Ok(status)
-    }
-    fn status(&self) -> Result<RepoStatus>;
-    fn status_cancellable(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
-        cancellation.check_cancelled()?;
-        let status = self.status()?;
-        cancellation.check_cancelled()?;
-        Ok(status)
-    }
+
+    fn status(&self, cancellation: &CancellationToken) -> Result<RepoStatus>;
+
     /// Whether `path` is a gitlink in the current HEAD tree.
     ///
     /// This is primarily needed for a staged deletion: the worktree marker is
@@ -1195,72 +1100,53 @@ pub trait GitRepository: Send + Sync {
     fn head_path_is_gitlink(&self, _path: &Path) -> Result<bool> {
         Ok(false)
     }
-    fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
-        Ok(None)
-    }
-    fn upstream_divergence_cancellable(
+    fn upstream_divergence(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Option<UpstreamDivergence>> {
         cancellation.check_cancelled()?;
-        let divergence = self.upstream_divergence()?;
+        let result: Result<Option<UpstreamDivergence>> = { Ok(None) };
+        let result = result?;
         cancellation.check_cancelled()?;
-        Ok(divergence)
+        Ok(result)
     }
+
     fn diff_unified(&self, target: &DiffTarget) -> Result<String>;
     /// Load and parse unified diff rows for the target.
     ///
     /// Default implementation goes through `diff_unified`; backends may
     /// override for streaming parsing to avoid large monolithic allocations.
-    fn diff_parsed(&self, target: &DiffTarget) -> Result<Diff> {
-        self.diff_unified(target)
-            .map(|text| Diff::from_unified(target.clone(), &text))
-    }
-    fn diff_parsed_cancellable(
+    /// `encoding` is the user's explicit decoding choice, when supported.
+    fn diff_parsed(
         &self,
         target: &DiffTarget,
+        _encoding: Option<crate::text_format::TextEncoding>,
         cancellation: &CancellationToken,
     ) -> Result<Diff> {
         cancellation.check_cancelled()?;
-        let diff = self.diff_parsed(target)?;
+        let result: Result<Diff> = {
+            self.diff_unified(target)
+                .map(|text| Diff::from_unified(target.clone(), &text))
+        };
+        let result = result?;
         cancellation.check_cancelled()?;
-        Ok(diff)
+        Ok(result)
     }
-    fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<FileDiffText>> {
+
+    /// Read both sides as UTF-8 content, using `encoding` when the user chose one.
+    fn diff_file_text(
+        &self,
+        _target: &DiffTarget,
+        _encoding: Option<crate::text_format::TextEncoding>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        cancellation.check_cancelled()?;
+
         Err(Error::new(ErrorKind::Unsupported(
             "file diff view is not implemented for this backend",
         )))
     }
-    fn diff_file_text_cancellable(
-        &self,
-        target: &DiffTarget,
-        cancellation: &CancellationToken,
-    ) -> Result<Option<FileDiffText>> {
-        cancellation.check_cancelled()?;
-        let result = self.diff_file_text(target)?;
-        cancellation.check_cancelled()?;
-        Ok(result)
-    }
-    /// [`Self::diff_parsed_cancellable`], reading the file in `encoding` when
-    /// the user chose one.
-    fn diff_parsed_with_encoding_cancellable(
-        &self,
-        target: &DiffTarget,
-        _encoding: Option<TextEncoding>,
-        cancellation: &CancellationToken,
-    ) -> Result<Diff> {
-        self.diff_parsed_cancellable(target, cancellation)
-    }
-    /// [`Self::diff_file_text_cancellable`] with both sides pointed at UTF-8
-    /// content, reading the file in `encoding` when the user chose one.
-    fn diff_file_text_with_encoding_cancellable(
-        &self,
-        target: &DiffTarget,
-        _encoding: Option<TextEncoding>,
-        cancellation: &CancellationToken,
-    ) -> Result<Option<FileDiffText>> {
-        self.diff_file_text_cancellable(target, cancellation)
-    }
+
     /// `.gitattributes` and git config deciding how `path`'s content reads.
     fn text_attributes(&self, _path: &Path) -> Result<TextAttributes> {
         Ok(TextAttributes::default())
@@ -1269,36 +1155,25 @@ pub trait GitRepository: Send + Sync {
         &self,
         _target: &DiffTarget,
         _side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
     ) -> Result<Option<DiffPreviewTextFile>> {
+        cancellation.check_cancelled()?;
+
         Err(Error::new(ErrorKind::Unsupported(
             "preview text file loading is not implemented for this backend",
         )))
     }
-    fn diff_preview_text_file_cancellable(
+
+    fn diff_file_image(
         &self,
-        target: &DiffTarget,
-        side: DiffPreviewTextSide,
-        cancellation: &CancellationToken,
-    ) -> Result<Option<DiffPreviewTextFile>> {
-        cancellation.check_cancelled()?;
-        let result = self.diff_preview_text_file(target, side)?;
-        cancellation.check_cancelled()?;
-        Ok(result)
-    }
-    fn diff_file_image(&self, _target: &DiffTarget) -> Result<Option<FileDiffImage>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "image diff view is not implemented for this backend",
-        )))
-    }
-    fn diff_file_image_cancellable(
-        &self,
-        target: &DiffTarget,
+        _target: &DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<Option<FileDiffImage>> {
         cancellation.check_cancelled()?;
-        let result = self.diff_file_image(target)?;
-        cancellation.check_cancelled()?;
-        Ok(result)
+
+        Err(Error::new(ErrorKind::Unsupported(
+            "image diff view is not implemented for this backend",
+        )))
     }
 
     fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
@@ -1311,20 +1186,15 @@ pub trait GitRepository: Send + Sync {
     ///
     /// Backends that support conflict stages and conflict-kind detection should
     /// return a populated session; unsupported backends return Unsupported.
-    fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+    /// `encoding` selects how every side is decoded when the user chose one.
+    fn conflict_session(
+        &self,
+        _path: &Path,
+        _encoding: Option<crate::text_format::TextEncoding>,
+    ) -> Result<Option<ConflictSession>> {
         Err(Error::new(ErrorKind::Unsupported(
             "conflict session loading is not implemented for this backend",
         )))
-    }
-
-    /// [`Self::conflict_session`], reading the file in `encoding` when the
-    /// user chose one.
-    fn conflict_session_with_encoding(
-        &self,
-        path: &Path,
-        _encoding: Option<TextEncoding>,
-    ) -> Result<Option<ConflictSession>> {
-        self.conflict_session(path)
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
@@ -1434,13 +1304,8 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
-    fn stash_list(&self) -> Result<Vec<StashEntry>>;
-    fn stash_list_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {
-        cancellation.check_cancelled()?;
-        let stashes = self.stash_list()?;
-        cancellation.check_cancelled()?;
-        Ok(stashes)
-    }
+    fn stash_list(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>>;
+
     fn stash_apply(&self, index: usize) -> Result<()>;
     fn stash_drop(&self, index: usize) -> Result<()>;
 
@@ -1538,43 +1403,34 @@ pub trait GitRepository: Send + Sync {
             "git merge --abort is not implemented for this backend",
         )))
     }
-    fn rebase_in_progress(&self) -> Result<bool> {
-        Ok(false)
-    }
-    fn rebase_in_progress_cancellable(&self, cancellation: &CancellationToken) -> Result<bool> {
+    fn rebase_in_progress(&self, cancellation: &CancellationToken) -> Result<bool> {
         cancellation.check_cancelled()?;
-        let in_progress = self.rebase_in_progress()?;
+        let result: Result<bool> = { Ok(false) };
+        let result = result?;
         cancellation.check_cancelled()?;
-        Ok(in_progress)
-    }
-    fn sequencer_state(&self) -> Result<SequencerState> {
-        Ok(if self.rebase_in_progress()? {
-            SequencerState::RebaseOrApply
-        } else {
-            SequencerState::None
-        })
-    }
-    fn sequencer_state_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<SequencerState> {
-        cancellation.check_cancelled()?;
-        let state = self.sequencer_state()?;
-        cancellation.check_cancelled()?;
-        Ok(state)
+        Ok(result)
     }
 
-    fn merge_commit_message(&self) -> Result<Option<String>> {
-        Ok(None)
+    fn sequencer_state(&self, cancellation: &CancellationToken) -> Result<SequencerState> {
+        cancellation.check_cancelled()?;
+        let result: Result<SequencerState> = {
+            Ok(if self.rebase_in_progress(cancellation)? {
+                SequencerState::RebaseOrApply
+            } else {
+                SequencerState::None
+            })
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn merge_commit_message_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Option<String>> {
+
+    fn merge_commit_message(&self, cancellation: &CancellationToken) -> Result<Option<String>> {
         cancellation.check_cancelled()?;
-        let message = self.merge_commit_message()?;
+        let result: Result<Option<String>> = { Ok(None) };
+        let result = result?;
         cancellation.check_cancelled()?;
-        Ok(message)
+        Ok(result)
     }
 
     fn create_tag_with_output(
@@ -1635,19 +1491,17 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn add_remote_with_output(&self, _name: &str, _url: &str) -> Result<CommandOutput> {
+    fn add_remote_with_output(
+        &self,
+        _name: &str,
+        _url: &str,
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git remote add is not implemented for this backend",
         )))
     }
-    fn add_remote_with_output_and_policy(
-        &self,
-        name: &str,
-        url: &str,
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<CommandOutput> {
-        self.add_remote_with_output(name, url)
-    }
+
     fn remove_remote_with_output(&self, _name: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git remote remove is not implemented for this backend",
@@ -1658,23 +1512,15 @@ pub trait GitRepository: Send + Sync {
         _name: &str,
         _url: &str,
         _kind: RemoteUrlKind,
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git remote set-url is not implemented for this backend",
         )))
     }
-    fn set_remote_url_with_output_and_policy(
-        &self,
-        name: &str,
-        url: &str,
-        kind: RemoteUrlKind,
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<CommandOutput> {
-        self.set_remote_url_with_output(name, url, kind)
-    }
 
-    fn fetch_all(&self) -> Result<()>;
-    fn pull(&self, mode: PullMode) -> Result<()>;
+    fn fetch_all(&self, _prune: bool) -> Result<CommandOutput>;
+    fn pull(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput>;
     fn push(&self) -> Result<()>;
 
     fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
@@ -1704,15 +1550,6 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn fetch_all_with_output(&self) -> Result<CommandOutput> {
-        self.fetch_all()?;
-        Ok(CommandOutput::empty_success("git fetch --all"))
-    }
-
-    fn fetch_all_with_output_prune(&self, _prune: bool) -> Result<CommandOutput> {
-        self.fetch_all_with_output()
-    }
-
     /// Fetches exactly `refspecs` from `remote` (for example
     /// `+refs/pull/7/head:refs/remotes/origin/pr/7`), pruning nothing.
     fn fetch_refspecs_with_output(
@@ -1723,15 +1560,6 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "fetching refspecs is not implemented for this backend",
         )))
-    }
-
-    fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {
-        self.pull(mode)?;
-        Ok(CommandOutput::empty_success("git pull"))
-    }
-
-    fn pull_with_output_prune(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput> {
-        self.pull_with_output(mode)
     }
 
     fn push_with_output(&self) -> Result<CommandOutput> {
@@ -1835,19 +1663,15 @@ pub trait GitRepository: Send + Sync {
         Ok(CommandOutput::empty_success("git commit --amend"))
     }
 
-    fn pull_branch_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {
+    fn pull_branch_with_output(
+        &self,
+        _remote: &str,
+        _branch: &str,
+        _prune: bool,
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "pulling a specific remote branch is not implemented for this backend",
         )))
-    }
-
-    fn pull_branch_with_output_prune(
-        &self,
-        remote: &str,
-        branch: &str,
-        _prune: bool,
-    ) -> Result<CommandOutput> {
-        self.pull_branch_with_output(remote, branch)
     }
 
     fn merge_ref_with_output(&self, _reference: &str) -> Result<CommandOutput> {
@@ -1996,38 +1820,27 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn list_worktrees(&self) -> Result<Vec<Worktree>> {
+    fn list_worktrees(&self, cancellation: &CancellationToken) -> Result<Vec<Worktree>> {
+        cancellation.check_cancelled()?;
+
         Err(Error::new(ErrorKind::Unsupported(
             "worktree listing is not implemented for this backend",
         )))
-    }
-    fn list_worktrees_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<Worktree>> {
-        cancellation.check_cancelled()?;
-        let worktrees = self.list_worktrees()?;
-        cancellation.check_cancelled()?;
-        Ok(worktrees)
     }
 
     /// Tip-commit author/date/summary for every local and remote-tracking ref,
     /// as `(short refname, metadata)` pairs. Purely decorative — callers render
     /// name-only rows when this is unavailable, so backends may leave it
     /// unimplemented.
-    fn list_ref_metadata(&self) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "ref metadata listing is not implemented for this backend",
-        )))
-    }
-    fn list_ref_metadata_cancellable(
+    fn list_ref_metadata(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
         cancellation.check_cancelled()?;
-        let metadata = self.list_ref_metadata()?;
-        cancellation.check_cancelled()?;
-        Ok(metadata)
+
+        Err(Error::new(ErrorKind::Unsupported(
+            "ref metadata listing is not implemented for this backend",
+        )))
     }
 
     fn add_worktree_with_output(
@@ -2052,19 +1865,12 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn list_submodules(&self) -> Result<Vec<Submodule>> {
+    fn list_submodules(&self, cancellation: &CancellationToken) -> Result<Vec<Submodule>> {
+        cancellation.check_cancelled()?;
+
         Err(Error::new(ErrorKind::Unsupported(
             "submodule listing is not implemented for this backend",
         )))
-    }
-    fn list_submodules_cancellable(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<Submodule>> {
-        cancellation.check_cancelled()?;
-        let submodules = self.list_submodules()?;
-        cancellation.check_cancelled()?;
-        Ok(submodules)
     }
 
     /// The working directory as it is on disk, not `HEAD`'s tree.
@@ -2083,63 +1889,43 @@ pub trait GitRepository: Send + Sync {
     fn submodule_diff_summary(
         &self,
         _target: &crate::domain::DiffTarget,
-    ) -> Result<crate::domain::SubmoduleDiffSummary> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "submodule diff summary is not implemented for this backend",
-        )))
-    }
-    fn submodule_diff_summary_cancellable(
-        &self,
-        target: &crate::domain::DiffTarget,
         cancellation: &CancellationToken,
     ) -> Result<crate::domain::SubmoduleDiffSummary> {
         cancellation.check_cancelled()?;
-        let summary = self.submodule_diff_summary(target)?;
-        cancellation.check_cancelled()?;
-        Ok(summary)
+
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule diff summary is not implemented for this backend",
+        )))
     }
 
     fn check_submodule_add_trust(
         &self,
         _url: &str,
         _path: &Path,
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
-    }
-    fn check_submodule_add_trust_with_policy(
-        &self,
-        url: &str,
-        path: &Path,
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<SubmoduleTrustDecision> {
-        self.check_submodule_add_trust(url, path)
     }
 
-    fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
+    fn check_submodule_update_trust(
+        &self,
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
-    }
-    fn check_submodule_update_trust_with_policy(
-        &self,
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<SubmoduleTrustDecision> {
-        self.check_submodule_update_trust()
     }
 
-    fn check_submodule_load_trust(&self, _path: &Path) -> Result<SubmoduleTrustDecision> {
+    fn check_submodule_load_trust(
+        &self,
+        _path: &Path,
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
-    }
-    fn check_submodule_load_trust_with_policy(
-        &self,
-        path: &Path,
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<SubmoduleTrustDecision> {
-        self.check_submodule_load_trust(path)
     }
 
     fn add_submodule_with_output(
@@ -2150,56 +1936,32 @@ pub trait GitRepository: Send + Sync {
         _name: Option<&str>,
         _force: bool,
         _approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule add is not implemented for this backend",
         )))
     }
-    fn add_submodule_with_output_and_policy(
-        &self,
-        url: &str,
-        path: &Path,
-        branch: Option<&str>,
-        name: Option<&str>,
-        force: bool,
-        approved_sources: &[SubmoduleTrustTarget],
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<CommandOutput> {
-        self.add_submodule_with_output(url, path, branch, name, force, approved_sources)
-    }
 
     fn update_submodules_with_output(
         &self,
         _approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
         )))
-    }
-    fn update_submodules_with_output_and_policy(
-        &self,
-        approved_sources: &[SubmoduleTrustTarget],
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<CommandOutput> {
-        self.update_submodules_with_output(approved_sources)
     }
 
     fn load_submodule_with_output(
         &self,
         _path: &Path,
         _approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: crate::remote_url::RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
         )))
-    }
-    fn load_submodule_with_output_and_policy(
-        &self,
-        path: &Path,
-        approved_sources: &[SubmoduleTrustTarget],
-        _remote_url_policy: RemoteUrlPolicy,
-    ) -> Result<CommandOutput> {
-        self.load_submodule_with_output(path, approved_sources)
     }
 
     fn change_submodule_pointer_with_output(
@@ -2225,7 +1987,7 @@ fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(
     repo: &R,
     target: &SafePushAfterCommitTarget,
 ) -> Result<()> {
-    let current_branch = repo.current_branch()?;
+    let current_branch = repo.current_branch(&CancellationToken::new())?;
     if current_branch != target.local_branch {
         return Err(Error::new(ErrorKind::Backend(format!(
             "stale push-after-commit target: expected branch {}, but current branch is {}",
@@ -2485,6 +2247,10 @@ impl GitBackend for ConfiguredBackend {
         self.inner.open_with_options(workdir, &self.options)
     }
 
+    fn release_object_stores(&self, common_dir: &Path) {
+        self.inner.release_object_stores(common_dir);
+    }
+
     fn open_with_options(
         &self,
         workdir: &Path,
@@ -2539,709 +2305,4 @@ impl GitBackend for UnavailableGitBackend {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        BlameLine, CheckoutRemoteBranchMode, CommandOutput, ConflictSide, GitBackend,
-        GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
-        UnavailableGitBackend, decode_utf8_optional, validate_conflict_resolution_text,
-    };
-    use crate::domain::{
-        Branch, CommitDetails, CommitId, DiffArea, DiffTarget, HistoryMode, LogCursor, LogPage,
-        ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry, Upstream,
-    };
-    use crate::error::{Error, ErrorKind};
-    use crate::test_support::UnconfiguredRepository;
-    use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn combined_steps_join_non_empty_streams_in_order() {
-        let step = |stdout: &str, stderr: &str| CommandOutput {
-            command: "step".into(),
-            stdout: stdout.into(),
-            stderr: stderr.into(),
-            exit_code: Some(0),
-        };
-        let combined = CommandOutput::combine(
-            "both",
-            &[step("one\n", ""), step("", "warn\n"), step("two", "  \n")],
-        );
-        assert_eq!(combined.command, "both");
-        assert_eq!(combined.stdout, "one\ntwo");
-        assert_eq!(combined.stderr, "warn");
-        assert_eq!(combined.exit_code, Some(0));
-    }
-
-    #[test]
-    fn history_ref_filters_match_names_prefixes_and_globs() {
-        use super::HistoryRefFilter;
-        let filter = HistoryRefFilter::excluding([
-            "refs/pull",
-            "refs/remotes/*/pr/**",
-            "refs/heads/wip-*",
-            "",
-        ]);
-        assert_eq!(filter.patterns().len(), 3, "empty patterns are dropped");
-        for excluded in [
-            "refs/pull",
-            "refs/pull/7/head",
-            "refs/remotes/origin/pr/7",
-            "refs/remotes/origin/pr/7/merge",
-            "refs/heads/wip-parser",
-        ] {
-            assert!(filter.excludes(excluded), "{excluded}");
-        }
-        for kept in [
-            "refs/pulled/7",
-            "refs/heads/main",
-            "refs/remotes/origin/main",
-            "refs/remotes/origin/nested/pr/7",
-            "refs/heads/wip",
-            "refs/heads/wip-a/b",
-        ] {
-            assert!(!filter.excludes(kept), "{kept}");
-        }
-        assert!(HistoryRefFilter::default().is_empty());
-        assert!(!HistoryRefFilter::default().excludes("refs/heads/main"));
-        // Order and duplicates do not make two filters different.
-        assert_eq!(
-            HistoryRefFilter::excluding(["b", "a", "a"]),
-            HistoryRefFilter::excluding(["a", "b"])
-        );
-    }
-
-    #[test]
-    fn repository_options_are_refused_by_backends_that_cannot_honor_them() {
-        use super::{ConfiguredBackend, HistoryRefFilter, RepositoryOptions};
-        let options = RepositoryOptions::default()
-            .with_history_ref_filter(HistoryRefFilter::excluding(["refs/pull"]));
-        struct PlainBackend;
-        impl GitBackend for PlainBackend {
-            fn open(&self, workdir: &Path) -> super::Result<Arc<dyn GitRepository>> {
-                Ok(Arc::new(UnconfiguredRepository::new(workdir)))
-            }
-        }
-        let error = PlainBackend
-            .open_with_options(Path::new("/tmp/repo"), &options)
-            .err()
-            .expect("a non-default option is refused");
-        assert!(matches!(error.kind(), ErrorKind::Unsupported(_)));
-        assert!(
-            PlainBackend
-                .open_with_options(Path::new("/tmp/repo"), &RepositoryOptions::default())
-                .is_ok()
-        );
-        // Wrapped, every open carries the options and so is refused too.
-        let configured = ConfiguredBackend::new(Arc::new(PlainBackend), options);
-        assert!(configured.open(Path::new("/tmp/repo")).is_err());
-        let cancel = super::CancellationToken::new();
-        assert!(
-            configured
-                .open_cancellable(Path::new("/tmp/repo"), &cancel)
-                .is_err()
-        );
-    }
-
-    /// The default comparison is `diff_range_files`, measured from `from`,
-    /// and a merge base comes from `merge_base` when a backend provides one.
-    #[test]
-    fn default_compare_files_delegates_to_the_range_listing_and_merge_base() {
-        let repo = RecordingHistoryModeRepo::new();
-        let cancel = super::CancellationToken::new();
-        let main = CommitId("main".into());
-        let feature = CommitId("feature".into());
-        let direct = repo
-            .compare_files(
-                &main,
-                Some(&feature),
-                &super::ComparisonOptions::direct(),
-                &cancel,
-            )
-            .unwrap();
-        assert_eq!(direct.base, main);
-        assert_eq!(direct.files[0].path, PathBuf::from("from-main"));
-        let since_fork = repo
-            .compare_files(
-                &main,
-                Some(&feature),
-                &super::ComparisonOptions::merge_base(),
-                &cancel,
-            )
-            .unwrap();
-        assert_eq!(since_fork.base, CommitId("fork".into()));
-        assert_eq!(since_fork.files[0].path, PathBuf::from("from-fork"));
-    }
-
-    /// Pins the fallback behavior of every provided [`GitRepository`] method.
-    ///
-    /// These defaults are what a backend inherits when it does not implement an
-    /// operation, so a default that silently changes from "unsupported" to a
-    /// plausible-looking success value (`Ok(vec![])`, `Ok(false)`) would make
-    /// every partial backend quietly report the wrong thing instead of failing
-    /// loudly. Nothing else in the workspace exercises them.
-    #[test]
-    fn provided_trait_methods_use_unsupported_fallback_behavior() {
-        fn assert_unsupported<T: std::fmt::Debug>(result: super::Result<T>) {
-            let error = result.expect_err("provided default must be unsupported");
-            assert!(
-                matches!(error.kind(), ErrorKind::Unsupported(_)),
-                "expected Unsupported, got {error:?}"
-            );
-        }
-
-        let repo = UnconfiguredRepository::new("/tmp/provided-defaults");
-        let commit = CommitId("abc123".into());
-        let safe_push_target = SafePushAfterCommitTarget {
-            remote: "origin".to_string(),
-            branch: "main".to_string(),
-            local_branch: "main".to_string(),
-            local_head: commit.clone(),
-        };
-        let cursor = LogCursor {
-            last_seen: CommitId("deadbeef".into()),
-            resume_from: None,
-            resume_token: None,
-        };
-        let diff_target = DiffTarget::working_tree(PathBuf::from("file.txt"), DiffArea::Staged);
-        let path = Path::new("file.txt");
-
-        // The three defaults that deliberately succeed: absence of an upstream,
-        // of a rebase, and of a merge message are all legitimate answers a
-        // backend can give without implementing anything.
-        assert_eq!(repo.upstream_divergence().unwrap(), None);
-        assert!(!repo.rebase_in_progress().unwrap());
-        assert_eq!(repo.merge_commit_message().unwrap(), None);
-        // Likewise: "not a gitlink" is the safe answer for a backend that
-        // cannot read HEAD trees.
-        assert!(!repo.head_path_is_gitlink(path).unwrap());
-        // A backend without a long-lived store has nothing to release.
-        repo.release_object_store();
-
-        assert_unsupported(repo.log_all_branches_page(25, Some(&cursor)));
-        assert_unsupported(repo.log_file_page(path, 25, None));
-        assert_unsupported(repo.list_tags());
-        assert_unsupported(repo.list_remote_tags());
-        assert_unsupported(repo.diff_file_text(&diff_target));
-        assert_unsupported(repo.diff_file_image(&diff_target));
-        assert_unsupported(repo.conflict_file_stages(path));
-        assert_unsupported(repo.conflict_session(path));
-        assert_unsupported(repo.delete_branch_force("feature"));
-        assert_unsupported(repo.rename_branch_force("feature", "main"));
-        assert_unsupported(repo.checkout_remote_branch(
-            "origin",
-            "main",
-            "feature",
-            CheckoutRemoteBranchMode::Create,
-        ));
-        assert_unsupported(repo.commit_amend("message"));
-        assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
-        assert_unsupported(repo.merge_base(&commit, &commit));
-        assert_unsupported(repo.is_ancestor(&commit, &commit));
-        let cancel = super::CancellationToken::new();
-        // Options a fallback cannot honor fail instead of returning a list
-        // that silently leaves files out.
-        assert_unsupported(repo.compare_files(
-            &commit,
-            None,
-            &super::ComparisonOptions::direct().with_untracked(true),
-            &cancel,
-        ));
-        assert_unsupported(repo.compare_files(
-            &commit,
-            Some(&commit),
-            &super::ComparisonOptions::merge_base(),
-            &cancel,
-        ));
-        assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
-        assert_unsupported(repo.revert_with_output(&commit, true, None));
-        assert_unsupported(repo.apply_file_change_with_output(
-            &crate::domain::ApplyChangeTarget::commit(commit.clone(), path.to_path_buf()),
-            false,
-        ));
-        assert_unsupported(repo.rebase_with_output("main"));
-        assert_unsupported(repo.rebase_continue_with_output());
-        assert_unsupported(repo.rebase_abort_with_output());
-        assert_unsupported(repo.merge_abort_with_output());
-        assert_unsupported(repo.create_tag_with_output("v1.0.0", "HEAD", None, false));
-        assert_unsupported(repo.delete_tag_with_output("v1.0.0"));
-        assert_unsupported(repo.prune_merged_branches_with_output());
-        assert_unsupported(repo.maintenance_needed());
-        assert_unsupported(repo.run_maintenance_with_output());
-        assert_eq!(repo.common_dir(), None);
-        assert_unsupported(repo.prune_local_tags_with_output());
-        assert_unsupported(repo.push_tag_with_output("origin", "v1.0.0"));
-        assert_unsupported(repo.delete_remote_tag_with_output("origin", "v1.0.0"));
-        assert_unsupported(repo.add_remote_with_output("origin", "https://example.com/repo.git"));
-        assert_unsupported(repo.remove_remote_with_output("origin"));
-        assert_unsupported(repo.set_remote_url_with_output(
-            "origin",
-            "https://example.com/repo.git",
-            RemoteUrlKind::Fetch,
-        ));
-        assert_unsupported(repo.fetch_all_with_output());
-        assert_unsupported(repo.fetch_all_with_output_prune(true));
-        assert_unsupported(repo.pull_with_output(PullMode::FastForwardOnly));
-        assert_unsupported(repo.push_with_output());
-        assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
-        assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
-        assert_unsupported(repo.push_force());
-        assert_unsupported(repo.push_force_with_output());
-        assert_unsupported(repo.push_set_upstream("origin", "main"));
-        assert_unsupported(repo.push_set_upstream_with_output("origin", "main"));
-        assert_unsupported(repo.set_upstream_branch_with_output(
-            "main",
-            &Upstream {
-                remote: "origin".to_string(),
-                branch: "main".to_string(),
-            },
-        ));
-        assert_unsupported(repo.unset_upstream_branch_with_output("main"));
-        assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
-        assert_unsupported(repo.commit_amend_with_output("message"));
-        assert_unsupported(repo.pull_branch_with_output("origin", "main"));
-        assert_unsupported(repo.merge_ref_with_output("origin/main"));
-        assert_unsupported(repo.squash_ref_with_output("origin/main"));
-        assert_unsupported(repo.reset_with_output("HEAD~1", ResetMode::Mixed));
-        assert_unsupported(repo.blame_file(path, None));
-        assert_unsupported(repo.checkout_conflict_side(path, ConflictSide::Ours));
-        assert_unsupported(repo.accept_conflict_deletion(path));
-        assert_unsupported(repo.checkout_conflict_base(path));
-        assert_unsupported(repo.launch_mergetool(path));
-        assert_unsupported(repo.export_patch_with_output(&commit, path));
-        assert_unsupported(repo.apply_patch_with_output(path));
-        assert_unsupported(repo.apply_unified_patch_to_index_with_output(b"@@ -1 +1 @@", false));
-        assert_unsupported(repo.apply_unified_patch_to_worktree_with_output(b"@@ -1 +1 @@", true));
-        assert_unsupported(repo.list_worktrees());
-        assert_unsupported(repo.add_worktree_with_output(path, Some("main")));
-        assert_unsupported(repo.remove_worktree_with_output(path));
-        assert_unsupported(repo.force_remove_worktree_with_output(path));
-        assert_unsupported(repo.list_submodules());
-        assert_unsupported(repo.check_submodule_add_trust("https://example.com/repo.git", path));
-        assert_unsupported(repo.check_submodule_update_trust());
-        assert_unsupported(repo.add_submodule_with_output(
-            "https://example.com/repo.git",
-            path,
-            None,
-            None,
-            false,
-            &[],
-        ));
-        assert_unsupported(repo.update_submodules_with_output(&[]));
-        assert_unsupported(repo.remove_submodule_with_output(path));
-    }
-
-    #[test]
-    fn unavailable_backend_reports_unsupported() {
-        let error = match UnavailableGitBackend.open(Path::new(".")) {
-            Ok(_) => panic!("unavailable backend must reject repository opens"),
-            Err(error) => error,
-        };
-        assert!(matches!(error.kind(), ErrorKind::Unsupported(_)));
-    }
-
-    fn unsupported<T>() -> super::Result<T> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "unused in services history-mode delegation test",
-        )))
-    }
-
-    struct RecordingHistoryModeRepo {
-        spec: RepoSpec,
-        calls: Mutex<Vec<(&'static str, usize, Option<String>)>>,
-    }
-
-    impl RecordingHistoryModeRepo {
-        fn new() -> Self {
-            Self {
-                spec: RepoSpec {
-                    workdir: PathBuf::from("/tmp/recording-history-mode-repo"),
-                },
-                calls: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn record(&self, method: &'static str, limit: usize, cursor: Option<&LogCursor>) {
-            self.calls.lock().expect("recording mutex").push((
-                method,
-                limit,
-                cursor.map(|cursor| cursor.last_seen.as_ref().to_string()),
-            ));
-        }
-
-        fn calls(&self) -> Vec<(&'static str, usize, Option<String>)> {
-            self.calls.lock().expect("recording mutex").clone()
-        }
-    }
-
-    impl GitRepository for RecordingHistoryModeRepo {
-        fn spec(&self) -> &RepoSpec {
-            &self.spec
-        }
-
-        fn diff_range_files(
-            &self,
-            from: &CommitId,
-            _to: Option<&CommitId>,
-        ) -> super::Result<Vec<crate::domain::CommitFileChange>> {
-            Ok(vec![crate::domain::CommitFileChange::new(
-                PathBuf::from(format!("from-{from}")),
-                crate::domain::FileStatusKind::Modified,
-            )])
-        }
-
-        fn merge_base(&self, _a: &CommitId, _b: &CommitId) -> super::Result<Option<CommitId>> {
-            Ok(Some(CommitId("fork".into())))
-        }
-
-        fn log_head_page(
-            &self,
-            limit: usize,
-            cursor: Option<&LogCursor>,
-        ) -> super::Result<std::sync::Arc<LogPage>> {
-            self.record("head", limit, cursor);
-            Ok(std::sync::Arc::new(LogPage {
-                commits: Vec::new(),
-                next_cursor: None,
-            }))
-        }
-
-        fn log_all_branches_page(
-            &self,
-            limit: usize,
-            cursor: Option<&LogCursor>,
-        ) -> super::Result<std::sync::Arc<LogPage>> {
-            self.record("all", limit, cursor);
-            Ok(std::sync::Arc::new(LogPage {
-                commits: Vec::new(),
-                next_cursor: None,
-            }))
-        }
-
-        fn commit_details(&self, _id: &CommitId) -> super::Result<CommitDetails> {
-            unsupported()
-        }
-
-        fn reflog_head(&self, _limit: usize) -> super::Result<Vec<ReflogEntry>> {
-            unsupported()
-        }
-
-        fn current_branch(&self) -> super::Result<String> {
-            unsupported()
-        }
-
-        fn list_branches(&self) -> super::Result<Vec<Branch>> {
-            unsupported()
-        }
-
-        fn list_remotes(&self) -> super::Result<Vec<Remote>> {
-            unsupported()
-        }
-
-        fn list_remote_branches(&self) -> super::Result<Vec<RemoteBranch>> {
-            unsupported()
-        }
-
-        fn status(&self) -> super::Result<RepoStatus> {
-            unsupported()
-        }
-
-        fn diff_unified(&self, _target: &DiffTarget) -> super::Result<String> {
-            unsupported()
-        }
-
-        fn create_branch(&self, _name: &str, _target: &CommitId) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn delete_branch(&self, _name: &str) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn checkout_branch(&self, _name: &str) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn checkout_commit(&self, _id: &CommitId) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn stash_create(&self, _message: &str, _include_untracked: bool) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn stash_list(&self) -> super::Result<Vec<StashEntry>> {
-            unsupported()
-        }
-
-        fn stash_apply(&self, _index: usize) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn stash_drop(&self, _index: usize) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn stage(&self, _paths: &[&Path]) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn unstage(&self, _paths: &[&Path]) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn commit(&self, _message: &str) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn fetch_all(&self) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn pull(&self, _mode: super::PullMode) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn push(&self) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn discard_worktree_changes(&self, _paths: &[&Path]) -> super::Result<()> {
-            unsupported()
-        }
-    }
-
-    // ── validate_conflict_resolution_text ────────────────────────────
-
-    #[test]
-    fn validate_conflict_resolution_text_reports_no_markers() {
-        let validation = validate_conflict_resolution_text("line 1\nline 2\n");
-        assert!(!validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 0);
-    }
-
-    #[test]
-    fn validate_conflict_resolution_text_counts_marker_lines() {
-        let text = "<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n";
-        let validation = validate_conflict_resolution_text(text);
-        assert!(validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 3);
-    }
-
-    #[test]
-    fn validate_empty_text_reports_no_markers() {
-        let validation = validate_conflict_resolution_text("");
-        assert!(!validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 0);
-    }
-
-    #[test]
-    fn validate_diff3_markers_detected() {
-        let text = "<<<<<<< ours\na\n||||||| base\nb\n=======\nc\n>>>>>>> theirs\n";
-        let validation = validate_conflict_resolution_text(text);
-        assert!(validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 4);
-    }
-
-    #[test]
-    fn validate_markers_with_branch_annotations_detected() {
-        let text = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> feature/my-branch\n";
-        let validation = validate_conflict_resolution_text(text);
-        assert!(validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 3);
-    }
-
-    #[test]
-    fn validate_partial_marker_set_detected() {
-        // Only start marker — still detects it
-        let text = "some code\n<<<<<<< HEAD\nmore code\n";
-        let validation = validate_conflict_resolution_text(text);
-        assert!(validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 1);
-    }
-
-    #[test]
-    fn validate_markers_not_at_start_of_line_ignored() {
-        // Markers must be at line start to count
-        let text = "  <<<<<<< not a marker\n  ======= not a marker\n";
-        let validation = validate_conflict_resolution_text(text);
-        assert!(!validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 0);
-    }
-
-    #[test]
-    fn validate_multiple_conflicts_counts_all_markers() {
-        let text = "\
-<<<<<<< HEAD\na\n=======\nb\n>>>>>>> branch1\n\
-<<<<<<< HEAD\nc\n=======\nd\n>>>>>>> branch2\n";
-        let validation = validate_conflict_resolution_text(text);
-        assert!(validation.has_conflict_markers);
-        assert_eq!(validation.marker_lines, 6);
-    }
-
-    // ── decode_utf8_optional ─────────────────────────────────────────
-
-    #[test]
-    fn decode_utf8_none_returns_none() {
-        assert_eq!(decode_utf8_optional(None), None);
-    }
-
-    #[test]
-    fn decode_utf8_valid_returns_string() {
-        let bytes = b"hello world";
-        assert_eq!(
-            decode_utf8_optional(Some(bytes.as_slice())),
-            Some("hello world".to_string())
-        );
-    }
-
-    #[test]
-    fn decode_utf8_invalid_returns_none() {
-        let bytes = &[0xff, 0xfe, 0x00, 0x01];
-        assert_eq!(decode_utf8_optional(Some(bytes.as_slice())), None);
-    }
-
-    #[test]
-    fn decode_utf8_empty_bytes_returns_empty_string() {
-        let bytes: &[u8] = b"";
-        assert_eq!(decode_utf8_optional(Some(bytes)), Some(String::new()));
-    }
-
-    #[test]
-    fn decode_utf8_multibyte_chars_preserved() {
-        let text = "héllo wörld 日本語";
-        assert_eq!(
-            decode_utf8_optional(Some(text.as_bytes())),
-            Some(text.to_string())
-        );
-    }
-
-    // ── CommandOutput ────────────────────────────────────────────────
-
-    #[test]
-    fn command_output_empty_success_has_zero_exit_code() {
-        let out = CommandOutput::empty_success("git status");
-        assert_eq!(out.command, "git status");
-        assert_eq!(out.stdout, "");
-        assert_eq!(out.stderr, "");
-        assert_eq!(out.exit_code, Some(0));
-    }
-
-    #[test]
-    fn command_output_combined_stdout_only() {
-        let out = CommandOutput {
-            command: "test".into(),
-            stdout: "output line\n".into(),
-            stderr: String::new(),
-            exit_code: Some(0),
-        };
-        assert_eq!(out.combined(), "output line");
-    }
-
-    #[test]
-    fn command_output_combined_stderr_only() {
-        let out = CommandOutput {
-            command: "test".into(),
-            stdout: String::new(),
-            stderr: "error message\n".into(),
-            exit_code: Some(1),
-        };
-        assert_eq!(out.combined(), "error message");
-    }
-
-    #[test]
-    fn command_output_combined_both_streams() {
-        let out = CommandOutput {
-            command: "test".into(),
-            stdout: "output\n".into(),
-            stderr: "warning\n".into(),
-            exit_code: Some(0),
-        };
-        assert_eq!(out.combined(), "output\nwarning");
-    }
-
-    #[test]
-    fn command_output_combined_empty_when_both_blank() {
-        let out = CommandOutput {
-            command: "test".into(),
-            stdout: "   \n".into(),
-            stderr: "  \n".into(),
-            exit_code: Some(0),
-        };
-        assert_eq!(out.combined(), "");
-    }
-
-    #[test]
-    fn command_output_combined_trims_trailing_whitespace() {
-        let out = CommandOutput {
-            command: "test".into(),
-            stdout: "line1\nline2\n\n".into(),
-            stderr: "err\n\n".into(),
-            exit_code: Some(0),
-        };
-        assert_eq!(out.combined(), "line1\nline2\nerr");
-    }
-
-    #[test]
-    fn command_output_default_has_no_exit_code() {
-        let out = CommandOutput::default();
-        assert_eq!(out.command, "");
-        assert_eq!(out.exit_code, None);
-    }
-
-    #[test]
-    fn blame_line_clone_shares_arc_metadata() {
-        let line = BlameLine {
-            commit_id: "deadbeef".into(),
-            author: "Alice".into(),
-            author_time_unix: Some(1_700_000_000),
-            summary: "Initial import".into(),
-            body: Some("detailed body".into()),
-            line: "hello".to_string(),
-            prior_exists: true,
-            source_path: None,
-            prior_commit: None,
-        };
-
-        let cloned = line.clone();
-        assert!(Arc::ptr_eq(&line.commit_id, &cloned.commit_id));
-        assert!(Arc::ptr_eq(&line.author, &cloned.author));
-        assert!(Arc::ptr_eq(&line.summary, &cloned.summary));
-        assert_eq!(line.line, cloned.line);
-    }
-
-    #[test]
-    fn log_history_mode_page_delegates_current_branch_modes_to_head_log() {
-        let repo = RecordingHistoryModeRepo::new();
-        let cursor = LogCursor {
-            last_seen: CommitId("cursor".into()),
-            resume_from: Some(CommitId("resume".into())),
-            resume_token: Some(Arc::from("token")),
-        };
-
-        for mode in [
-            HistoryMode::FullReachable,
-            HistoryMode::FirstParent,
-            HistoryMode::NoMerges,
-            HistoryMode::MergesOnly,
-            HistoryMode::AllBranches,
-        ] {
-            repo.log_history_mode_page(mode, 7, Some(&cursor))
-                .expect("history mode delegation should succeed");
-        }
-
-        assert_eq!(
-            repo.calls(),
-            vec![
-                ("head", 7, Some("cursor".to_string())),
-                ("head", 7, Some("cursor".to_string())),
-                ("head", 7, Some("cursor".to_string())),
-                ("head", 7, Some("cursor".to_string())),
-                ("all", 7, Some("cursor".to_string())),
-            ]
-        );
-    }
-}
+mod tests;

@@ -166,7 +166,7 @@ fn auth_prompt_does_not_clear_an_unrelated_existing_error() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
-    state.repos[0].feedback.last_error = Some("previous command failed".into());
+    state.repos[0].feedback_mut().last_error = Some("previous command failed".into());
     reduce(
         &mut repos,
         &id_alloc,
@@ -282,7 +282,7 @@ fn auth_recovery_marks_only_its_own_hook_operation() {
 fn clone_authentication_waits_then_retries_or_cancels_quietly() {
     let _lock = super::super::staged_auth_test_lock();
     for outcome in ["success", "failure", "cancel"] {
-        let mut repos = FxHashMap::default();
+        let mut repos: RepositoryRuntimes = Default::default();
         let mut state = AppState::test_default();
         let id_alloc = AtomicU64::new(1);
         let url = "git@github.com:private/repo.git".to_string();
@@ -370,7 +370,7 @@ fn clone_authentication_waits_then_retries_or_cancels_quietly() {
 #[test]
 fn cancelling_auth_does_not_remove_an_unrelated_clone() {
     let _lock = super::super::staged_auth_test_lock();
-    let mut repos = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let mut state = AppState::test_default();
     let id_alloc = AtomicU64::new(1);
     state.auth_prompt = Some(AuthPromptState {
@@ -402,7 +402,7 @@ fn cancelling_auth_does_not_remove_an_unrelated_clone() {
 #[test]
 fn aborting_a_clone_that_exits_for_credentials_cancels_without_a_prompt() {
     let _lock = super::super::staged_auth_test_lock();
-    let mut repos = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let mut state = AppState::test_default();
     let id_alloc = AtomicU64::new(1);
     let url = "git@github.com:private/repo.git".to_string();

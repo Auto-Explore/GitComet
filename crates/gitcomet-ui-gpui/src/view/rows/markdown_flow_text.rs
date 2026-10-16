@@ -17,7 +17,7 @@ type MarkdownFlowHighlightLayers = (MarkdownFlowHighlights, MarkdownFlowBackgrou
 /// selection machinery.
 pub(in crate::view) struct MarkdownFlowText {
     tab_width: usize,
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     row_ix: usize,
     region: DiffTextRegion,
     /// The row's raw text when it differs from what is painted, i.e. when tabs
@@ -55,7 +55,7 @@ pub(in crate::view) enum MarkdownFlowPaintPhase {
 impl MarkdownFlowText {
     pub(in crate::view) fn new(
         tab_width: usize,
-        view: Entity<MainPaneView>,
+        view: Entity<DiffRenderer>,
         row_ix: usize,
         region: DiffTextRegion,
         row_text: SharedString,

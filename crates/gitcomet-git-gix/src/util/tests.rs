@@ -1530,6 +1530,27 @@ fn run_git_with_stdin_capture_respects_cancellation() {
 }
 
 #[test]
+fn command_spawn_error_preserves_the_executable_and_io_cause() {
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("missing-git");
+    let error = run_git_raw_output(Command::new(&executable), "git status").unwrap_err();
+
+    assert!(matches!(
+        error.kind(),
+        ErrorKind::Io(io::ErrorKind::NotFound)
+    ));
+    let source = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<io::Error>()
+        .unwrap();
+    assert_eq!(source.kind(), io::ErrorKind::NotFound);
+    assert!(source.raw_os_error().is_some());
+    let context = error.context().unwrap();
+    assert_eq!(context.operation(), "git status");
+    assert_eq!(context.path(), Some(executable.as_path()));
+}
+
+#[test]
 fn pre_cancelled_command_returns_cancelled_before_spawn() {
     let token = CancellationToken::new();
     token.cancel();

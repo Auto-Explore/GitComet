@@ -1,11 +1,12 @@
 use super::*;
 use crate::indexed_history::{IndexedHistoryEffect as Work, IndexedHistoryMsg as Event};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::history_index::HISTORY_BLOCK_SIZE;
 use std::sync::OnceLock;
 
 pub(super) fn schedule(
     range_executor: &TaskExecutor,
-    repos: &util::RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     work: Work,
     parent: CancellationToken,

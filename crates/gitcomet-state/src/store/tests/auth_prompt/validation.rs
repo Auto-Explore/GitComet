@@ -32,11 +32,7 @@ fn outcome_error(outcome: AuthOutcome, id: GitFailureId, output: &str) -> Error 
     ))
 }
 
-fn finish_pull(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    state: &mut AppState,
-    error: Error,
-) {
+fn finish_pull(repos: &mut RepositoryRuntimes, state: &mut AppState, error: Error) {
     reduce(
         repos,
         &AtomicU64::new(1),
@@ -52,7 +48,7 @@ fn finish_pull(
 }
 
 fn start_validation(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     state: &mut AppState,
     challenge: AuthChallenge,
 ) -> (u64, StagedGitAuth, CancellationToken) {

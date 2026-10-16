@@ -1,7 +1,8 @@
 use super::*;
 use crate::msg::RepoExternalChange;
+use crate::msg::{PersistenceEffect, RepoCommandEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::services::{GitRepository, Result};
-use rustc_hash::FxHashMap;
 use std::sync::atomic::AtomicU64;
 
 /// A repository whose only real answer is its shared git directory.
@@ -21,8 +22,17 @@ impl GitRepository for CommonDirRepo {
     fn common_dir(&self) -> Option<PathBuf> {
         Some(self.common_dir.clone())
     }
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<Arc<LogPage>> {
-        unsupported()
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Arc<LogPage>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
         unsupported()
@@ -30,20 +40,55 @@ impl GitRepository for CommonDirRepo {
     fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
         unsupported()
     }
-    fn current_branch(&self) -> Result<String> {
-        unsupported()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        unsupported()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        unsupported()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        unsupported()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn status(&self) -> Result<RepoStatus> {
-        unsupported()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported()
@@ -66,8 +111,15 @@ impl GitRepository for CommonDirRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported()
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        unsupported()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { unsupported() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         unsupported()
@@ -84,11 +136,17 @@ impl GitRepository for CommonDirRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         unsupported()
     }
-    fn fetch_all(&self) -> Result<()> {
-        unsupported()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        unsupported()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         unsupported()
@@ -99,7 +157,7 @@ impl GitRepository for CommonDirRepo {
 }
 
 fn open_repo_tab(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     workdir: &str,
@@ -138,7 +196,7 @@ fn repo(state: &AppState, repo_id: RepoId) -> &RepoState {
 
 #[test]
 fn opening_the_active_tab_requests_one_maintenance_check_an_hour() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (repo_id, effects) = open_repo_tab(
@@ -152,7 +210,7 @@ fn opening_the_active_tab_requests_one_maintenance_check_an_hour() {
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::CheckRepoMaintenance { repo_id: id } if *id == repo_id)),
+            .any(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::CheckRepoMaintenance { repo_id: id }) if *id == repo_id)),
         "{effects:?}"
     );
     assert_eq!(
@@ -160,14 +218,19 @@ fn opening_the_active_tab_requests_one_maintenance_check_an_hour() {
         Some(Path::new("/work/app/.git"))
     );
     assert!(
-        super::reducer::maintenance::request_check(&mut state, repo_id).is_none(),
+        super::reducer::maintenance::request_check(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            repo_id
+        )
+        .is_none(),
         "focus right after opening does not ask again"
     );
 }
 
 #[test]
 fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (main, _) = open_repo_tab(
@@ -205,7 +268,7 @@ fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
     assert!(!repo(&state, linked).maintenance.recommended);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PersistRepoMaintenanceSnooze { common_dir }] if common_dir == Path::new("/work/app/.git")
+        [Effect::Persistence(PersistenceEffect::PersistRepoMaintenanceSnooze { common_dir })] if common_dir == Path::new("/work/app/.git")
     ));
 
     reduce(&mut repos, &id_alloc, &mut state, checked(true));
@@ -215,7 +278,9 @@ fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
         &mut state,
         Msg::StartRepoMaintenance { repo_id: main },
     );
-    assert!(matches!(effects.as_slice(), [Effect::RunMaintenance { repo_id }] if *repo_id == main));
+    assert!(
+        matches!(effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::RunMaintenance { repo_id })] if *repo_id == main)
+    );
     assert!(repo(&state, main).maintenance.running);
     assert!(!repo(&state, linked).maintenance.recommended);
     // One run per repository, whichever tab asks.
@@ -235,7 +300,7 @@ fn recommendation_start_and_snooze_cover_every_tab_of_the_repository() {
 
 #[test]
 fn external_changes_wait_for_maintenance_and_replay_when_it_ends() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (main, _) = open_repo_tab(
@@ -316,7 +381,7 @@ fn external_changes_wait_for_maintenance_and_replay_when_it_ends() {
 
 #[test]
 fn recommendations_turned_off_ask_nothing_and_withdraw_cards() {
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let (main, _) = open_repo_tab(
@@ -383,8 +448,20 @@ fn recommendations_turned_off_ask_nothing_and_withdraw_cards() {
     let checks = effects
         .iter()
         .chain(&switched)
-        .filter(|effect| matches!(effect, Effect::CheckRepoMaintenance { .. }))
+        .filter(|effect| {
+            matches!(
+                effect,
+                Effect::RepoCommand(RepoCommandEffect::CheckRepoMaintenance { .. })
+            )
+        })
         .count();
     assert_eq!(checks, 0, "open: {effects:?}, switch: {switched:?}");
-    assert!(super::reducer::maintenance::request_check(&mut state, opened).is_none());
+    assert!(
+        super::reducer::maintenance::request_check(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            opened
+        )
+        .is_none()
+    );
 }

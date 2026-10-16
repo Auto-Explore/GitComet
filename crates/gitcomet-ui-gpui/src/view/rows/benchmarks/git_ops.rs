@@ -460,7 +460,11 @@ impl GitOpsFixture {
             } => {
                 let page = self
                     .repo
-                    .log_head_page(*requested_commits, None)
+                    .log_head_page(
+                        *requested_commits,
+                        None,
+                        &gitcomet_core::services::CancellationToken::new(),
+                    )
                     .expect("git_ops log benchmark");
                 let commits_returned = page.commits.len();
                 (
@@ -486,6 +490,7 @@ impl GitOpsFixture {
                         Some(author.as_str()),
                         *requested_commits,
                         None,
+                        &gitcomet_core::services::CancellationToken::new(),
                     )
                     .expect("git_ops author-filter benchmark");
                 let commits_returned = page.commits.len();
@@ -497,7 +502,11 @@ impl GitOpsFixture {
             GitOpsScenario::DiffRange { target, .. } => {
                 let diff = self
                     .repo
-                    .diff_parsed(target)
+                    .diff_parsed(
+                        target,
+                        None,
+                        &gitcomet_core::services::CancellationToken::new(),
+                    )
                     .expect("git_ops diff benchmark");
                 let diff_lines = diff.lines.len();
                 (hash_parsed_diff(&diff), GitOpsOutcome::Diff { diff_lines })
@@ -539,7 +548,7 @@ impl GitOpsFixture {
             GitOpsScenario::RefEnumerate { .. } => {
                 let branches = self
                     .repo
-                    .list_branches()
+                    .list_branches(&gitcomet_core::services::CancellationToken::new())
                     .expect("git_ops ref_enumerate benchmark");
                 let branches_returned = branches.len();
                 (

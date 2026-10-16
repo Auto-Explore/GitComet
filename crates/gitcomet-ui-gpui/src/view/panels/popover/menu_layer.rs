@@ -33,7 +33,7 @@ impl PopoverHost {
             (Some(PopoverAnchor::Point(corner)), PopoverKind::AppMenu) => (
                 MenuAnchor::Trigger(Bounds {
                     origin: *corner,
-                    size: size(px(0.0), crate::view::chrome::TITLE_BAR_HEIGHT),
+                    size: size(px(0.0), crate::kit::window_chrome::TITLE_BAR_HEIGHT),
                 }),
                 px(0.0),
             ),
@@ -83,7 +83,7 @@ const ARROW_SCROLL_MAX_STEP: std::time::Duration = std::time::Duration::from_mil
 
 /// The usable window for a floating menu: the visible surface less `margin`.
 pub(super) fn menu_limits(window: &Window, margin: Pixels) -> Bounds<Pixels> {
-    let surface = crate::view::chrome::window_surface_bounds(window);
+    let surface = crate::kit::window_chrome::window_surface_bounds(window);
     Bounds::from_corners(
         point(surface.left() + margin, surface.top() + margin),
         point(

@@ -367,6 +367,8 @@ fn io_error(error: io::Error) -> Error {
     Error::new(ErrorKind::Backend(format!(
         "History search text could not be stored: {error}"
     )))
+    .with_source(error)
+    .with_context("store history search text", None)
 }
 
 /// A file for the text, preferably in the user's cache directory: `/tmp` is

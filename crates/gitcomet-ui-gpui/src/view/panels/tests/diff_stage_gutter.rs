@@ -103,8 +103,8 @@ fn open_stage_gutter_view(
     let repo = stage_gutter_repo(RepoId(70910), &workdir, target);
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_view = diff_view;
             cx.notify();
         });
@@ -126,7 +126,7 @@ fn open_stage_gutter_view(
 }
 
 /// Source index of the patch line with this exact unified text.
-fn src_ix_for_text(pane: &MainPaneView, text: &str) -> usize {
+fn src_ix_for_text(pane: &DiffRenderer, text: &str) -> usize {
     (0..pane.patch_diff_row_len())
         .find(|src_ix| {
             pane.patch_diff_row(*src_ix)
@@ -137,7 +137,7 @@ fn src_ix_for_text(pane: &MainPaneView, text: &str) -> usize {
 
 /// Visible row rendering the patch line with this text, as the gutter button's
 /// click handler sees it.
-fn visible_ix_for_text(pane: &MainPaneView, text: &str) -> usize {
+fn visible_ix_for_text(pane: &DiffRenderer, text: &str) -> usize {
     let src_ix = src_ix_for_text(pane, text);
     (0..pane.diff_visible_len())
         .find(|visible_ix| {
@@ -154,7 +154,7 @@ fn stage_gutter_patch(
     kind: DiffLineKind,
 ) -> Option<String> {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let visible_ix = visible_ix_for_text(pane, text);
         pane.diff_stage_gutter_patch(visible_ix, kind)
             .map(|patch| String::from_utf8(patch.as_bytes().to_vec()).expect("UTF-8 patch"))
@@ -168,7 +168,7 @@ fn stage_gutter_cell(
     slot: DiffStageSlot,
 ) -> (usize, gpui::Bounds<Pixels>) {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let visible_ix = visible_ix_for_text(pane, text);
         let cell = *pane
             .diff_stage_gutter_cells
@@ -222,7 +222,7 @@ fn stage_gutter_patch_works_for_a_path_containing_spaces(cx: &mut gpui::TestAppC
     let path = STAGE_GUTTER_SPACED_PATH;
     assert_eq!(
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             pane.diff_file_for_src_ix
                 .iter()
                 .filter_map(|file| file.as_deref().map(str::to_string))
@@ -314,7 +314,11 @@ fn stage_gutter_builds_a_reverse_appliable_patch_for_a_staged_diff(cx: &mut gpui
         open_stage_gutter_view(cx, worktree_target(DiffArea::Staged), DiffViewMode::Inline);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_area()),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_area()),
         Some(DiffArea::Staged)
     );
 
@@ -352,7 +356,7 @@ fn stage_gutter_is_disabled_for_commit_diffs(cx: &mut gpui::TestAppContext) {
     );
 
     let (area, cells) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         (
             pane.diff_stage_gutter_area(),
             pane.diff_stage_gutter_cells.len(),
@@ -386,8 +390,8 @@ fn stage_gutter_is_painted_whether_or_not_line_numbers_are_shown(cx: &mut gpui::
     );
 
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_show_line_numbers = false;
             cx.notify();
         });
@@ -409,7 +413,7 @@ fn diff_row_text_left(
 ) -> Option<Pixels> {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_text_hitboxes
             .iter()
@@ -431,7 +435,11 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
     cx.simulate_mouse_move(cell.center(), None, Modifiers::default());
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         Some(DiffStageHover {
             visible_ix,
             slot: DiffStageSlot::Inline,
@@ -442,7 +450,7 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
 
     // Anywhere else in the same row still shows the button, just not lit up.
     let text_position = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_text_hitboxes
             .get(&(visible_ix, DiffTextRegion::Inline))
             .expect("expected an inline text hitbox for the added line")
@@ -452,7 +460,11 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
     cx.simulate_mouse_move(text_position, None, Modifiers::default());
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         Some(DiffStageHover {
             visible_ix,
             slot: DiffStageSlot::Inline,
@@ -463,7 +475,7 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
 
     // A context row has no button, so leaving the change row hides it again.
     let context_position = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let context_ix = visible_ix_for_text(pane, " context one");
         pane.diff_text_hitboxes
             .get(&(context_ix, DiffTextRegion::Inline))
@@ -474,7 +486,11 @@ fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) 
     cx.simulate_mouse_move(context_position, None, Modifiers::default());
     draw_and_drain_test_window(cx);
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         None,
         "moving to a line that cannot be staged should hide the button"
     );
@@ -491,8 +507,8 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
     );
 
     let selection = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             let anchor = visible_ix_for_text(pane, "-old one");
             pane.diff_selection_anchor = Some(anchor);
             pane.diff_selection_range = Some((anchor, anchor));
@@ -508,7 +524,7 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
     draw_and_drain_test_window(cx);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_range),
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_selection_range),
         Some(selection),
         "clicking the gutter button must not move the diff row selection"
     );
@@ -536,7 +552,7 @@ fn stage_gutter_hover_clears_when_its_button_stops_being_painted(cx: &mut gpui::
     assert_eq!(
         cx.update(|_window, app| view
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_stage_gutter_hover
             .map(|hover| hover.visible_ix)),
@@ -546,15 +562,19 @@ fn stage_gutter_hover_clears_when_its_button_stops_being_painted(cx: &mut gpui::
     // Scrolling under a still pointer delivers no mouse move, so the hovered row
     // never gets to clear itself; here the row simply stops painting a button.
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, _cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, _cx| {
             pane.diff_stage_gutter_cells.clear();
         });
     });
     draw_and_drain_test_window(cx);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_stage_gutter_hover),
+        cx.update(|_window, app| view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_stage_gutter_hover),
         None,
         "a hover whose button is no longer painted must not stay pinned"
     );
@@ -587,8 +607,8 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
     // Park a sentinel selection and disarm the reload autoscroll, so the only
     // thing that can move the selection from here is a row click.
     let sentinel = cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             let sentinel = (0, 0);
             pane.diff_selection_anchor = Some(sentinel.0);
             pane.diff_selection_range = Some(sentinel);
@@ -602,7 +622,7 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
     // handlers know nothing about the press. Releasing over the row's text
     // stands in for that: unguarded, it would select the row.
     let text_position = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_text_hitboxes
             .get(&(visible_ix, DiffTextRegion::Inline))
             .expect("expected an inline text hitbox for the added line")
@@ -618,7 +638,7 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
     draw_and_drain_test_window(cx);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_range),
+        cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_selection_range),
         Some(sentinel),
         "a release that belongs to the gutter button must not select a row"
     );
@@ -779,8 +799,8 @@ fn open_generated_diff_view_with_status(
     )));
     apply_state(cx, &view, app_state_with_active_repo(repo));
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.diff_view = mode;
             cx.notify();
         });
@@ -826,7 +846,7 @@ fn diff_view_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
     let row = cx
         .update(|_window, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_text_hitbox_bounds_for_tests(
                     10,
@@ -899,8 +919,8 @@ fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
         open_generated_diff_view_with_status(cx, RepoId(70932), 400, DiffViewMode::Inline, extra);
     let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |_pane, cx| cx.notify());
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |_pane, cx| cx.notify());
             let _ = window.draw(app);
         });
     };
@@ -969,8 +989,8 @@ fn timing_main_pane_frame_with_open_toast(cx: &mut gpui::TestAppContext) {
     });
     let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |_pane, cx| cx.notify());
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |_pane, cx| cx.notify());
             let _ = window.draw(app);
         });
     };
@@ -1014,8 +1034,8 @@ fn timing_diff_cache_checks_on_unchanged_diff(cx: &mut gpui::TestAppContext) {
     for _ in 0..20 {
         let started = Instant::now();
         cx.update(|_window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.ensure_file_diff_cache(cx);
                 pane.ensure_rendered_patch_diff_cache(cx);
             });
@@ -1041,15 +1061,15 @@ fn a_frame_of_a_text_diff_resolves_what_the_pane_shows_a_bounded_number_of_times
         });
     }
 
-    crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    crate::view::panes::diff::take_file_preview_active_checks_for_tests();
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |_pane, cx| cx.notify());
+            this.diff_renderer.update(cx, |_pane, cx| cx.notify());
         });
         window.refresh();
         let _ = window.draw(app);
     });
-    let checks = crate::view::panes::main::take_file_preview_active_checks_for_tests();
+    let checks = crate::view::panes::diff::take_file_preview_active_checks_for_tests();
     assert!(
         checks <= 2,
         "a frame of a text diff checks the preview surface {checks} times"

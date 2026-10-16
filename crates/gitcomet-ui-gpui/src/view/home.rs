@@ -7,7 +7,7 @@ use crate::view::panels::popover::picker_nav::{
     PickerNavKeys, PickerNavOutcome, handle_picker_nav,
 };
 use gitcomet_state::session::{Workspace, WorkspaceId};
-use gpui::{ScrollStrategy, Stateful, UniformListScrollHandle, uniform_list};
+use gpui::{EventEmitter, ScrollStrategy, Stateful, UniformListScrollHandle, uniform_list};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -50,10 +50,10 @@ struct HomeColumn {
 }
 
 type HomeRowsRenderer = fn(
-    &mut GitCometView,
+    &mut HomeView,
     std::ops::Range<usize>,
     &mut Window,
-    &mut gpui::Context<GitCometView>,
+    &mut gpui::Context<HomeView>,
 ) -> Vec<AnyElement>;
 
 fn matches_query(query: &str, haystacks: &[&str]) -> bool {
@@ -90,22 +90,101 @@ pub(super) fn home_repositories(pinned: &[PathBuf], recent: &[PathBuf]) -> Vec<P
     repositories
 }
 
-impl GitCometView {
+/// What Home asks its window to open.
+pub(super) enum HomeEvent {
+    OpenWorkspace(WorkspaceId),
+    OpenRepository(PathBuf),
+}
+
+/// Home's search box and lists: the window's other workspaces, then pinned
+/// and recent repositories, with one keyboard selection across both.
+pub(super) struct HomeView {
+    window_handle: gpui::AnyWindowHandle,
+    tooltip_host: WeakEntity<TooltipHost>,
+    /// The window's own workspace, which the list leaves out.
+    workspace_id: Option<WorkspaceId>,
+    /// Whether the window shows Home; keys reaching a hidden search box do nothing.
+    active: bool,
+    pub(super) search_input: Entity<components::TextInput>,
+    _search_input_subscription: gpui::Subscription,
+    pub(super) search_query: String,
+    pub(super) rows: HomeRows,
+    /// Index into `rows` in keyboard order (workspaces, then repositories).
+    pub(super) selected: Option<usize>,
+    workspaces_scroll: UniformListScrollHandle,
+    repositories_scroll: UniformListScrollHandle,
+    pub(super) pinned_repos: Vec<PathBuf>,
+    pub(super) recent_repos: Vec<PathBuf>,
+}
+
+impl EventEmitter<HomeEvent> for HomeView {}
+
+impl HomeView {
+    pub(super) fn new(
+        window_handle: gpui::AnyWindowHandle,
+        tooltip_host: WeakEntity<TooltipHost>,
+        pinned_repos: Vec<PathBuf>,
+        recent_repos: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let search_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Search workspaces and repositories".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let search_input_subscription = cx.observe(&search_input, |this, input, cx| {
+            this.handle_search_input(&input, cx);
+        });
+        Self {
+            window_handle,
+            tooltip_host,
+            workspace_id: None,
+            active: false,
+            search_input,
+            _search_input_subscription: search_input_subscription,
+            search_query: String::new(),
+            rows: HomeRows::default(),
+            selected: None,
+            workspaces_scroll: UniformListScrollHandle::new(),
+            repositories_scroll: UniformListScrollHandle::new(),
+            pinned_repos,
+            recent_repos,
+        }
+    }
+
+    pub(super) fn set_workspace_id(&mut self, id: Option<WorkspaceId>) {
+        self.workspace_id = id;
+    }
+
+    pub(super) fn set_active(&mut self, active: bool) {
+        self.active = active;
+    }
+
     /// Reload pinned and recent repositories from the session file. Called on
     /// entering Home and on window activation, never from render.
-    pub(super) fn refresh_home_repositories(&mut self) {
+    pub(super) fn refresh_repositories(&mut self) {
         let session = session::load();
-        self.home_pinned_repos = session.pinned_repos;
-        self.home_recent_repos = session.recent_repos;
+        self.pinned_repos = session.pinned_repos;
+        self.recent_repos = session.recent_repos;
     }
 
-    fn open_workspace_from_home(&mut self, id: WorkspaceId, cx: &mut gpui::Context<Self>) {
-        let window_id = self.window_handle.window_id();
-        // Adoption updates this view, so leave the listener first.
-        cx.defer(move |cx| crate::app::open_workspace_in_window(cx, window_id, id));
+    /// Entering Home after closing `closed`: the store records them as recent
+    /// in the background, so promote them here rather than race that write.
+    pub(super) fn enter(&mut self, closed: &[PathBuf]) {
+        self.refresh_repositories();
+        for path in closed.iter().rev() {
+            session::promote_recent_repo(&mut self.recent_repos, path);
+        }
+        self.selected = None;
     }
 
-    fn home_section(&self, title: &'static str, theme: AppTheme) -> gpui::Div {
+    fn section(title: &'static str, theme: AppTheme) -> gpui::Div {
         div()
             .pt(px(8.0))
             .pb(px(4.0))
@@ -116,7 +195,7 @@ impl GitCometView {
             .child(title)
     }
 
-    fn home_list_frame(&self, id: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
+    fn list_frame(id: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
         div()
             .id(id)
             .debug_selector(move || id.to_string())
@@ -130,7 +209,7 @@ impl GitCometView {
             .bg(theme.colors.surface.panel)
     }
 
-    fn home_empty(&self, text: &'static str, theme: AppTheme) -> gpui::Div {
+    fn empty(text: &'static str, theme: AppTheme) -> gpui::Div {
         div()
             .px(px(8.0))
             .py(px(8.0))
@@ -141,12 +220,12 @@ impl GitCometView {
 
     /// Every row has this height: `uniform_list` measures only the first one.
     /// Two text lines plus padding, in rems so it follows the font size.
-    pub(super) fn home_row_height(&self) -> gpui::Rems {
-        self.theme.ui_text(18.0 + 16.0 + 12.0)
+    fn row_height(theme: AppTheme) -> gpui::Rems {
+        theme.ui_text(18.0 + 16.0 + 12.0)
     }
 
-    fn compute_home_rows(&self, cx: &App) -> HomeRows {
-        let query = self.home_search_query.trim().to_lowercase();
+    fn compute_rows(&self, cx: &App) -> HomeRows {
+        let query = self.search_query.trim().to_lowercase();
         let workspaces = home_workspaces(cx, self.workspace_id)
             .into_iter()
             .filter(|workspace| {
@@ -161,7 +240,7 @@ impl GitCometView {
                 matches_query(&query, &haystacks)
             })
             .collect();
-        let repositories = home_repositories(&self.home_pinned_repos, &self.home_recent_repos)
+        let repositories = home_repositories(&self.pinned_repos, &self.recent_repos)
             .into_iter()
             .filter(|path| {
                 let name = repo_name(path);
@@ -175,57 +254,56 @@ impl GitCometView {
             inputs: Some(HomeRowsInputs {
                 workspace_revision: crate::workspaces::revision(cx),
                 own: self.workspace_id,
-                query: self.home_search_query.clone(),
-                pinned: self.home_pinned_repos.clone(),
-                recent: self.home_recent_repos.clone(),
+                query: self.search_query.clone(),
+                pinned: self.pinned_repos.clone(),
+                recent: self.recent_repos.clone(),
             }),
         }
     }
 
     /// Refresh the filtered rows and keep a row selected while any exist.
-    pub(super) fn sync_home_rows(&mut self, cx: &App) {
-        let current = self.home_rows.inputs.as_ref().is_some_and(|inputs| {
+    pub(super) fn sync_rows(&mut self, cx: &App) {
+        let current = self.rows.inputs.as_ref().is_some_and(|inputs| {
             inputs.workspace_revision == crate::workspaces::revision(cx)
                 && inputs.own == self.workspace_id
-                && inputs.query == self.home_search_query
-                && inputs.pinned == self.home_pinned_repos
-                && inputs.recent == self.home_recent_repos
+                && inputs.query == self.search_query
+                && inputs.pinned == self.pinned_repos
+                && inputs.recent == self.recent_repos
         });
         if !current {
-            self.home_rows = self.compute_home_rows(cx);
+            self.rows = self.compute_rows(cx);
         }
-        let count = self.home_rows.len();
-        self.home_selected = (count > 0).then(|| self.home_selected.unwrap_or(0).min(count - 1));
+        let count = self.rows.len();
+        self.selected = (count > 0).then(|| self.selected.unwrap_or(0).min(count - 1));
     }
 
-    fn scroll_home_selection_into_view(&self) {
-        let Some(ix) = self.home_selected else {
+    fn scroll_selection_into_view(&self) {
+        let Some(ix) = self.selected else {
             return;
         };
-        let workspaces = self.home_rows.workspaces.len();
+        let workspaces = self.rows.workspaces.len();
         if ix < workspaces {
-            self.home_workspaces_scroll
+            self.workspaces_scroll
                 .scroll_to_item(ix, ScrollStrategy::Nearest);
         } else {
-            self.home_repositories_scroll
+            self.repositories_scroll
                 .scroll_to_item(ix - workspaces, ScrollStrategy::Nearest);
         }
     }
 
-    fn activate_home_row(&mut self, ix: usize, cx: &mut gpui::Context<Self>) {
-        let workspaces = self.home_rows.workspaces.len();
-        if let Some(workspace) = self.home_rows.workspaces.get(ix) {
-            let id = workspace.id;
-            self.open_workspace_from_home(id, cx);
-        } else if let Some(path) = self.home_rows.repositories.get(ix - workspaces).cloned() {
-            self.open_repo_path(path, cx);
+    fn activate_row(&mut self, ix: usize, cx: &mut gpui::Context<Self>) {
+        let workspaces = self.rows.workspaces.len();
+        if let Some(workspace) = self.rows.workspaces.get(ix) {
+            cx.emit(HomeEvent::OpenWorkspace(workspace.id));
+        } else if let Some(path) = self.rows.repositories.get(ix - workspaces).cloned() {
+            cx.emit(HomeEvent::OpenRepository(path));
         }
     }
 
     /// The search box's keys: typing filters and selects the first match,
     /// Up/Down walk both lists as one run, Left/Right (with the caret at that
     /// edge) jump to the same position in the other list, Enter opens.
-    pub(super) fn handle_home_search_input(
+    fn handle_search_input(
         &mut self,
         input: &Entity<components::TextInput>,
         cx: &mut gpui::Context<Self>,
@@ -238,37 +316,37 @@ impl GitCometView {
                 input.text().to_string(),
             )
         });
-        if self.home_search_query != text {
-            self.home_search_query = text;
-            self.home_selected = None;
-            self.sync_home_rows(cx);
-            self.home_workspaces_scroll
+        if self.search_query != text {
+            self.search_query = text;
+            self.selected = None;
+            self.sync_rows(cx);
+            self.workspaces_scroll
                 .scroll_to_item_strict(0, ScrollStrategy::Top);
-            self.home_repositories_scroll
+            self.repositories_scroll
                 .scroll_to_item_strict(0, ScrollStrategy::Top);
             cx.notify();
             return;
         }
-        if !self.is_home_screen_active() {
+        if !self.active {
             return;
         }
-        self.sync_home_rows(cx);
-        let workspaces = self.home_rows.workspaces.len();
-        let repositories = self.home_rows.repositories.len();
+        self.sync_rows(cx);
+        let workspaces = self.rows.workspaces.len();
+        let repositories = self.rows.repositories.len();
 
         if left || right {
-            if let Some(ix) = self.home_selected
+            if let Some(ix) = self.selected
                 && workspaces > 0
                 && repositories > 0
             {
-                self.home_selected = Some(if right && ix < workspaces {
+                self.selected = Some(if right && ix < workspaces {
                     workspaces + ix.min(repositories - 1)
                 } else if left && ix >= workspaces {
                     (ix - workspaces).min(workspaces - 1)
                 } else {
                     ix
                 });
-                self.scroll_home_selection_into_view();
+                self.scroll_selection_into_view();
                 cx.notify();
             }
             return;
@@ -276,21 +354,21 @@ impl GitCometView {
 
         match handle_picker_nav(
             &keys,
-            &mut self.home_selected,
+            &mut self.selected,
             workspaces + repositories,
             HOME_LIST_MAX_ROWS,
         ) {
             PickerNavOutcome::Navigated => {
-                self.scroll_home_selection_into_view();
+                self.scroll_selection_into_view();
                 cx.notify();
             }
             PickerNavOutcome::Enter => {
-                if let Some(ix) = self.home_selected {
-                    self.activate_home_row(ix, cx);
+                if let Some(ix) = self.selected {
+                    self.activate_row(ix, cx);
                 }
             }
             PickerNavOutcome::Escape => {
-                if !self.home_search_query.is_empty() {
+                if !self.search_query.is_empty() {
                     input.update(cx, |input, cx| input.set_text("", cx));
                 }
             }
@@ -300,8 +378,8 @@ impl GitCometView {
 
     /// Focus the search box (entering Home) or release it (leaving Home) once
     /// the snapshot has been applied; this path has no `Window`.
-    pub(super) fn defer_home_search_focus(&self, focus: bool, cx: &mut gpui::Context<Self>) {
-        let handle = self.home_search_input.read(cx).focus_handle();
+    pub(super) fn defer_search_focus(&self, focus: bool, cx: &mut gpui::Context<Self>) {
+        let handle = self.search_input.read(cx).focus_handle();
         let window_handle = self.window_handle;
         cx.defer(move |cx| {
             let _ = window_handle.update(cx, |_root, window, cx| {
@@ -314,17 +392,16 @@ impl GitCometView {
         });
     }
 
-    pub(super) fn focus_home_search(&self, window: &mut Window, cx: &mut App) {
-        let focus = self.home_search_input.read(cx).focus_handle();
-        window.focus(&focus, cx);
+    pub(super) fn search_focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+        self.search_input.read(cx).focus_handle()
     }
 
-    fn remove_home_workspace(&mut self, id: WorkspaceId, cx: &mut gpui::Context<Self>) {
+    fn remove_workspace(&mut self, id: WorkspaceId, cx: &mut gpui::Context<Self>) {
         let view = cx.entity().downgrade();
         cx.defer(move |cx| {
             crate::app::delete_workspace(cx, id);
             let _ = view.update(cx, |this, cx| {
-                this.sync_home_rows(cx);
+                this.sync_rows(cx);
                 cx.notify();
             });
         });
@@ -332,24 +409,26 @@ impl GitCometView {
 
     /// Drop a repository from Home: forget it and, if pinned, unpin it too,
     /// since a pin would otherwise keep it listed.
-    fn remove_home_repository(&mut self, path: &Path, cx: &mut gpui::Context<Self>) {
-        if self.home_pinned_repos.iter().any(|pinned| pinned == path) {
+    fn remove_repository(&mut self, path: &Path, cx: &mut gpui::Context<Self>) {
+        if self.pinned_repos.iter().any(|pinned| pinned == path) {
             let _ = session::remove_pinned_repo(path);
-            self.home_pinned_repos.retain(|pinned| pinned != path);
+            self.pinned_repos.retain(|pinned| pinned != path);
         }
         let _ = session::remove_recent_repo(path);
-        self.home_recent_repos.retain(|recent| recent != path);
-        self.sync_home_rows(cx);
+        self.recent_repos.retain(|recent| recent != path);
+        self.sync_rows(cx);
         cx.notify();
     }
 
     /// The Enter pill (selected row only) and the remove cross, which shows on
     /// hover and stays visible on the selected row for keyboard users.
-    fn home_row_trailing(
+    fn row_trailing(
         &self,
         row_group: SharedString,
         index: usize,
         selected: bool,
+        theme: AppTheme,
+        ui_scale: crate::ui_scale::UiScale,
         remove: Option<(
             &'static str,
             SharedString,
@@ -357,8 +436,6 @@ impl GitCometView {
         )>,
         cx: &gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let theme = self.theme;
-        let ui_scale = crate::ui_scale::UiScale::from_percent(self.ui_scale_percent);
         let mut trailing = Vec::new();
         if selected {
             trailing.push(
@@ -377,7 +454,7 @@ impl GitCometView {
                     row_group,
                     selected,
                     Some(tooltip),
-                    Some(self.tooltip_host.downgrade()),
+                    Some(self.tooltip_host.clone()),
                     on_remove,
                     cx,
                 )
@@ -387,8 +464,7 @@ impl GitCometView {
         trailing
     }
 
-    fn home_row(
-        &self,
+    fn row(
         id: SharedString,
         leading: AnyElement,
         text: (String, String),
@@ -406,7 +482,7 @@ impl GitCometView {
             .relative()
             .w_full()
             .min_w(px(0.0))
-            .h(self.home_row_height())
+            .h(Self::row_height(theme))
             .px(px(8.0))
             .flex()
             .items_center()
@@ -444,25 +520,25 @@ impl GitCometView {
             .children(trailing)
     }
 
-    fn render_home_workspace_rows(
+    fn render_workspace_rows(
         this: &mut Self,
         range: std::ops::Range<usize>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let theme = this.theme;
-        let ui_scale = crate::ui_scale::UiScale::from_percent(this.ui_scale_percent);
+        let theme = AppTheme::current(cx);
+        let ui_scale = crate::ui_scale::UiScale::from_percent(crate::ui_scale::current(cx).percent);
         range
-            .filter_map(|ix| this.home_rows.workspaces.get(ix).cloned().map(|w| (ix, w)))
+            .filter_map(|ix| this.rows.workspaces.get(ix).cloned().map(|w| (ix, w)))
             .map(|(ix, workspace)| {
                 let id = workspace.id;
                 let row_id: SharedString = format!("home_workspace_{id}").into();
-                let selected = this.home_selected == Some(ix);
+                let selected = this.selected == Some(ix);
                 // A workspace open in another window would reappear at once.
                 let remove = (!crate::workspaces::is_open_in_a_window(cx, id)).then(|| {
                     let on_remove: Arc<components::OnRemoveFn<Self>> =
                         Arc::new(move |this: &mut Self, _ix, _window, cx| {
-                            this.remove_home_workspace(id, cx);
+                            this.remove_workspace(id, cx);
                         });
                     (
                         "home_workspace_remove",
@@ -470,7 +546,8 @@ impl GitCometView {
                         on_remove,
                     )
                 });
-                let trailing = this.home_row_trailing(row_id.clone(), ix, selected, remove, cx);
+                let trailing =
+                    this.row_trailing(row_id.clone(), ix, selected, theme, ui_scale, remove, cx);
                 components::picker_row(
                     theme,
                     ui_scale,
@@ -485,7 +562,7 @@ impl GitCometView {
                         match_range: None,
                         leading_icon: None,
                     },
-                    Some(this.tooltip_host.downgrade()),
+                    Some(this.tooltip_host.clone()),
                     cx,
                 )
                 .group(row_id)
@@ -494,8 +571,8 @@ impl GitCometView {
                     false,
                     controls::ControlActivation::PreserveFocus,
                     cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                        this.home_selected = Some(ix);
-                        this.open_workspace_from_home(id, cx);
+                        this.selected = Some(ix);
+                        cx.emit(HomeEvent::OpenWorkspace(id));
                     }),
                 )
                 .into_any_element()
@@ -503,31 +580,25 @@ impl GitCometView {
             .collect()
     }
 
-    fn render_home_repository_rows(
+    fn render_repository_rows(
         this: &mut Self,
         range: std::ops::Range<usize>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let theme = this.theme;
-        let scale = crate::ui_scale::UiScale::from_percent(this.ui_scale_percent);
-        let offset = this.home_rows.workspaces.len();
+        let theme = AppTheme::current(cx);
+        let scale = crate::ui_scale::UiScale::from_percent(crate::ui_scale::current(cx).percent);
+        let offset = this.rows.workspaces.len();
         range
-            .filter_map(|ix| {
-                this.home_rows
-                    .repositories
-                    .get(ix)
-                    .cloned()
-                    .map(|p| (ix, p))
-            })
+            .filter_map(|ix| this.rows.repositories.get(ix).cloned().map(|p| (ix, p)))
             .map(|(ix, path)| {
-                let selected = this.home_selected == Some(offset + ix);
+                let selected = this.selected == Some(offset + ix);
                 let name = repo_name(&path);
                 let parent = path
                     .parent()
                     .map(|parent| parent.display().to_string())
                     .unwrap_or_default();
-                let detail = if this.home_pinned_repos.contains(&path) {
+                let detail = if this.pinned_repos.contains(&path) {
                     format!("Pinned · {parent}")
                 } else {
                     parent
@@ -541,31 +612,33 @@ impl GitCometView {
                 .into_any_element();
                 let row_id: SharedString =
                     format!("home_recent_{}", session::path_storage_key(&path)).into();
-                let pinned = this.home_pinned_repos.contains(&path);
+                let pinned = this.pinned_repos.contains(&path);
                 let remove_path = path.clone();
                 let on_remove: Arc<components::OnRemoveFn<Self>> =
                     Arc::new(move |this: &mut Self, _ix, _window, cx| {
-                        this.remove_home_repository(&remove_path, cx);
+                        this.remove_repository(&remove_path, cx);
                     });
                 let tooltip = if pinned {
                     "Unpin and remove from recent repositories"
                 } else {
                     "Remove from recent repositories"
                 };
-                let trailing = this.home_row_trailing(
+                let trailing = this.row_trailing(
                     row_id.clone(),
                     ix,
                     selected,
+                    theme,
+                    scale,
                     Some(("home_recent_remove", tooltip.into(), on_remove)),
                     cx,
                 );
-                this.home_row(row_id, badge, (name, detail), selected, trailing, theme)
+                Self::row(row_id, badge, (name, detail), selected, trailing, theme)
                     .on_activate(
                         false,
                         controls::ControlActivation::PreserveFocus,
                         cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                            this.home_selected = Some(offset + ix);
-                            this.open_repo_path(path.clone(), cx);
+                            this.selected = Some(offset + ix);
+                            cx.emit(HomeEvent::OpenRepository(path.clone()));
                         }),
                     )
                     .into_any_element()
@@ -575,7 +648,7 @@ impl GitCometView {
 
     /// A column: header plus a list capped at `HOME_LIST_MAX_ROWS` rows that
     /// renders only what is in view.
-    fn home_column(
+    fn column(
         &self,
         labels: HomeColumn,
         count: usize,
@@ -584,10 +657,10 @@ impl GitCometView {
         rows: HomeRowsRenderer,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
-        let theme = self.theme;
-        let frame = self.home_list_frame(labels.frame_id, theme);
+        let theme = AppTheme::current(cx);
+        let frame = Self::list_frame(labels.frame_id, theme);
         let body = if count == 0 {
-            frame.child(self.home_empty(labels.empty_text, theme))
+            frame.child(Self::empty(labels.empty_text, theme))
         } else {
             let visible = count.min(HOME_LIST_MAX_ROWS) as f32;
             let height: gpui::AbsoluteLength = match row_height {
@@ -614,8 +687,101 @@ impl GitCometView {
             .min_w(px(0.0))
             .flex()
             .flex_col()
-            .child(self.home_section(labels.title, theme))
+            .child(Self::section(labels.title, theme))
             .child(body)
+    }
+}
+
+impl Render for HomeView {
+    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = AppTheme::current(cx);
+        let percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(percent);
+        self.sync_rows(cx);
+        let filtering = !self.search_query.trim().is_empty();
+        let workspaces_column = self.column(
+            HomeColumn {
+                title: "Workspaces",
+                frame_id: "home_workspaces_list",
+                list_id: "home_workspaces_rows",
+                scrollbar_id: "home_workspaces_scrollbar",
+                empty_text: if filtering {
+                    "No matching workspaces."
+                } else {
+                    "No saved workspaces yet. Every window with repositories open is one."
+                },
+            },
+            self.rows.workspaces.len(),
+            // Workspace rows are the shared picker rows, repositories Home's own.
+            components::picker_row_height(crate::ui_scale::UiScale::from_percent(percent), true)
+                .into(),
+            self.workspaces_scroll.clone(),
+            Self::render_workspace_rows,
+            cx,
+        );
+        let repositories_column = self.column(
+            HomeColumn {
+                title: "Recent repositories",
+                frame_id: "home_recent_list",
+                list_id: "home_recent_rows",
+                scrollbar_id: "home_recent_scrollbar",
+                empty_text: if filtering {
+                    "No matching repositories."
+                } else {
+                    "Repositories you open appear here."
+                },
+            },
+            self.rows.repositories.len(),
+            Self::row_height(theme).into(),
+            self.repositories_scroll.clone(),
+            Self::render_repository_rows,
+            cx,
+        );
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(scaled_px(12.0))
+            .child(
+                div()
+                    .id("home_search")
+                    .debug_selector(|| "home_search".to_string())
+                    .w_full()
+                    .child(self.search_input.clone()),
+            )
+            .child(
+                div()
+                    .id("home_columns")
+                    .debug_selector(|| "home_columns".to_string())
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap(scaled_px(16.0))
+                    .child(workspaces_column)
+                    .child(repositories_column),
+            )
+    }
+}
+
+impl GitCometView {
+    pub(super) fn open_workspace_from_home(
+        &mut self,
+        id: WorkspaceId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let window_id = self.window_handle.window_id();
+        // Adoption updates this view, so leave the listener first.
+        cx.defer(move |cx| crate::app::open_workspace_in_window(cx, window_id, id));
+    }
+
+    /// Records the window's workspace, which Home leaves out of its list.
+    pub(super) fn set_workspace_id(
+        &mut self,
+        id: Option<WorkspaceId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.workspace_id = id;
+        self.home.update(cx, |home, _| home.set_workspace_id(id));
     }
 
     pub(super) fn home_screen(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
@@ -633,7 +799,6 @@ impl GitCometView {
         let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
         let colors = theme.colors.interstitial;
         let cta_scale = crate::ui_scale::UiScale::from_percent(self.ui_scale_percent);
-        let query = self.home_search_query.trim().to_lowercase();
 
         let open_button = components::interstitial_cta_button(
             "home_open_repo",
@@ -713,50 +878,6 @@ impl GitCometView {
                 )
                 .child(self.open_repo_panel(cx))
         });
-
-        self.sync_home_rows(cx);
-        let filtering = !query.is_empty();
-        let workspaces_column = self.home_column(
-            HomeColumn {
-                title: "Workspaces",
-                frame_id: "home_workspaces_list",
-                list_id: "home_workspaces_rows",
-                scrollbar_id: "home_workspaces_scrollbar",
-                empty_text: if filtering {
-                    "No matching workspaces."
-                } else {
-                    "No saved workspaces yet. Every window with repositories open is one."
-                },
-            },
-            self.home_rows.workspaces.len(),
-            // Workspace rows are the shared picker rows, repositories Home's own.
-            components::picker_row_height(
-                crate::ui_scale::UiScale::from_percent(self.ui_scale_percent),
-                true,
-            )
-            .into(),
-            self.home_workspaces_scroll.clone(),
-            Self::render_home_workspace_rows,
-            cx,
-        );
-        let repositories_column = self.home_column(
-            HomeColumn {
-                title: "Recent repositories",
-                frame_id: "home_recent_list",
-                list_id: "home_recent_rows",
-                scrollbar_id: "home_recent_scrollbar",
-                empty_text: if filtering {
-                    "No matching repositories."
-                } else {
-                    "Repositories you open appear here."
-                },
-            },
-            self.home_rows.repositories.len(),
-            self.home_row_height().into(),
-            self.home_repositories_scroll.clone(),
-            Self::render_home_repository_rows,
-            cx,
-        );
 
         div()
             .id("repository_entry_screen")
@@ -846,24 +967,7 @@ impl GitCometView {
                                     })),
                             )
                             .children(open_repo_fallback)
-                            .child(
-                                div()
-                                    .id("home_search")
-                                    .debug_selector(|| "home_search".to_string())
-                                    .w_full()
-                                    .child(self.home_search_input.clone()),
-                            )
-                            .child(
-                                div()
-                                    .id("home_columns")
-                                    .debug_selector(|| "home_columns".to_string())
-                                    .w_full()
-                                    .flex()
-                                    .items_start()
-                                    .gap(scaled_px(16.0))
-                                    .child(workspaces_column)
-                                    .child(repositories_column),
-                            ),
+                            .child(self.home.clone()),
                     ),
             )
             .into_any_element()

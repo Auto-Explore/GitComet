@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 /// What a commit-diff file row belongs to: one commit's details, or the
 /// comparison view (`to: None` compares against the working tree).

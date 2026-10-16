@@ -1,15 +1,12 @@
-//! kdiff3-style minimap column for the merge resolver.
+//! kdiff3-style minimap column.
 //!
 //! Port of kdiff3's `Overview` widget (`Overview.cpp`): a narrow column beside
-//! the input panes that paints the whole file's change structure at a glance,
-//! frames the current viewport, and jumps the panes when clicked.
-//!
-//! Band classification lives in `gitcomet_core::merge::minimap`; this module
-//! only paints the bands and handles the mouse.
+//! the content that paints its whole structure at a glance, frames the current
+//! viewport, and jumps the content when clicked. The caller classifies the
+//! bands and colors them; this module only paints them and handles the mouse.
 
 use crate::scrollbar::{ScrollbarAxis, ScrollbarDriver};
 use crate::theme::AppTheme;
-use gitcomet_core::merge::MinimapRowKind;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, MouseButton,
@@ -57,14 +54,18 @@ impl MinimapViewport {
 
 type JumpHandler = Arc<dyn Fn(f32, &mut Window, &mut App) + 'static>;
 
+/// A band's color, or `None` to leave its slice as plain background.
+pub type MinimapBandColor<B> = fn(AppTheme, B) -> Option<gpui::Rgba>;
+
 /// The minimap column element.
 ///
-/// `bands` is the merge classification, one entry per quantized slice of the
-/// file, painted across the full column width.
+/// `bands` holds one classification per quantized slice of the content,
+/// painted across the full column width in the color `color` gives it.
 #[derive(Clone)]
-pub struct MinimapColumn {
+pub struct MinimapColumn<B> {
     id: ElementId,
-    bands: Arc<[MinimapRowKind]>,
+    bands: Arc<[B]>,
+    color: MinimapBandColor<B>,
     driver: Option<Arc<dyn ScrollbarDriver>>,
     on_jump: Option<JumpHandler>,
     width: Option<Pixels>,
@@ -75,11 +76,12 @@ struct MinimapInteractionState {
     dragging: bool,
 }
 
-impl MinimapColumn {
-    pub fn new(id: impl Into<ElementId>, bands: Arc<[MinimapRowKind]>) -> Self {
+impl<B: Copy + PartialEq + 'static> MinimapColumn<B> {
+    pub fn new(id: impl Into<ElementId>, bands: Arc<[B]>, color: MinimapBandColor<B>) -> Self {
         Self {
             id: id.into(),
             bands,
+            color,
             driver: None,
             on_jump: None,
             width: None,
@@ -112,6 +114,7 @@ impl MinimapColumn {
         let Self {
             id,
             bands,
+            color,
             driver,
             on_jump,
             width,
@@ -148,6 +151,7 @@ impl MinimapColumn {
                     bounds.left(),
                     bounds.size.width,
                     &bands,
+                    color,
                 );
 
                 if let Some(driver) = driver.as_ref() {
@@ -223,31 +227,14 @@ impl MinimapColumn {
     }
 }
 
-fn band_color(theme: AppTheme, kind: MinimapRowKind) -> Option<gpui::Rgba> {
-    let changed_alpha = if theme.is_dark { 0.85 } else { 0.70 };
-    // A settled conflict drops to a muted neutral, so the red that remains is
-    // exactly the work left and it reads as neither side's change color.
-    let resolved_alpha = if theme.is_dark { 0.45 } else { 0.35 };
-    let (mut color, alpha) = match kind {
-        MinimapRowKind::Unchanged => return None,
-        MinimapRowKind::LocalChanged => (theme.colors.diff.added.foreground, changed_alpha),
-        MinimapRowKind::RemoteChanged => (theme.colors.accent.foreground, changed_alpha),
-        MinimapRowKind::ResolvedConflict => (theme.colors.foreground.secondary, resolved_alpha),
-        MinimapRowKind::Conflict => (theme.colors.status.danger.foreground, changed_alpha),
-    };
-    color.alpha = alpha;
-    Some(color)
-}
-
-/// Paint one classification column, coalescing runs of equal bands so the
-/// number of quads follows the change count rather than the band count.
-fn paint_bands(
+fn paint_bands<B: Copy + PartialEq>(
     window: &mut Window,
     theme: AppTheme,
     bounds: Bounds<Pixels>,
     x: Pixels,
     width: Pixels,
-    bands: &[MinimapRowKind],
+    bands: &[B],
+    color: MinimapBandColor<B>,
 ) {
     let count = bands.len();
     if count == 0 || width <= px(0.0) {
@@ -264,7 +251,7 @@ fn paint_bands(
         while ix < count && bands[ix] == kind {
             ix += 1;
         }
-        let Some(color) = band_color(theme, kind) else {
+        let Some(color) = color(theme, kind) else {
             continue;
         };
         let y0 = bounds.top() + band_height * start as f32;
@@ -374,36 +361,5 @@ mod tests {
         );
         assert_eq!(negative, positive);
         assert!((negative.start - 0.75).abs() < 1e-5);
-    }
-
-    #[test]
-    fn unchanged_bands_are_not_painted() {
-        let theme = crate::theme::AppTheme::gitcomet_dark();
-        assert!(band_color(theme, MinimapRowKind::Unchanged).is_none());
-        assert!(band_color(theme, MinimapRowKind::Conflict).is_some());
-        assert!(band_color(theme, MinimapRowKind::LocalChanged).is_some());
-        assert!(band_color(theme, MinimapRowKind::RemoteChanged).is_some());
-    }
-
-    #[test]
-    fn a_resolved_conflict_is_painted_but_not_in_the_conflict_color() {
-        for theme in [
-            crate::theme::AppTheme::gitcomet_dark(),
-            crate::theme::AppTheme::gitcomet_light(),
-        ] {
-            let resolved = band_color(theme, MinimapRowKind::ResolvedConflict)
-                .expect("a resolved conflict still marks its rows");
-            let open =
-                band_color(theme, MinimapRowKind::Conflict).expect("an open conflict paints");
-            assert_ne!(
-                (resolved.red, resolved.green, resolved.blue),
-                (open.red, open.green, open.blue),
-                "a resolved conflict must not keep the open-conflict hue",
-            );
-            assert!(
-                resolved.alpha < open.alpha,
-                "a resolved conflict should recede: {resolved:?} vs {open:?}",
-            );
-        }
     }
 }

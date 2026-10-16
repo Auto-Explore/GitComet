@@ -254,10 +254,9 @@ impl HistoryView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let theme = self.theme;
         let find = self.find.get_or_insert_with(|| {
             let input = cx.new(|cx| {
-                let mut input = components::TextInput::new(
+                components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "find commit".into(),
                         leading_icon: Some("icons/zoom.svg"),
@@ -265,9 +264,7 @@ impl HistoryView {
                     },
                     window,
                     cx,
-                );
-                input.set_theme(theme, cx);
-                input
+                )
             });
             let subscription = cx.observe_in(&input, window, |this, input, window, cx| {
                 this.handle_history_find_input(input, window, cx);
@@ -904,9 +901,12 @@ impl HistoryView {
 
         let panel = components::QuickSearchBar::<Self>::new("history_find", status)
             .input(input)
-            .options(options, |this, next, window, cx| {
-                this.set_history_find_options(next, window, cx);
-            })
+            .options(
+                components::search_toggles(options),
+                |this, next, window, cx| {
+                    this.set_history_find_options(components::search_options(next), window, cx);
+                },
+            )
             .navigation(can_step, step(false), step(true))
             .on_close(|this, window, cx| this.close_history_find(window, cx))
             .render(theme, ui_scale, cx)

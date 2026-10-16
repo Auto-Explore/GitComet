@@ -1,9 +1,9 @@
 use gitcomet_core::services::GitBackend;
+use gitcomet_perf::sidecar::{PerfSidecarReport, write_criterion_sidecar};
 use gitcomet_ui_gpui::perf_alloc::{PerfAllocMetrics, TRACKING_MIMALLOC};
 use gitcomet_ui_gpui::perf_ram_guard::{
     benchmark_ram_limit_kib, install_benchmark_process_ram_guard, process_rss_kib,
 };
-use gitcomet_ui_gpui::perf_sidecar::{PerfSidecarReport, write_criterion_sidecar};
 use process_wrap::std::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, json};

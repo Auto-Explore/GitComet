@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::Upstream;
 
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
@@ -8,14 +9,20 @@ fn schedule_effect_with_state_for_test(
     executor: &super::executor::TaskExecutor,
     session_persist_executor: &super::executor::TaskExecutor,
     backend: &Arc<dyn GitBackend>,
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     state: AppState,
     msg_tx: std::sync::mpsc::Sender<Msg>,
     effect: Effect,
 ) {
+    // Each invocation represents an independent effect fixture, as when its
+    // task scope was a local map. Tests of shared scopes use the router directly.
+    for repo in &state.repos {
+        repos.take_load_scope(&repo.id);
+    }
+    repos.bind_test_state(&state);
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut repo_task_tokens = FxHashMap::default();
+
     let repo_load_executor = super::executor::TaskExecutor::new(1);
     let metadata_executor = super::executor::TaskExecutor::new(1);
     super::effects::schedule_effect(
@@ -36,7 +43,6 @@ fn schedule_effect_with_state_for_test(
         &thread_state,
         backend,
         repos,
-        &mut repo_task_tokens,
         msg_tx,
         effect,
     );
@@ -50,16 +56,37 @@ fn schedule_effect_for_test(
     executor: &super::executor::TaskExecutor,
     session_persist_executor: &super::executor::TaskExecutor,
     backend: &Arc<dyn GitBackend>,
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     msg_tx: std::sync::mpsc::Sender<Msg>,
     effect: Effect,
 ) {
+    let mut state = AppState::test_default();
+    if effect.requires_available_git() {
+        state.repos = repos
+            .repository_specs_for_test()
+            .map(|(repo_id, spec)| {
+                let mut repo = RepoState::new_opening(repo_id, spec);
+                repo.open = Loadable::Ready(());
+                repo
+            })
+            .collect();
+        if let Some(repo_id) = crate::store::repo_load_trace::effect_repo_id(&effect)
+            && !state.repos.iter().any(|repo| repo.id == repo_id)
+        {
+            state.repos.push(RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: "/tmp/missing-test-repository".into(),
+                },
+            ));
+        }
+    }
     schedule_effect_with_state_for_test(
         executor,
         session_persist_executor,
         backend,
         repos,
-        AppState::test_default(),
+        state,
         msg_tx,
         effect,
     );
@@ -117,8 +144,13 @@ impl GitRepository for UnsupportedRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        unsupported_repo_result()
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
         unsupported_repo_result()
@@ -126,20 +158,55 @@ impl GitRepository for UnsupportedRepo {
     fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
         unsupported_repo_result()
     }
-    fn current_branch(&self) -> Result<String> {
-        unsupported_repo_result()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        unsupported_repo_result()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        unsupported_repo_result()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        unsupported_repo_result()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn status(&self) -> Result<RepoStatus> {
-        unsupported_repo_result()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported_repo_result()
@@ -172,8 +239,15 @@ impl GitRepository for UnsupportedRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        unsupported_repo_result()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         unsupported_repo_result()
@@ -191,11 +265,17 @@ impl GitRepository for UnsupportedRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         unsupported_repo_result()
     }
-    fn fetch_all(&self) -> Result<()> {
-        unsupported_repo_result()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        unsupported_repo_result()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         unsupported_repo_result()
@@ -251,7 +331,7 @@ impl GitRepository for MetadataSchedulingRepo {
         &self.spec
     }
 
-    fn lfs_locks_cancellable(
+    fn lfs_locks(
         &self,
         _cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<Vec<gitcomet_core::large_files::LfsLock>> {
@@ -260,7 +340,7 @@ impl GitRepository for MetadataSchedulingRepo {
         Ok(Vec::new())
     }
 
-    fn annex_unused_cancellable(
+    fn annex_unused(
         &self,
         _cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<gitcomet_core::large_files::AnnexUnused> {
@@ -273,8 +353,13 @@ impl GitRepository for MetadataSchedulingRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        unsupported_repo_result()
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
         unsupported_repo_result()
@@ -282,39 +367,92 @@ impl GitRepository for MetadataSchedulingRepo {
     fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
         unsupported_repo_result()
     }
-    fn current_branch(&self) -> Result<String> {
-        unsupported_repo_result()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        unsupported_repo_result()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_tags(&self) -> Result<Vec<gitcomet_core::domain::Tag>> {
-        match self.mode {
-            MetadataRepoMode::ReadyTags => {
-                let _ = self.started_tx.send("tags");
-                Ok(Vec::new())
+    fn list_tags(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Tag>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<gitcomet_core::domain::Tag>> = {
+            match self.mode {
+                MetadataRepoMode::ReadyTags => {
+                    let _ = self.started_tx.send("tags");
+                    Ok(Vec::new())
+                }
+                MetadataRepoMode::BlockingRemoteTags => unsupported_repo_result(),
             }
-            MetadataRepoMode::BlockingRemoteTags => unsupported_repo_result(),
-        }
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_tags(&self) -> Result<Vec<gitcomet_core::domain::RemoteTag>> {
-        match self.mode {
-            MetadataRepoMode::BlockingRemoteTags => {
-                let _ = self.started_tx.send("remote_tags");
-                wait_for_release_signal(&self.release);
-                Ok(Vec::new())
+    fn list_remote_tags(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::RemoteTag>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<gitcomet_core::domain::RemoteTag>> = {
+            match self.mode {
+                MetadataRepoMode::BlockingRemoteTags => {
+                    let _ = self.started_tx.send("remote_tags");
+                    wait_for_release_signal(&self.release);
+                    Ok(Vec::new())
+                }
+                MetadataRepoMode::ReadyTags => unsupported_repo_result(),
             }
-            MetadataRepoMode::ReadyTags => unsupported_repo_result(),
-        }
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        unsupported_repo_result()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        unsupported_repo_result()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn status(&self) -> Result<RepoStatus> {
-        unsupported_repo_result()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported_repo_result()
@@ -337,8 +475,15 @@ impl GitRepository for MetadataSchedulingRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        unsupported_repo_result()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         unsupported_repo_result()
@@ -355,11 +500,17 @@ impl GitRepository for MetadataSchedulingRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         unsupported_repo_result()
     }
-    fn fetch_all(&self) -> Result<()> {
-        unsupported_repo_result()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        unsupported_repo_result()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         unsupported_repo_result()
@@ -391,8 +542,13 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        unsupported_repo_result()
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
         unsupported_repo_result()
@@ -400,28 +556,67 @@ impl GitRepository for SelectedDiffSchedulingRepo {
     fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
         unsupported_repo_result()
     }
-    fn current_branch(&self) -> Result<String> {
-        unsupported_repo_result()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        unsupported_repo_result()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        unsupported_repo_result()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        unsupported_repo_result()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn status(&self) -> Result<RepoStatus> {
-        unsupported_repo_result()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported_repo_result()
     }
-    fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
-        panic!("the executor must reuse the supplied status, not rescan");
+    fn uncommitted_line_stats(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        cancellation.check_cancelled()?;
+        panic!("the executor must reuse the supplied status, not rescan")
     }
-    fn uncommitted_line_stats_for_status_cancellable(
+    fn uncommitted_line_stats_for_status(
         &self,
         status: &RepoStatus,
         cancellation: &CancellationToken,
@@ -443,9 +638,10 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         cancellation.check_cancelled()?;
         Ok(Default::default())
     }
-    fn diff_parsed_cancellable(
+    fn diff_parsed(
         &self,
         target: &DiffTarget,
+        _encoding: Option<gitcomet_core::text_format::TextEncoding>,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::domain::Diff> {
         let _ = self.started_tx.send(self.started_repo_id);
@@ -485,8 +681,15 @@ impl GitRepository for SelectedDiffSchedulingRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        unsupported_repo_result()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         unsupported_repo_result()
@@ -503,11 +706,17 @@ impl GitRepository for SelectedDiffSchedulingRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         unsupported_repo_result()
     }
-    fn fetch_all(&self) -> Result<()> {
-        unsupported_repo_result()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        unsupported_repo_result()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         unsupported_repo_result()
@@ -533,7 +742,7 @@ impl GitRepository for RecordingLogRepo {
         author: Option<&str>,
         limit: usize,
         cursor: Option<&LogCursor>,
-        _cancellation: &gitcomet_core::services::CancellationToken,
+        cancellation: &gitcomet_core::services::CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
     ) -> Result<Arc<LogPage>> {
         self.calls
@@ -544,10 +753,10 @@ impl GitRepository for RecordingLogRepo {
             commits: Vec::new(),
             scanned: 1,
         });
-        self.log_history_mode_page(mode, limit, cursor)
+        self.log_history_mode_page(mode, limit, cursor, cancellation)
     }
 
-    fn log_history_mode_page_filtered_cancellable(
+    fn log_history_mode_page_filtered(
         &self,
         mode: LogScope,
         author: Option<&str>,
@@ -560,7 +769,7 @@ impl GitRepository for RecordingLogRepo {
             .lock()
             .unwrap()
             .push(format!("filtered {author:?}"));
-        self.log_history_mode_page(mode, limit, cursor)
+        self.log_history_mode_page(mode, limit, cursor, cancellation)
     }
 
     fn log_history_mode_page(
@@ -568,40 +777,54 @@ impl GitRepository for RecordingLogRepo {
         mode: LogScope,
         limit: usize,
         cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        self.calls
-            .lock()
-            .expect("log recording mutex")
-            .push(format!(
-                "history {mode:?} {limit} {}",
-                cursor
-                    .map(|cursor| cursor.last_seen.as_ref())
-                    .unwrap_or("none")
-            ));
-        Ok(std::sync::Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }))
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            self.calls
+                .lock()
+                .expect("log recording mutex")
+                .push(format!(
+                    "history {mode:?} {limit} {}",
+                    cursor
+                        .map(|cursor| cursor.last_seen.as_ref())
+                        .unwrap_or("none")
+                ));
+            Ok(std::sync::Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn log_head_page(
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        self.calls
-            .lock()
-            .expect("log recording mutex")
-            .push(format!(
-                "head {limit} {}",
-                cursor
-                    .map(|cursor| cursor.last_seen.as_ref())
-                    .unwrap_or("none")
-            ));
-        Ok(std::sync::Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }))
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            self.calls
+                .lock()
+                .expect("log recording mutex")
+                .push(format!(
+                    "head {limit} {}",
+                    cursor
+                        .map(|cursor| cursor.last_seen.as_ref())
+                        .unwrap_or("none")
+                ));
+            Ok(std::sync::Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -610,20 +833,55 @@ impl GitRepository for RecordingLogRepo {
     fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
         unsupported_repo_result()
     }
-    fn current_branch(&self) -> Result<String> {
-        unsupported_repo_result()
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        unsupported_repo_result()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        unsupported_repo_result()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        unsupported_repo_result()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn status(&self) -> Result<RepoStatus> {
-        unsupported_repo_result()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported_repo_result()
@@ -646,8 +904,15 @@ impl GitRepository for RecordingLogRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        unsupported_repo_result()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         unsupported_repo_result()
@@ -664,11 +929,17 @@ impl GitRepository for RecordingLogRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         unsupported_repo_result()
     }
-    fn fetch_all(&self) -> Result<()> {
-        unsupported_repo_result()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        unsupported_repo_result()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         unsupported_repo_result()
@@ -744,8 +1015,13 @@ impl GitRepository for RecordingCheckoutRepo {
         &self,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        unsupported_repo_result()
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
         unsupported_repo_result()
@@ -753,22 +1029,59 @@ impl GitRepository for RecordingCheckoutRepo {
     fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
         unsupported_repo_result()
     }
-    fn current_branch(&self) -> Result<String> {
-        self.current_branch
-            .clone()
-            .map_or_else(unsupported_repo_result, Ok)
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = {
+            self.current_branch
+                .clone()
+                .map_or_else(unsupported_repo_result, Ok)
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        unsupported_repo_result()
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remotes(&self) -> Result<Vec<Remote>> {
-        unsupported_repo_result()
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Remote>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        unsupported_repo_result()
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<RemoteBranch>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
-    fn status(&self) -> Result<RepoStatus> {
-        unsupported_repo_result()
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported_repo_result()
@@ -829,8 +1142,15 @@ impl GitRepository for RecordingCheckoutRepo {
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        unsupported_repo_result()
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { unsupported_repo_result() };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn stash_apply(&self, _index: usize) -> Result<()> {
         unsupported_repo_result()
@@ -848,11 +1168,17 @@ impl GitRepository for RecordingCheckoutRepo {
     fn commit(&self, _message: &str) -> Result<()> {
         unsupported_repo_result()
     }
-    fn fetch_all(&self) -> Result<()> {
-        unsupported_repo_result()
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        unsupported_repo_result()
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { unsupported_repo_result() };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
     fn push(&self) -> Result<()> {
         unsupported_repo_result()
@@ -880,7 +1206,7 @@ impl GitBackend for RecordingWorktreeBackend {
 /// An origin repo that reports every branch as checked out in `worktree`, and
 /// the recorder the backend hands out for that worktree.
 struct WorktreeRedirectFixture {
-    repos: FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     origin_calls: Arc<std::sync::Mutex<Vec<String>>>,
     worktree_calls: Arc<std::sync::Mutex<Vec<String>>>,
@@ -921,8 +1247,8 @@ fn worktree_redirect_fixture(
         repo: Arc::new(worktree_repo),
         opened: Arc::clone(&opened),
     });
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(repo_id, Arc::new(origin));
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(repo_id, Arc::new(origin));
     WorktreeRedirectFixture {
         repos,
         backend,
@@ -954,7 +1280,7 @@ fn recv_until_action_finished(msg_rx: &std::sync::mpsc::Receiver<Msg>) -> (Vec<M
 }
 
 fn run_effect_with_fixture(
-    fixture: &WorktreeRedirectFixture,
+    fixture: &mut WorktreeRedirectFixture,
     effect: Effect,
 ) -> std::sync::mpsc::Receiver<Msg> {
     let executor = super::executor::TaskExecutor::new(1);
@@ -963,7 +1289,7 @@ fn run_effect_with_fixture(
         &executor,
         &executor,
         &fixture.backend,
-        &fixture.repos,
+        &mut fixture.repos,
         msg_tx,
         effect,
     );

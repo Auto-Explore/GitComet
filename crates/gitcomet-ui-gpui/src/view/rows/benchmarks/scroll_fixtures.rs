@@ -42,7 +42,7 @@ impl LargeFileDiffScrollFixture {
             let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
             let document = prepare_bench_diff_syntax_document_from_shared(
                 language,
-                DiffSyntaxBudget::default(),
+                default_diff_syntax_budget(),
                 text.clone(),
                 Arc::clone(&line_starts),
                 None,
@@ -1065,6 +1065,20 @@ fn record_keyboard_stage_unstage_select_effects(
             Effect::LoadDiff { .. }
             | Effect::LoadDiffFile { .. }
             | Effect::LoadDiffFileImage { .. } => 1,
+            Effect::LoadSelectedDiff {
+                load_patch_diff,
+                load_file_text,
+                preview_text_side,
+                load_submodule_summary,
+                load_file_image,
+                ..
+            } => {
+                u64::from(*load_patch_diff)
+                    + u64::from(*load_file_text)
+                    + u64::from(preview_text_side.is_some())
+                    + u64::from(*load_submodule_summary)
+                    + u64::from(*load_file_image)
+            }
             _ => 0,
         };
         *total_effects = total_effects.saturating_add(logical_effects);
@@ -1446,5 +1460,71 @@ impl RepoSwitchDuringScrollFixture {
                 window_rows: u64::try_from(window_rows).unwrap_or(u64::MAX),
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod selected_diff_effect_tests {
+    use super::*;
+    use gitcomet_core::domain::DiffPreviewTextSide;
+
+    #[test]
+    fn selected_diff_logical_effects_count_only_requested_content_loads() {
+        let cases = [
+            ("none", false, false, None, false, false, 0),
+            ("patch", true, false, None, false, false, 1),
+            ("text", false, true, None, false, false, 1),
+            (
+                "old preview",
+                false,
+                false,
+                Some(DiffPreviewTextSide::Old),
+                false,
+                false,
+                1,
+            ),
+            (
+                "new preview",
+                false,
+                false,
+                Some(DiffPreviewTextSide::New),
+                false,
+                false,
+                1,
+            ),
+            ("submodule", false, false, None, true, false, 1),
+            ("image", false, false, None, false, true, 1),
+            ("regular text", true, true, None, false, false, 2),
+            (
+                "all content loads",
+                true,
+                true,
+                Some(DiffPreviewTextSide::New),
+                true,
+                true,
+                5,
+            ),
+        ];
+
+        for (name, patch, text, preview_text_side, submodule, image, expected) in cases {
+            let effect = Effect::LoadSelectedDiff {
+                repo_id: RepoId(1),
+                load_patch_diff: patch,
+                load_file_text: text,
+                preview_text_side,
+                load_submodule_summary: submodule,
+                load_file_image: image,
+            };
+            let mut total_effects = 7;
+            let mut selected_effects = 3;
+            record_keyboard_stage_unstage_select_effects(
+                &[effect],
+                &mut total_effects,
+                &mut selected_effects,
+                &mut FxHasher::default(),
+            );
+            assert_eq!(total_effects, 7 + expected, "total effects: {name}");
+            assert_eq!(selected_effects, 3 + expected, "selected effects: {name}");
+        }
     }
 }

@@ -659,7 +659,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     assert_eq!(page1.commits.len(), 1);
     assert!(page1.next_cursor.is_some());
     assert!(
-        repo.log_file_follow_cache
+        repo.history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache")
             .is_empty(),
@@ -674,7 +675,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
 
     let cached_commits = {
         let cache = repo
-            .log_file_follow_cache
+            .history_cache
+            .file_follow
             .lock()
             .expect("log file follow cache");
         assert_eq!(cache.len(), 1);
@@ -689,7 +691,8 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     assert_eq!(page3.commits.len(), 1);
 
     let cache = repo
-        .log_file_follow_cache
+        .history_cache
+        .file_follow
         .lock()
         .expect("log file follow cache");
     assert_eq!(cache.len(), 1);
@@ -798,7 +801,7 @@ fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
 
     let key = repo.log_page_cache_key(
         HistoryMode::AllBranches,
-        super::super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
+        super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
         &shallow,
         10,
         None,
@@ -834,11 +837,15 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
     commit_file(tmp.path(), "a.txt", "one\n", "first");
     let repo = open_repo(tmp.path());
     let shallow = shallow_snapshot(&repo.repo()).expect("shallow snapshot");
-    let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
+    let commit = repo
+        .log_head_page_cancellable_impl(1, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap()
+        .commits[0]
+        .clone();
     for limit in [4000, 4001, 4002, 20_000] {
         let key = repo.log_page_cache_key(
             HistoryMode::AllBranches,
-            super::super::LogPageSeed::Tips(Arc::from(Vec::new())),
+            super::LogPageSeed::Tips(Arc::from(Vec::new())),
             &shallow,
             limit,
             None,
@@ -852,7 +859,8 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
             }),
         );
         let rows: usize = repo
-            .log_page_cache
+            .history_cache
+            .pages
             .lock()
             .unwrap()
             .iter()
@@ -891,14 +899,14 @@ fn a_cached_page_keeps_the_page_that_follows_it_from_being_evicted() {
     let shallow = shallow_snapshot(&local_repo).expect("shallow snapshot");
     let second_key = repo.log_page_cache_key(
         mode,
-        super::super::LogPageSeed::Head(head),
+        super::LogPageSeed::Head(head),
         &shallow,
         4,
         Some(&cursor),
         None,
     );
 
-    for round in 0..super::super::LOG_PAGE_CACHE_LIMIT + 4 {
+    for round in 0..super::LOG_PAGE_CACHE_LIMIT + 4 {
         repo.log_history_mode_page_impl(mode, 5 + round, None)
             .expect("filler page");
         repo.log_history_mode_page_impl(mode, 4, None)
@@ -1227,7 +1235,9 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     commit_file(tmp.path(), "a.txt", "2\n", "c2");
 
     let repo = open_repo(tmp.path());
-    let first = repo.upstream_divergence_impl().expect("divergence");
+    let first = repo
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+        .expect("divergence");
     assert_eq!(
         first,
         Some(UpstreamDivergence {
@@ -1237,13 +1247,15 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     );
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 1);
 
-    let again = repo.upstream_divergence_impl().expect("divergence again");
+    let again = repo
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
+        .expect("divergence again");
     assert_eq!(again, first);
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 1);
 
     commit_file(tmp.path(), "a.txt", "3\n", "c3");
     let moved = repo
-        .upstream_divergence_impl()
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
         .expect("divergence after move");
     assert_eq!(
         moved,
@@ -1257,7 +1269,7 @@ fn upstream_divergence_is_memoized_by_tip_pair_and_recomputed_when_tips_move() {
     // Upstream catching up produces the equal-tip fast path (no walk, no entry).
     git_success(tmp.path(), &["fetch", "-q", "origin"]);
     let caught_up = repo
-        .upstream_divergence_impl()
+        .upstream_divergence_cancellable_impl(&gitcomet_core::services::CancellationToken::new())
         .expect("divergence caught up");
     assert_eq!(caught_up, Some(UpstreamDivergence::default()));
     assert_eq!(repo.divergence_cache.lock().expect("cache").len(), 2);
@@ -1308,9 +1320,12 @@ fn upstream_divergence_cache_invalidates_on_shallow_boundary_changes() {
             fs::remove_file(tmp.path().join(".git/shallow")).expect("unshallow");
         }
         assert_eq!(git_stdout(tmp.path(), &["show-ref"]), tips);
-        let fresh = open_repo(tmp.path())
-            .upstream_divergence_impl()
-            .expect("fresh divergence");
+        let fresh =
+            open_repo(tmp.path())
+                .upstream_divergence_cancellable_impl(
+                    &gitcomet_core::services::CancellationToken::new(),
+                )
+                .expect("fresh divergence");
         let ahead: usize = git_stdout(
             tmp.path(),
             &["rev-list", "--count", "HEAD", "--not", "@{upstream}"],
@@ -1319,7 +1334,13 @@ fn upstream_divergence_cache_invalidates_on_shallow_boundary_changes() {
         .unwrap();
         assert_eq!(ahead, expected_ahead);
         assert_eq!(fresh.unwrap().ahead, ahead);
-        assert_eq!(repo.upstream_divergence_impl().expect("divergence"), fresh);
+        assert_eq!(
+            repo.upstream_divergence_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .expect("divergence"),
+            fresh
+        );
     }
 }
 
@@ -1857,7 +1878,11 @@ fn timing_upstream_divergence_far_behind() {
     let repo = open_repo(tmp.path());
     for round in 1..=3 {
         let started = std::time::Instant::now();
-        let divergence = repo.upstream_divergence_impl().expect("divergence");
+        let divergence =
+            repo.upstream_divergence_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new(),
+            )
+            .expect("divergence");
         println!(
             "timing upstream_divergence round {round}: {:?} -> {divergence:?}",
             started.elapsed()
@@ -1907,7 +1932,11 @@ fn timing_all_branches_page_with_many_refs() {
     for round in 1..=3 {
         let started = std::time::Instant::now();
         let page = repo
-            .log_all_branches_page_impl(50, None)
+            .log_all_branches_page_cancellable_impl(
+                50,
+                None,
+                &gitcomet_core::services::CancellationToken::new(),
+            )
             .expect("all branches page");
         println!(
             "timing all_branches_page round {round}: {:?} ({} commits)",
@@ -2205,7 +2234,7 @@ fn reopen_object_store_drops_old_store_handles() {
     let first_page = repo
         .log_history_mode_page_impl(HistoryMode::FullReachable, 1, None)
         .expect("first page");
-    assert_eq!(repo.log_paged_walk_cache.lock().unwrap().entries.len(), 1);
+    assert_eq!(repo.history_cache.walks.lock().unwrap().entries.len(), 1);
     repo.range_reader_repo().expect("range reader");
 
     let active_reader = repo.repo();
@@ -2213,8 +2242,8 @@ fn reopen_object_store_drops_old_store_handles() {
     let old_generation = repo.store_generation();
     repo.reopen_object_store().expect("reopen");
 
-    assert!(repo.log_paged_walk_cache.lock().unwrap().entries.is_empty());
-    assert!(repo.range_reader.lock().unwrap().is_none());
+    assert!(repo.history_cache.walks.lock().unwrap().entries.is_empty());
+    assert!(repo.history_cache.range_reader.lock().unwrap().is_none());
     let (store, generation) = repo.thread_safe_repo();
     assert!(generation > old_generation);
     let config_store = repo

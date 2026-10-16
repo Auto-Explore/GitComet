@@ -57,7 +57,7 @@ fn context_menu_entry_disabled_by_label_prefix(model: &ContextMenuModel, prefix:
 /// Platform-aware label for `secondary`-modifier shortcuts, matching what the
 /// context menus declare.
 fn sec(suffix: &str) -> String {
-    crate::view::shortcut_labels::secondary_shortcut(suffix)
+    crate::kit::components::secondary_shortcut(suffix)
 }
 
 fn context_menu_model_for(
@@ -71,6 +71,86 @@ fn context_menu_model_for(
                 .unwrap_or_else(|| panic!("expected context menu model for {kind:?}"))
         })
     })
+}
+
+#[gpui::test]
+fn snapshot_diff_selection_copies_without_repository_menu_actions(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{DiffLayout, DiffPaneOptions, DiffSnapshot, Registry};
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(
+                gitcomet_extension_example::review::ReviewExtension,
+            )])
+            .unwrap(),
+            app,
+        );
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.run_until_parked();
+    let pane = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        host.create_snapshot_pane(
+            DiffSnapshot::new("selection.txt", "before\n", "selected\n"),
+            DiffPaneOptions {
+                layout: DiffLayout::Inline,
+                ..Default::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let hosted = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap();
+        let renderer = hosted.read(app).renderer().unwrap().clone();
+        renderer.update(app, |renderer, cx| {
+            assert!(renderer.active_repo().is_none());
+            renderer.ensure_diff_visible_indices();
+            let anchor = DiffTextPos {
+                source_visible_ix: 1,
+                region: DiffTextRegion::Inline,
+                offset: 0,
+            };
+            renderer.diff_text_anchor = Some(anchor);
+            renderer.diff_text_head = Some(DiffTextPos {
+                offset: "selected".len(),
+                ..anchor
+            });
+            renderer.open_diff_editor_context_menu(
+                1,
+                DiffTextRegion::Inline,
+                point(px(40.0), px(40.0)),
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let popover = view.read(app).popover_host.clone();
+        popover.update(app, |host, cx| {
+            let kind = host
+                .popover_kind_for_tests()
+                .expect("snapshot selection context menu");
+            assert!(matches!(&kind, PopoverKind::DiffEditorMenu { repo_id: None, copy_text: Some(text), .. } if text == "selected"));
+            let model = host.context_menu_model(&kind, cx).unwrap();
+            let mut entries = model.items.into_iter().filter_map(|item| match item {
+                ContextMenuItem::Entry { label, disabled, action, .. } => Some((label, disabled, action)),
+                _ => None,
+            });
+            let (label, disabled, action) = entries.next().expect("copy action");
+            assert_eq!(label.as_ref(), "Copy");
+            assert!(!disabled);
+            assert!(entries.next().is_none(), "a snapshot has no repository actions");
+            host.context_menu_activate_action(*action, window, cx);
+            assert_eq!(crate::clipboard::read_text(cx).as_deref(), Some("selected"));
+        });
+    });
 }
 
 #[gpui::test]
@@ -1107,7 +1187,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             &view,
             app,
             PopoverKind::DiffEditorMenu {
-                repo_id,
+                repo_id: Some(repo_id),
                 area: DiffArea::Unstaged,
                 path: Some(unstaged_path.clone()),
                 hunk_patch: Some("hunk patch".into()),
@@ -1150,7 +1230,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             &view,
             app,
             PopoverKind::DiffEditorMenu {
-                repo_id,
+                repo_id: Some(repo_id),
                 area: DiffArea::Staged,
                 path: Some(staged_path.clone()),
                 hunk_patch: Some("staged hunk".into()),
@@ -1365,7 +1445,7 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();

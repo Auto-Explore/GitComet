@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::RepoState;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{CommitId, LogScope, RepoSpec};
 
 #[test]
@@ -12,7 +13,7 @@ fn history_selection_acknowledges_noops_and_rejected_requests_by_id() {
             workdir: "/tmp/history-selection-ack".into(),
         },
     ));
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let ids = AtomicU64::new(2);
     for request_id in [11, 12] {
         reduce(

@@ -60,7 +60,7 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) layout: MarkdownDocumentLayoutCache,
     /// Set when the preview is interactive: text selection, copy, the link
     /// menu, and the diff context menu all go through this view.
-    pub(in crate::view) view: Option<Entity<MainPaneView>>,
+    pub(in crate::view) view: Option<Entity<DiffRenderer>>,
     pub(in crate::view) text_region: DiffTextRegion,
     /// Gutter colour for a wholly added or removed file, `None` otherwise.
     pub(in crate::view) change_bar_color: Option<gpui::Rgba>,
@@ -73,7 +73,7 @@ pub(in crate::view) struct MarkdownDocumentContext {
     /// The container the document scrolls in, which the reveal moves.
     pub(in crate::view) scroll: Option<gpui::ScrollHandle>,
     /// Diagram heights already known, for sizing diagram blocks not yet drawn.
-    pub(in crate::view) diagram_heights: crate::view::diagram_preview::DiagramHeights,
+    pub(in crate::view) diagram_heights: crate::view::diagram_preview::block::DiagramHeights,
     /// The link under the pointer.
     pub(in crate::view) hovered_link: Option<crate::view::rows::MarkdownPreviewHoveredLink>,
     /// Where changed blocks were laid out, for the diff's scrollbar markers.
@@ -511,7 +511,7 @@ pub(in crate::view) fn markdown_block_estimate_for_tests(
 ) -> f32 {
     let blocks = markdown_document_blocks(document);
     let context = MarkdownDocumentContext {
-        diagram_heights: crate::view::diagram_preview::DiagramHeights::new(cx),
+        diagram_heights: crate::view::diagram_preview::block::DiagramHeights::new(cx),
         ..MarkdownDocumentContext::detached(theme, ui_scale_percent)
     };
     f32::from(estimated_block_height(
@@ -704,7 +704,7 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
         return column.into_any_element();
     };
     let boxes = context.row_boxes.clone();
-    let focus = |view: &Entity<MainPaneView>, window: &mut Window, cx: &mut App| {
+    let focus = |view: &Entity<DiffRenderer>, window: &mut Window, cx: &mut App| {
         let focus = view.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus, cx);
     };
@@ -2729,11 +2729,11 @@ mod tests {
 
     fn image_search_query(
         text: &str,
-        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+        options: crate::view::panes::diff::diff_search::DiffSearchOptions,
     ) -> crate::view::rows::MarkdownPreviewQuery {
         crate::view::rows::MarkdownPreviewQuery {
             matcher: Arc::new(
-                crate::view::panes::main::diff_search::DiffSearchMatcher::new(text, options),
+                crate::view::panes::diff::diff_search::DiffSearchMatcher::new(text, options),
             ),
             current_row: None,
         }
@@ -2743,7 +2743,7 @@ mod tests {
     fn table_image_search_respects_full_row_regex_anchors() {
         let query = image_search_query(
             "^cat$",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 regex: true,
                 ..Default::default()
             },
@@ -2773,7 +2773,7 @@ mod tests {
     fn table_image_search_respects_full_row_word_boundaries() {
         let query = image_search_query(
             "cat",
-            crate::view::panes::main::diff_search::DiffSearchOptions {
+            crate::view::panes::diff::diff_search::DiffSearchOptions {
                 whole_word: true,
                 ..Default::default()
             },
@@ -2809,7 +2809,7 @@ mod tests {
         let tab_width = 4;
 
         use crate::view::markdown_preview::parse_markdown;
-        use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+        use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
         let theme = AppTheme::gitcomet_dark();
         let mut source = String::from(

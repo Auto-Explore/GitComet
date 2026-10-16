@@ -101,11 +101,7 @@ impl SettingsWindowView {
         self.cancel_signing_tools_probe();
         self.runtime_info.large_file_tools = Some(Default::default());
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, _cx| {
-            view.cancel_signing_tools_probe();
-            view.store
-                .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
-        });
+        self.broadcast_preference(PreferenceChange::GitRuntime(runtime), cx);
         cx.notify();
     }
 
@@ -174,10 +170,7 @@ impl SettingsWindowView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.runtime_info.large_file_tools = Some(tools.clone());
-        self.update_main_windows(cx, move |view, _window, _cx| {
-            view.store
-                .dispatch(Msg::SetLargeFileToolsState(tools.clone()));
-        });
+        self.broadcast_preference(PreferenceChange::LargeFileTools(tools), cx);
         cx.notify();
     }
 

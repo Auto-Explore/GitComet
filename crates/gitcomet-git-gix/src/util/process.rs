@@ -48,33 +48,10 @@ pub(crate) fn credentials_without_prompts(cmd: &mut Command) {
     cmd.env("GCM_INTERACTIVE", "Never");
 }
 
-pub(crate) fn install_test_git_command_environment(env: TestGitCommandEnvironment) {
-    if let Some(existing) = TEST_GIT_COMMAND_ENVIRONMENT.get() {
-        assert_eq!(
-            existing, &env,
-            "test git command environment already initialized"
-        );
-        return;
-    }
-    let _ = TEST_GIT_COMMAND_ENVIRONMENT.set(env);
-}
-
-pub(super) fn apply_test_git_command_environment(cmd: &mut Command) {
-    let Some(env) = TEST_GIT_COMMAND_ENVIRONMENT.get() else {
-        return;
-    };
-
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
-    cmd.env("HOME", &env.home_dir);
-    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
-    cmd.env("GNUPGHOME", &env.gnupg_home);
-    cmd.arg("-c").arg("protocol.file.allow=always");
-}
-
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
-    apply_test_git_command_environment(&mut cmd);
+    #[cfg(any(test, feature = "test-support"))]
+    crate::test_support::apply_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd
 }
@@ -349,7 +326,7 @@ pub(super) fn wait_for_child_with_timeout(
                     cancelled = true;
                     match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
+                        Err(e) => return Err(Error::from(e)),
                     }
                 }
                 let idle = liveness.idle();
@@ -357,7 +334,7 @@ pub(super) fn wait_for_child_with_timeout(
                     timed_out = true;
                     match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
+                        Err(e) => return Err(Error::from(e)),
                     }
                 }
                 if let Some(poll) =
@@ -366,7 +343,7 @@ pub(super) fn wait_for_child_with_timeout(
                     thread::sleep(poll);
                 }
             }
-            Err(e) => return Err(io_err(e)),
+            Err(e) => return Err(Error::from(e)),
         }
     };
     Ok(ChildWaitOutcome {
@@ -396,14 +373,14 @@ pub(super) fn wait_for_output_workers(
 ) -> Result<OutputDrainOutcome> {
     while !workers_finished() {
         if command_cancellation_requested(cancellation, operation_cancellation) {
-            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            terminate_process_tree_and_wait(child).map_err(Error::from)?;
             return Ok(OutputDrainOutcome {
                 cancelled: true,
                 timed_out: false,
             });
         }
         if liveness.idle() >= timeout {
-            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            terminate_process_tree_and_wait(child).map_err(Error::from)?;
             return Ok(OutputDrainOutcome {
                 cancelled: false,
                 timed_out: true,
@@ -646,7 +623,8 @@ fn run_command_with_timeout_auth_stdin(
     let lfs_progress = LfsProgressMonitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = if allow_auth { command_git_auth() } else { None };
-        let script = create_askpass_script().map_err(io_err)?;
+        let script = create_askpass_script()
+            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
     } else {
@@ -658,7 +636,9 @@ fn run_command_with_timeout_auth_stdin(
     let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
 
     let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
@@ -791,7 +771,9 @@ pub(crate) fn run_git_with_stdin_capture(
         .stderr(Stdio::piped());
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
 
     let stdin = child.stdin.take();
@@ -963,7 +945,8 @@ where
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = command_git_auth();
-        let script = create_askpass_script().map_err(io_err)?;
+        let script = create_askpass_script()
+            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
     } else {
@@ -972,7 +955,9 @@ where
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
     let stdout = child.stdout.take().ok_or_else(|| {
         Error::new(ErrorKind::Backend(format!(

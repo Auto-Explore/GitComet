@@ -50,9 +50,10 @@ fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
         crate::workspaces::initialize_for_test(app, vec![alpha, beta]);
-        view.update(app, |view, _cx| {
-            view.home_recent_repos = vec![PathBuf::from("/work/gamma")];
-            view.home_pinned_repos.clear();
+        let home = view.read(app).home.clone();
+        home.update(app, |home, _cx| {
+            home.recent_repos = vec![PathBuf::from("/work/gamma")];
+            home.pinned_repos.clear();
         });
         let _ = window.draw(app);
     });
@@ -67,8 +68,8 @@ fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext
 
     cx.update(|window, app| {
         view.update(app, |view, cx| {
-            view.home_search_input
-                .update(cx, |input, cx| input.set_text("ALPHA", cx));
+            let input = view.home.read(cx).search_input.clone();
+            input.update(cx, |input, cx| input.set_text("ALPHA", cx));
         });
         let _ = window.draw(app);
     });
@@ -89,7 +90,7 @@ fn home_selected(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<usize> {
-    cx.update(|_window, app| view.read(app).home_selected)
+    cx.update(|_window, app| view.read(app).home.read(app).selected)
 }
 
 #[gpui::test]
@@ -97,7 +98,9 @@ fn new_window_focuses_the_home_search(cx: &mut gpui::TestAppContext) {
     let (view, cx) = home_view_with(cx, Vec::new(), Vec::new());
     let focused = cx.update(|window, app| {
         view.read(app)
-            .home_search_input
+            .home
+            .read(app)
+            .search_input
             .read(app)
             .focus_handle()
             .is_focused(window)
@@ -161,8 +164,8 @@ fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
     // With text and the caret mid-text, Left edits the query instead.
     cx.update(|_window, app| {
         view.update(app, |view, cx| {
-            view.home_search_input
-                .update(cx, |input, cx| input.set_text("work", cx));
+            let input = view.home.read(cx).search_input.clone();
+            input.update(cx, |input, cx| input.set_text("work", cx));
         });
     });
     cx.run_until_parked();
@@ -189,8 +192,8 @@ fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestA
     press(cx, "down down");
     cx.update(|_window, app| {
         view.update(app, |view, cx| {
-            view.home_search_input
-                .update(cx, |input, cx| input.set_text("later", cx));
+            let input = view.home.read(cx).search_input.clone();
+            input.update(cx, |input, cx| input.set_text("later", cx));
         });
     });
     cx.run_until_parked();
@@ -299,7 +302,7 @@ fn home_cross_removes_a_recent_repository(cx: &mut gpui::TestAppContext) {
     cx.simulate_click(cross.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
-    let recents = cx.update(|_window, app| view.read(app).home_recent_repos.clone());
+    let recents = cx.update(|_window, app| view.read(app).home.read(app).recent_repos.clone());
     assert_eq!(recents, vec![PathBuf::from("/work/d")]);
     assert_eq!(home_selected(&view, cx), Some(0), "a row stays selected");
 }

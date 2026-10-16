@@ -444,7 +444,7 @@ fn terminal_padding_menu_returns_focus_from_another_input_on_actions_and_escape(
             let input = fixture
                 .root
                 .read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_search_input
                 .clone();

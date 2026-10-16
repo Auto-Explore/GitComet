@@ -670,6 +670,8 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let home_active = self.is_home_screen_active();
+        self.home.update(cx, |home, _| home.set_active(home_active));
         if let Some(pane) = &self.focused_diff_pane {
             return div()
                 .flex_1()

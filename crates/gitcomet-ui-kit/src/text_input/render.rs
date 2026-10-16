@@ -51,6 +51,7 @@ impl Render for TextInput {
             serde_json::json!({"window":format!("{:?}", window.window_handle().window_id()),
                 "model":snapshot.model_id(), "revision":snapshot.revision(), "bytes":snapshot.len()})
         });
+        self.sync_theme(cx);
         let style = self.style;
         let focus = self.focus_handle.clone();
         let entity_id = cx.entity().entity_id();

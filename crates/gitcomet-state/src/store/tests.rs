@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::{CloneOpStatus, CloneProgressStage, DiagnosticKind, Loadable, RepoState};
+use crate::msg::StatusEffect;
 use crate::msg::{Effect, RepoActionKind, RepoCommandKind};
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,
@@ -13,6 +14,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
+
+fn fill_set_active_repo_inline(
+    repos: &RepositoryRuntimes,
+    state: &mut AppState,
+    repo_id: RepoId,
+    unchanged: bool,
+    effects: &mut reducer::SetActiveRepoEffects,
+) {
+    let inputs = reducer::test_inputs::for_message(state, repos, Msg::SetActiveRepo { repo_id });
+    reducer::fill_set_active_repo_inline(&inputs, state, repo_id, unchanged, effects);
+}
 
 /// The empty workspace snapshot the history-switch tests seed nav histories
 /// with: no diff target, no preview/edit mode, no selection besides the
@@ -86,7 +98,7 @@ fn has_worktree_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadWorktreeStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -95,7 +107,7 @@ fn has_staged_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadStagedStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadStagedStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -104,7 +116,7 @@ fn has_combined_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadStatus { repo_id: candidate } if *candidate == repo_id
+            Effect::Status(StatusEffect::LoadStatus { repo_id: candidate }) if *candidate == repo_id
         )
     })
 }
@@ -192,6 +204,7 @@ mod external_and_history;
 mod file_browser_follow;
 mod filesystem_engine;
 mod maintenance;
+mod prepared_inputs;
 mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;

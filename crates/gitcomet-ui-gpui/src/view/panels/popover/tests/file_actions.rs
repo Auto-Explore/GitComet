@@ -1181,7 +1181,7 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
                 this.popover_host.update(cx, |host, cx| {
                     host.context_menu_model(
                         &PopoverKind::DiffEditorMenu {
-                            repo_id,
+                            repo_id: Some(repo_id),
                             area: DiffArea::Unstaged,
                             path: Some(path.clone()),
                             hunk_patch: None,
@@ -1297,8 +1297,8 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
     );
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.open_diff_editor_context_menu(
                 1,
                 DiffTextRegion::Inline,
@@ -1309,7 +1309,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
         });
     });
 
-    // Flush deferred popover open from MainPaneView::open_popover_at.
+    // Flush deferred popover open from DiffRenderer::open_popover_at.
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
@@ -1329,7 +1329,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
                         copy_text,
                         ..
                     } => {
-                        assert_eq!(*rid, repo_id);
+                        assert_eq!(*rid, Some(repo_id));
                         assert_eq!(*area, DiffArea::Staged);
                         assert_eq!(menu_path, &Some(path.clone()));
                         assert_eq!(copy_text, &Some("beta".to_string()));
@@ -1631,7 +1631,7 @@ fn file_browser_file_menu_for_a_commit_source_has_no_explorer_groups(
 
 #[gpui::test]
 fn explorer_entries_carry_icons_and_platform_shortcuts(cx: &mut gpui::TestAppContext) {
-    use crate::view::shortcut_labels::{Shortcut, secondary_shortcut};
+    use crate::kit::components::{Shortcut, secondary_shortcut};
 
     let model = file_browser_menu_model(cx, "src/a.rs", false, |_state| {});
     let entry = |label: &str| {
@@ -2329,7 +2329,7 @@ fn review_hunk_menu_uses_rendered_large_file_target(cx: &mut gpui::TestAppContex
     });
     cx.update(|_, app| {
         view.update(app, |this, cx| {
-            assert!(this.main_pane.read(cx).has_large_file_text_diff());
+            assert!(this.diff_renderer.read(cx).has_large_file_text_diff());
             this.popover_host.update(cx, |host, cx| {
                 let model = host
                     .context_menu_model(&PopoverKind::DiffHunkMenu { repo_id, src_ix: 3 }, cx)

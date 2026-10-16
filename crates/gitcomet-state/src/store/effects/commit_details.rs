@@ -1,9 +1,10 @@
 //! A burst of history clicks needs only the latest queued detail load. Unlike
 //! log/status refreshes, superseded selections have no result the UI can use.
-use super::util::{RepoMap, send_or_log};
+use super::util::send_or_log;
 use crate::model::{AppState, RepoId};
 use crate::msg::{InternalMsg, Msg};
 use crate::store::executor::{LatestTaskSlot, TaskExecutor};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use crate::store::{repo_load_trace, worker_channel::StoreWorkerSender};
 use gitcomet_core::domain::{CommitDetails, CommitId};
 use gitcomet_core::services::Result;
@@ -12,13 +13,13 @@ use std::sync::{Arc, RwLock};
 pub(super) fn schedule(
     executor: &TaskExecutor,
     slot: &LatestTaskSlot,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     state: Arc<RwLock<Arc<AppState>>>,
     tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: CommitId,
 ) {
-    let Some(repo) = repos.get(&repo_id).cloned() else {
+    let Some(repo) = repos.repository(&repo_id).cloned() else {
         return;
     };
     let id = commit_id.clone();
@@ -165,7 +166,7 @@ mod tests {
             let cancellation = CancellationToken::new();
             let tx = StoreWorkerSender::for_test_msg_sender(sender).with_repo_load_guard(
                 id,
-                0,
+                crate::model::RepoLoadEpoch::default(),
                 cancellation.clone(),
             );
             let calls = Arc::new(AtomicUsize::new(0));

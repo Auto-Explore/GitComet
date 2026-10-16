@@ -1,12 +1,17 @@
+use super::conflict_load::{start_conflict_target_reload, start_current_conflict_target_reload};
+use crate::model::LoadKind;
 use crate::model::{
-    AppNotification, AppNotificationKind, AppState, CommandLogEntry, ConflictFileLoadMode,
-    DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoLoadsInFlight,
-    RepoState,
+    AppNotification, AppNotificationKind, AppState, CommandLogEntry, DiagnosticEntry,
+    DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
+use crate::msg::{ReferenceEffect, StatusEffect};
+use crate::store::reducer::prepared::ReducerInputs;
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
-use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
+use gitcomet_core::domain::{
+    CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, SignatureFormats,
+};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
@@ -14,6 +19,7 @@ use smallvec::{Array, SmallVec};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::SystemTime;
 
 /// Default page size for log fetches.
@@ -131,7 +137,6 @@ pub(super) fn set_commit_signature_targets(
         .into_iter()
         .collect()
 }
-const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
 const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
 const FULL_REFRESH_MAX_EFFECTS: usize = 8;
@@ -244,79 +249,72 @@ pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
     diff_target_preview_flags(target).is_svg
 }
 
-fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
-    match target {
-        DiffTarget::WorkingTree { path, area, .. } => {
-            let Some(entries) = repo_state.status_entries_for_area(*area) else {
-                return false;
-            };
-
-            entries.iter().any(|entry| {
-                entry.path == *path
-                    && matches!(
-                        entry.kind,
-                        FileStatusKind::Untracked | FileStatusKind::Added | FileStatusKind::Deleted
-                    )
-            })
-        }
-        DiffTarget::Commit {
-            commit_id, path, ..
-        } => {
-            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
-                return false;
-            };
-            if &details.id != commit_id {
-                return false;
-            }
-
-            details.files.iter().any(|file| {
-                file.path == *path
-                    && !file.is_submodule
-                    && matches!(file.kind, FileStatusKind::Added | FileStatusKind::Deleted)
-            })
-        }
-        DiffTarget::CommitRange { .. } => false,
-    }
+enum DiffTargetClassification {
+    Submodule,
+    Ordinary(Option<gitcomet_core::domain::DiffPreviewTextSide>),
 }
 
-fn diff_target_preview_text_side(
+fn classify_diff_target(
+    inputs: &ReducerInputs,
     repo_state: &RepoState,
     target: &DiffTarget,
-) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
-    match target {
-        DiffTarget::WorkingTree { path, area, .. } => {
-            let entries = repo_state.status_entries_for_area(*area)?;
+) -> DiffTargetClassification {
+    use gitcomet_core::domain::DiffPreviewTextSide;
 
-            entries.iter().find_map(|entry| {
-                (entry.path == *path).then_some(match entry.kind {
+    let preview_text_side = match target {
+        DiffTarget::WorkingTree { path, area, .. } => {
+            let mut entries = repo_state
+                .status_entries_for_area(*area)
+                .into_iter()
+                .flatten()
+                .filter(|entry| entry.path == *path);
+            let first = entries.next();
+            let is_submodule = match worktree_submodule_source_for_entry(repo_state, path, first) {
+                WorktreeSubmoduleSource::Known(value) => value,
+                WorktreeSubmoduleSource::Marker => inputs.worktree_marker(repo_state, path),
+            };
+            if is_submodule {
+                return DiffTargetClassification::Submodule;
+            }
+            if repo_state.diff_state.content_preview {
+                return DiffTargetClassification::Ordinary(None);
+            }
+            first
+                .into_iter()
+                .chain(entries)
+                .find_map(|entry| match entry.kind {
                     FileStatusKind::Untracked | FileStatusKind::Added => {
-                        Some(gitcomet_core::domain::DiffPreviewTextSide::New)
+                        Some(DiffPreviewTextSide::New)
                     }
-                    FileStatusKind::Deleted => {
-                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
-                    }
+                    FileStatusKind::Deleted => Some(DiffPreviewTextSide::Old),
                     FileStatusKind::Modified
                     | FileStatusKind::Renamed
                     | FileStatusKind::Conflicted => None,
-                })?
-            })
+                })
         }
         DiffTarget::Commit {
             commit_id, path, ..
         } => {
             let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
-                return None;
+                return DiffTargetClassification::Ordinary(None);
             };
             if &details.id != commit_id {
-                return None;
+                return DiffTargetClassification::Ordinary(None);
             }
-
+            if details
+                .files
+                .iter()
+                .any(|file| file.path == *path && file.is_submodule)
+            {
+                return DiffTargetClassification::Submodule;
+            }
+            if repo_state.diff_state.content_preview {
+                return DiffTargetClassification::Ordinary(None);
+            }
             details.files.iter().find_map(|file| {
                 (file.path == *path && !file.is_submodule).then_some(match file.kind {
-                    FileStatusKind::Added => Some(gitcomet_core::domain::DiffPreviewTextSide::New),
-                    FileStatusKind::Deleted => {
-                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
-                    }
+                    FileStatusKind::Added => Some(DiffPreviewTextSide::New),
+                    FileStatusKind::Deleted => Some(DiffPreviewTextSide::Old),
                     FileStatusKind::Modified
                     | FileStatusKind::Renamed
                     | FileStatusKind::Conflicted
@@ -325,22 +323,27 @@ fn diff_target_preview_text_side(
             })
         }
         DiffTarget::CommitRange { .. } => None,
-    }
+    };
+    DiffTargetClassification::Ordinary(preview_text_side)
 }
 
 pub(super) fn selected_diff_load_plan(
+    inputs: &ReducerInputs,
     repo_state: &RepoState,
     target: &DiffTarget,
 ) -> SelectedDiffLoadPlan {
-    if diff_target_is_submodule(repo_state, target) {
-        return SelectedDiffLoadPlan {
-            load_patch_diff: false,
-            load_file_text: false,
-            preview_text_side: None,
-            load_submodule_summary: true,
-            load_file_image: false,
-        };
-    }
+    let target_preview_text_side = match classify_diff_target(inputs, repo_state, target) {
+        DiffTargetClassification::Submodule => {
+            return SelectedDiffLoadPlan {
+                load_patch_diff: false,
+                load_file_text: false,
+                preview_text_side: None,
+                load_submodule_summary: true,
+                load_file_image: false,
+            };
+        }
+        DiffTargetClassification::Ordinary(side) => side,
+    };
 
     let supports_file = matches!(
         target,
@@ -350,7 +353,7 @@ pub(super) fn selected_diff_load_plan(
     );
     let preview = diff_target_preview_flags(target);
     let content_preview = repo_state.diff_state.content_preview;
-    let preview_only = content_preview || diff_target_is_preview_only(repo_state, target);
+    let preview_only = content_preview || target_preview_text_side.is_some();
     let preview_text_side = if supports_file && (!preview.wants_image || preview.is_svg) {
         if content_preview {
             // Commit content is read from a blob temp file (New side); working-tree
@@ -359,7 +362,7 @@ pub(super) fn selected_diff_load_plan(
             matches!(target, DiffTarget::Commit { .. })
                 .then_some(gitcomet_core::domain::DiffPreviewTextSide::New)
         } else {
-            diff_target_preview_text_side(repo_state, target)
+            target_preview_text_side
         }
     } else {
         None
@@ -415,6 +418,7 @@ pub(super) fn reload_selected_text_attributes(repo_state: &mut RepoState) -> Opt
 /// conflict when it is one, otherwise as a new generation that keeps the
 /// content on screen and drops loads still reading it the old way.
 pub(super) fn reload_selected_file_text(
+    inputs: &ReducerInputs,
     repo_state: &mut RepoState,
     target: &DiffTarget,
 ) -> Vec<Effect> {
@@ -425,7 +429,7 @@ pub(super) fn reload_selected_file_text(
         };
     }
     repo_state.diff_state.diff_target_rev = repo_state.diff_state.diff_target_rev.wrapping_add(1);
-    let load_plan = selected_diff_load_plan(repo_state, target);
+    let load_plan = selected_diff_load_plan(inputs, repo_state, target);
     apply_selected_diff_load_plan_state_with_reload_mode(
         repo_state,
         load_plan,
@@ -516,47 +520,43 @@ pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
     };
 }
 
-fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool {
-    match target {
-        DiffTarget::WorkingTree { path, area, .. } => {
-            let Some(entry) = repo_state.status_entry_for_path(*area, path) else {
-                return false;
-            };
-            if entry.kind == FileStatusKind::Untracked {
-                return false;
-            }
+pub(super) enum WorktreeSubmoduleSource {
+    Known(bool),
+    Marker,
+}
 
-            if let Loadable::Ready(submodules) = &repo_state.submodules
-                && submodules.iter().any(|submodule| submodule.path == *path)
-            {
-                return true;
-            }
+pub(super) fn worktree_submodule_source(
+    repo_state: &RepoState,
+    area: DiffArea,
+    path: &Path,
+) -> WorktreeSubmoduleSource {
+    worktree_submodule_source_for_entry(
+        repo_state,
+        path,
+        repo_state.status_entry_for_path(area, path),
+    )
+}
 
-            if entry.kind == FileStatusKind::Deleted {
-                return repo_state.head_gitlink_paths.contains(path);
-            }
-
-            let mut dot_git = repo_state.spec.workdir.join(path);
-            dot_git.push(".git");
-            std::fs::metadata(&dot_git).is_ok_and(|meta| meta.is_file() || meta.is_dir())
-        }
-        DiffTarget::Commit {
-            commit_id, path, ..
-        } => {
-            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
-                return false;
-            };
-            if &details.id != commit_id {
-                return false;
-            }
-
-            details
-                .files
-                .iter()
-                .any(|file| file.path == *path && file.is_submodule)
-        }
-        DiffTarget::CommitRange { .. } => false,
+pub(super) fn worktree_submodule_source_for_entry(
+    repo_state: &RepoState,
+    path: &Path,
+    entry: Option<&FileStatus>,
+) -> WorktreeSubmoduleSource {
+    let Some(entry) = entry else {
+        return WorktreeSubmoduleSource::Known(false);
+    };
+    if entry.kind == FileStatusKind::Untracked {
+        return WorktreeSubmoduleSource::Known(false);
     }
+    if let Loadable::Ready(submodules) = &repo_state.submodules
+        && submodules.iter().any(|submodule| submodule.path == path)
+    {
+        return WorktreeSubmoduleSource::Known(true);
+    }
+    if entry.kind == FileStatusKind::Deleted {
+        return WorktreeSubmoduleSource::Known(repo_state.head_gitlink_paths.contains(path));
+    }
+    WorktreeSubmoduleSource::Marker
 }
 
 pub(super) fn selected_conflict_target<'a>(
@@ -586,106 +586,12 @@ pub(super) fn selected_conflict_target<'a>(
         .map(|_| SelectedConflictTarget::Path(path.as_path()))
 }
 
-pub(super) fn current_conflict_load_mode(repo_state: &RepoState) -> ConflictFileLoadMode {
-    repo_state.conflict_state.conflict_file_load_mode
-}
-
-pub(super) fn start_current_conflict_target_reload(repo_state: &mut RepoState) -> Vec<Effect> {
-    let mode = current_conflict_load_mode(repo_state);
-    let mut effects = Vec::with_capacity(CONFLICT_RELOAD_EFFECT_COUNT);
-    append_start_current_conflict_target_reload_with_mode(&mut effects, repo_state, mode);
-    effects
-}
-
-pub(super) fn append_start_current_conflict_target_reload(
-    effects: &mut impl EffectAccumulator,
-    repo_state: &mut RepoState,
-) {
-    let mode = current_conflict_load_mode(repo_state);
-    append_start_current_conflict_target_reload_with_mode(effects, repo_state, mode);
-}
-
-pub(super) fn start_conflict_target_reload(repo_state: &mut RepoState, path: &Path) -> Vec<Effect> {
-    let mode = current_conflict_load_mode(repo_state);
-    start_conflict_target_reload_with_mode(repo_state, path, mode)
-}
-
-pub(super) fn append_start_conflict_target_reload(
-    effects: &mut impl EffectAccumulator,
-    repo_state: &mut RepoState,
-    path: &Path,
-) {
-    let mode = current_conflict_load_mode(repo_state);
-    append_start_conflict_target_reload_with_mode(effects, repo_state, path, mode);
-}
-
-pub(super) fn start_conflict_target_reload_with_mode(
-    repo_state: &mut RepoState,
-    path: &Path,
-    mode: ConflictFileLoadMode,
-) -> Vec<Effect> {
-    let mut effects = Vec::with_capacity(CONFLICT_RELOAD_EFFECT_COUNT);
-    append_start_conflict_target_reload_with_mode(&mut effects, repo_state, path, mode);
-    effects
-}
-
-pub(super) fn reset_conflict_target_reload_state(
-    repo_state: &mut RepoState,
-    mode: ConflictFileLoadMode,
-    same_path: bool,
-) {
-    repo_state.set_conflict_file_load_mode(mode);
-    repo_state.set_conflict_file(Loadable::Loading);
-    if !same_path {
-        repo_state.conflict_state.session_pending_restore = None;
-    }
-    // section 30 split/join round-trip: stash (not drop) the session across
-    // same-path reloads so `conflict_file_loaded` restores resolutions and
-    // does not re-run the on-open autosolve. Dropping it outright wiped
-    // unsaved resolutions on every watcher reload.
-    if let Some(session) = repo_state.conflict_state.conflict_session.take() {
-        if same_path {
-            repo_state.conflict_state.session_pending_restore = Some(session);
-        }
-        repo_state.bump_conflict_rev();
-    }
-    repo_state.set_conflict_hide_resolved(false);
-}
-
-fn append_start_current_conflict_target_reload_with_mode(
-    effects: &mut impl EffectAccumulator,
-    repo_state: &mut RepoState,
-    mode: ConflictFileLoadMode,
-) {
-    debug_assert!(repo_state.conflict_state.conflict_file_path.is_some());
-    reset_conflict_target_reload_state(repo_state, mode, true);
-    effects.push_effect(Effect::LoadSelectedConflictFile {
-        repo_id: repo_state.id,
-        mode,
-    });
-}
-
-fn append_start_conflict_target_reload_with_mode(
-    effects: &mut impl EffectAccumulator,
-    repo_state: &mut RepoState,
-    path: &Path,
-    mode: ConflictFileLoadMode,
-) {
-    if repo_state.conflict_state.conflict_file_path.as_deref() == Some(path) {
-        append_start_current_conflict_target_reload_with_mode(effects, repo_state, mode);
-        return;
-    }
-
-    repo_state.set_conflict_file_path(Some(path.to_path_buf()));
-    reset_conflict_target_reload_state(repo_state, mode, false);
-    effects.push_effect(Effect::LoadSelectedConflictFile {
-        repo_id: repo_state.id,
-        mode,
-    });
-}
-
-pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarget) -> usize {
-    let plan = selected_diff_load_plan(repo_state, target);
+pub(super) fn diff_reload_effect_count(
+    inputs: &ReducerInputs,
+    repo_state: &RepoState,
+    target: &DiffTarget,
+) -> usize {
+    let plan = selected_diff_load_plan(inputs, repo_state, target);
 
     let mut count = usize::from(plan.load_patch_diff);
     if plan.load_submodule_summary {
@@ -706,22 +612,24 @@ pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarg
 }
 
 pub(super) fn diff_reload_effects(
+    inputs: &ReducerInputs,
     repo_state: &RepoState,
     repo_id: RepoId,
     target: DiffTarget,
 ) -> Vec<Effect> {
-    let mut effects = Vec::with_capacity(diff_reload_effect_count(repo_state, &target));
-    append_diff_reload_effects(&mut effects, repo_state, repo_id, target);
+    let mut effects = Vec::with_capacity(diff_reload_effect_count(inputs, repo_state, &target));
+    append_diff_reload_effects(inputs, &mut effects, repo_state, repo_id, target);
     effects
 }
 
 pub(super) fn append_diff_reload_effects(
+    inputs: &ReducerInputs,
     effects: &mut impl EffectAccumulator,
     repo_state: &RepoState,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
-    let plan = selected_diff_load_plan(repo_state, &target);
+    let plan = selected_diff_load_plan(inputs, repo_state, &target);
 
     if plan.load_submodule_summary {
         effects.push_effect(Effect::LoadSubmoduleSummary {
@@ -766,17 +674,17 @@ pub(super) fn append_requested_status_refresh_effects(
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let load_worktree = repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREE_STATUS);
-    let load_staged = repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STAGED_STATUS);
+    let load_worktree = repo_state.loads_in_flight.request(LoadKind::WorktreeStatus);
+    let load_staged = repo_state.loads_in_flight.request(LoadKind::StagedStatus);
 
     match (load_worktree, load_staged) {
-        (true, true) => effects.push_effect(Effect::LoadStatus { repo_id }),
-        (true, false) => effects.push_effect(Effect::LoadWorktreeStatus { repo_id }),
-        (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
+        (true, true) => effects.push_effect(Effect::Status(StatusEffect::LoadStatus { repo_id })),
+        (true, false) => {
+            effects.push_effect(Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id }))
+        }
+        (false, true) => {
+            effects.push_effect(Effect::Status(StatusEffect::LoadStagedStatus { repo_id }))
+        }
         (false, false) => {}
     }
     repo_state.loads_in_flight.invalidate_line_stats();
@@ -806,7 +714,7 @@ pub(super) fn append_ready_line_stats_effect(
             unstaged.len()
         );
         let large_files = repo_state.large_file_support_active();
-        effects.push_effect(Effect::LoadUncommittedLineStats {
+        effects.push_effect(Effect::Status(StatusEffect::LoadUncommittedLineStats {
             repo_id,
             generation,
             status: std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
@@ -814,7 +722,7 @@ pub(super) fn append_ready_line_stats_effect(
                 unstaged: std::sync::Arc::clone(unstaged),
             }),
             large_files,
-        });
+        }));
     }
 }
 
@@ -827,12 +735,10 @@ fn append_requested_rebase_and_merge_refresh_effects(
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let load_rebase = repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REBASE_STATE);
+    let load_rebase = repo_state.loads_in_flight.request(LoadKind::RebaseState);
     let load_merge_commit_message = repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE);
+        .request(LoadKind::MergeCommitMessage);
 
     match (load_rebase, load_merge_commit_message) {
         (true, true) => push_rebase_and_merge_refresh_effect(effects, repo_id),
@@ -913,10 +819,14 @@ pub(super) fn append_refresh_primary_effects(
         .request_primary_refresh_batch(log_request.clone())
     {
         repo_state.set_log_loading_more(false);
-        effects.push_effect(Effect::LoadHeadBranch { repo_id });
-        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::References(ReferenceEffect::LoadHeadBranch {
+            repo_id,
+        }));
+        effects.push_effect(Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id },
+        ));
         push_rebase_and_merge_refresh_effect(effects, repo_id);
-        effects.push_effect(Effect::LoadStatus { repo_id });
+        effects.push_effect(Effect::Status(StatusEffect::LoadStatus { repo_id }));
         // This batch short-circuits the status-refresh funnel.
         repo_state.loads_in_flight.invalidate_line_stats();
         effects.push_effect(Effect::LoadLog {
@@ -930,17 +840,18 @@ pub(super) fn append_refresh_primary_effects(
         return;
     }
 
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::HEAD_BRANCH)
-    {
-        effects.push_effect(Effect::LoadHeadBranch { repo_id });
+    if repo_state.loads_in_flight.request(LoadKind::HeadBranch) {
+        effects.push_effect(Effect::References(ReferenceEffect::LoadHeadBranch {
+            repo_id,
+        }));
     }
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+        .request(LoadKind::UpstreamDivergence)
     {
-        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id },
+        ));
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
     append_requested_status_refresh_effects(repo_state, effects);
@@ -978,17 +889,18 @@ pub(super) fn append_refresh_full_effects(
 
     // Prioritize UI-critical loads (status + log) early. The executor is a FIFO queue, so this
     // ordering can materially impact perceived responsiveness when switching repositories.
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::HEAD_BRANCH)
-    {
-        effects.push_effect(Effect::LoadHeadBranch { repo_id });
+    if repo_state.loads_in_flight.request(LoadKind::HeadBranch) {
+        effects.push_effect(Effect::References(ReferenceEffect::LoadHeadBranch {
+            repo_id,
+        }));
     }
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+        .request(LoadKind::UpstreamDivergence)
     {
-        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::References(
+            ReferenceEffect::LoadUpstreamDivergence { repo_id },
+        ));
     }
     append_requested_status_refresh_effects(repo_state, effects);
     let log_request = refresh_log_request(repo_state);
@@ -996,23 +908,18 @@ pub(super) fn append_refresh_full_effects(
         repo_state.set_log_loading_more(false);
         effects.push_effect(effect);
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::BRANCHES)
-    {
-        effects.push_effect(Effect::LoadBranches { repo_id });
+    if repo_state.loads_in_flight.request(LoadKind::Branches) {
+        effects.push_effect(Effect::References(ReferenceEffect::LoadBranches {
+            repo_id,
+        }));
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REMOTES)
-    {
-        effects.push_effect(Effect::LoadRemotes { repo_id });
+    if repo_state.loads_in_flight.request(LoadKind::Remotes) {
+        effects.push_effect(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-    {
-        effects.push_effect(Effect::LoadRemoteBranches { repo_id });
+    if repo_state.loads_in_flight.request(LoadKind::RemoteBranches) {
+        effects.push_effect(Effect::References(ReferenceEffect::LoadRemoteBranches {
+            repo_id,
+        }));
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
 }
@@ -1030,8 +937,8 @@ pub(super) fn append_auto_background_metadata_effects(
     if should_auto_fetch_history_tags(git_log_settings) {
         if matches!(repo_state.tags, Loadable::NotLoaded | Loadable::Error(_)) {
             repo_state.set_tags(Loadable::Loading);
-            if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
-                effects.push_effect(Effect::LoadTags { repo_id });
+            if repo_state.loads_in_flight.request(LoadKind::Tags) {
+                effects.push_effect(Effect::References(ReferenceEffect::LoadTags { repo_id }));
             }
         }
 
@@ -1040,11 +947,10 @@ pub(super) fn append_auto_background_metadata_effects(
             Loadable::NotLoaded | Loadable::Error(_)
         ) {
             repo_state.set_remote_tags(Loadable::Loading);
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::REMOTE_TAGS)
-            {
-                effects.push_effect(Effect::LoadRemoteTags { repo_id });
+            if repo_state.loads_in_flight.request(LoadKind::RemoteTags) {
+                effects.push_effect(Effect::References(ReferenceEffect::LoadRemoteTags {
+                    repo_id,
+                }));
             }
         }
     }
@@ -1054,10 +960,7 @@ pub(super) fn append_auto_background_metadata_effects(
         Loadable::NotLoaded | Loadable::Error(_)
     ) {
         repo_state.set_submodules(Loadable::Loading);
-        if repo_state
-            .loads_in_flight
-            .request(RepoLoadsInFlight::SUBMODULES)
-        {
+        if repo_state.loads_in_flight.request(LoadKind::Submodules) {
             effects.push_effect(Effect::LoadSubmodules { repo_id });
         }
     }
@@ -1091,23 +994,34 @@ pub(super) fn canonicalize_path(path: PathBuf) -> PathBuf {
     super::super::canonicalize_path(path)
 }
 
-pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind, message: String) {
+pub(super) fn push_notification(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    kind: AppNotificationKind,
+    message: String,
+) {
     state.push_notification(AppNotification {
-        time: SystemTime::now(),
+        time: inputs.now(),
         kind,
         message,
     });
 }
 
-pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
-    repo_state.feedback.push_diagnostic(DiagnosticEntry {
-        time: SystemTime::now(),
+pub(super) fn push_diagnostic(
+    inputs: &ReducerInputs,
+    repo_state: &mut RepoState,
+    kind: DiagnosticKind,
+    message: String,
+) {
+    repo_state.feedback_mut().push_diagnostic(DiagnosticEntry {
+        time: inputs.now(),
         kind,
         message,
     });
 }
 
 pub(super) fn handle_session_persist_result(
+    inputs: &ReducerInputs,
     state: &mut AppState,
     repo_id: Option<RepoId>,
     action: &'static str,
@@ -1117,11 +1031,11 @@ pub(super) fn handle_session_persist_result(
         return;
     };
     let message = format!("Failed to persist session state while {action}: {error}");
-    push_notification(state, AppNotificationKind::Error, message.clone());
+    push_notification(inputs, state, AppNotificationKind::Error, message.clone());
     if let Some(repo_id) = repo_id
         && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
     {
-        push_diagnostic(repo_state, DiagnosticKind::Error, message);
+        push_diagnostic(inputs, repo_state, DiagnosticKind::Error, message);
     }
 }
 
@@ -1136,6 +1050,7 @@ fn command_success_is_worth_announcing(command: &RepoCommandKind) -> bool {
 }
 
 pub(super) fn push_command_log(
+    inputs: &ReducerInputs,
     repo_state: &mut RepoState,
     ok: bool,
     command: &RepoCommandKind,
@@ -1147,7 +1062,7 @@ pub(super) fn push_command_log(
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
 
     let entry = CommandLogEntry {
-        time: SystemTime::now(),
+        time: inputs.now(),
         ok,
         command: command_text,
         summary,
@@ -1167,10 +1082,11 @@ pub(super) fn push_command_log(
         }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     };
-    repo_state.feedback.push_command_result(entry);
+    repo_state.feedback_mut().push_command_result(entry);
 }
 
 pub(super) fn push_action_log(
+    inputs: &ReducerInputs,
     repo_state: &mut RepoState,
     ok: bool,
     command: String,
@@ -1180,7 +1096,7 @@ pub(super) fn push_action_log(
 ) {
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
     let entry = CommandLogEntry {
-        time: SystemTime::now(),
+        time: inputs.now(),
         ok,
         command,
         summary,
@@ -1196,7 +1112,7 @@ pub(super) fn push_action_log(
         }),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     };
-    repo_state.feedback.push_command_result(entry);
+    repo_state.feedback_mut().push_command_result(entry);
 }
 
 /// Nested command completion already carries its exact reporting owner. Mark
@@ -1206,7 +1122,7 @@ fn mark_auth_prompt_hook_operation(repo_state: &mut RepoState, handled_by_auth_p
     if handled_by_auth_prompt
         && let Some(operation_id) = repo_state.feedback.command_log_operation_id
         && let Some(operation) = repo_state
-            .feedback
+            .feedback_mut()
             .hook_activity
             .iter_mut()
             .find(|operation| operation.id == operation_id)
@@ -1838,7 +1754,6 @@ fn summarize_command(
 pub(super) fn format_error_for_user(error: &Error) -> String {
     match error.kind() {
         ErrorKind::Git(failure) => failure.to_string(),
-        ErrorKind::Backend(message) => message.clone(),
         _ => error.to_string(),
     }
 }
@@ -1936,1358 +1851,7 @@ impl IfEmptyElse for String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::auth::{
-        clear_staged_git_auth_env, detect_auth_prompt_kind, detect_auth_prompt_kind_from_message,
-        stage_git_auth_env,
-    };
-    use super::*;
-    use crate::model::{AppNotificationKind, DiagnosticKind};
-    use crate::msg::RepoCommandKind;
-    use gitcomet_core::auth::SSH_PASSPHRASE_PROMPT_MARKER;
-    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, RepoSpec};
-    use gitcomet_core::error::{GitFailure, GitFailureId};
-    use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
-    use std::path::Path;
-
-    fn repo_state(id: u64) -> RepoState {
-        RepoState::new_opening(
-            RepoId(id),
-            RepoSpec {
-                workdir: PathBuf::from("/tmp/gitcomet-state-util-tests"),
-            },
-        )
-    }
-
-    fn command_output(command: &str, stdout: &str, stderr: &str) -> CommandOutput {
-        CommandOutput {
-            command: command.to_string(),
-            stdout: stdout.to_string(),
-            stderr: stderr.to_string(),
-            exit_code: Some(0),
-        }
-    }
-
-    fn dummy_log_entry(ix: usize) -> CommandLogEntry {
-        CommandLogEntry {
-            time: SystemTime::UNIX_EPOCH,
-            ok: true,
-            command: format!("cmd-{ix}"),
-            summary: String::new(),
-            stdout: Arc::from(""),
-            stderr: Arc::from(""),
-            announce_success: true,
-            handled_by_auth_prompt: false,
-            failure_id: None,
-            hook_operation_id: None,
-        }
-    }
-
-    #[test]
-    fn diff_reload_effects_cover_image_svg_and_non_file_targets() {
-        let repo_id = RepoId(7);
-        let repo_state = repo_state(repo_id.0);
-        let png = DiffTarget::working_tree(PathBuf::from("img.PNG"), DiffArea::Unstaged);
-        let png_effects = diff_reload_effects(&repo_state, repo_id, png.clone());
-        assert!(diff_target_wants_image_preview(&png));
-        assert!(!diff_target_is_svg(&png));
-        assert_eq!(png_effects.len(), 2);
-        assert!(matches!(png_effects[0], Effect::LoadDiff { .. }));
-        assert!(matches!(png_effects[1], Effect::LoadDiffFileImage { .. }));
-
-        let svg = DiffTarget::working_tree(PathBuf::from("diagram.svg"), DiffArea::Unstaged);
-        let svg_effects = diff_reload_effects(&repo_state, repo_id, svg.clone());
-        assert!(diff_target_wants_image_preview(&svg));
-        assert!(diff_target_is_svg(&svg));
-        assert_eq!(svg_effects.len(), 3);
-        assert!(matches!(svg_effects[2], Effect::LoadDiffFile { .. }));
-
-        let text_no_ext = DiffTarget::working_tree(PathBuf::from("README"), DiffArea::Unstaged);
-        assert!(!diff_target_wants_image_preview(&text_no_ext));
-        assert_eq!(
-            diff_reload_effects(&repo_state, repo_id, text_no_ext).len(),
-            2
-        );
-
-        let range_without_path = DiffTarget::commit_range(
-            CommitId("abc123".into()),
-            Some(CommitId("def456".into())),
-            None,
-        );
-        assert!(!diff_target_wants_image_preview(&range_without_path));
-        assert!(!diff_target_is_svg(&range_without_path));
-        assert_eq!(
-            diff_reload_effects(&repo_state, repo_id, range_without_path).len(),
-            0
-        );
-    }
-
-    #[test]
-    fn content_preview_forces_full_content_preview_plan() {
-        let mut repo = repo_state(9);
-        repo.diff_state.content_preview = true;
-
-        // Working-tree content is read from disk: no patch diff, no file text, no
-        // preview-text-file load.
-        let worktree = DiffTarget::working_tree(PathBuf::from("src/lib.rs"), DiffArea::Unstaged);
-        let plan = selected_diff_load_plan(&repo, &worktree);
-        assert!(!plan.load_patch_diff);
-        assert!(!plan.load_file_text);
-        assert_eq!(plan.preview_text_side, None);
-        assert!(!plan.load_file_image);
-
-        // Commit content reads the New-side blob via a preview text file.
-        let commit = DiffTarget::commit(CommitId("abc123".into()), PathBuf::from("src/lib.rs"));
-        let plan = selected_diff_load_plan(&repo, &commit);
-        assert!(!plan.load_patch_diff);
-        assert_eq!(
-            plan.preview_text_side,
-            Some(gitcomet_core::domain::DiffPreviewTextSide::New)
-        );
-
-        // An image is still loaded as an image, not as text.
-        let image = DiffTarget::commit(CommitId("abc123".into()), PathBuf::from("logo.png"));
-        let plan = selected_diff_load_plan(&repo, &image);
-        assert!(plan.load_file_image);
-        assert_eq!(plan.preview_text_side, None);
-
-        // Without the flag, a tracked file still gets a normal patch diff.
-        repo.diff_state.content_preview = false;
-        assert!(selected_diff_load_plan(&repo, &worktree).load_patch_diff);
-    }
-
-    #[test]
-    fn preview_only_svg_still_loads_file_text_for_the_code_view() {
-        use crate::model::Shared;
-        use gitcomet_core::domain::{FileStatus, RepoStatus};
-
-        let mut repo = repo_state(11);
-        let svg_path = PathBuf::from("assets/diagram.svg");
-        let png_path = PathBuf::from("assets/logo.png");
-        repo.status = Loadable::Ready(Shared::new(RepoStatus {
-            unstaged: std::sync::Arc::new(vec![
-                FileStatus {
-                    path: svg_path.clone(),
-                    kind: FileStatusKind::Untracked,
-                    conflict: None,
-                },
-                FileStatus {
-                    path: png_path.clone(),
-                    kind: FileStatusKind::Untracked,
-                    conflict: None,
-                },
-            ]),
-            staged: std::sync::Arc::new(vec![]),
-        }));
-
-        // An untracked SVG has no patch, but its source still has to load: the
-        // Code view is the only place an SVG's text is ever shown.
-        let svg = DiffTarget::working_tree(svg_path, DiffArea::Unstaged);
-        let plan = selected_diff_load_plan(&repo, &svg);
-        assert!(!plan.load_patch_diff);
-        assert!(plan.load_file_text);
-        assert!(plan.load_file_image);
-        // Image + preview text + file text is the widest SVG fan-out; it has to
-        // stay inside the reload cap that `diff_reload_effect_count` asserts.
-        assert!(plan.preview_text_side.is_some());
-        assert_eq!(diff_reload_effect_count(&repo, &svg), 3);
-
-        // A non-SVG image has no text view at all.
-        let png = DiffTarget::working_tree(png_path, DiffArea::Unstaged);
-        let plan = selected_diff_load_plan(&repo, &png);
-        assert!(!plan.load_patch_diff);
-        assert!(!plan.load_file_text);
-        assert!(plan.load_file_image);
-
-        // Content preview does not suppress the SVG file text either.
-        repo.diff_state.content_preview = true;
-        assert!(selected_diff_load_plan(&repo, &svg).load_file_text);
-    }
-
-    #[test]
-    fn refresh_effects_request_expected_loads_and_reset_log_loading_more() {
-        let mut primary = repo_state(1);
-        primary.set_log_loading_more(true);
-        let primary_effects = refresh_primary_effects(&mut primary);
-        assert_eq!(primary_effects.len(), 5);
-        assert!(!primary.log_loading_more);
-        assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
-        assert!(
-            primary_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
-        );
-        // Counts wait for the status snapshot, including on the batch path.
-        assert!(
-            !primary_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. })),
-            "counts must not launch a second worktree walk"
-        );
-        assert!(matches!(
-            primary_effects[4],
-            Effect::LoadLog {
-                limit: DEFAULT_LOG_PAGE_SIZE,
-                ..
-            }
-        ));
-        assert!(
-            !primary_effects.iter().any(|effect| {
-                matches!(
-                    effect,
-                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
-                )
-            }),
-            "primary refresh should coalesce staged and worktree status into LoadStatus"
-        );
-        assert!(
-            primary_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
-        );
-
-        let mut full = repo_state(2);
-        full.set_log_loading_more(true);
-        let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
-        assert_eq!(full_effects.len(), 8);
-        assert!(!full.log_loading_more);
-        assert!(
-            full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
-        );
-        assert!(
-            !full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
-        );
-        assert!(
-            !full_effects.iter().any(|effect| {
-                matches!(
-                    effect,
-                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
-                )
-            }),
-            "full refresh should coalesce staged and worktree status into LoadStatus"
-        );
-        assert!(
-            !full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
-            "tags should lazy-load by default instead of refresh_full_effects"
-        );
-        assert!(
-            !full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
-            "remote tags should lazy-load from tag-specific UI instead of refresh_full_effects"
-        );
-        assert!(
-            !full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadStashes { .. })),
-            "stashes should now lazy-load from the sidebar instead of refresh_full_effects"
-        );
-        assert!(
-            full_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
-        );
-
-        let mut metadata = repo_state(3);
-        metadata.set_open(Loadable::Ready(()));
-        let mut metadata_effects = Vec::new();
-        append_auto_background_metadata_effects(
-            &mut metadata,
-            GitLogSettings::default(),
-            &mut metadata_effects,
-        );
-        assert!(
-            metadata_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
-            "auto-idle metadata should request LoadTags"
-        );
-        assert!(
-            metadata_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
-            "auto-idle metadata should request LoadRemoteTags"
-        );
-        assert!(
-            metadata_effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::LoadSubmodules { .. })),
-            "auto-idle metadata should request LoadSubmodules"
-        );
-    }
-
-    #[test]
-    fn dedup_and_normalize_path_cover_duplicate_and_relative_branches() {
-        let deduped = dedup_paths_in_order(vec![
-            PathBuf::from("a"),
-            PathBuf::from("b"),
-            PathBuf::from("a"),
-        ]);
-        assert_eq!(deduped, vec![PathBuf::from("a"), PathBuf::from("b")]);
-
-        let normalized = normalize_repo_path(PathBuf::from("."));
-        assert!(normalized.is_absolute());
-    }
-
-    #[test]
-    fn push_notification_and_diagnostic_count_every_entry_without_a_cap() {
-        let mut state = AppState::test_default();
-        for ix in 0..205 {
-            push_notification(
-                &mut state,
-                AppNotificationKind::Info,
-                format!("notification-{ix}"),
-            );
-        }
-        assert_eq!(state.notifications.len(), 205);
-        assert_eq!(state.notifications_seq, 205);
-        assert_eq!(state.notifications[0].message, "notification-0");
-
-        let mut repo = repo_state(3);
-        for ix in 0..205 {
-            push_diagnostic(&mut repo, DiagnosticKind::Info, format!("diagnostic-{ix}"));
-        }
-        assert_eq!(repo.feedback.diagnostics.len(), 205);
-        assert_eq!(repo.feedback.diagnostics_seq, 205);
-        assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-0");
-    }
-
-    #[test]
-    fn command_and_action_logs_use_expected_stderr_and_keep_history() {
-        let mut repo = repo_state(4);
-        repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
-        push_command_log(
-            &mut repo,
-            true,
-            &RepoCommandKind::FetchAll,
-            &command_output("git fetch", "", "stderr from git"),
-            None,
-            false,
-        );
-        assert_eq!(repo.feedback.command_log.len(), 201);
-        assert_eq!(repo.feedback.command_log_seq, 1);
-        assert_eq!(repo.feedback.command_log[0].command, "cmd-0");
-        assert_eq!(
-            repo.feedback
-                .command_log
-                .last()
-                .expect("last command log entry")
-                .stderr,
-            "stderr from git".into()
-        );
-
-        repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
-        push_action_log(
-            &mut repo,
-            false,
-            "manual action".to_string(),
-            "action failed".to_string(),
-            Some(&Error::new(ErrorKind::Backend(
-                "backend failure".to_string(),
-            ))),
-            false,
-        );
-        assert_eq!(repo.feedback.command_log.len(), 201);
-        assert_eq!(repo.feedback.command_log_seq, 2);
-        assert_eq!(repo.feedback.command_log[0].command, "cmd-0");
-    }
-
-    #[test]
-    fn conflict_autosolve_summary_covers_mode_and_detail_variants() {
-        let history_summary = conflict_autosolve_telemetry_summary(
-            ConflictAutosolveMode::History,
-            Some(Path::new("conflict.txt")),
-            6,
-            3,
-            4,
-            1,
-            ConflictAutosolveStats {
-                history: 2,
-                ..ConflictAutosolveStats::default()
-            },
-        );
-        assert!(history_summary.contains("(history)"));
-        assert!(history_summary.contains("history=2"));
-        assert!(history_summary.contains("in conflict.txt"));
-
-        let safe_summary = conflict_autosolve_telemetry_summary(
-            ConflictAutosolveMode::Safe,
-            None,
-            1,
-            1,
-            1,
-            1,
-            ConflictAutosolveStats::default(),
-        );
-        assert!(safe_summary.contains("(safe)"));
-        assert!(safe_summary.contains("details=none"));
-    }
-
-    #[test]
-    fn summarize_command_failure_covers_error_labels() {
-        let failing_cases = vec![
-            (RepoCommandKind::FetchAll, "Fetch"),
-            (
-                RepoCommandKind::PruneMergedBranches,
-                "Prune merged branches",
-            ),
-            (RepoCommandKind::PruneLocalTags, "Prune local tags"),
-            (
-                RepoCommandKind::Pull {
-                    mode: PullMode::Default,
-                },
-                "Pull",
-            ),
-            (
-                RepoCommandKind::PullBranch {
-                    remote: "origin".into(),
-                    branch: "main".into(),
-                },
-                "Pull",
-            ),
-            (
-                RepoCommandKind::MergeRef {
-                    reference: "feature".into(),
-                },
-                "Merge",
-            ),
-            (
-                RepoCommandKind::SquashRef {
-                    reference: "feature".into(),
-                },
-                "Squash",
-            ),
-            (RepoCommandKind::Push, "Push"),
-            (RepoCommandKind::ForcePush, "Force push"),
-            (
-                RepoCommandKind::PushSetUpstream {
-                    remote: "origin".into(),
-                    branch: "main".into(),
-                },
-                "Push",
-            ),
-            (
-                RepoCommandKind::SetUpstreamBranch {
-                    branch: "main".into(),
-                    upstream: Upstream {
-                        remote: "origin".into(),
-                        branch: "main".into(),
-                    },
-                },
-                "Set as tracking upstream",
-            ),
-            (
-                RepoCommandKind::UnsetUpstreamBranch {
-                    branch: "main".into(),
-                },
-                "Unlink upstream branch",
-            ),
-            (
-                RepoCommandKind::DeleteRemoteBranch {
-                    remote: "origin".into(),
-                    branch: "old".into(),
-                },
-                "Delete remote branch",
-            ),
-            (
-                RepoCommandKind::DeleteRemoteBranches {
-                    remote: "origin".into(),
-                    branches: vec!["feat/a".into(), "feat/b".into()],
-                },
-                "Delete remote branches",
-            ),
-            (
-                RepoCommandKind::PushTag {
-                    remote: "origin".into(),
-                    name: "v1".into(),
-                },
-                "Push tag",
-            ),
-            (
-                RepoCommandKind::DeleteRemoteTag {
-                    remote: "origin".into(),
-                    name: "v1".into(),
-                },
-                "Delete remote tag",
-            ),
-            (
-                RepoCommandKind::Reset {
-                    mode: ResetMode::Hard,
-                    target: "HEAD~1".into(),
-                },
-                "Reset",
-            ),
-            (
-                RepoCommandKind::Rebase {
-                    onto: "main".into(),
-                },
-                "Rebase",
-            ),
-            (RepoCommandKind::RebaseContinue, "Rebase"),
-            (RepoCommandKind::RebaseAbort, "Rebase"),
-            (
-                RepoCommandKind::InteractiveRebase {
-                    base: "HEAD~3".into(),
-                    interactive: true,
-                },
-                "Interactive rebase",
-            ),
-            (RepoCommandKind::MergeAbort, "Merge"),
-            (
-                RepoCommandKind::ApplyFileChange {
-                    commit_retry: None,
-                    target: gitcomet_core::domain::ApplyChangeTarget::commit(
-                        CommitId("abcdef1234567890".into()),
-                        PathBuf::from("a.txt"),
-                    ),
-                    commit: false,
-                },
-                "Apply change",
-            ),
-            (
-                RepoCommandKind::CreateTag {
-                    name: "v2".into(),
-                    target: "HEAD".into(),
-                    message: None,
-                    annotated: false,
-                },
-                "Tag",
-            ),
-            (RepoCommandKind::DeleteTag { name: "v2".into() }, "Tag"),
-            (
-                RepoCommandKind::AddRemote {
-                    name: "origin".into(),
-                    url: "https://example.com/repo.git".into(),
-                },
-                "Remote",
-            ),
-            (
-                RepoCommandKind::RemoveRemote {
-                    name: "origin".into(),
-                },
-                "Remote",
-            ),
-            (
-                RepoCommandKind::SetRemoteUrl {
-                    name: "origin".into(),
-                    url: "https://example.com/repo.git".into(),
-                    kind: RemoteUrlKind::Fetch,
-                },
-                "Remote",
-            ),
-        ];
-
-        for (command, label) in failing_cases {
-            let (rendered_command, summary) =
-                summarize_command(&command, &CommandOutput::default(), false, None);
-            assert_eq!(rendered_command, label);
-            assert_eq!(summary, format!("{label} failed"));
-        }
-    }
-
-    #[test]
-    fn maintenance_summary_reports_what_the_run_did() {
-        // Since git 2.54 the default strategy prints nothing over a pipe, even
-        // after a full repack.
-        let (_, silent_run) = summarize_command(
-            &RepoCommandKind::RunMaintenance,
-            &command_output("git maintenance run --auto", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(silent_run, "Maintenance: Completed");
-
-        let (_, skipped) = summarize_command(
-            &RepoCommandKind::RunMaintenance,
-            &command_output(gitcomet_core::services::MAINTENANCE_CHECK_COMMAND, "", ""),
-            true,
-            None,
-        );
-        assert_eq!(
-            skipped,
-            "Maintenance: Not needed, the repository is already optimized"
-        );
-    }
-
-    #[test]
-    fn summarize_command_success_covers_status_variants() {
-        let (_, fetch_summary) = summarize_command(
-            &RepoCommandKind::FetchAll,
-            &command_output("git fetch", "synced", ""),
-            true,
-            None,
-        );
-        assert_eq!(fetch_summary, "Fetch: Synchronized");
-
-        let gitignore_command = RepoCommandKind::AppendGitignorePatterns {
-            patterns: vec!["/build/out.log".to_string()],
-        };
-        let (_, gitignore_written) = summarize_command(
-            &gitignore_command,
-            &command_output("Update .gitignore", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(gitignore_written, "Added /build/out.log to .gitignore");
-
-        let (_, gitignore_noop) = summarize_command(
-            &gitignore_command,
-            &command_output(
-                "Update .gitignore",
-                gitcomet_core::gitignore::NOTHING_TO_ADD,
-                "",
-            ),
-            true,
-            None,
-        );
-        assert_eq!(
-            gitignore_noop, "Already in .gitignore; nothing added",
-            "the worker skipped the write, so announcing \"Added …\" would send \
-             the user looking for a change that never happened"
-        );
-
-        let (_, gitignore_many) = summarize_command(
-            &RepoCommandKind::AppendGitignorePatterns {
-                patterns: vec!["/a".to_string(), "/b".to_string()],
-            },
-            &command_output("Update .gitignore", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(gitignore_many, "Added 2 patterns to .gitignore");
-
-        let (_, pull_up_to_date) = summarize_command(
-            &RepoCommandKind::Pull {
-                mode: PullMode::Default,
-            },
-            &command_output("git pull", "Already up to date", ""),
-            true,
-            None,
-        );
-        assert_eq!(pull_up_to_date, "Pull: Already up to date");
-
-        let (_, pull_fast_forward) = summarize_command(
-            &RepoCommandKind::Pull {
-                mode: PullMode::Default,
-            },
-            &command_output("git pull", "Updating abc..def", ""),
-            true,
-            None,
-        );
-        assert_eq!(pull_fast_forward, "Pull: Fast-forwarded");
-
-        let (_, pull_merged) = summarize_command(
-            &RepoCommandKind::Pull {
-                mode: PullMode::Default,
-            },
-            &command_output("git pull", "Merge branch 'feature'", ""),
-            true,
-            None,
-        );
-        assert_eq!(pull_merged, "Pull: Merged");
-
-        let (_, pull_rebased) = summarize_command(
-            &RepoCommandKind::Pull {
-                mode: PullMode::Default,
-            },
-            &command_output(
-                "git pull",
-                "Successfully rebased and updated refs/heads/main.",
-                "",
-            ),
-            true,
-            None,
-        );
-        assert_eq!(pull_rebased, "Pull: Rebasing complete");
-
-        let (_, pull_branch_summary) = summarize_command(
-            &RepoCommandKind::PullBranch {
-                remote: "origin".into(),
-                branch: "main".into(),
-            },
-            &command_output("git pull origin main", "Updating abc..def", ""),
-            true,
-            None,
-        );
-        assert_eq!(pull_branch_summary, "Pull origin/main: Fast-forwarded");
-
-        let (_, merge_ref_summary) = summarize_command(
-            &RepoCommandKind::MergeRef {
-                reference: "feature".into(),
-            },
-            &command_output("git merge feature", "Fast-forward", ""),
-            true,
-            None,
-        );
-        assert_eq!(merge_ref_summary, "Merge feature: Fast-forwarded");
-
-        let (_, squash_ref_summary) = summarize_command(
-            &RepoCommandKind::SquashRef {
-                reference: "feature".into(),
-            },
-            &command_output(
-                "git merge --squash feature",
-                "Squash commit -- not updating HEAD\nAutomatic merge went well; stopped before committing as requested",
-                "",
-            ),
-            true,
-            None,
-        );
-        assert_eq!(squash_ref_summary, "Squash feature: Staged");
-
-        let (_, push_uptodate) = summarize_command(
-            &RepoCommandKind::Push,
-            &command_output("git push", "", "Everything up-to-date"),
-            true,
-            None,
-        );
-        assert_eq!(push_uptodate, "Push: Everything up-to-date");
-
-        let (_, force_push_uptodate) = summarize_command(
-            &RepoCommandKind::ForcePush,
-            &command_output("git push --force", "", "Everything up-to-date"),
-            true,
-            None,
-        );
-        assert_eq!(force_push_uptodate, "Force push: Everything up-to-date");
-
-        let (_, push_upstream_uptodate) = summarize_command(
-            &RepoCommandKind::PushSetUpstream {
-                remote: "origin".into(),
-                branch: "main".into(),
-            },
-            &command_output("git push -u origin main", "", "Everything up-to-date"),
-            true,
-            None,
-        );
-        assert_eq!(
-            push_upstream_uptodate,
-            "Push -u origin/main: Everything up-to-date"
-        );
-
-        let (_, set_upstream_summary) = summarize_command(
-            &RepoCommandKind::SetUpstreamBranch {
-                branch: "feature".into(),
-                upstream: Upstream {
-                    remote: "origin".into(),
-                    branch: "feature".into(),
-                },
-            },
-            &command_output(
-                "git branch --set-upstream-to origin/feature feature",
-                "",
-                "",
-            ),
-            true,
-            None,
-        );
-        assert_eq!(
-            set_upstream_summary,
-            "Branch feature: Upstream set to origin/feature"
-        );
-
-        let (_, unset_upstream_summary) = summarize_command(
-            &RepoCommandKind::UnsetUpstreamBranch {
-                branch: "feature".into(),
-            },
-            &command_output("git branch --unset-upstream feature", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(unset_upstream_summary, "Branch feature: Upstream unlinked");
-
-        let (_, push_tag_uptodate) = summarize_command(
-            &RepoCommandKind::PushTag {
-                remote: "origin".into(),
-                name: "v1".into(),
-            },
-            &command_output("git push origin v1", "", "Everything up-to-date"),
-            true,
-            None,
-        );
-        assert_eq!(push_tag_uptodate, "Tag v1 → origin: Already up-to-date");
-
-        let (_, reset_soft) = summarize_command(
-            &RepoCommandKind::Reset {
-                mode: ResetMode::Soft,
-                target: "HEAD~1".into(),
-            },
-            &command_output("git reset --soft HEAD~1", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(reset_soft, "Reset (--soft) HEAD~1: Completed");
-
-        let (_, reset_mixed) = summarize_command(
-            &RepoCommandKind::Reset {
-                mode: ResetMode::Mixed,
-                target: "HEAD~1".into(),
-            },
-            &command_output("git reset --mixed HEAD~1", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(reset_mixed, "Reset (--mixed) HEAD~1: Completed");
-
-        let (_, reset_hard) = summarize_command(
-            &RepoCommandKind::Reset {
-                mode: ResetMode::Hard,
-                target: "HEAD~1".into(),
-            },
-            &command_output("git reset --hard HEAD~1", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(reset_hard, "Reset (--hard) HEAD~1: Completed");
-
-        let (_, rebase_summary) = summarize_command(
-            &RepoCommandKind::Rebase {
-                onto: "origin/main".into(),
-            },
-            &command_output("git rebase origin/main", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(rebase_summary, "Rebase onto origin/main: Completed");
-
-        let (_, rebase_continue_summary) = summarize_command(
-            &RepoCommandKind::RebaseContinue,
-            &command_output("git rebase --continue", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(rebase_continue_summary, "Rebase: Continued");
-
-        let (_, rebase_abort_summary) = summarize_command(
-            &RepoCommandKind::RebaseAbort,
-            &command_output("git rebase --abort", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(rebase_abort_summary, "Rebase: Aborted");
-
-        let (_, cherry_pick_continue_summary) = summarize_command(
-            &RepoCommandKind::RebaseContinue,
-            &command_output("git cherry-pick --continue", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(cherry_pick_continue_summary, "Cherry-pick: Continued");
-
-        let (_, cherry_pick_abort_summary) = summarize_command(
-            &RepoCommandKind::RebaseAbort,
-            &command_output("git cherry-pick --abort", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(cherry_pick_abort_summary, "Cherry-pick: Aborted");
-
-        for (command, kind, expected) in [
-            (
-                "git revert --continue",
-                RepoCommandKind::RebaseContinue,
-                "Revert: Continued",
-            ),
-            (
-                gitcomet_core::services::REVERT_SKIP_COMMAND,
-                RepoCommandKind::RebaseContinue,
-                "Revert: Skipped the revert the resolution left empty",
-            ),
-            (
-                "git revert --abort",
-                RepoCommandKind::RebaseAbort,
-                "Revert: Aborted",
-            ),
-        ] {
-            let (_, summary) =
-                summarize_command(&kind, &command_output(command, "", ""), true, None);
-            assert_eq!(summary, expected, "{command}");
-        }
-
-        let (_, kept_head) = summarize_command(
-            &RepoCommandKind::RebaseAbort,
-            &command_output(
-                "git revert --abort",
-                gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL,
-                "",
-            ),
-            true,
-            None,
-        );
-        assert_eq!(
-            kept_head,
-            "Revert: Sequence cleared; HEAD was left where it is"
-        );
-
-        let mut paused_cherry_pick = command_output("git cherry-pick --continue", "", "");
-        paused_cherry_pick.exit_code = Some(1);
-        let (_, cherry_pick_pause_summary) = summarize_command(
-            &RepoCommandKind::RebaseContinue,
-            &paused_cherry_pick,
-            true,
-            None,
-        );
-        assert_eq!(
-            cherry_pick_pause_summary,
-            "Cherry-pick: Paused at the next conflict"
-        );
-
-        let (_, interactive_rebase_summary) = summarize_command(
-            &RepoCommandKind::InteractiveRebase {
-                base: "HEAD~3".into(),
-                interactive: true,
-            },
-            &command_output("git rebase -i HEAD~3", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(
-            interactive_rebase_summary,
-            "Interactive rebase onto HEAD~3: Completed"
-        );
-
-        // An automated squash rebase (no editor window) reports as "Rebase".
-        let (_, squash_rebase_summary) = summarize_command(
-            &RepoCommandKind::InteractiveRebase {
-                base: "HEAD~3".into(),
-                interactive: false,
-            },
-            &command_output("git rebase -i HEAD~3", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(squash_rebase_summary, "Rebase onto HEAD~3: Completed");
-
-        let commit_id = CommitId("abcdef1234567890".into());
-        let (_, cherry_pick_summary) = summarize_command(
-            &RepoCommandKind::CherryPick {
-                commit_id: commit_id.clone(),
-                commit: true,
-                mainline: None,
-                summary: "fix parser\n\nbody".into(),
-            },
-            &command_output("git cherry-pick abcdef1", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(cherry_pick_summary, "Cherry-picked abcdef1: fix parser");
-
-        let (_, cherry_pick_no_commit_summary) = summarize_command(
-            &RepoCommandKind::CherryPick {
-                commit_id: commit_id.clone(),
-                commit: false,
-                mainline: None,
-                summary: "fix parser".into(),
-            },
-            &command_output("git cherry-pick --no-commit abcdef1", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(
-            cherry_pick_no_commit_summary,
-            "Cherry-picked abcdef1 without committing: fix parser"
-        );
-
-        let (_, cherry_pick_already_applied_summary) = summarize_command(
-            &RepoCommandKind::CherryPick {
-                commit_id,
-                commit: true,
-                mainline: None,
-                summary: "fix parser".into(),
-            },
-            &command_output(
-                "git cherry-pick abcdef1",
-                "GITCOMET_CHERRY_PICK_ALREADY_APPLIED",
-                "",
-            ),
-            true,
-            None,
-        );
-        assert_eq!(
-            cherry_pick_already_applied_summary,
-            "Current branch already has all the changes from the cherry-picked commit."
-        );
-
-        let multi_pick = |commit: bool| RepoCommandKind::InteractiveCherryPick {
-            entries: vec![
-                gitcomet_core::services::InteractiveRebaseEntry {
-                    action: gitcomet_core::services::InteractiveRebaseAction::Pick,
-                    commit_id: "1111111".into(),
-                    summary: "one".into(),
-                    message: "one".into(),
-                    new_message: None,
-                };
-                2
-            ],
-            commit,
-        };
-        let multi_summary = |commit: bool, stdout: &str| {
-            summarize_command(
-                &multi_pick(commit),
-                &command_output("git cherry-pick 2 commits", stdout, ""),
-                true,
-                None,
-            )
-            .1
-        };
-        assert_eq!(multi_summary(true, ""), "Cherry-pick 2 commits: Completed");
-        assert_eq!(
-            multi_summary(false, ""),
-            "Cherry-picked 2 commits without committing"
-        );
-        assert_eq!(
-            multi_summary(false, "GITCOMET_CHERRY_PICK_ALREADY_APPLIED"),
-            "Current branch already has all the changes from the cherry-picked commits."
-        );
-
-        let apply_paths =
-            |commit: bool, to: Option<&str>, paths: &[&str]| RepoCommandKind::ApplyFileChange {
-                commit_retry: None,
-                target: gitcomet_core::domain::ApplyChangeTarget {
-                    source: match to {
-                        Some(to) => gitcomet_core::domain::ApplyChangeSource::Range {
-                            from: CommitId("abcdef1234567890".into()),
-                            to: CommitId(to.into()),
-                        },
-                        None => gitcomet_core::domain::ApplyChangeSource::Commit(CommitId(
-                            "abcdef1234567890".into(),
-                        )),
-                    },
-                    paths: paths.iter().map(PathBuf::from).collect(),
-                },
-                commit,
-            };
-        let apply = |commit: bool, to: Option<&str>| apply_paths(commit, to, &["src/a.rs"]);
-        for (kind, stdout, expected) in [
-            (
-                apply(false, None),
-                "",
-                "Applied the change to src/a.rs from abcdef1 without committing",
-            ),
-            (
-                apply(true, Some("1234567890abcdef")),
-                "",
-                "Applied and committed the change to src/a.rs from abcdef1..1234567",
-            ),
-            (
-                apply(true, None),
-                gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL,
-                "Current branch already has the change to src/a.rs from abcdef1.",
-            ),
-            (
-                apply_paths(false, None, &["src/a.rs", "src/b.rs"]),
-                "",
-                "Applied the changes to 2 files from abcdef1 without committing",
-            ),
-            (
-                apply_paths(true, Some("1234567890abcdef"), &["a", "b", "c"]),
-                "",
-                "Applied and committed the changes to 3 files from abcdef1..1234567",
-            ),
-            (
-                apply_paths(true, None, &["src/a.rs", "src/b.rs"]),
-                gitcomet_core::services::APPLY_FILE_CHANGE_ALREADY_APPLIED_SENTINEL,
-                "Current branch already has the changes to these 2 files from abcdef1.",
-            ),
-        ] {
-            let (_, summary) = summarize_command(
-                &kind,
-                &command_output("git apply --3way src/a.rs", stdout, ""),
-                true,
-                None,
-            );
-            assert_eq!(summary, expected);
-        }
-
-        let revert = |commit: bool, summary: &str| RepoCommandKind::Revert {
-            commit_id: CommitId("abcdef1234567890".into()),
-            commit,
-            mainline: None,
-            summary: summary.into(),
-        };
-        for (kind, stdout, expected) in [
-            (
-                revert(true, "fix parser\n\nbody"),
-                "",
-                "Reverted abcdef1: fix parser",
-            ),
-            (
-                revert(false, "fix parser"),
-                "",
-                "Reverted abcdef1 without committing: fix parser",
-            ),
-            (revert(true, ""), "", "Reverted abcdef1"),
-            (
-                revert(true, "fix parser"),
-                gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL,
-                "Nothing to revert: the current branch no longer has the changes from abcdef1.",
-            ),
-        ] {
-            let (_, summary) = summarize_command(
-                &kind,
-                &command_output("git revert abcdef1", stdout, ""),
-                true,
-                None,
-            );
-            assert_eq!(summary, expected);
-        }
-
-        let (_, merge_abort_summary) = summarize_command(
-            &RepoCommandKind::MergeAbort,
-            &command_output("git merge --abort", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(merge_abort_summary, "Merge: Aborted");
-
-        let (_, create_tag_summary) = summarize_command(
-            &RepoCommandKind::CreateTag {
-                name: "v2".into(),
-                target: "HEAD".into(),
-                message: None,
-                annotated: false,
-            },
-            &command_output("git tag v2 HEAD", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(create_tag_summary, "Tag v2 → HEAD: Created");
-
-        let (_, delete_tag_summary) = summarize_command(
-            &RepoCommandKind::DeleteTag { name: "v2".into() },
-            &command_output("git tag -d v2", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(delete_tag_summary, "Tag v2: Deleted");
-
-        let (_, add_remote_summary) = summarize_command(
-            &RepoCommandKind::AddRemote {
-                name: "origin".into(),
-                url: "https://example.com/repo.git".into(),
-            },
-            &command_output("git remote add origin ...", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(add_remote_summary, "Remote origin: Added");
-
-        let (_, remove_remote_summary) = summarize_command(
-            &RepoCommandKind::RemoveRemote {
-                name: "origin".into(),
-            },
-            &command_output("git remote remove origin", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(remove_remote_summary, "Remote origin: Removed");
-
-        let (_, set_remote_url_summary) = summarize_command(
-            &RepoCommandKind::SetRemoteUrl {
-                name: "origin".into(),
-                url: "https://example.com/repo.git".into(),
-                kind: RemoteUrlKind::Push,
-            },
-            &command_output("git remote set-url --push origin ...", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(set_remote_url_summary, "Remote origin (push): URL updated");
-    }
-
-    #[test]
-    fn error_format_helpers_cover_non_git_and_failed_suffix_cases() {
-        let git_error = Error::new(ErrorKind::Git(GitFailure::new(
-            "git fetch --all",
-            GitFailureId::CommandFailed,
-            Some(128),
-            Vec::new(),
-            b"fatal: network down\n".to_vec(),
-            Some("fatal: network down".to_string()),
-        )));
-        let formatted = format_failure_summary("Fetch", &git_error);
-        assert!(formatted.contains("Fetch failed"));
-        assert!(formatted.contains("git fetch --all"));
-        assert!(formatted.contains("fatal: network down"));
-        assert_eq!(
-            format_error_for_user(&git_error),
-            "git fetch --all failed: fatal: network down"
-        );
-
-        let backend_error = Error::new(ErrorKind::Backend(
-            "git fetch --all failed: fatal: network down".to_string(),
-        ));
-        assert!(format_failure_summary("Fetch", &backend_error).contains("git fetch --all"));
-
-        let io_error = Error::new(ErrorKind::Io(io::ErrorKind::Other));
-        let io_rendered = format_error_for_user(&io_error);
-        assert_eq!(io_rendered, io_error.to_string());
-        assert!(!io_rendered.is_empty());
-        assert!(try_format_git_backend_error(&io_error).is_none());
-        assert!(try_format_git_backend_error_message("curl failed: timeout").is_none());
-        assert_eq!(
-            parse_failed_command_message("git status failed"),
-            Some(("git status".to_string(), None))
-        );
-
-        let rendered = render_command_and_output("git status", Some(""));
-        assert!(rendered.contains("    git status"));
-        assert!(!rendered.contains("\n\n    "));
-
-        assert_eq!(
-            "value".to_string().if_empty_else(|| "fallback".to_string()),
-            "value"
-        );
-    }
-
-    #[test]
-    fn detect_auth_prompt_kind_classifies_username_password_passphrase_and_host_verification() {
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(
-                "git pull failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled"
-            ),
-            Some(crate::model::AuthPromptKind::UsernamePassword)
-        );
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(
-                "git push failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled"
-            ),
-            Some(crate::model::AuthPromptKind::Passphrase)
-        );
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(
-                "git clone --progress git@github.com:org/repo.git C:\\git\\repo failed: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
-            ),
-            None
-        );
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(
-                "git pull --no-rebase origin main failed: Host key verification failed.\nfatal: Could not read from remote repository."
-            ),
-            None
-        );
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(
-                "git fetch origin failed: The authenticity of host 'github.com (140.82.121.3)' can't be established.\nED25519 key fingerprint is: SHA256:+DiY...\nAre you sure you want to continue connecting (yes/no/[fingerprint])?"
-            ),
-            Some(crate::model::AuthPromptKind::HostVerification)
-        );
-        assert!(detect_auth_prompt_kind_from_message("git status failed").is_none());
-
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(
-                "git commit failed: error: Load key \"C:\\Users\\dev\\.ssh\\id_ed25519\": incorrect passphrase supplied to decrypt private key\nfatal: failed to write commit object"
-            ),
-            Some(crate::model::AuthPromptKind::Passphrase)
-        );
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(
-                "git tag failed: Enter passphrase for \"/home/dev/.ssh/id_ed25519\":"
-            ),
-            Some(crate::model::AuthPromptKind::Passphrase)
-        );
-        assert_eq!(
-            detect_auth_prompt_kind_from_message(&format!(
-                "git commit failed\n{SSH_PASSPHRASE_PROMPT_MARKER}\nEnter passphrase for key"
-            )),
-            None
-        );
-
-        let structured = Error::new(ErrorKind::Git(GitFailure::new(
-            "git fetch origin",
-            GitFailureId::CommandFailed,
-            Some(128),
-            Vec::new(),
-            b"Host key verification failed.\nfatal: Could not read from remote repository.\n"
-                .to_vec(),
-            None,
-        )));
-        assert_eq!(detect_auth_prompt_kind(&structured), None);
-    }
-
-    #[test]
-    fn stage_git_auth_env_stages_and_clears_shared_auth_slot() {
-        let _lock = crate::store::tests::staged_auth_test_lock();
-        gitcomet_core::auth::clear_staged_git_auth();
-        stage_git_auth_env(
-            crate::model::AuthPromptKind::UsernamePassword,
-            Some("alice"),
-            "secret-token",
-        )
-        .expect("staging auth");
-
-        let staged = gitcomet_core::auth::take_staged_git_auth().expect("staged auth to exist");
-        assert_eq!(staged.username.as_deref(), Some("alice"));
-        assert_eq!(staged.secret, "secret-token");
-        assert_eq!(
-            staged.kind,
-            gitcomet_core::auth::GitAuthKind::UsernamePassword
-        );
-
-        stage_git_auth_env(
-            crate::model::AuthPromptKind::Passphrase,
-            None,
-            "ssh-passphrase",
-        )
-        .expect("staging passphrase");
-
-        let staged =
-            gitcomet_core::auth::take_staged_git_auth().expect("staged passphrase to exist");
-        assert_eq!(staged.kind, gitcomet_core::auth::GitAuthKind::Passphrase);
-
-        stage_git_auth_env(
-            crate::model::AuthPromptKind::HostVerification,
-            None,
-            " YES ",
-        )
-        .expect("staging host verification");
-
-        let staged =
-            gitcomet_core::auth::take_staged_git_auth().expect("staged host verification to exist");
-        assert_eq!(
-            staged.kind,
-            gitcomet_core::auth::GitAuthKind::HostVerification
-        );
-        assert_eq!(staged.secret, "yes");
-
-        clear_staged_git_auth_env();
-        assert!(gitcomet_core::auth::take_staged_git_auth().is_none());
-    }
-}
+mod tests;
 
 #[cfg(test)]
-mod delete_remote_branches_summary_tests {
-    use super::*;
-    use gitcomet_core::services::CommandOutput;
-
-    fn summary_for(branches: Vec<String>) -> String {
-        let (_message, summary) = super::summarize_command(
-            &RepoCommandKind::DeleteRemoteBranches {
-                remote: "origin".into(),
-                branches,
-            },
-            &CommandOutput::empty_success("git push --delete"),
-            true,
-            None,
-        );
-        summary
-    }
-
-    #[test]
-    fn summary_pluralises_on_the_branch_count() {
-        assert_eq!(
-            summary_for(vec!["feat/a".into()]),
-            "1 remote branch on origin: Deleted"
-        );
-        assert_eq!(
-            summary_for(vec!["feat/a".into(), "feat/b".into()]),
-            "2 remote branches on origin: Deleted"
-        );
-    }
-}
+mod delete_remote_branches_summary_tests;

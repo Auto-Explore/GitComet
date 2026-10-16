@@ -5,8 +5,8 @@
 //! global is absent, windows skip every lookup, and no task is spawned.
 
 use super::command_palette::{CommandEntry, Needs};
-use super::shortcut_labels::Shortcut;
 use super::*;
+use crate::kit::components::Shortcut;
 use gitcomet_extension_api::{
     CommandContext, DialogContent, DialogHandle, EntryOrigin, ExtensionId, GateDecision, HostError,
     MenuLocation, Registry, RepositoryEntryRequest, RepositoryHandle, StateObserver, WindowHost,
@@ -273,6 +273,7 @@ struct HostWindow {
     observers: Rc<StateObservers>,
     bottom_panels: super::extension_panels::SharedBottomPanels,
     diff_panes: SharedDiffPanes,
+    diff_environment: super::hosted::environment::DiffPaneEnvironment,
     external_editor:
         Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
 }
@@ -578,11 +579,15 @@ impl WindowHostImpl for HostWindow {
         let store = self.store.clone();
         let repository = repository.clone();
         let entity = cx.new(|cx| {
-            let mut pane = super::hosted::diff_pane::DiffPaneView::new(
-                host, store, repository, target, options, cx,
-            );
-            pane.attach_root(self.view.clone());
-            pane
+            super::hosted::diff_pane::DiffPaneView::new(
+                host,
+                self.diff_environment.clone(),
+                store,
+                repository,
+                target,
+                options,
+                cx,
+            )
         });
         self.remember_diff_pane(&entity);
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
@@ -598,10 +603,13 @@ impl WindowHostImpl for HostWindow {
     ) -> Result<gitcomet_extension_api::DiffPane, HostError> {
         let host = self.host()?;
         let entity = cx.new(|cx| {
-            let mut pane =
-                super::hosted::diff_pane::DiffPaneView::snapshot(host, snapshot, options, cx);
-            pane.attach_root(self.view.clone());
-            pane
+            super::hosted::diff_pane::DiffPaneView::snapshot(
+                host,
+                self.diff_environment.clone(),
+                snapshot,
+                options,
+                cx,
+            )
         });
         self.remember_diff_pane(&entity);
         Ok(gitcomet_extension_api::DiffPane::new(Rc::new(
@@ -804,7 +812,7 @@ impl WindowHostImpl for HostWindow {
         let view = self.view.clone();
         cx.defer(move |cx| {
             let _ = view.update(cx, |root, cx| {
-                root.main_pane.update(cx, |pane, cx| {
+                root.diff_renderer.update(cx, |pane, cx| {
                     pane.extension_editor_available = available;
                     cx.notify();
                 });
@@ -1094,6 +1102,7 @@ impl ExtensionWindow {
         store: &Arc<AppStore>,
         state: Arc<AppState>,
         theme: AppTheme,
+        diff_environment: super::hosted::environment::DiffPaneEnvironment,
         kind: gitcomet_core::identity::WindowKind,
         cx: &mut gpui::Context<GitCometView>,
     ) -> Option<Self> {
@@ -1150,6 +1159,7 @@ impl ExtensionWindow {
             observers: Rc::clone(&observers),
             bottom_panels: Rc::clone(&bottom_panels),
             diff_panes: Rc::clone(&diff_panes),
+            diff_environment,
             external_editor: Rc::clone(&external_editor),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
@@ -1199,7 +1209,7 @@ impl ExtensionWindow {
         scope: &gpui::FocusHandle,
         window: &Window,
         cx: &App,
-    ) -> Option<Entity<MainPaneView>> {
+    ) -> Option<Entity<DiffRenderer>> {
         let mut panes = self.diff_panes.borrow_mut();
         panes.retain(|pane| pane.upgrade().is_some());
         panes

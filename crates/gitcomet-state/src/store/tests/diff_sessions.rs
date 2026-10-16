@@ -3,17 +3,13 @@
 
 use super::*;
 use crate::diff_session::{DiffSessionContent, DiffSessionMsg, DiffSessionWork, DiffViewId};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{Diff, DiffArea, DiffTarget};
 
-fn setup() -> (
-    FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    AtomicU64,
-    AppState,
-    RepoId,
-) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+fn setup() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId) {
+    let mut repos: RepositoryRuntimes = Default::default();
     let repo_id = RepoId(1);
-    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/sessions")));
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/sessions")));
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::kit::interaction as controls;
-use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
+use gitcomet_ui_terminal::{terminal_default_background, terminal_default_foreground};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum TextSection {
@@ -88,7 +88,6 @@ fn text(
         });
     field.seen = true;
     field.input.update(cx, |input, cx| {
-        input.set_theme(this.theme, cx);
         if section == TextSection::Output {
             input.set_vertical_scroll_handle(Some(this.hook_activity_output_scroll.clone()));
             input.set_text_preserving_selection_on_append(value, cx);
@@ -885,7 +884,7 @@ pub(super) fn panel(
     }
     let ui_scale = popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
-    let window_size = crate::view::chrome::window_surface_bounds(window).size;
+    let window_size = crate::kit::window_chrome::window_surface_bounds(window).size;
     let margin = scaled_px(DIALOG_MARGIN_PX);
     let available = gpui::size(
         (window_size.width - margin * 2.0).max(px(0.0)),

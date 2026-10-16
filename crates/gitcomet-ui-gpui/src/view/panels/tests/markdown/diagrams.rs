@@ -144,8 +144,8 @@ fn assert_estimate_matches_drawn_block(
 ) {
     let block = f32::from(cx.debug_bounds("diagram_preview").unwrap().size.height);
     let estimate = cx.update(|_, app| {
-        crate::view::diagram_preview::DiagramHeights::new(app).estimate_block(
-            &crate::view::diagram_preview::DiagramKey::new(
+        crate::view::diagram_preview::block::DiagramHeights::new(app).estimate_block(
+            &gitcomet_diagrams::source::DiagramKey::new(
                 gitcomet_diagrams::DiagramKind::Mermaid,
                 source.into(),
             ),
@@ -414,12 +414,15 @@ fn a_collapsed_diagram_stays_collapsed_when_its_block_is_rebuilt(cx: &mut gpui::
 
     let edited = format!("Inserted above.\n\n{}", stacked_flowchart(7));
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
-                crate::view::markdown_preview::parse_markdown(&edited).unwrap(),
-            ));
-            cx.notify();
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(&edited).unwrap(),
+                ));
+                cx.notify();
+            });
     });
     draw_frames(cx, 3);
     assert_eq!(viewport_height(cx), 320.0, "still collapsed after the edit");
@@ -527,12 +530,12 @@ fn undrawn_diagram_blocks_are_sized_without_hashing_each_frame(cx: &mut gpui::Te
         "markdown_diagram_estimate_hashing",
         &source,
     );
-    crate::view::diagram_preview::take_sources_hashed_for_tests();
+    gitcomet_diagrams::source::take_sources_hashed_for_tests();
     for _ in 0..3 {
         scroll_document(cx, -20.0);
     }
     assert_eq!(
-        crate::view::diagram_preview::take_sources_hashed_for_tests(),
+        gitcomet_diagrams::source::take_sources_hashed_for_tests(),
         0
     );
     fixture.cleanup();
@@ -582,12 +585,15 @@ fn a_diagrams_code_view_stays_when_its_block_is_rebuilt(cx: &mut gpui::TestAppCo
 
     let edited = format!("Inserted above.\n\n{}", stacked_flowchart(4));
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
-                crate::view::markdown_preview::parse_markdown(&edited).unwrap(),
-            ));
-            cx.notify();
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(&edited).unwrap(),
+                ));
+                cx.notify();
+            });
     });
     draw_frames(cx, 3);
     assert!(cx.debug_bounds("diagram_preview").is_some());
@@ -611,12 +617,15 @@ fn a_prepared_diagram_draws_in_the_first_frame_of_its_block(cx: &mut gpui::TestA
     );
     let edited = format!("Inserted above.\n\n{}", stacked_flowchart(4));
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
-                crate::view::markdown_preview::parse_markdown(&edited).unwrap(),
-            ));
-            cx.notify();
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.worktree_markdown.document = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(&edited).unwrap(),
+                ));
+                cx.notify();
+            });
     });
     // One frame, with no background work allowed to finish first.
     cx.update(|window, app| {
@@ -659,7 +668,7 @@ fn a_failed_diagram_is_sized_as_its_error_and_source(cx: &mut gpui::TestAppConte
     );
     let (document, theme, percent) = cx.update(|_, app| {
         let view = view.read(app);
-        let document = match &view.main_pane.read(app).worktree_markdown.document {
+        let document = match &view.diff_renderer.read(app).worktree_markdown.document {
             gitcomet_state::model::Loadable::Ready(document) => document.clone(),
             other => panic!("a parsed document, not {other:?}"),
         };

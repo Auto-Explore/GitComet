@@ -11,6 +11,10 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+# A stand-in window host for extension tests. Adds items only.
+test-support = []
+
 # Extensions see the kit, the core domain, and the revision-pinned state API;
 # never the UI host (scripts/ci/boundaries.py).
 [dependencies]

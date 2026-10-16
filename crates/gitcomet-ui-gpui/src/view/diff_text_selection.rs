@@ -4,7 +4,7 @@ use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use rustc_hash::FxHasher;
 
 fn diff_text_empty_space_surface(
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     region: DiffTextRegion,
 ) -> gpui::Stateful<gpui::Div> {
     let left_view = view.clone();
@@ -49,7 +49,7 @@ fn diff_text_trailing_space_height(
 /// so the surface counteracts horizontal scrolling and is clipped by the list's
 /// own content mask and padding.
 pub(super) struct DiffTextEmptySpaceDecoration {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: Entity<DiffRenderer>,
     pub(super) region: DiffTextRegion,
 }
 
@@ -93,7 +93,7 @@ impl gpui::UniformListDecoration for DiffTextEmptySpaceDecoration {
 /// places this immediately after the complete body, so pictures and other
 /// non-text blocks remain outside the hit area.
 pub(super) fn flowing_diff_text_empty_space(
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     region: DiffTextRegion,
 ) -> AnyElement {
     diff_text_empty_space_surface(view, region)
@@ -107,7 +107,7 @@ pub(super) fn flowing_diff_text_empty_space(
 /// be measured. Keep its empty-state presentation, but make the document
 /// viewport itself behave as the sole EOF position.
 pub(super) fn empty_diff_text_document(
-    view: Entity<MainPaneView>,
+    view: Entity<DiffRenderer>,
     region: DiffTextRegion,
     child: AnyElement,
 ) -> AnyElement {
@@ -133,7 +133,7 @@ pub(super) fn empty_diff_text_document(
 }
 
 pub(super) struct DiffTextSelectionTracker {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: Entity<DiffRenderer>,
 }
 
 impl IntoElement for DiffTextSelectionTracker {
@@ -228,7 +228,7 @@ impl Element for DiffTextSelectionTracker {
 /// section 30 split: zero-size element that ends a conflict row-drag on mouse-up
 /// anywhere in the window (per-row handlers cover extend inside the columns).
 pub(super) struct ConflictRowSelectionTracker {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: Entity<DiffRenderer>,
 }
 
 impl IntoElement for ConflictRowSelectionTracker {
@@ -311,7 +311,7 @@ impl Element for ConflictRowSelectionTracker {
 }
 
 pub(super) struct DiffTextSelectionOverlay {
-    pub(super) view: Entity<MainPaneView>,
+    pub(super) view: Entity<DiffRenderer>,
     pub(super) visible_ix: usize,
     pub(super) region: DiffTextRegion,
     pub(super) text: SharedString,

@@ -217,7 +217,7 @@ fn review_errors_after_many_diagnostics_still_arrive(cx: &mut gpui::TestAppConte
     let id = RepoId(9694);
     let mut repo = opening_repo_state(id, Path::new("/tmp/review-diagnostics"));
     for i in 0..200 {
-        repo.feedback.push_diagnostic(DiagnosticEntry {
+        repo.feedback_mut().push_diagnostic(DiagnosticEntry {
             time: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(i),
             kind: DiagnosticKind::Info,
             message: format!("old {i}"),
@@ -305,7 +305,7 @@ fn local_changes_blocking_pull_show_guidance_output_and_a_review_action(
 error: Your local changes to the following files would be overwritten by merge:\n\
 \tREADME.md\n\tcrates/app.rs\n\
 Please commit your changes or stash them before you merge.\nAborting\n";
-    repo.feedback.push_command_result(CommandLogEntry {
+    repo.feedback_mut().push_command_result(CommandLogEntry {
         time: std::time::SystemTime::UNIX_EPOCH,
         ok: false,
         command: "git pull --prune".into(),

@@ -48,9 +48,9 @@ pub use containers::{
 #[cfg(any(test, feature = "test-support"))]
 pub use containers::{panel, pill};
 pub use context_menu::{
-    ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, MENU_SCROLL_ARROW_HEIGHT_PX,
-    MenuScrollDirection, context_menu, context_menu_description, context_menu_group,
-    context_menu_header, context_menu_icon_path, context_menu_label, context_menu_scroll_arrow,
+    ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, ContextMenuTone,
+    MENU_SCROLL_ARROW_HEIGHT_PX, MenuScrollDirection, context_menu, context_menu_description,
+    context_menu_group, context_menu_header, context_menu_label, context_menu_scroll_arrow,
     context_menu_separator,
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};
@@ -76,7 +76,7 @@ pub use picker_prompt::{
     picker_prompt_layout_ordered, picker_row, remove_row_button, row_height as picker_row_height,
     selected_hint_pill,
 };
-pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus};
+pub use quick_search_bar::{QuickSearchBar, QuickSearchStatus, SearchToggles};
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
 };
@@ -90,7 +90,8 @@ pub use settings_rows::{
     settings_summary_row_with_value_prefix, settings_toggle_row,
 };
 pub use shortcut_keys::{
-    keystrokes_display, keystrokes_label_for, shortcut_keys, shortcut_keys_compact,
+    Shortcut, alt_shortcut, keystrokes_display, keystrokes_label_for, secondary_shortcut,
+    shortcut_keys, shortcut_keys_compact,
 };
 pub use skeleton::skeleton;
 pub use split_button::{SplitButton, SplitButtonStyle, filled_action_frame};

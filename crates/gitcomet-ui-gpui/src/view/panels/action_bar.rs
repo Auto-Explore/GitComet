@@ -821,7 +821,7 @@ impl BarItemOwner for ActionBarView {
                 theme,
                 format!(
                     "Navigate Back ({})",
-                    crate::view::shortcut_labels::alt_shortcut("Left")
+                    crate::kit::components::alt_shortcut("Left")
                 )
                 .into(),
             );
@@ -848,7 +848,7 @@ impl BarItemOwner for ActionBarView {
                 theme,
                 format!(
                     "Navigate Forward ({})",
-                    crate::view::shortcut_labels::alt_shortcut("Right")
+                    crate::kit::components::alt_shortcut("Right")
                 )
                 .into(),
             );

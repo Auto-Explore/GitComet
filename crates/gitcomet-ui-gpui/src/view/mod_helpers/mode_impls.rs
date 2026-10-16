@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_ui_terminal::TerminalViewportView;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ResolverPickTarget {
@@ -373,7 +374,7 @@ pub(crate) enum PopoverKind {
         allow_navigate: bool,
     },
     DiffEditorMenu {
-        repo_id: RepoId,
+        repo_id: Option<RepoId>,
         area: DiffArea,
         path: Option<std::path::PathBuf>,
         hunk_patch: Option<gitcomet_state::msg::ContentBytes>,
@@ -937,125 +938,14 @@ pub(crate) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf 
     canonicalize_or_original(path)
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct TerminalTextMetrics {
-    pub(crate) font_size: Pixels,
-    pub(crate) line_height: Pixels,
-    pub(crate) cell_width: Pixels,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct TerminalGridSize {
-    pub(crate) rows: u16,
-    pub(crate) cols: u16,
-    pub(crate) pixel_width: u16,
-    pub(crate) pixel_height: u16,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct TerminalLayoutKey {
-    pub(crate) font_size_bits: u32,
-    pub(crate) line_height_bits: u32,
-    pub(crate) cell_width_bits: u32,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TerminalLayoutCache {
-    pub(crate) rem_size: Pixels,
-    pub(crate) key: TerminalLayoutKey,
-    pub(crate) base_style: gpui::TextStyle,
-    pub(crate) metrics: TerminalTextMetrics,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct TerminalCachedRow {
-    pub(crate) fingerprint: u64,
-    pub(crate) layout_key: TerminalLayoutKey,
-    pub(crate) shaped: Option<ShapedLine>,
-    pub(crate) background_rects: Vec<super::terminal_alacritty::TerminalBackgroundRect>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct TerminalViewportCacheKey {
-    pub(crate) content_epoch: u64,
-    pub(crate) scrollback: usize,
-    pub(crate) rows: u16,
-    pub(crate) cols: u16,
-    pub(crate) layout_key: TerminalLayoutKey,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct TerminalRenderCache {
-    pub(crate) viewport_key: Option<TerminalViewportCacheKey>,
-    pub(crate) rows: Vec<TerminalCachedRow>,
-}
-
-pub(crate) struct TerminalViewportView {
-    pub(crate) theme: AppTheme,
-    pub(crate) focus_handle: FocusHandle,
-    pub(crate) focus_subscriptions: Option<[gpui::Subscription; 2]>,
-    pub(crate) took_press: bool,
-    pub(crate) term_lock: Option<AlacrittyTermLock>,
-    pub(crate) pty_sender: Option<super::terminal_alacritty::PtySender>,
-    pub(crate) layout_cache: Option<TerminalLayoutCache>,
-    pub(crate) render_cache: TerminalRenderCache,
-    pub(crate) cursor_blink_visible: bool,
-    pub(crate) cursor_blink_hold_until: Instant,
-    pub(crate) cursor_blink_active: bool,
-    pub(crate) cursor_blink_task_scheduled: bool,
-    pub(crate) cursor_blink_seq: u64,
-    /// Blinks since the last keystroke, click or focus.
-    pub(crate) cursor_idle_blinks: u32,
-    pub(crate) content_epoch: u64,
-    pub(crate) paint_retry_scheduled: bool,
-    pub(crate) last_content: Option<super::terminal_alacritty::TerminalContent>,
-    pub(crate) viewport_bounds: Option<Bounds<Pixels>>,
-    pub(crate) pressed_mouse_button: Option<gpui::MouseButton>,
-    /// Last grid cell reported to the PTY for mouse-motion tracking. Used to
-    /// dedupe motion reports so a TUI in any-event mode (1003) receives at most
-    /// one report per cell instead of one per pixel-level move event.
-    pub(crate) last_motion_cell: Option<TerminalGridPoint>,
-    pub(crate) was_focused: bool,
-    /// Selection endpoints in grid coordinates. Note these are *not* rotated
-    /// when the PTY emits output: alacritty shifts existing content to
-    /// more-negative rows as lines scroll off, so text can slide under a
-    /// stationary highlight during a drag. Autoscroll itself is safe because
-    /// `scroll_display` moves the viewport, not the content.
-    pub(crate) selection_start: Option<TerminalGridPoint>,
-    pub(crate) selection_end: Option<TerminalGridPoint>,
-    /// Set by "select all" so Copy grabs the entire buffer through the trimming
-    /// `copy_entire_buffer` path. Cleared as soon as a manual selection begins.
-    pub(crate) select_all_active: bool,
-    /// True while the left button is held down for a selection drag. Drives the
-    /// window-level `TerminalSelectionTracker` listeners and the autoscroll
-    /// ticker, both of which keep working after the pointer leaves the viewport.
-    pub(crate) selecting: bool,
-    /// Most recent pointer position seen during a drag. The autoscroll ticker
-    /// re-reads it every frame so scrolling continues while the pointer is held
-    /// still outside the viewport.
-    pub(crate) selection_last_mouse_pos: Point<Pixels>,
-    /// Whether the current drag has actually moved (pointer motion, a wheel
-    /// scroll, or an autoscroll step). The ticker refuses to re-resolve the free
-    /// end until it has: otherwise the first tick after a double- or
-    /// triple-click would drag that word/line selection back to the press cell.
-    pub(crate) selection_drag_moved: bool,
-    /// Bumped whenever a drag starts or ends so a stale autoscroll ticker exits.
-    pub(crate) selection_autoscroll_seq: u64,
-    /// Which window's text selection this viewport owns, if any.
-    /// See [`crate::text_selection_owner`].
-    pub(crate) selection_owner: crate::text_selection_owner::SelectionOwnerToken,
-    pub(crate) _selection_owner_observer: gpui::Subscription,
-    pub(crate) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
-}
-
 /// A single terminal (one PTY + alacritty + rendered viewport). A repo can hold
 /// several of these as tabs.
 pub(crate) struct TerminalInstance {
     pub(crate) focus_handle: FocusHandle,
-    pub(crate) pty_sender: Option<super::terminal_alacritty::PtySender>,
+    pub(crate) pty_sender: Option<gitcomet_ui_terminal::PtySender>,
     pub(crate) child_pid: Option<u32>,
     pub(crate) events_rx:
-        Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
+        Option<smol::channel::Receiver<gitcomet_ui_terminal::TerminalBackendEvent>>,
     pub(crate) connected: bool,
     pub(crate) viewport: Entity<TerminalViewportView>,
     pub(crate) session_seq: u64,
@@ -1232,23 +1122,6 @@ pub(crate) enum BottomPanelTab {
     Reflog,
     /// An extension's panel, by its index in the registry.
     Extension(usize),
-}
-
-/// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
-/// top of the visible screen at the live tail, and scrollback history is
-/// negative down to `-history_size`. Field order matters — the derived `Ord`
-/// gives row-major ordering, which is what normalises a selection's
-/// `start`/`end` pair.
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct TerminalGridPoint {
-    pub(crate) row: i32,
-    pub(crate) col: u16,
-}
-
-impl TerminalGridPoint {
-    pub(crate) fn new(row: i32, col: u16) -> Self {
-        Self { row, col }
-    }
 }
 
 pub(crate) fn focused_mergetool_bootstrap_action(

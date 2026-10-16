@@ -68,7 +68,12 @@ impl Stack {
             let list = match std::fs::read(dir.join("tables.list")) {
                 Ok(list) => list,
                 Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                Err(e) => return Err(invalid(&dir.join("tables.list"), 0, e)),
+                Err(error) => {
+                    let path = dir.join("tables.list");
+                    return Err(invalid(&path, 0, &error)
+                        .with_source(error)
+                        .with_context("read reftable list", Some(&path)));
+                }
             };
             let old = CACHE
                 .lock()
@@ -113,7 +118,11 @@ impl Stack {
                         missing = true;
                         break;
                     }
-                    Err(e) => return Err(invalid(&path, 0, e)),
+                    Err(error) => {
+                        return Err(invalid(&path, 0, &error)
+                            .with_source(error)
+                            .with_context("read reftable", Some(&path)));
+                    }
                 };
                 tables.push(Arc::new(Table::parse(path, bytes.into(), hash, cancel)?));
             }
@@ -206,6 +215,47 @@ impl Stack {
             .take(limit.unwrap_or(usize::MAX))
             .collect())
     }
+}
+
+#[test]
+fn repository_tag_error_retains_reftable_io_cause_through_backend_wrapping() {
+    use gitcomet_core::services::GitBackend as _;
+    use std::error::Error as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let output = gitcomet_core::test_support::git_fixture::git_command()
+        .current_dir(root.path())
+        .args(["init", "--ref-format=reftable", "-b", "main"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let repo = crate::GixBackend.open(root.path()).unwrap();
+    let cancellation = CancellationToken::new();
+    assert!(repo.list_tags(&cancellation).unwrap().is_empty());
+    let reftable = root.path().join(".git/reftable").canonicalize().unwrap();
+    let list = reftable.join("tables.list");
+    std::fs::remove_file(&list).unwrap();
+    std::fs::create_dir(&list).unwrap();
+    let expected = std::fs::read(&list).unwrap_err();
+
+    let error = repo.list_tags(&cancellation).unwrap_err();
+    assert!(
+        matches!(error.kind(), ErrorKind::Backend(message) if message.starts_with("gix references: "))
+    );
+    let source = error.source().unwrap().downcast_ref::<Error>().unwrap();
+    assert_eq!(source.context().unwrap().operation(), "read reftable list");
+    assert_eq!(source.context().unwrap().path(), Some(list.as_path()));
+    let io = source
+        .source()
+        .unwrap()
+        .downcast_ref::<std::io::Error>()
+        .unwrap();
+    assert_eq!(io.kind(), expected.kind());
+    assert_eq!(io.raw_os_error(), expected.raw_os_error());
 }
 
 #[test]
