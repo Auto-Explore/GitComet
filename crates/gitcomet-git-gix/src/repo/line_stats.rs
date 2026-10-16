@@ -670,6 +670,8 @@ impl<'repo> WorktreeReader<'repo> {
         }
         let cleans = driver.is_some();
         let encoded = matches!(encoding, Some(StateRef::Value(_)));
+        // Unlike the diff panel's memo, no second stat after the read: a write
+        // after this stat moves ctime, so counts from a torn read never match.
         let stamp = super::DiskFileStamp::from_metadata(&metadata)
             .filter(|stamp| !cleans && !stamp.is_racy_at(now));
         Some(Found::File(FoundFile {
