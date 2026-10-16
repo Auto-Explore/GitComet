@@ -1843,9 +1843,15 @@ impl DetailsPaneView {
         section: StatusSection,
     ) -> Option<Arc<[usize]>> {
         let sort = self.status_file_sort_for(section);
+        // Counts arrive after every save; only a sort that reads them re-sorts.
+        let content_rev = if sort.needs_line_stats() {
+            status_section_content_rev(repo, section)
+        } else {
+            crate::view::status_section_rev(repo, section)
+        };
         let key = crate::view::rows::file_list_projection_key(
             repo.id.0,
-            self.file_source_key(repo.id, status_section_content_rev(repo, section), None),
+            self.file_source_key(repo.id, content_rev, None),
             sort,
             crate::view::rows::CommitFileFilter::All,
         );
