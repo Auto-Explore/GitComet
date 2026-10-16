@@ -479,10 +479,9 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Cmake => Some((
             tree_sitter_cmake::LANGUAGE.into(),
-            TreesitterQueryAsset::with_injections_and_supplement(
-                tree_sitter_cmake::HIGHLIGHTS_QUERY,
+            TreesitterQueryAsset::with_injections(
+                CMAKE_HIGHLIGHTS_QUERY,
                 tree_sitter_cmake::INJECTIONS_QUERY,
-                CMAKE_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::Dockerfile => Some((

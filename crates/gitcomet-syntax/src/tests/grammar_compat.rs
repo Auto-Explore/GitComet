@@ -1568,13 +1568,6 @@ const UNEVALUATED_PREDICATES: &[(DiffSyntaxLanguage, &str, usize, &str)] = &[
         2,
         "the injected markdown/xml then starts at the comment marker, which it renders as text",
     ),
-    // Pre-existing, each the only filter on its rule.
-    (
-        DiffSyntaxLanguage::Cmake,
-        "lua-match?",
-        2,
-        "pre-existing: the shebang rule is undone by cmake_supplement.scm; every unquoted argument reads as a constant",
-    ),
 ];
 
 /// Captures a wired query emits that no kind maps, left plain on purpose.

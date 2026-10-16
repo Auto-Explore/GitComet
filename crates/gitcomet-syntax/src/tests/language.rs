@@ -722,6 +722,27 @@ fn objective_c_marks_only_instance_variables_as_properties() {
     assert!(!kinds(4, "bar").contains(&SyntaxTokenKind::Property));
 }
 
+/// The crate's query gated two rules on `#lua-match?`, which the engine never
+/// evaluates: every bare argument read as a constant and every file's first
+/// comment as a shebang.
+#[test]
+fn cmake_marks_only_upper_case_arguments_constant_and_real_shebangs() {
+    let text = "# Copyright header\nadd_library(core STATIC main.cpp)\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Cmake, text);
+    let kinds = |line: usize, fragment| {
+        token_kinds_for_line_fragment(document, line, text.lines().nth(line).unwrap(), fragment)
+    };
+    assert_eq!(kinds(0, "Copyright"), [SyntaxTokenKind::Comment]);
+    assert!(!kinds(1, "core").contains(&SyntaxTokenKind::Constant));
+    assert!(!kinds(1, "main.cpp").contains(&SyntaxTokenKind::Constant));
+    assert_eq!(kinds(1, "STATIC"), [SyntaxTokenKind::Constant]);
+
+    let script = "#!/usr/bin/env -S cmake -P\nmessage(hi)\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Cmake, script);
+    let shebang = token_kinds_for_line_fragment(document, 0, "#!/usr/bin/env -S cmake -P", "#!");
+    assert_eq!(shebang, [SyntaxTokenKind::Keyword]);
+}
+
 /// Java, PHP and Groovy all use queries that capture no punctuation at all.
 #[test]
 fn jvm_and_php_family_colour_their_brackets() {
