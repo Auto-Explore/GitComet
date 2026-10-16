@@ -2,7 +2,13 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::git_dir_for_workdir;
 use std::path::Path;
 
-/// Open the repository backing the worktree at `workdir`.
+/// [`open_worktree_repo_with`] with gix's default permissions.
+pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
+    open_worktree_repo_with(workdir, gix::open::Permissions::default())
+}
+
+/// Open the repository backing the worktree at `workdir`, reading config,
+/// environment and attribute files only from the sources `permissions` allow.
 ///
 /// This is the single point in the crate that turns a worktree path into an
 /// open [`gix::Repository`]. It routes through [`git_dir_for_workdir`] so that a
@@ -17,12 +23,6 @@ use std::path::Path;
 ///
 /// The raw [`gix::Error`] is returned so callers can map it to their own
 /// error type or treat "not a repository" as absence.
-pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
-    open_worktree_repo_with(workdir, gix::open::Permissions::default())
-}
-
-/// [`open_worktree_repo`], reading config, environment and attribute files
-/// only from the sources `permissions` allow.
 pub(crate) fn open_worktree_repo_with(
     workdir: &Path,
     permissions: gix::open::Permissions,
