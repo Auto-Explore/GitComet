@@ -8,16 +8,6 @@ const STREAMED_HEURISTIC_CHECKPOINT_SPACING_BYTES: usize = 32 * 1024;
 const STREAMED_HEURISTIC_SCAN_CHUNK_BYTES: usize = 256 * 1024;
 const STREAMED_HEURISTIC_SCAN_CHUNK_LOOKAHEAD_BYTES: usize = 4;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum HeuristicBlockCommentKind {
-    Html,
-    FSharp,
-    Lua,
-    C,
-    PowerShell,
-    Haskell,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum HeuristicOpenState {
     #[default]
@@ -28,7 +18,7 @@ enum HeuristicOpenState {
     },
     LineComment,
     BlockComment {
-        kind: HeuristicBlockCommentKind,
+        spec: HeuristicBlockCommentSpec,
     },
 }
 
@@ -109,12 +99,10 @@ thread_local! {
     > = RefCell::new(new_fx_lru_cache(STREAMED_HEURISTIC_LINE_CACHE_MAX_ENTRIES));
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct HeuristicBlockCommentSpec {
     pub(super) start: &'static str,
     pub(super) end: &'static str,
-    /// How the multi-line scan carries this comment from one line to the next.
-    kind: HeuristicBlockCommentKind,
 }
 
 #[derive(Clone, Copy)]
@@ -228,17 +216,14 @@ impl HeuristicCommentConfig {
 #[derive(Clone, Copy)]
 struct HeuristicOpenStateScanConfig {
     comment: HeuristicCommentConfig,
-    block_comment_kind: Option<HeuristicBlockCommentKind>,
     allow_backtick_strings: bool,
     single_quote: HeuristicSingleQuote,
 }
 
 impl HeuristicOpenStateScanConfig {
     fn for_language(language: DiffSyntaxLanguage) -> Self {
-        let comment = heuristic_comment_config(language);
         Self {
-            comment,
-            block_comment_kind: comment.block_comment.map(|spec| spec.kind),
+            comment: heuristic_comment_config(language),
             allow_backtick_strings: heuristic_allows_backtick_strings(language),
             single_quote: heuristic_single_quote_role(language),
         }
@@ -248,32 +233,26 @@ impl HeuristicOpenStateScanConfig {
 const HEURISTIC_HTML_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "<!--",
     end: "-->",
-    kind: HeuristicBlockCommentKind::Html,
 };
 const HEURISTIC_FSHARP_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "(*",
     end: "*)",
-    kind: HeuristicBlockCommentKind::FSharp,
 };
 const HEURISTIC_LUA_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "--[[",
     end: "]]",
-    kind: HeuristicBlockCommentKind::Lua,
 };
 const HEURISTIC_HASKELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "{-",
     end: "-}",
-    kind: HeuristicBlockCommentKind::Haskell,
 };
 const HEURISTIC_C_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "/*",
     end: "*/",
-    kind: HeuristicBlockCommentKind::C,
 };
 const HEURISTIC_POWERSHELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "<#",
     end: "#>",
-    kind: HeuristicBlockCommentKind::PowerShell,
 };
 
 pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> HeuristicCommentConfig {
@@ -297,7 +276,7 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // `#`. That also lands on Jinja's own `{# … #}`, one byte late.
         DiffSyntaxLanguage::JinjaText => HeuristicCommentConfig::hash(),
         // Pascal's block comment is `(* ... *)`, which is F#'s and OCaml's too.
-        // Its other form, `{ ... }`, has no `HeuristicBlockCommentKind` and would
+        // Its other form, `{ ... }`, has no block-comment spec and would
         // swallow every record and set literal if it did.
         // EBNF's comment is `(* ... *)`, the same as Pascal's and F#'s.
         DiffSyntaxLanguage::Ebnf
@@ -455,28 +434,6 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
     }
 }
 
-fn heuristic_block_comment_start_bytes(kind: HeuristicBlockCommentKind) -> &'static [u8] {
-    match kind {
-        HeuristicBlockCommentKind::Html => b"<!--",
-        HeuristicBlockCommentKind::FSharp => b"(*",
-        HeuristicBlockCommentKind::Lua => b"--[[",
-        HeuristicBlockCommentKind::C => b"/*",
-        HeuristicBlockCommentKind::PowerShell => b"<#",
-        HeuristicBlockCommentKind::Haskell => b"{-",
-    }
-}
-
-fn heuristic_block_comment_end_bytes(kind: HeuristicBlockCommentKind) -> &'static [u8] {
-    match kind {
-        HeuristicBlockCommentKind::Html => b"-->",
-        HeuristicBlockCommentKind::FSharp => b"*)",
-        HeuristicBlockCommentKind::Lua => b"]]",
-        HeuristicBlockCommentKind::C => b"*/",
-        HeuristicBlockCommentKind::PowerShell => b"#>",
-        HeuristicBlockCommentKind::Haskell => b"-}",
-    }
-}
-
 fn matches_ascii_bytes_at(bytes: &[u8], start: usize, needle: &[u8]) -> bool {
     start
         .checked_add(needle.len())
@@ -552,11 +509,10 @@ fn comment_prefix_state_at_ascii(
     bytes: &[u8],
     start: usize,
 ) -> Option<(usize, HeuristicOpenState)> {
-    if let Some(kind) = config.block_comment_kind {
-        let start_bytes = heuristic_block_comment_start_bytes(kind);
-        if matches_ascii_bytes_at(bytes, start, start_bytes) {
-            return Some((start_bytes.len(), HeuristicOpenState::BlockComment { kind }));
-        }
+    if let Some(spec) = config.comment.block_comment
+        && matches_ascii_bytes_at(bytes, start, spec.start.as_bytes())
+    {
+        return Some((spec.start.len(), HeuristicOpenState::BlockComment { spec }));
     }
     line_comment_start_len(bytes, start, config.comment)
         .map(|len| (len, HeuristicOpenState::LineComment))
@@ -576,9 +532,11 @@ fn potential_open_state_lead(config: HeuristicOpenStateScanConfig, byte: u8) -> 
     {
         return true;
     }
-    if config.block_comment_kind.is_some_and(|kind| {
-        heuristic_block_comment_start_bytes(kind).first().copied() == Some(byte)
-    }) {
+    if config
+        .comment
+        .block_comment
+        .is_some_and(|spec| spec.start.as_bytes().first().copied() == Some(byte))
+    {
         return true;
     }
     if config.comment.haskell_dashes_line_comment && byte == b'-' {
@@ -668,8 +626,8 @@ fn consume_open_state_ascii_prefix(
             }
             (bytes.len(), HeuristicOpenState::String { quote, escaped })
         }
-        HeuristicOpenState::BlockComment { kind } => {
-            let end_bytes = heuristic_block_comment_end_bytes(kind);
+        HeuristicOpenState::BlockComment { spec } => {
+            let end_bytes = spec.end.as_bytes();
             let end_first = end_bytes[0];
             let mut ix = 0usize;
             while ix < bytes.len() {
@@ -684,7 +642,7 @@ fn consume_open_state_ascii_prefix(
                     break;
                 }
             }
-            (bytes.len(), HeuristicOpenState::BlockComment { kind })
+            (bytes.len(), HeuristicOpenState::BlockComment { spec })
         }
     }
 }
@@ -831,8 +789,8 @@ fn advance_streamed_heuristic_open_state_ascii(
                 };
                 record_constant!(*abs, *state);
             }
-            HeuristicOpenState::BlockComment { kind } => {
-                let end_bytes = heuristic_block_comment_end_bytes(kind);
+            HeuristicOpenState::BlockComment { spec } => {
+                let end_bytes = spec.end.as_bytes();
                 let end_first = end_bytes[0];
                 let remainder = &bytes[local..process_len];
                 let Some(found) = memchr::memchr(end_first, remainder) else {
@@ -857,7 +815,7 @@ fn advance_streamed_heuristic_open_state_ascii(
                         *state = if end_ix + 1 == end_bytes.len() {
                             HeuristicOpenState::Normal
                         } else {
-                            HeuristicOpenState::BlockComment { kind }
+                            HeuristicOpenState::BlockComment { spec }
                         };
                         record_constant!(*abs, *state);
                     }
