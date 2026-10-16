@@ -80,14 +80,14 @@ enum AddedLines {
     Counted(LineStats),
     Binary,
     /// The read failed; another may not.
-    Unread,
+    Unreadable,
 }
 
 impl AddedLines {
     fn stats(&self) -> LineStats {
         match self {
             Self::Counted(stats) => *stats,
-            Self::Binary | Self::Unread => LineStats::UNKNOWN,
+            Self::Binary | Self::Unreadable => LineStats::UNKNOWN,
         }
     }
 }
@@ -171,7 +171,7 @@ impl MemoScan {
         }
         let added = count();
         let stats = added.stats();
-        if !matches!(added, AddedLines::Unread) {
+        if !matches!(added, AddedLines::Unreadable) {
             self.next
                 .untracked
                 .insert(path.to_path_buf(), UntrackedCounts { identity, stats });
@@ -750,7 +750,7 @@ impl Found<'_, '_> {
         match self.read(buf) {
             ReadOutcome::Text => AddedLines::Counted(line_stats_from_bytes(&[], buf)),
             ReadOutcome::Binary => AddedLines::Binary,
-            ReadOutcome::Unreadable => AddedLines::Unread,
+            ReadOutcome::Unreadable => AddedLines::Unreadable,
         }
     }
 
