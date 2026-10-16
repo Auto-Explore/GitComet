@@ -295,12 +295,14 @@ fn collect_layer_captures(
                 cursor.captures(&spec.query, tree.root_node(), RopeTextProvider(rope));
             catch.advance(&mut captures);
             let capture_kinds = spec.capture_kinds.as_slice();
+            let mut discarded = DiscardedForms::new(spec);
             // Counts every capture the cursor yields, including the ones dropped
             // below, so the numbering is the emission order itself rather than
             // the order of what survived.
             let mut seq: u32 = 0;
             while let Some((m, capture_ix)) = captures.get() {
                 if let Some(capture) = m.captures().get(*capture_ix)
+                    && !discarded.hides(capture)
                     && let Some(kind) = capture_kinds.get(capture.index as usize).copied().flatten()
                 {
                     let range = clamp_to_len(capture.node.byte_range(), text_len);

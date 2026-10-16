@@ -142,23 +142,7 @@
   open: _ @punctuation.bracket
   close: _ @punctuation.bracket)
 
-;; `#_` discards the form after it. Captured last and five levels down -- a
-;; symbol's or keyword's name is a level below it -- so the discarded form's own
-;; strings, keywords and brackets cannot outrank the comment.
+;; `#_` discards the form after it. A `@comment.discarded` node is greyed
+;; whole, at any depth.
 
-(dis_expr) @comment
-
-(dis_expr
-  _ @comment)
-
-(dis_expr
-  (_ _* @comment))
-
-(dis_expr
-  (_ (_ _* @comment)))
-
-(dis_expr
-  (_ (_ (_ _* @comment))))
-
-(dis_expr
-  (_ (_ (_ (_ _* @comment)))))
+(dis_expr) @comment.discarded

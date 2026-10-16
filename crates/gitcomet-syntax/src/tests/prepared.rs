@@ -675,6 +675,7 @@ fn document_collector_reports_host_query_failure_after_collecting_injections() {
         ts_language: ts_language.clone(),
         query,
         capture_kinds,
+        discarded_capture: None,
         injection_query: Some(injection_query),
         injection_combined_patterns: vec![false],
         has_combined_injections: false,

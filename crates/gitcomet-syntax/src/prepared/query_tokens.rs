@@ -482,11 +482,16 @@ pub(crate) fn collect_query_pass_tokens_for_document(
             let pass_range = clamp_query_range(pass.byte_range.clone(), input.len());
             let mut captures = cursor.captures(&highlight.query, tree.root_node(), input);
             catch.advance(&mut captures);
+            let mut discarded = DiscardedForms::new(highlight);
             while let Some((m, capture_ix)) = captures.get() {
                 let Some(capture) = m.captures().get(*capture_ix) else {
                     catch.advance(&mut captures);
                     continue;
                 };
+                if discarded.hides(capture) {
+                    catch.advance(&mut captures);
+                    continue;
+                }
                 let Some(kind) = highlight
                     .capture_kinds
                     .get(capture.index as usize)

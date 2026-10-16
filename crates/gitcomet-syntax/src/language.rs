@@ -813,6 +813,7 @@ fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec 
         .iter()
         .map(|name| syntax_kind_from_capture_name(name))
         .collect::<Vec<_>>();
+    let discarded_capture = query.capture_index_for_name("comment.discarded");
     let injection_query = asset.injections.map(|source| {
         tree_sitter::Query::new(&ts_language, source).expect("injections.scm should compile")
     });
@@ -834,6 +835,7 @@ fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec 
         ts_language,
         query,
         capture_kinds,
+        discarded_capture,
         injection_query,
         injection_combined_patterns,
         has_combined_injections,

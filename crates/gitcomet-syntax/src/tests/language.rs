@@ -824,6 +824,81 @@ fn clojure_discarded_forms_are_comments_throughout() {
     }
 }
 
+/// A Lisp datum comment (`#_`, `#;`) greys its form however deep it nests; a
+/// discarded `defn` is the usual case. The form after it keeps its colours.
+#[test]
+fn lisp_discarded_forms_are_comments_at_any_depth() {
+    for (language, discarded) in [
+        (
+            DiffSyntaxLanguage::Clojure,
+            "#_(defn old [x] (let [y (inc x)] (when (pos? y) (println \"deep\" :kw (str/join [\"a\" {:b #{\"c\"}}])))))",
+        ),
+        (
+            DiffSyntaxLanguage::Racket,
+            "#;(define (f x) (let ([y 1]) (when y (display (list \"deep\" 'a (vector #\\c \"e\"))))))",
+        ),
+        (
+            DiffSyntaxLanguage::Scheme,
+            "#;(define (f x) (let ((y 1)) (when y (display (list \"deep\" 'a (vector #\\c \"e\"))))))",
+        ),
+    ] {
+        let text = format!("{discarded}\n(+ 1 2)\n");
+        let document = prepare_test_document(language, &text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0).expect("line tokens");
+        assert!(
+            !tokens.is_empty()
+                && tokens
+                    .iter()
+                    .all(|token| token.kind == SyntaxTokenKind::Comment),
+            "{language:?}: {tokens:?}"
+        );
+        let next = syntax_tokens_for_prepared_document_line(document, 1).expect("line tokens");
+        assert!(
+            next.iter()
+                .any(|token| token.kind == SyntaxTokenKind::Number),
+            "{language:?}: {next:?}"
+        );
+    }
+}
+
+/// The editor's live highlighter greys a deep discarded form as the diff does.
+#[test]
+fn live_highlighting_greys_a_deep_discarded_form() {
+    struct Kinds;
+    impl gitcomet_text::SyntaxPalette for Kinds {
+        type Style = SyntaxTokenKind;
+        fn style(&self, kind: SyntaxTokenKind) -> Option<SyntaxTokenKind> {
+            Some(kind)
+        }
+    }
+    let text = "#_(defn old [x] (let [y (inc x)] (when (pos? y) (println \"deep\" (str/join [\"a\" {:b #{\"c\"}}])))))\n(+ 1 2)\n";
+    let live = LiveSyntaxDocument::new(
+        DiffSyntaxLanguage::Clojure,
+        gitcomet_text::rope::Rope::from_text(text),
+        Vec::new().into(),
+        None,
+    )
+    .expect("clojure live document should build");
+    let line_end = text.find('\n').expect("two lines");
+    let (discarded, next): (Vec<_>, Vec<_>) = live
+        .snapshot(Kinds)
+        .highlights_for_byte_range(0..text.len())
+        .into_iter()
+        .partition(|(range, _)| range.end <= line_end);
+    assert!(
+        !discarded.is_empty()
+            && discarded
+                .iter()
+                .all(|(_, kind)| *kind == SyntaxTokenKind::Comment),
+        "{discarded:?}"
+    );
+    assert!(
+        next.iter()
+            .any(|(_, kind)| *kind == SyntaxTokenKind::Number),
+        "{next:?}"
+    );
+}
+
 /// Java, PHP and Groovy all use queries that capture no punctuation at all.
 #[test]
 fn jvm_and_php_family_colour_their_brackets() {

@@ -19,6 +19,8 @@
 ;   * Added definitions: procedure and syntax names @function with parameters,
 ;     value names plain @variable, record types @type, a named let's name
 ;     @function, and library names @namespace.
+;   * `#;` comments: upstream's four hand-written levels became one
+;     @comment.discarded rule, which GitComet greys whole at any depth.
 
 ["(" ")" "[" "]" "{" "}" "#(" "#vu8("] @punctuation.bracket
 
@@ -169,23 +171,8 @@
 
 ;; datum comment ;;
 
-;; hardcoded highlight four levels of nested structure
-
-; #;atom
 (comment
-  _ @comment)
-
-; #;(list)
-(comment
-  (_ _* @comment))
-
-; #;(list (list))
-(comment
-  (_ (_ _* @comment)))
-
-; #;(list (list (list)))
-(comment
-  (_ (_ (_ _ @comment))))
+  (_)) @comment.discarded
 
 [(comment)
  (block_comment)

@@ -17,6 +17,8 @@
 ;     names @function with their parameters ([arg default] optionals too), value
 ;     names plain @variable, struct names @type, a named let's name @function,
 ;     and the module paths require/module+ name @namespace.
+;   * `#;` comments: upstream's four hand-written levels became one
+;     @comment.discarded rule, which GitComet greys whole at any depth.
 
 ["(" ")" "[" "]" "{" "}"] @punctuation.bracket
 
@@ -195,23 +197,7 @@
 
 ;; sexp comment ;;
 
-;; hardcoded highlight four levels of nested structure
-
-; #;atom
-(sexp_comment
-  _ @comment)
-
-; #;(list)
-(sexp_comment
-  (_ _* @comment))
-
-; #;(list (list))
-(sexp_comment
-  (_ (_ _* @comment)))
-
-; #;(list (list (list)))
-(sexp_comment
-  (_ (_ (_ _ @comment))))
+(sexp_comment) @comment.discarded
 
 [(comment)
  (block_comment)] @comment
