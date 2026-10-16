@@ -907,7 +907,9 @@ mod tests {
         ms.sort_by(f64::total_cmp);
         eprintln!(
             "{label}: min {:.1} ms, median {:.1} ms, max {:.1} ms",
-            ms[0], ms[3], ms[5]
+            ms[0],
+            ms[ms.len() / 2],
+            ms[ms.len() - 1]
         );
     }
 
