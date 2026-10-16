@@ -1373,14 +1373,29 @@ fn a_theme_change_during_a_reload_restyles_unchanged_text(cx: &mut gpui::TestApp
     });
     drain(&root, cx);
 
+    let assert_restyled = |cx: &mut gpui::VisualTestContext, case: &str| {
+        cx.update(|_, app| {
+            let b = buffer.read(app);
+            let snapshot = b.input.read(app).text_snapshot();
+            assert_eq!(b.input.read(app).text(), "fn main() {}\n", "{case}");
+            assert_eq!(
+                b.syntax_key,
+                Some((snapshot.model_id(), snapshot.revision())),
+                "{case}: the restyle waits for the read and must happen once it ends"
+            );
+        });
+    };
+    assert_restyled(cx, "read the same text");
+
+    // A read that fails keeps the text on screen, which still needs restyling.
     cx.update(|_, app| {
-        let b = buffer.read(app);
-        let snapshot = b.input.read(app).text_snapshot();
-        assert_eq!(b.input.read(app).text(), "fn main() {}\n");
-        assert_eq!(
-            b.syntax_key,
-            Some((snapshot.model_id(), snapshot.revision())),
-            "the restyle waits for the read and must happen once it lands"
-        );
+        buffer.update(app, |b, cx| b.reload(cx));
+        docs.update(app, |docs, cx| {
+            docs.set_theme(crate::theme::AppTheme::gitcomet_dark(), cx)
+        });
     });
+    std::fs::remove_file(&path).unwrap();
+    drain(&root, cx);
+    assert!(cx.update(|_, app| buffer.read(app).error().is_some()));
+    assert_restyled(cx, "read failed");
 }
