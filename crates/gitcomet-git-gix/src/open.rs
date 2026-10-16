@@ -33,7 +33,7 @@ pub(crate) fn open_worktree_repo_with(
     Ok(repo)
 }
 
-/// Translate a failed [`open_worktree_repo`] into the crate's error type.
+/// Translate a failed [`open_worktree_repo_with`] into the crate's error type.
 ///
 /// `context` names the operation that was opening the repository and is only
 /// used for the catch-all `Backend` message; the two cases callers act on —

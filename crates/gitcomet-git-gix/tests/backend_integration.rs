@@ -84,7 +84,7 @@ fn gix_backend_open_maps_io_error_for_missing_path() {
 
 // gix misreads a worktree whose directory ends in `.git` as a bare git dir, so
 // a plain `gix::open` fails on it. These tests pin that `GixBackend::open` (via
-// the crate's single `open_worktree_repo` chokepoint) opens such repos.
+// the crate's single `open_worktree_repo_with` chokepoint) opens such repos.
 
 #[test]
 fn gix_backend_open_succeeds_for_dot_git_suffixed_worktree() {
