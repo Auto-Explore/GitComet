@@ -19,7 +19,9 @@ impl TreesitterHighlightSpec {
 /// Drops every capture inside a `@comment.discarded` node, so a discarded
 /// form reads as one comment however deep it nests. Captures arrive in start
 /// order, so only the latest discarded node can still contain the next one.
-/// Shared by both collectors.
+/// Shared by both collectors. It works per pass and per layer: a line too long
+/// to query whole is queried in chunks, and a discarded form wider than its
+/// chunk keeps its colours there, as a string crossing a chunk does.
 pub(crate) struct DiscardedForms {
     capture: Option<u32>,
     latest: Range<usize>,
