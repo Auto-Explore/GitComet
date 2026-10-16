@@ -110,27 +110,31 @@ impl PopoverHost {
         on_enter: impl Fn(&mut Self, Option<R::Item>, String, &mut Window, &mut gpui::Context<Self>)
         + 'static,
     ) -> gpui::Subscription {
-        // A caret blink or move notifies the input as well; only a navigation
-        // key or a changed query changes what the picker shows.
-        let text_identity = |input: &components::TextInput| {
-            let text = input.text_snapshot();
-            (text.model_id(), text.revision())
-        };
-        let mut seen_text = text_identity(input.read(cx));
-        cx.observe_in(input, window, move |this, input, window, cx| {
+        let items = std::rc::Rc::new(items);
+        // A new query changes what the picker shows; a caret blink or move,
+        // which notifies the input as well, does not.
+        let query_items = std::rc::Rc::clone(&items);
+        let query_changes = cx.subscribe(
+            input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
+                if !is_active(this) {
+                    return;
+                }
+                let query = input.read(cx).text().trim().to_string();
+                if (*query_items)(this, &query, cx).is_some() {
+                    cx.notify();
+                }
+            },
+        );
+        let navigation = cx.observe_in(input, window, move |this, input, window, cx| {
             let keys = input.update(cx, |i, _| PickerNavKeys::take(i));
 
-            if !is_active(this) {
+            if !is_active(this) || keys == PickerNavKeys::default() {
                 return;
             }
-            let text = text_identity(input.read(cx));
-            if keys == PickerNavKeys::default() && text == seen_text {
-                return;
-            }
-            seen_text = text;
 
             let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-            let Some(list) = items(this, &query, cx) else {
+            let Some(list) = (*items)(this, &query, cx) else {
                 // Data not ready yet — still let Esc dismiss the picker.
                 if keys.escape {
                     on_escape(this, cx);
@@ -179,7 +183,8 @@ impl PopoverHost {
                 PickerNavOutcome::Idle => {}
             }
             cx.notify();
-        })
+        });
+        gpui::Subscription::join(query_changes, navigation)
     }
 
     pub(super) fn ensure_repo_picker_search_input(
