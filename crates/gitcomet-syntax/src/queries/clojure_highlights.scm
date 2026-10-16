@@ -53,10 +53,6 @@
 
 (regex_lit) @string.regex
 
-; `#_` discards the form after it, and the node spans the whole discarded form.
-; Greying all of it out is the point.
-(dis_expr) @comment
-
 ;; Special forms and defining macros, in head position only.
 
 (list_lit
@@ -121,3 +117,21 @@
 (set_lit
   open: _ @punctuation.bracket
   close: _ @punctuation.bracket)
+
+;; `#_` discards the form after it. Captured last and five levels down -- a
+;; symbol's or keyword's name is a level below it -- so the discarded form's own
+;; strings, keywords and brackets cannot outrank the comment.
+
+(dis_expr) @comment
+
+(dis_expr
+  (_ _* @comment))
+
+(dis_expr
+  (_ (_ _* @comment)))
+
+(dis_expr
+  (_ (_ (_ _* @comment))))
+
+(dis_expr
+  (_ (_ (_ (_ _* @comment)))))

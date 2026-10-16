@@ -793,6 +793,22 @@ fn cmake_marks_only_upper_case_arguments_constant_and_real_shebangs() {
     assert_eq!(shebang, [SyntaxTokenKind::Keyword]);
 }
 
+/// `#_` discards the form after it; its strings, keywords and brackets must not
+/// keep their own colours.
+#[test]
+fn clojure_discarded_forms_are_comments_throughout() {
+    let text = "(+ 1 2)\n#_(foo \"bar\" :k [1 {:a 2}])\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Clojure, text);
+    let tokens = syntax_tokens_for_prepared_document_line(document, 1).expect("line tokens");
+    assert!(
+        !tokens.is_empty()
+            && tokens
+                .iter()
+                .all(|token| token.kind == SyntaxTokenKind::Comment),
+        "{tokens:?}"
+    );
+}
+
 /// Java, PHP and Groovy all use queries that capture no punctuation at all.
 #[test]
 fn jvm_and_php_family_colour_their_brackets() {
