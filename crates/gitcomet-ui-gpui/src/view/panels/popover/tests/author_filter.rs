@@ -331,7 +331,10 @@ fn author_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppContext
         "the active filter's row is marked"
     );
 
-    // Every other input of the author list keys the rows as well.
+    // Every other input of the author list keys the rows as well. The bumps
+    // add up, so each push differs from the last by one input.
+    let mut repo = repo_with_authors(repo_id, 2, &["Bob", "Alice", "Carol"]);
+    repo.history_state.history_author_filter = Some("Bob".to_owned());
     let mut previous = filtered;
     for (label, bump) in [
         (
@@ -342,12 +345,10 @@ fn author_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppContext
             repo.history_state.history_scope = gitcomet_core::domain::HistoryMode::FirstParent
         }),
     ] {
+        bump(&mut repo);
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                let mut repo = repo_with_authors(repo_id, 2, &["Bob", "Alice", "Carol"]);
-                repo.history_state.history_author_filter = Some("Bob".to_owned());
-                bump(&mut repo);
-                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+                push_test_state(this, app_state_with_repo(repo.clone(), repo_id), cx);
             });
         });
         let rebuilt = rows(cx);
