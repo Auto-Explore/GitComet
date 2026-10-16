@@ -217,6 +217,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             tree_sitter_sequel::LANGUAGE.into(),
         ),
         (
+            "solidity",
+            "tree-sitter-solidity",
+            tree_sitter_solidity::LANGUAGE.into(),
+        ),
+        (
             "spirv",
             "tree-sitter-spirv",
             tree_sitter_spirv::LANGUAGE.into(),

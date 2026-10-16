@@ -59,11 +59,17 @@ own `Cargo.toml` header. There are three reasons in play:
 - **No release, or a needed fix.** No crates.io release exists, or upstream's
   grammar has a bug GitComet patches (`tree-sitter-asm`'s `mnemonic` token,
   `tree-sitter-ruby`'s `=begin` rule, `tree-sitter-properties`' process-global
-  scanner flag), or its published build wiring is not
+  scanner flag, `tree-sitter-solidity`'s highlight query, which tree-sitter
+  0.26.11+ rejects), or its published build wiring is not
   portable (`tree-sitter-v` hard-codes GNU object and archiver conventions).
 - **The small-state retune.** Fifteen grammars are upstream's own source,
   regenerated only to make the parse tables smaller. That is what the rest of
   this file is about.
+
+GitComet's highlighter keeps most of its queries in
+`crates/gitcomet-syntax/src/queries/`. A grammar vendors upstream's `queries/`
+only when something reads its query constants -- GitComet's highlighter or
+vendor/difftastic -- and its `Cargo.toml` header says which.
 
 ## The small-state retune
 

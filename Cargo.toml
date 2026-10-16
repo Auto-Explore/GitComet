@@ -63,6 +63,7 @@ exclude = [
   "vendor/tree-sitter-rust",
   "vendor/tree-sitter-scala",
   "vendor/tree-sitter-sequel",
+  "vendor/tree-sitter-solidity",
   "vendor/tree-sitter-spirv",
   "vendor/tree-sitter-swift",
   "vendor/tree-sitter-typescript",
@@ -323,7 +324,9 @@ tree-sitter-ruby = { path = "vendor/tree-sitter-ruby" }
 tree-sitter-rust = { path = "vendor/tree-sitter-rust" }
 tree-sitter-scala = { path = "vendor/tree-sitter-scala" }
 tree-sitter-sequel = { path = "vendor/tree-sitter-sequel" }
-tree-sitter-solidity = "1.2.13"
+# Vendored to fix its highlight query for the workspace tree-sitter. See
+# vendor/tree-sitter-solidity/Cargo.toml.
+tree-sitter-solidity = { path = "vendor/tree-sitter-solidity" }
 # Vendored: no crates.io release, no Rust bindings upstream.
 tree-sitter-spirv = { path = "vendor/tree-sitter-spirv" }
 tree-sitter-svelte-ng = "1.0.2"

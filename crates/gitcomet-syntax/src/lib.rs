@@ -118,7 +118,7 @@ const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
 const CLOJURE_HIGHLIGHTS_QUERY: &str = include_str!("queries/clojure_highlights.scm");
 const JULIA_HIGHLIGHTS_QUERY: &str = include_str!("queries/julia_highlights.scm");
 const OCAML_HIGHLIGHTS_QUERY: &str = tree_sitter_ocaml::HIGHLIGHTS_QUERY;
-const SOLIDITY_HIGHLIGHTS_QUERY: &str = include_str!("queries/solidity_highlights.scm");
+const SOLIDITY_HIGHLIGHTS_QUERY: &str = tree_sitter_solidity::HIGHLIGHT_QUERY;
 const SVELTE_HIGHLIGHTS_QUERY: &str = include_str!("queries/svelte_highlights.scm");
 const SVELTE_INJECTIONS_QUERY: &str = include_str!("queries/svelte_injections.scm");
 

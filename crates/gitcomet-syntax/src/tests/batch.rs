@@ -498,21 +498,6 @@ fn prepared_solidity_document_highlights_core_syntax() {
     }
 }
 
-/// If a grammar bump ships a query that compiles as-is, the vendored copy and
-/// this test can both go.
-#[test]
-fn solidity_upstream_query_still_needs_the_vendored_fix() {
-    assert!(
-        tree_sitter::Query::new(
-            &tree_sitter_solidity::LANGUAGE.into(),
-            tree_sitter_solidity::HIGHLIGHT_QUERY,
-        )
-        .is_err(),
-        "tree_sitter_solidity::HIGHLIGHT_QUERY now compiles -- drop \
-             queries/solidity_highlights.scm and use the crate constant."
-    );
-}
-
 // ---- Assembly -------------------------------------------------------------
 
 const ASSEMBLY_FIXTURE: &[&str] = &[
