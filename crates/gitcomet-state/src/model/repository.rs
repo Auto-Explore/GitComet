@@ -219,7 +219,9 @@ pub struct RepoState {
     /// tab is refreshed on its next activation.
     pub left_mid_refresh: bool,
 
-    pub feedback: RepoFeedbackState,
+    /// Shared until changed: its bounded logs would otherwise be deep-copied
+    /// with the rest of the state on every dispatch.
+    pub feedback: Arc<RepoFeedbackState>,
     pub pending: RepoPendingState,
     pub load_epoch: crate::model::RepoLoadEpoch,
 }
@@ -264,6 +266,11 @@ pub enum DiagnosticKind {
 }
 
 impl RepoState {
+    /// The feedback logs for writing, copied first if a snapshot shares them.
+    pub fn feedback_mut(&mut self) -> &mut RepoFeedbackState {
+        Arc::make_mut(&mut self.feedback)
+    }
+
     /// See the `lifetime` field.
     pub fn lifetime(&self) -> u64 {
         self.lifetime.get()
@@ -376,7 +383,7 @@ impl RepoState {
             local_worktree_write_rev: 0,
             last_active_at: None,
             left_mid_refresh: false,
-            feedback: RepoFeedbackState::default(),
+            feedback: Arc::default(),
             pending: RepoPendingState::default(),
             load_epoch: crate::model::RepoLoadEpoch(0),
         }

@@ -166,7 +166,7 @@ fn auth_prompt_does_not_clear_an_unrelated_existing_error() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
-    state.repos[0].feedback.last_error = Some("previous command failed".into());
+    state.repos[0].feedback_mut().last_error = Some("previous command failed".into());
     reduce(
         &mut repos,
         &id_alloc,

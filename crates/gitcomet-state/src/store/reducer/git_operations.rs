@@ -115,16 +115,16 @@ pub(super) fn git_operation_finished(
         })
         .flatten();
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-        repo.feedback.command_log_operation_id = is_reportable.then_some(operation_id);
+        repo.feedback_mut().command_log_operation_id = is_reportable.then_some(operation_id);
     }
 
     let mut effects = reduce_prepared(inputs, repos, id_alloc, state, Msg::Internal(*message));
 
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
-        repo.feedback.command_log_operation_id = None;
+        repo.feedback_mut().command_log_operation_id = None;
         if let Some((entries, seq)) = previous_diagnostics {
-            repo.feedback.diagnostics = entries;
-            repo.feedback.diagnostics_seq = seq;
+            repo.feedback_mut().diagnostics = entries;
+            repo.feedback_mut().diagnostics_seq = seq;
         }
         git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
     }

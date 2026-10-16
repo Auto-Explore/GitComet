@@ -1456,7 +1456,7 @@ mod tests {
     #[test]
     fn repo_tab_tooltip_reports_missing_repository() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert_eq!(
             RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
             "Repository not found!\n/tmp/missing-repo"
@@ -1466,7 +1466,7 @@ mod tests {
     #[test]
     fn missing_repo_warning_icon_yields_to_spinner() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert!(RepoTabsBarView::repo_tab_shows_missing_warning(
             &repo, false
         ));

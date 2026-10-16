@@ -1071,7 +1071,7 @@ pub(super) fn commit_finished(
     repo_state.bump_local_worktree_write_rev();
     match result {
         Ok(()) => {
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
             succeeded = true;
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
@@ -1096,7 +1096,7 @@ pub(super) fn commit_finished(
         Err(e) => {
             let summary = format_failure_summary(label, &e);
             if !handled_by_auth_prompt {
-                repo_state.feedback.last_error = Some(summary.clone());
+                repo_state.feedback_mut().last_error = Some(summary.clone());
             }
             push_action_log(
                 inputs,
@@ -1150,7 +1150,7 @@ pub(super) fn safe_push_after_commit_finished(
             };
             let full_summary = format!("Push after commit blocked: {summary}");
             repo_state.pending.force_push_lease = lease;
-            repo_state.feedback.last_error = Some(full_summary.clone());
+            repo_state.feedback_mut().last_error = Some(full_summary.clone());
             push_action_log(
                 inputs,
                 repo_state,
@@ -1170,7 +1170,7 @@ pub(super) fn safe_push_after_commit_finished(
             repo_state.pending.force_push_lease = None;
             let summary = format_failure_summary("Push after commit", &e);
             if !handled_by_auth_prompt {
-                repo_state.feedback.last_error = Some(summary.clone());
+                repo_state.feedback_mut().last_error = Some(summary.clone());
             }
             push_action_log(
                 inputs,
@@ -1541,7 +1541,7 @@ pub(super) fn repo_command_finished(
 
     match result {
         Ok(output) => {
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
             if command_clears_pending_force_push_lease(&command) {
                 repo_state.pending.force_push_lease = None;
             }
@@ -1582,7 +1582,7 @@ pub(super) fn repo_command_finished(
                 handled_by_auth_prompt,
             );
             if !handled_by_auth_prompt {
-                repo_state.feedback.last_error = repo_state
+                repo_state.feedback_mut().last_error = repo_state
                     .feedback
                     .command_log
                     .last()

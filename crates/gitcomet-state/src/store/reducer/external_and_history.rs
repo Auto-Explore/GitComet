@@ -913,14 +913,14 @@ fn finish_repo_action(
         }
         match completion {
             RepoActionCompletion::Succeeded => {
-                repo_state.feedback.last_error = None;
+                repo_state.feedback_mut().last_error = None;
                 if repo_action_clears_head_dependent_state(action) {
                     repo_state.clear_head_dependent_cached_state();
                 }
             }
             RepoActionCompletion::ExpectedNoop => {}
             RepoActionCompletion::Failed(e) => {
-                repo_state.feedback.last_error = Some(e.to_string());
+                repo_state.feedback_mut().last_error = Some(e.to_string());
                 push_diagnostic(inputs, repo_state, DiagnosticKind::Error, e.to_string());
             }
         }

@@ -844,7 +844,7 @@ fn reduce_inner(
         }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.feedback.last_error = None;
+                repo_state.feedback_mut().last_error = None;
             }
             Vec::new()
         }

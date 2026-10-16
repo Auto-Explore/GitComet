@@ -1360,10 +1360,10 @@ pub(super) fn repo_opened_ok(
             ));
         }
         repo_state.set_open(Loadable::Ready(()));
-        repo_state.feedback.missing_on_disk = false;
+        repo_state.feedback_mut().missing_on_disk = false;
         if !should_refresh_worktrees {
             clear_cancelled_repo_loading(repo_state);
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
         } else {
             repo_state.set_head_branch(Loadable::Loading);
             repo_state.set_detached_head_commit(None);
@@ -1398,7 +1398,7 @@ pub(super) fn repo_opened_ok(
             repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
             // Reopening resets the whole repo view; saved back/forward snapshots
             // may reference commits or file revisions from before the reopen, so
             // start the navigation stacks fresh.
@@ -1619,11 +1619,11 @@ pub(super) fn repo_opened_err(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Error(error.to_string()));
-        repo_state.feedback.missing_on_disk = is_missing_repo_error(&error);
+        repo_state.feedback_mut().missing_on_disk = is_missing_repo_error(&error);
         if repo_state.feedback.missing_on_disk {
-            repo_state.feedback.last_error = None;
+            repo_state.feedback_mut().last_error = None;
         } else {
-            repo_state.feedback.last_error = Some(error.to_string());
+            repo_state.feedback_mut().last_error = Some(error.to_string());
             push_diagnostic(inputs, repo_state, DiagnosticKind::Error, error.to_string());
         }
     }

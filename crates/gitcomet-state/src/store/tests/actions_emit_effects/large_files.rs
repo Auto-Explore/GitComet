@@ -1009,7 +1009,7 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         },
     ] {
         let label = format!("{msg:?}");
-        state.repos[0].feedback.last_error = None;
+        state.repos[0].feedback_mut().last_error = None;
         let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
         assert!(effects.is_empty(), "{label} must not run git: {effects:?}");
         assert!(

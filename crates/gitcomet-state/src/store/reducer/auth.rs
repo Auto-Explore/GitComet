@@ -272,7 +272,7 @@ pub(super) fn annex_refusal(
     let summary = format!(
         "{action} on a git-annex adjusted branch {reason}. Check out {base} to use plain Git."
     );
-    repo.feedback.last_error = Some(summary.clone());
+    repo.feedback_mut().last_error = Some(summary.clone());
     util::push_action_log(
         inputs,
         repo,

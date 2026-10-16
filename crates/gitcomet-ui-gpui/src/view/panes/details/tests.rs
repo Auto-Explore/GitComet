@@ -36,7 +36,7 @@ fn pending_amend_ignores_previous_amend_log_entry() {
         last_command_log_entry: Some(old_entry.clone()),
     };
     let mut repo = repo_state(repo_id, "/tmp/repo");
-    repo.feedback.command_log.push(old_entry);
+    repo.feedback_mut().command_log.push(old_entry);
 
     assert!(DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo).is_none());
 }
@@ -51,8 +51,8 @@ fn pending_amend_observes_later_amend_log_entry() {
         last_command_log_entry: Some(old_entry.clone()),
     };
     let mut repo = repo_state(repo_id, "/tmp/repo");
-    repo.feedback.command_log.push(old_entry);
-    repo.feedback.command_log.push(new_entry);
+    repo.feedback_mut().command_log.push(old_entry);
+    repo.feedback_mut().command_log.push(new_entry);
 
     assert_eq!(
         DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -72,9 +72,9 @@ fn pending_amend_observes_amend_before_later_push_log_entry() {
         last_command_log_entry: Some(old_entry.clone()),
     };
     let mut repo = repo_state(repo_id, "/tmp/repo");
-    repo.feedback.command_log.push(old_entry);
-    repo.feedback.command_log.push(new_entry);
-    repo.feedback.command_log.push(push_entry);
+    repo.feedback_mut().command_log.push(old_entry);
+    repo.feedback_mut().command_log.push(new_entry);
+    repo.feedback_mut().command_log.push(push_entry);
 
     assert_eq!(
         DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -94,9 +94,9 @@ fn pending_amend_observes_successful_retry_after_failed_amend_log_entry() {
         last_command_log_entry: Some(marker_entry.clone()),
     };
     let mut repo = repo_state(repo_id, "/tmp/repo");
-    repo.feedback.command_log.push(marker_entry);
-    repo.feedback.command_log.push(failed_amend);
-    repo.feedback.command_log.push(successful_retry);
+    repo.feedback_mut().command_log.push(marker_entry);
+    repo.feedback_mut().command_log.push(failed_amend);
+    repo.feedback_mut().command_log.push(successful_retry);
 
     let completed_entry = DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo);
 

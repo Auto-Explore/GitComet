@@ -1019,15 +1019,15 @@ pub(super) fn push_diagnostic(
     message: String,
 ) {
     const MAX_DIAGNOSTICS: usize = 200;
-    repo_state.feedback.diagnostics_seq = repo_state.feedback.diagnostics_seq.wrapping_add(1);
-    repo_state.feedback.diagnostics.push(DiagnosticEntry {
+    repo_state.feedback_mut().diagnostics_seq = repo_state.feedback.diagnostics_seq.wrapping_add(1);
+    repo_state.feedback_mut().diagnostics.push(DiagnosticEntry {
         time: inputs.now(),
         kind,
         message,
     });
     if repo_state.feedback.diagnostics.len() > MAX_DIAGNOSTICS {
         let extra = repo_state.feedback.diagnostics.len() - MAX_DIAGNOSTICS;
-        repo_state.feedback.diagnostics.drain(0..extra);
+        repo_state.feedback_mut().diagnostics.drain(0..extra);
     }
 }
 
@@ -1074,7 +1074,8 @@ pub(super) fn push_command_log(
     let (command_text, summary) = summarize_command(command, output, ok, error);
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
 
-    repo_state.feedback.command_log.push(CommandLogEntry {
+    let hook_operation_id = repo_state.feedback.command_log_operation_id;
+    repo_state.feedback_mut().command_log.push(CommandLogEntry {
         time: inputs.now(),
         ok,
         command: command_text,
@@ -1093,11 +1094,11 @@ pub(super) fn push_command_log(
             ErrorKind::Git(failure) => Some(failure.id()),
             _ => None,
         }),
-        hook_operation_id: repo_state.feedback.command_log_operation_id,
+        hook_operation_id,
     });
     if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
-        repo_state.feedback.command_log.drain(0..extra);
+        repo_state.feedback_mut().command_log.drain(0..extra);
     }
 }
 
@@ -1113,7 +1114,8 @@ pub(super) fn push_action_log(
     const MAX_COMMAND_LOG: usize = 200;
 
     mark_auth_prompt_hook_operation(repo_state, handled_by_auth_prompt);
-    repo_state.feedback.command_log.push(CommandLogEntry {
+    let hook_operation_id = repo_state.feedback.command_log_operation_id;
+    repo_state.feedback_mut().command_log.push(CommandLogEntry {
         time: inputs.now(),
         ok,
         command,
@@ -1128,11 +1130,11 @@ pub(super) fn push_action_log(
             ErrorKind::Git(failure) => Some(failure.id()),
             _ => None,
         }),
-        hook_operation_id: repo_state.feedback.command_log_operation_id,
+        hook_operation_id,
     });
     if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
-        repo_state.feedback.command_log.drain(0..extra);
+        repo_state.feedback_mut().command_log.drain(0..extra);
     }
 }
 
@@ -1143,7 +1145,7 @@ fn mark_auth_prompt_hook_operation(repo_state: &mut RepoState, handled_by_auth_p
     if handled_by_auth_prompt
         && let Some(operation_id) = repo_state.feedback.command_log_operation_id
         && let Some(operation) = repo_state
-            .feedback
+            .feedback_mut()
             .hook_activity
             .iter_mut()
             .find(|operation| operation.id == operation_id)

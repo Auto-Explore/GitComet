@@ -467,7 +467,7 @@ fn push_notification_and_diagnostic_cap_old_entries() {
 #[test]
 fn command_and_action_logs_use_expected_stderr_and_trim_history() {
     let mut repo = repo_state(4);
-    repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
+    repo.feedback_mut().command_log = (0..200).map(dummy_log_entry).collect();
     push_command_log(
         &crate::store::reducer::test_inputs::clock(),
         &mut repo,
@@ -488,7 +488,7 @@ fn command_and_action_logs_use_expected_stderr_and_trim_history() {
         "stderr from git".into()
     );
 
-    repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
+    repo.feedback_mut().command_log = (0..200).map(dummy_log_entry).collect();
     push_action_log(
         &crate::store::reducer::test_inputs::clock(),
         &mut repo,

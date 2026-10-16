@@ -1026,3 +1026,39 @@ fn reloading_an_identical_submodule_summary_does_not_re_read_a_range_entry() {
     assert_eq!(inline.rev, 7, "the inline generation must not move");
     assert!(Arc::ptr_eq(&entries, &inline.entries));
 }
+
+/// Feedback logs are shared between snapshots until a message writes them, so
+/// a dispatch that leaves them alone does not copy every repository's logs.
+#[test]
+fn dispatches_that_leave_feedback_alone_keep_it_shared() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    let snapshot = state.clone();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
+            repo_id: RepoId(1),
+            submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+            parent_submodule_path: PathBuf::from("vendor/submodule"),
+            entries: Arc::from(Vec::new()),
+            selected_ix: 0,
+        },
+    );
+
+    assert!(Arc::ptr_eq(
+        &snapshot.repos[0].feedback,
+        &state.repos[0].feedback
+    ));
+}

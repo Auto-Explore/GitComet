@@ -79,7 +79,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &mut state,
         Msg::OpenRepo(PathBuf::from("/tmp/repo")),
     );
-    state.repos[0].feedback.missing_on_disk = true;
+    state.repos[0].feedback_mut().missing_on_disk = true;
 
     let effects = reduce(
         &mut repos,
@@ -344,7 +344,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
         },
     ));
     state.active_repo = Some(RepoId(1));
-    state.repos[0].feedback.last_error = Some("boom".to_string());
+    state.repos[0].feedback_mut().last_error = Some("boom".to_string());
 
     let effects = reduce(
         &mut repos,

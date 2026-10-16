@@ -814,3 +814,19 @@ missing or no longer needed, the host's lists were corrected (including a stale
 `hosted/diff_pane.rs` entry from before this round), and the terminal and media
 crates run the kit's control, clipboard and icon-size guards over their own
 sources.
+
+### 4.1 Copy-on-write feedback logs (first step)
+
+An ignored timing probe (`timing_state_clone_with_full_repository_logs`) put a
+number on the per-dispatch state copy: with each repository's bounded logs full
+(200 diagnostics and 200 command-log entries), cloning the state cost 18.4 µs
+for one repository and 245.7 µs for eight. Nearly all of it was the feedback
+logs, so `RepoState::feedback` is now an `Arc<RepoFeedbackState>`, written
+through `feedback_mut()`, which copies it only when a snapshot shares it. The
+same probe now reads 1.6 µs for one repository and 5.2 µs for eight, and a test
+asserts that a dispatch that leaves feedback alone keeps it shared.
+
+The rest of the plan's 4.1 (a copy-on-write repository list behind
+`repo`/`repo_mut` accessors) would save the remaining 0.6 µs per repository at
+the cost of rewriting about 550 test constructions and 200 lookups, so it waits
+for the feature owners in 4.2, which rewrite those lookups anyway.

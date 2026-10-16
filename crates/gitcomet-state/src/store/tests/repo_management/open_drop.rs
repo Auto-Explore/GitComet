@@ -440,7 +440,7 @@ fn open_repo_refreshes_when_repo_is_already_active() {
     let mut state = AppState::test_default();
 
     open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo");
-    state.repos[0].feedback.missing_on_disk = true;
+    state.repos[0].feedback_mut().missing_on_disk = true;
 
     let effects = reduce(
         &mut repos,
