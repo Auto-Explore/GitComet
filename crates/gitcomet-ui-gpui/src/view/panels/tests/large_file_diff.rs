@@ -4335,7 +4335,11 @@ fn source_backed_whole_view_passes_read_each_side_once(cx: &mut gpui::TestAppCon
         std::process::id()
     ));
     let line = |ix: usize, edited: bool| {
-        let word = if ix % 300 == 0 { "needle" } else { "plain" };
+        let word = if ix.is_multiple_of(300) {
+            "needle"
+        } else {
+            "plain"
+        };
         let tail = if edited { " edited" } else { "" };
         format!("row {ix:05} {word} content{tail}\n")
     };
