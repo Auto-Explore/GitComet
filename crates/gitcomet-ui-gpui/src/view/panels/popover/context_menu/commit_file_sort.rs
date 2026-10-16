@@ -9,27 +9,22 @@ pub(super) fn model(
     model_for_sort(list, current)
 }
 
-/// Untracked entries carry no line diff, so the edit-size and edit modes have
+/// Untracked entries carry no line diff, so the sorts that read one have
 /// nothing to order by and are left out of their menu. Path and file type
 /// read off the path alone, so they stay.
-fn sorts_for(list: crate::view::rows::FileListId) -> &'static [crate::view::rows::CommitFileSort] {
-    use crate::view::rows::CommitFileSort;
-    const WITHOUT_EDIT_SIZE: [CommitFileSort; 4] = [
-        CommitFileSort::PathAscending,
-        CommitFileSort::PathDescending,
-        CommitFileSort::FileTypeAscending,
-        CommitFileSort::FileTypeDescending,
-    ];
-    match list {
-        // Untracked files are in neither index lane, so git reports no counts
-        // or edits for them — those modes there would silently sort by path.
+fn sorts_for(
+    list: crate::view::rows::FileListId,
+) -> impl Iterator<Item = crate::view::rows::CommitFileSort> {
+    // Untracked files are in neither index lane, so git reports no counts or
+    // edits for them — those modes there would silently sort by path.
+    let lacks_line_stats = matches!(
+        list,
         crate::view::rows::FileListId::Status(section)
-            if !crate::view::status_section_has_line_stats(section) =>
-        {
-            &WITHOUT_EDIT_SIZE
-        }
-        _ => &CommitFileSort::ALL,
-    }
+            if !crate::view::status_section_has_line_stats(section)
+    );
+    crate::view::rows::CommitFileSort::ALL
+        .into_iter()
+        .filter(move |sort| !(lacks_line_stats && sort.needs_line_stats()))
 }
 
 fn model_for_sort(
@@ -50,7 +45,7 @@ fn model_for_sort(
         ContextMenuItem::Header(header.into()),
         ContextMenuItem::Separator,
     ];
-    for sort in sorts_for(list).iter().copied() {
+    for sort in sorts_for(list) {
         items.push(ContextMenuItem::Entry {
             label: sort.label().into(),
             icon: check(sort == current),
