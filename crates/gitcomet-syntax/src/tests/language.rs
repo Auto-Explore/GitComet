@@ -706,6 +706,22 @@ fn objective_c_colours_comments_strings_and_numbers() {
     );
 }
 
+/// The crate's query painted every identifier as a property through an
+/// unevaluated `#has-ancestor?`; only an instance variable's name is one.
+#[test]
+fn objective_c_marks_only_instance_variables_as_properties() {
+    let text =
+        "@interface Foo : NSObject {\n  int count;\n  NSString *name;\n}\n- (void)bar;\n@end\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::ObjectiveC, text);
+    let kinds = |line: usize, fragment| {
+        token_kinds_for_line_fragment(document, line, text.lines().nth(line).unwrap(), fragment)
+    };
+    assert_eq!(kinds(1, "count"), [SyntaxTokenKind::Property]);
+    assert_eq!(kinds(2, "name"), [SyntaxTokenKind::Property]);
+    assert!(!kinds(0, "Foo").contains(&SyntaxTokenKind::Property));
+    assert!(!kinds(4, "bar").contains(&SyntaxTokenKind::Property));
+}
+
 /// Java, PHP and Groovy all use queries that capture no punctuation at all.
 #[test]
 fn jvm_and_php_family_colour_their_brackets() {

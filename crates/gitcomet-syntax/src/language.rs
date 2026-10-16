@@ -599,7 +599,7 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::ObjectiveC => Some((
             tree_sitter_objc::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections_and_supplement(
-                tree_sitter_objc::HIGHLIGHTS_QUERY,
+                OBJC_HIGHLIGHTS_QUERY,
                 tree_sitter_objc::INJECTIONS_QUERY,
                 OBJC_SUPPLEMENT_QUERY,
             ),

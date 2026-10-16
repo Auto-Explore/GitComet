@@ -892,7 +892,7 @@ fn extra_languages_capture_basic_semantic_tokens() {
         (
             DiffSyntaxLanguage::ObjectiveC,
             "NSString *value = @\"hi\";",
-            SyntaxTokenKind::Property,
+            SyntaxTokenKind::Type,
         ),
         (
             DiffSyntaxLanguage::FSharp,

@@ -78,6 +78,7 @@ const HCL_INJECTIONS_QUERY: &str = include_str!("queries/hcl_injections.scm");
 const JAVA_SUPPLEMENT_QUERY: &str = include_str!("queries/java_supplement.scm");
 const MAKEFILE_INJECTIONS_QUERY: &str = include_str!("queries/makefile_injections.scm");
 const MAKEFILE_SUPPLEMENT_QUERY: &str = include_str!("queries/makefile_supplement.scm");
+const OBJC_HIGHLIGHTS_QUERY: &str = include_str!("queries/objc_highlights.scm");
 const OBJC_SUPPLEMENT_QUERY: &str = include_str!("queries/objc_supplement.scm");
 const PASCAL_HIGHLIGHTS_QUERY: &str = include_str!("queries/pascal_highlights.scm");
 const PROTO_HIGHLIGHTS_QUERY: &str = include_str!("queries/proto_highlights.scm");

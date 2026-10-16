@@ -1570,12 +1570,6 @@ const UNEVALUATED_PREDICATES: &[(DiffSyntaxLanguage, &str, usize, &str)] = &[
     ),
     // Pre-existing, each the only filter on its rule.
     (
-        DiffSyntaxLanguage::ObjectiveC,
-        "has-ancestor?",
-        1,
-        "pre-existing: every identifier is captured @property",
-    ),
-    (
         DiffSyntaxLanguage::Cmake,
         "lua-match?",
         2,

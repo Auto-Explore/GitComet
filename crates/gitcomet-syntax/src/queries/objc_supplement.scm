@@ -1,4 +1,4 @@
-; Appended to `tree_sitter_objc::HIGHLIGHTS_QUERY`, which captures neither
+; Appended to queries/objc_highlights.scm (the crate's query), which captures neither
 ; comments, strings nor numbers -- an Objective-C file rendered with just that
 ; query has unhighlighted comments and string literals.
 
