@@ -4,6 +4,7 @@ use super::wrap::*;
 use super::*;
 use crate::text_selection::is_word_char;
 use gitcomet_text::rope::Rope;
+use gpui::sum_tree::Bias;
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
 impl TextInput {
@@ -747,11 +748,7 @@ impl TextInput {
     }
 
     pub(super) fn clamp_to_char_boundary(&self, offset: usize) -> usize {
-        let mut offset = offset.min(self.content.len());
-        while offset > 0 && !self.content.is_char_boundary(offset) {
-            offset -= 1;
-        }
-        offset
+        self.content.clamp_to_char_boundary(offset)
     }
 
     /// The grapheme boundary before `offset`. The segmenter reads the rope's
@@ -760,10 +757,7 @@ impl TextInput {
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
         let rope = self.content.snapshot().rope();
         // Inside a character, step from its end: no boundary lies between.
-        let mut offset = offset.min(rope.len());
-        while !rope.is_char_boundary(offset) {
-            offset += 1;
-        }
+        let offset = rope.clip_offset(offset, Bias::Right);
         let mut cursor = GraphemeCursor::new(offset, rope.len(), true);
         let mut chunk_end = offset;
         for chunk in rope.reversed_chunks_in_range(0..offset) {
@@ -790,10 +784,7 @@ impl TextInput {
         let rope = self.content.snapshot().rope();
         let len = rope.len();
         // Inside a character, step from its start: no boundary lies between.
-        let mut offset = offset.min(len);
-        while !rope.is_char_boundary(offset) {
-            offset -= 1;
-        }
+        let offset = rope.clip_offset(offset, Bias::Left);
         let mut cursor = GraphemeCursor::new(offset, len, true);
         let mut chunk_start = offset;
         for chunk in rope.chunks_in_range(offset..len) {
