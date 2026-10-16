@@ -94,7 +94,6 @@ impl PathDisplayCache {
     #[cfg(any(test, feature = "benchmarks"))]
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        #[cfg(any(test, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
 
         self.recent.clear();

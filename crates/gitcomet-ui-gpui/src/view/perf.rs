@@ -274,7 +274,6 @@ static WORD_QUERY_HIGHLIGHTING_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 #[cfg(any(test, feature = "benchmarks"))]
 static MARKDOWN_PREVIEW_PARSE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 #[cfg(any(test, feature = "benchmarks"))]
-#[cfg(any(test, feature = "benchmarks"))]
 static RENDER_RESOLVED_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
 #[cfg(any(test, feature = "benchmarks"))]
 static MARKDOWN_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
@@ -520,7 +519,7 @@ fn percentile_nearest_rank(sorted: &[u64], pct: usize) -> u64 {
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
-#[cfg(all(test, any(test, feature = "benchmarks")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -563,21 +562,14 @@ mod tests {
         record_row_batch(ViewPerfRenderLane::ResolvedPreview, 12, 9);
         let snapshot = snapshot();
 
-        #[cfg(any(test, feature = "benchmarks"))]
-        {
-            assert_eq!(
-                snapshot.render_resolved_preview_rows_batch,
-                RowBatchStats {
-                    calls: 1,
-                    requested_rows: 12,
-                    painted_rows: 9,
-                }
-            );
-        }
-        #[cfg(not(any(test, feature = "benchmarks")))]
-        {
-            assert_eq!(snapshot, ViewPerfSnapshot::default());
-        }
+        assert_eq!(
+            snapshot.render_resolved_preview_rows_batch,
+            RowBatchStats {
+                calls: 1,
+                requested_rows: 12,
+                painted_rows: 9,
+            }
+        );
     }
 
     #[test]
