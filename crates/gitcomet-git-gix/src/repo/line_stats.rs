@@ -64,6 +64,12 @@ enum IndexPointer {
     Annex,
 }
 
+/// Unknown is cheap to rediscover (size cap, binary sniff) or may be
+/// transient (an unreadable object), so the memo never keeps it.
+fn memoizable(stats: &LineStats) -> bool {
+    stats.additions.is_some()
+}
+
 /// One scan's view of the memo: hits carry over into `next`, which replaces
 /// the memo, so it only ever holds the current changes.
 #[derive(Default)]
@@ -86,9 +92,7 @@ impl MemoScan {
         #[cfg(test)]
         LINE_STATS_DIFFS.with(|diffs| diffs.set(diffs.get() + 1));
         let entry = diff();
-        // Unknown is cheap to rediscover (size cap, binary sniff) or may be
-        // transient (an unreadable object), so it is never kept.
-        if entry.additions.is_some() {
+        if memoizable(&entry) {
             self.next.counts.insert(key, entry);
         }
         entry
@@ -128,8 +132,7 @@ impl MemoScan {
             return entry.stats;
         }
         let stats = count();
-        // As in `counts`, unknown is never kept.
-        if stats.additions.is_some() {
+        if memoizable(&stats) {
             self.next
                 .untracked
                 .insert(path.to_path_buf(), UntrackedCounts { identity, stats });
@@ -291,7 +294,7 @@ fn cached_staged_line_stats(
             // Keep the memo as the walk would have left it, so the next walk
             // (after a stage or commit) still skips unchanged pairs.
             for (_, pair, stats) in &cached.rows {
-                if stats.additions.is_some() {
+                if memoizable(stats) {
                     memo.next
                         .counts
                         .insert((DiffArea::Staged, pair.0, pair.1), *stats);
