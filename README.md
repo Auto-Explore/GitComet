@@ -149,8 +149,11 @@ On Linux, install Clang and mold first; see [developer setup](CONTRIBUTING.md#ge
 
 ```bash
 cargo build -p gitcomet --features ui-gpui,gix
+python3 scripts/build-difftastic.py --profile debug --output target/debug/helpers
 cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
 ```
+
+Difftastic is bundled in release packages. Choose **Settings → Diff → Diff Engine** to make it the default, or use the diff viewer's cog for a temporary override. Both Split and Inline layouts support it. See [Difftastic](docs/difftastic.md) for partial staging, fallbacks, and helper build requirements.
 
 ### Contributing
 
