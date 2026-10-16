@@ -355,11 +355,6 @@ impl DiffRenderer {
             .unwrap_or_default()
     }
 
-    pub(in crate::view) fn hosted_is_empty(&mut self) -> bool {
-        self.ensure_diff_visible_indices();
-        self.diff_visible_len() == 0
-    }
-
     pub(in crate::view) fn diff_list_len(&mut self) -> usize {
         self.prepare_hosted_projection();
         self.hosted_decor

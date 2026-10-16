@@ -247,6 +247,7 @@ fn statuses_while_rows_arrive(
 
 /// The standalone difftool said "No changes" above a full diff: the pane read
 /// the renderer's row count before the renderer refreshed it in that frame.
+/// The renderer shows its own loading and empty states, so the pane adds none.
 #[gpui::test]
 fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::TestAppContext) {
     let statuses = statuses_while_rows_arrive(
@@ -257,13 +258,7 @@ fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::
             new: "first\nnew\n".into(),
         },
     );
-    assert!(
-        statuses
-            .iter()
-            .all(|status| status.as_deref() != Some("No changes")),
-        "{statuses:?}"
-    );
-    assert_eq!(statuses.last(), Some(&None), "{statuses:?}");
+    assert!(statuses.iter().all(Option::is_none), "{statuses:?}");
 }
 
 /// Patch input (directories, mode changes) builds its rows when the renderer

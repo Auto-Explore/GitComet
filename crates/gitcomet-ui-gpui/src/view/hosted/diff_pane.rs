@@ -880,18 +880,11 @@ impl DiffPaneView {
     pub(crate) fn rendered_statuses(&self) -> &[Option<SharedString>] {
         &self.rendered_statuses
     }
-    /// The pane's note when it has no rows.
-    fn empty_status(&self, cx: &mut gpui::Context<Self>) -> Option<SharedString> {
-        let (empty, computing) = self.renderer.as_ref().map_or((true, false), |renderer| {
-            renderer.update(cx, |pane, _| {
-                (
-                    pane.hosted_is_empty(),
-                    pane.file_diff_cache_inflight.is_some(),
-                )
-            })
-        });
-        empty.then(|| {
-            if self.loading || computing {
+    /// The renderer shows its own loading and empty states; the pane covers
+    /// only the time before it has one.
+    fn status_without_renderer(&self) -> Option<SharedString> {
+        self.renderer.is_none().then(|| {
+            if self.loading {
                 "Loading…".into()
             } else {
                 "No changes".into()
@@ -906,7 +899,10 @@ impl Render for DiffPaneView {
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
-        let status = self.error.clone().or_else(|| self.empty_status(cx));
+        let status = self
+            .error
+            .clone()
+            .or_else(|| self.status_without_renderer());
         #[cfg(test)]
         self.rendered_statuses.push(status.clone());
         let legend = (!self.legend.is_empty()).then(|| {
