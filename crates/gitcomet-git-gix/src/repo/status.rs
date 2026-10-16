@@ -1644,7 +1644,7 @@ pub(crate) mod tests {
             file_status("replaced", FileStatusKind::Modified),
         ];
         assert_eq!(
-            super::gitlink_status_paths(&gix::open(root).unwrap(), &staged),
+            super::gitlink_status_paths(&open_repo(root).repo(), &staged),
             Some(
                 ["removed", "replaced", "retained"]
                     .map(PathBuf::from)
@@ -1656,7 +1656,7 @@ pub(crate) mod tests {
         write_file(root, "ordinary.txt", "changed again\n");
         git_success(root, &["add", "ordinary.txt"]);
         assert_eq!(
-            super::gitlink_status_paths(&gix::open(root).unwrap(), &staged[..1]),
+            super::gitlink_status_paths(&open_repo(root).repo(), &staged[..1]),
             Some(Vec::new())
         );
     }

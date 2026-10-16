@@ -2042,7 +2042,7 @@ mod tests {
     fn a_nested_pointer_has_no_line_counts_in_the_live_lists() {
         let tmp = tempfile::tempdir().unwrap();
         nested_pointer_moves(tmp.path());
-        let repo = gix::open(tmp.path()).unwrap();
+        let repo = open_repo(tmp.path()).repo();
         let (staged, _) =
             submodule_live_inner_changes(tmp.path(), Some(&repo), &CancellationToken::new())
                 .unwrap();
@@ -2208,7 +2208,7 @@ mod tests {
             )
             .expect("write .gitmodules");
 
-            let repo = gix::open(tmp.path()).expect("open repo");
+            let repo = open_repo(tmp.path()).repo();
             let err = resolve_submodule_logical_name(&repo, Path::new("sub"))
                 .expect_err(&format!("name {name:?} must be rejected"));
             assert!(err.to_string().contains(name), "{name:?}: {err}");
@@ -2225,7 +2225,7 @@ mod tests {
         )
         .expect("write .gitmodules");
 
-        let repo = gix::open(tmp.path()).expect("open repo");
+        let repo = open_repo(tmp.path()).repo();
         let name = resolve_submodule_logical_name(&repo, Path::new("sub")).expect("resolve name");
         assert_eq!(name.as_deref(), Some(Path::new("group/sub")));
     }
