@@ -47,16 +47,63 @@ text-storage patch previously vendored in `gpui/`, so that crate and the Cargo
 patch are no longer needed. Platform, renderer and test text-backend crates use
 the same upstream revision.
 
+## Difftastic
+
+`difftastic/` is Difftastic 0.71.0 (MIT) as a library, for
+`crates/gitcomet-difftastic` to call in-process. The import commit is the
+pristine baseline, built by this recipe:
+
+- Source: `https://codeload.github.com/Wilfred/difftastic/tar.gz/refs/tags/0.71.0`,
+  sha256 `d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d`.
+- Keep only `Cargo.toml`, `LICENSE`, `README.md`, `clippy.toml`, `src/**` and
+  `vendored_parsers/highlights/*.scm`; delete everything else.
+- Follow symlinks to their target files, and store `src/main.rs` as `src/lib.rs`.
+
+Unlike the other vendored crates it is a workspace member: that lets its grammars
+use `workspace = true`, so each language resolves to the one grammar crate
+GitComet links. Two crates defining the same `tree_sitter_<lang>` symbol would
+collide at link time. Its manifest pins edition 2021, which keeps `cargo fmt`
+from rewriting upstream files, and forbids `unsafe` code.
+
+Changes against the baseline (`git log -- vendor/difftastic`):
+
+- A library: the CLI, terminal display, file reading, directory and conflict
+  modes are removed. `src/api.rs` is GitComet's entry point and
+  `src/api_tests.rs` pins its output for a few inputs. `api::compare` repeats
+  the CLI's final-newline step and reports lines in the caller's numbering;
+  `diff_file_content` guesses the language from the new text unless that is
+  empty.
+- tree-sitter 0.27: `QueryMatch::captures()` is a method.
+- Grammars: every language uses the workspace's grammar crate. Kotlin, Perl,
+  Rust, Java and Dart replace upstream's forks; janet-simple, LaTeX and Smali
+  moved into their own crates here; Verilog and Fortran are dropped. Perl's
+  config and `vendored_parsers/highlights/perl.scm` are written for GitComet's
+  Perl grammar; the other `.scm` files there are upstream's.
+- Fallback reasons are a typed `TextFallbackReason`, and `display/json.rs` builds
+  plain data instead of JSON.
+- `MatchedPos::new` places a changed string's words relative to the atom's full
+  line spans, so a string that starts with a newline (a Perl heredoc) keeps its
+  rows.
+
+To upgrade, rebuild the baseline for the new tag by the recipe, diff it against
+this import's tree, and apply that upstream diff to `difftastic/`. Then
+`cargo test -p difftastic`: `test_configs_valid` and
+`test_tree_sitter_node_names_exist` catch grammar drift, and the `api` tests show
+output drift.
+
 ## Tree-sitter grammars
 
 Each `tree-sitter-*` directory here is a grammar GitComet compiles from source
 rather than pulling from crates.io. Every one of them carries its reason in its
 own `Cargo.toml` header. There are three reasons in play:
 
-- **Unresolvable dependency.** The crate pins `tree-sitter ~0.20`, and the
-  `links = "tree-sitter"` key makes that unresolvable alongside the workspace's
-  0.27. Depending on `tree-sitter-language` instead drops the pin.
-- **No release, or a needed fix.** No crates.io release exists, or upstream's
+- **Unresolvable dependency.** The crate pins `tree-sitter ~0.20`
+  (`tree-sitter-smali`, among others), and the `links = "tree-sitter"` key makes
+  that unresolvable alongside the workspace's 0.27. Depending on
+  `tree-sitter-language` instead drops the pin.
+- **No release, or a needed fix.** No crates.io release exists
+  (`tree-sitter-janet-simple`, and `tree-sitter-latex`, whose crates.io namesake
+  is a different grammar), or upstream's
   grammar has a bug GitComet patches (`tree-sitter-asm`'s `mnemonic` token,
   `tree-sitter-ruby`'s `=begin` rule, `tree-sitter-properties`' process-global
   scanner flag, `tree-sitter-solidity`'s highlight query, which tree-sitter

@@ -4,26 +4,6 @@ use std::ops::Sub;
 
 use line_numbers::LineNumber;
 
-pub(crate) fn format_line_num(line_num: LineNumber) -> String {
-    format!("{} ", line_num.display())
-}
-
-pub(crate) fn format_line_num_padded(line_num: LineNumber, column_width: usize) -> String {
-    format!(
-        "{:width$} ",
-        line_num.as_usize() + 1,
-        width = column_width - 1
-    )
-}
-
-/// Return the length of `s` in bytes.
-///
-/// This is a trivial wrapper to make it clear when we want bytes not
-/// codepoints.
-pub(crate) fn byte_len(s: &str) -> usize {
-    s.len()
-}
-
 pub(crate) trait MaxLine {
     fn max_line(&self) -> LineNumber;
 }

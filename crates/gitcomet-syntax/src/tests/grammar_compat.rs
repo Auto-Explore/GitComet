@@ -135,6 +135,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             tree_sitter_html::LANGUAGE.into(),
         ),
         (
+            "janet-simple",
+            "tree-sitter-janet-simple",
+            tree_sitter_janet_simple::LANGUAGE.into(),
+        ),
+        (
             "jinja-dialects",
             "tree-sitter-jinja-dialects",
             tree_sitter_jinja_dialects::LANGUAGE.into(),
@@ -154,6 +159,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             "kotlin-sg",
             "tree-sitter-kotlin-sg",
             tree_sitter_kotlin_sg::LANGUAGE.into(),
+        ),
+        (
+            "latex",
+            "tree-sitter-latex",
+            tree_sitter_latex::LANGUAGE.into(),
         ),
         (
             "objc",
@@ -215,6 +225,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             "sequel",
             "tree-sitter-sequel",
             tree_sitter_sequel::LANGUAGE.into(),
+        ),
+        (
+            "smali",
+            "tree-sitter-smali",
+            tree_sitter_smali::LANGUAGE.into(),
         ),
         (
             "solidity",

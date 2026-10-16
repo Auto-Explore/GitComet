@@ -172,6 +172,8 @@ deranged	0.5.9	MIT OR Apache-2.0
 derive_more	2.1.1	MIT
 derive_more-impl	2.1.1	MIT
 derive_setters	0.1.9	MIT/Apache-2.0
+diff	0.1.13	MIT OR Apache-2.0
+difftastic	0.71.0	MIT
 digest	0.10.7	MIT OR Apache-2.0
 digest	0.11.3	MIT OR Apache-2.0
 dirs	6.0.0	MIT OR Apache-2.0
@@ -351,6 +353,7 @@ home	0.5.12	MIT OR Apache-2.0
 http	1.5.0	MIT OR Apache-2.0
 httparse	1.10.1	MIT OR Apache-2.0
 human_format	1.2.1	MIT
+humansize	2.1.3	MIT/Apache-2.0
 hybrid-array	0.4.15	MIT OR Apache-2.0
 iana-time-zone	0.1.65	MIT OR Apache-2.0
 iana-time-zone-haiku	0.1.2	MIT OR Apache-2.0
@@ -371,6 +374,7 @@ idna_adapter	1.2.2	Apache-2.0 OR MIT
 image	0.25.10	MIT OR Apache-2.0
 image-webp	0.2.4	MIT OR Apache-2.0
 imagesize	0.15.0	MIT
+imara-diff	0.2.0	Apache-2.0
 imgref	1.12.3	CC0-1.0 OR Apache-2.0
 indexmap	2.14.2	Apache-2.0 OR MIT
 inotify	0.11.5	ISC
@@ -409,6 +413,7 @@ libloading	0.8.9	ISC
 libm	0.2.16	MIT
 libredox	0.1.25	MIT
 libz-sys	1.1.30	MIT OR Apache-2.0
+line-numbers	0.3.1	MIT
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT
 link-section	0.19.3	Apache-2.0 OR MIT
 linktime-proc-macro	0.2.3	Apache-2.0 OR MIT
@@ -545,6 +550,7 @@ potential_utf	0.1.6	Unicode-3.0
 powerfmt	0.2.1	MIT OR Apache-2.0
 ppv-lite86	0.2.21	MIT OR Apache-2.0
 presser	0.3.1	MIT OR Apache-2.0
+pretty_assertions	1.4.1	MIT OR Apache-2.0
 prettyplease	0.3.0	MIT OR Apache-2.0
 proc-macro-crate	3.5.0	MIT OR Apache-2.0
 proc-macro2	1.0.107	MIT OR Apache-2.0
@@ -566,6 +572,7 @@ quick-xml	0.41.0	MIT
 quote	1.0.47	MIT OR Apache-2.0
 r-efi	5.3.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later
 r-efi	6.0.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later
+radix-heap	0.4.2	MIT
 rand	0.10.3	MIT OR Apache-2.0
 rand	0.9.5	MIT OR Apache-2.0
 rand_chacha	0.9.0	MIT OR Apache-2.0
@@ -702,6 +709,7 @@ tracing	0.1.44	MIT
 tracing-attributes	0.1.31	MIT
 tracing-core	0.1.36	MIT
 tree-sitter	0.27.1	MIT
+tree-sitter-ada	0.1.0	MIT
 tree-sitter-asm	0.24.0	MIT
 tree-sitter-bash	0.25.1	MIT
 tree-sitter-bicep	1.1.0	MIT
@@ -713,6 +721,7 @@ tree-sitter-cil	0.1.0	MIT
 tree-sitter-clojure-orchard	0.2.8	CC0-1.0
 tree-sitter-cmake	0.7.5	MIT
 tree-sitter-coffee	0.1.0	MIT
+tree-sitter-commonlisp	0.4.1	MIT
 tree-sitter-containerfile	0.9.2	MIT
 tree-sitter-cpp	0.23.4	MIT
 tree-sitter-crontab	0.1.0	MIT
@@ -720,11 +729,15 @@ tree-sitter-css	0.25.0	MIT
 tree-sitter-csv	1.2.0	MIT
 tree-sitter-cue	0.0.1	MIT
 tree-sitter-dart	0.2.0	MIT
+tree-sitter-devicetree	0.14.1	MIT
 tree-sitter-dhall	0.1.0	MIT
 tree-sitter-diff	0.1.0	MIT
 tree-sitter-ebnf	0.1.0	MIT
+tree-sitter-elisp	1.7.2	MIT
 tree-sitter-elixir	0.3.5	Apache-2.0
+tree-sitter-elm	5.9.4	MIT
 tree-sitter-erlang	0.21.0	MIT
+tree-sitter-fish	3.6.0	MIT
 tree-sitter-fsharp	0.3.12	MIT
 tree-sitter-gitcommit	0.0.1	MIT
 tree-sitter-gitignore	0.1.0	MIT
@@ -736,6 +749,7 @@ tree-sitter-haskell	0.24.1	MIT
 tree-sitter-hcl	1.1.0	Apache-2.0
 tree-sitter-html	0.23.2	MIT
 tree-sitter-ini	1.4.0	Apache-2.0
+tree-sitter-janet-simple	0.0.3	CC0-1.0
 tree-sitter-java	0.23.5	MIT
 tree-sitter-javascript	0.25.0	MIT
 tree-sitter-jinja-dialects	0.1.1	MIT
@@ -747,10 +761,12 @@ tree-sitter-just	0.1.0	Apache-2.0
 tree-sitter-kdl	1.1.0	MIT
 tree-sitter-kotlin-sg	0.4.1	MIT
 tree-sitter-language	0.1.9	MIT
+tree-sitter-latex	0.4.0	MIT
 tree-sitter-llvm	1.1.0	MIT
 tree-sitter-lua	0.5.0	MIT
 tree-sitter-make	1.1.1	MIT
 tree-sitter-md	0.3.2	MIT
+tree-sitter-newick	1.1.0	SEE LICENSE.txt
 tree-sitter-nix	0.3.0	MIT
 tree-sitter-objc	3.0.2	MIT
 tree-sitter-ocaml	0.26.0	MIT
@@ -761,13 +777,18 @@ tree-sitter-powershell	0.26.4	MIT
 tree-sitter-properties	0.3.0	MIT
 tree-sitter-proto	0.6.0	MIT
 tree-sitter-python	0.25.0	MIT
+tree-sitter-qmljs	0.3.1	MIT
 tree-sitter-r	1.3.0	MIT
+tree-sitter-racket	0.24.7	MIT
 tree-sitter-regex	0.25.0	MIT
 tree-sitter-ron	0.2.0	MIT
 tree-sitter-ruby	0.23.1	MIT
 tree-sitter-rust	0.24.2	MIT
 tree-sitter-scala	0.26.2	MIT
+tree-sitter-scheme	0.24.7	MIT
 tree-sitter-sequel	0.3.11	MIT
+tree-sitter-sfapex	2.4.0	MIT
+tree-sitter-smali	1.0.0	MIT
 tree-sitter-solidity	1.2.13	MIT
 tree-sitter-spirv	0.1.0	MIT
 tree-sitter-svelte-ng	1.0.2	MIT
@@ -775,12 +796,14 @@ tree-sitter-swift	0.7.4	MIT
 tree-sitter-toml-ng	0.7.0	MIT
 tree-sitter-typescript	0.23.2	MIT
 tree-sitter-v	0.0.4	ISC
+tree-sitter-vhdl	1.4.0	MIT
 tree-sitter-vue	0.1.0	MIT
 tree-sitter-wat	0.1.0	Apache-2.0 WITH LLVM-exception
 tree-sitter-xml	0.7.0	MIT
 tree-sitter-yaml	0.7.2	MIT
 tree-sitter-zig	1.1.2	MIT
 ttf-parser	0.25.1	MIT OR Apache-2.0
+typed-arena	2.0.2	MIT
 typeid	1.0.3	MIT OR Apache-2.0
 typenum	1.20.1	MIT OR Apache-2.0
 ucd-trie	0.1.7	MIT OR Apache-2.0
@@ -909,6 +932,7 @@ xmlwriter	0.1.0	MIT
 xxhash-rust	0.8.19	BSL-1.0
 y4m	0.8.0	MIT
 yaml-rust2	0.13.0	MIT OR Apache-2.0
+yansi	1.0.1	MIT OR Apache-2.0
 yazi	0.2.1	Apache-2.0 OR MIT
 yeslogic-fontconfig-sys	6.0.1	MIT
 yoke	0.8.3	Unicode-3.0

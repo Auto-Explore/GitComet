@@ -24,11 +24,10 @@
 # crates/gitcomet-syntax/src/tests/grammar_compat.rs. Depending on
 # `tree-sitter-language` rather than `tree-sitter` is what keeps that true.
 #
-# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue:
-# GitComet keeps its own asm query in
-# crates/gitcomet-syntax/src/queries/asm_highlights.scm,
-# and upstream's `HIGHLIGHTS_QUERY` const is removed from lib.rs because it
-# `include_str!`s a file that is not here.
+# `queries/asm/highlights.scm` and lib.rs's `HIGHLIGHTS_QUERY` are upstream's at this revision,
+# vendored for vendor/difftastic. GitComet's highlighter keeps its own asm query in
+# crates/gitcomet-syntax/src/queries/asm_highlights.scm, which captures the `mnemonic`
+# node this grammar adds.
 [package]
 name = "tree-sitter-asm"
 description = "assembly grammar for the tree-sitter parsing library"

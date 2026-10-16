@@ -39,7 +39,6 @@ pub(crate) enum Language {
     Erlang,
     Fish,
     FSharp,
-    Fortran,
     Gleam,
     Go,
     Haskell,
@@ -79,42 +78,10 @@ pub(crate) enum Language {
     Toml,
     TypeScript,
     TypeScriptTsx,
-    Verilog,
     Vhdl,
     Xml,
     Yaml,
     Zig,
-}
-
-/// Users can explicitly request to treat a certain file glob pattern
-/// as a specific languages, rather than using the normal language
-/// detection logic.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum LanguageOverride {
-    /// Treat the file as this language regardless of what language
-    /// detection thinks.
-    Language(Language),
-    /// Treat this file as plain text.
-    PlainText,
-}
-
-/// If there is a language called `name` (comparing case
-/// insensitively), return it. Treat `"text"` as an additional option.
-pub(crate) fn language_override_from_name(name: &str) -> Option<LanguageOverride> {
-    let name = name.trim().to_lowercase();
-
-    if name == "text" {
-        return Some(LanguageOverride::PlainText);
-    }
-
-    for language in Language::iter() {
-        let lang_name = language_name(language);
-        if lang_name.to_lowercase() == name {
-            return Some(LanguageOverride::Language(language));
-        }
-    }
-
-    None
 }
 
 /// The language name shown to the user.
@@ -140,7 +107,6 @@ pub(crate) fn language_name(language: Language) -> &'static str {
         Erlang => "Erlang",
         Fish => "Fish",
         FSharp => "F#",
-        Fortran => "Fortran",
         Gleam => "Gleam",
         Go => "Go",
         Haskell => "Haskell",
@@ -180,7 +146,6 @@ pub(crate) fn language_name(language: Language) -> &'static str {
         Toml => "TOML",
         TypeScript => "TypeScript",
         TypeScriptTsx => "TypeScript TSX",
-        Verilog => "Verilog",
         Vhdl => "VHDL",
         Xml => "XML",
         Yaml => "YAML",
@@ -290,7 +255,6 @@ pub(crate) fn language_globs(language: Language) -> Vec<glob::Pattern> {
         ],
         Fish => &["*.fish"],
         FSharp => &["*.fs", "*.fsx", "*.fsi"],
-        Fortran => &["*.f", "*.for", "*.f90", "*.F", "*.FOR", "*.F90"],
         Gleam => &["*.gleam"],
         Go => &["*.go"],
         Haskell => &["*.hs"],
@@ -396,7 +360,6 @@ pub(crate) fn language_globs(language: Language) -> Vec<glob::Pattern> {
         ],
         TypeScript => &["*.ts", "*.cts", "*.mts"],
         TypeScriptTsx => &["*.tsx"],
-        Verilog => &["*.v", "*.sv", "*.vh"],
         Vhdl => &["*.vhdl", "*.vhd"],
         Xml => &[
             "*.ant",
@@ -466,27 +429,7 @@ fn looks_like_xml(src: &str) -> bool {
     src.starts_with("<?xml")
 }
 
-pub(crate) fn guess(
-    path: &Path,
-    src: &str,
-    overrides: &[(LanguageOverride, Vec<glob::Pattern>)],
-) -> Option<Language> {
-    if let Some(file_name) = path.file_name() {
-        let file_name = file_name.to_string_lossy();
-        for (lang_override, patterns) in overrides {
-            for pattern in patterns {
-                if pattern.matches(&file_name) {
-                    match lang_override {
-                        LanguageOverride::Language(lang) => return Some(*lang),
-                        LanguageOverride::PlainText => {
-                            return None;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
+pub(crate) fn guess(path: &Path, src: &str) -> Option<Language> {
     if let Some(lang) = from_emacs_mode_header(src) {
         return Some(lang);
     }
@@ -546,7 +489,6 @@ fn from_emacs_mode_header(src: &str) -> Option<Language> {
             "emacs-lisp" => EmacsLisp,
             "fish" => Fish,
             "fsharp" => FSharp,
-            "fortran" => Fortran,
             "gleam" => Gleam,
             "go" => Go,
             "haskell" => Haskell,
@@ -572,7 +514,6 @@ fn from_emacs_mode_header(src: &str) -> Option<Language> {
             "toml" => Toml,
             "tuareg" => OCaml,
             "typescript" => TypeScript,
-            "verilog" => Verilog,
             "vhdl" => Vhdl,
             "yaml" => Yaml,
             "zig" => Zig,
@@ -647,7 +588,7 @@ mod tests {
     #[test]
     fn test_guess_by_extension() {
         let path = Path::new("foo.el");
-        assert_eq!(guess(path, "", &[]), Some(EmacsLisp));
+        assert_eq!(guess(path, ""), Some(EmacsLisp));
     }
 
     #[test]
@@ -655,50 +596,50 @@ mod tests {
         // Regression: the `.c++` extension glob was missing its leading `*`
         // (introduced in 286cad721), so foo.c++ fell through to plain text.
         let path = Path::new("foo.c++");
-        assert_eq!(guess(path, "", &[]), Some(CPlusPlus));
+        assert_eq!(guess(path, ""), Some(CPlusPlus));
     }
 
     #[test]
     fn test_guess_by_whole_name() {
         let path = Path::new("foo/.bashrc");
-        assert_eq!(guess(path, "", &[]), Some(Bash));
+        assert_eq!(guess(path, ""), Some(Bash));
     }
 
     #[test]
     fn test_guess_by_shebang() {
         let path = Path::new("foo");
-        assert_eq!(guess(path, "#!/bin/bash", &[]), Some(Bash));
+        assert_eq!(guess(path, "#!/bin/bash"), Some(Bash));
     }
 
     #[test]
     fn test_guess_by_env_shebang() {
         let path = Path::new("foo");
-        assert_eq!(guess(path, "#!/usr/bin/env python", &[]), Some(Python));
+        assert_eq!(guess(path, "#!/usr/bin/env python"), Some(Python));
     }
 
     #[test]
     fn test_guess_by_shebang_with_space() {
         let path = Path::new("foo");
-        assert_eq!(guess(path, "#! /bin/sh", &[]), Some(Bash));
+        assert_eq!(guess(path, "#! /bin/sh"), Some(Bash));
     }
 
     #[test]
     fn test_guess_comment_not_shebang() {
         let path = Path::new("foo.py");
-        assert_eq!(guess(path, "bar = 1 #!/bin/bash", &[]), Some(Python));
+        assert_eq!(guess(path, "bar = 1 #!/bin/bash"), Some(Python));
     }
 
     #[test]
     fn test_guess_by_emacs_mode_simple() {
         let path = Path::new("foo");
-        assert_eq!(guess(path, "; -*- mode: Lisp -*-", &[]), Some(CommonLisp));
+        assert_eq!(guess(path, "; -*- mode: Lisp -*-"), Some(CommonLisp));
     }
 
     #[test]
     fn test_guess_by_emacs_mode() {
         let path = Path::new("foo");
         assert_eq!(
-            guess(path, "; -*- mode: Lisp; eval: (auto-fill-mode 1); -*-", &[]),
+            guess(path, "; -*- mode: Lisp; eval: (auto-fill-mode 1); -*-"),
             Some(CommonLisp)
         );
     }
@@ -707,7 +648,7 @@ mod tests {
     fn test_guess_by_emacs_mode_second_line() {
         let path = Path::new("foo");
         assert_eq!(
-            guess(path, "#!/bin/bash\n; -*- mode: Lisp; -*-", &[]),
+            guess(path, "#!/bin/bash\n; -*- mode: Lisp; -*-"),
             Some(CommonLisp)
         );
     }
@@ -715,20 +656,20 @@ mod tests {
     #[test]
     fn test_guess_by_emacs_mode_shorthand() {
         let path = Path::new("foo");
-        assert_eq!(guess(path, "(* -*- tuareg -*- *)", &[]), Some(OCaml));
+        assert_eq!(guess(path, "(* -*- tuareg -*- *)"), Some(OCaml));
     }
 
     #[test]
     fn test_guess_by_emacs_mode_shorthand_no_spaces() {
         let path = Path::new("foo");
-        assert_eq!(guess(path, "# -*-python-*-", &[]), Some(Python));
+        assert_eq!(guess(path, "# -*-python-*-"), Some(Python));
     }
 
     #[test]
     fn test_guess_by_xml_header() {
         let path = Path::new("foo");
         assert_eq!(
-            guess(path, "<?xml version=\"1.0\" encoding=\"utf-8\"?>", &[]),
+            guess(path, "<?xml version=\"1.0\" encoding=\"utf-8\"?>"),
             Some(Xml)
         );
     }
@@ -736,22 +677,6 @@ mod tests {
     #[test]
     fn test_guess_unknown() {
         let path = Path::new("jfkdlsjfkdsljfkdsljf");
-        assert_eq!(guess(path, "", &[]), None);
-    }
-
-    #[test]
-    fn test_guess_override() {
-        let path = Path::new("foo.el");
-        assert_eq!(
-            guess(
-                path,
-                "",
-                &[(
-                    LanguageOverride::Language(Css),
-                    vec![glob::Pattern::new("*.el").unwrap()],
-                )]
-            ),
-            Some(Css)
-        );
+        assert_eq!(guess(path, ""), None);
     }
 }

@@ -25,7 +25,9 @@
 # `src/` is regenerated (tree-sitter-cli 0.26.13, ABI 15) and the `tree_sitter/`
 # headers come from vendor/tree-sitter-headers -- see the README there.
 #
-# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
+# `queries/highlights.scm` is the 0.25.0 release's, vendored for vendor/difftastic
+# (`HIGHLIGHTS_QUERY`). GitComet's highlighter keeps its own queries in
+# crates/gitcomet-syntax/src/queries/.
 [package]
 name = "tree-sitter-css"
 description = "CSS grammar for the tree-sitter parsing library"

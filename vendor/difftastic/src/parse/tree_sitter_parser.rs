@@ -85,13 +85,6 @@ pub(crate) struct TreeSitterConfig {
 // TODO: define a proper type instead of an alias.
 type TreeSitterNodeName = &'static str;
 
-extern "C" {
-    fn tree_sitter_janet_simple() -> ts::Language;
-    fn tree_sitter_kotlin() -> ts::Language;
-    fn tree_sitter_latex() -> ts::Language;
-    fn tree_sitter_smali() -> ts::Language;
-}
-
 // TODO: begin/end and object/end.
 const OCAML_ATOM_NODES: [&str; 6] = [
     "character",
@@ -321,18 +314,15 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
             }
         }
         Dart => {
-            let language_fn = tree_sitter_dart_orchard::LANGUAGE;
+            let language_fn = tree_sitter_dart::LANGUAGE;
             let language = tree_sitter::Language::new(language_fn);
             TreeSitterConfig {
                 language: language.clone(),
                 atom_nodes: ["string_literal", "script_tag"].into_iter().collect(),
                 delimiter_tokens: vec![("{", "}"), ("(", ")"), ("[", "]"), ("<", ">")],
                 ignore_trailing_tokens: vec![],
-                highlight_query: ts::Query::new(
-                    &language,
-                    tree_sitter_dart_orchard::HIGHLIGHTS_QUERY,
-                )
-                .unwrap(),
+                highlight_query: ts::Query::new(&language, tree_sitter_dart::HIGHLIGHTS_QUERY)
+                    .unwrap(),
                 sub_languages: vec![],
             }
         }
@@ -473,19 +463,6 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
                 sub_languages: vec![],
             }
         }
-        Fortran => {
-            let language_fn = tree_sitter_fortran::LANGUAGE;
-            let language = tree_sitter::Language::new(language_fn);
-            TreeSitterConfig {
-                language: language.clone(),
-                atom_nodes: ["string_literal", "number_literal"].into_iter().collect(),
-                delimiter_tokens: vec![("(", ")"), ("(/", "/)"), ("[", "]")],
-                ignore_trailing_tokens: vec![],
-                highlight_query: ts::Query::new(&language, tree_sitter_fortran::HIGHLIGHTS_QUERY)
-                    .unwrap(),
-                sub_languages: vec![],
-            }
-        }
         Gleam => {
             let language_fn = tree_sitter_gleam::LANGUAGE;
             let language = tree_sitter::Language::new(language_fn);
@@ -589,7 +566,7 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
             }
         }
         Janet => {
-            let language = unsafe { tree_sitter_janet_simple() };
+            let language = tree_sitter::Language::new(tree_sitter_janet_simple::LANGUAGE);
             TreeSitterConfig {
                 language: language.clone(),
                 atom_nodes: [].into_iter().collect(),
@@ -606,14 +583,14 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
                 ignore_trailing_tokens: vec![],
                 highlight_query: ts::Query::new(
                     &language,
-                    include_str!("../../vendored_parsers/highlights/janet_simple.scm"),
+                    tree_sitter_janet_simple::HIGHLIGHTS_QUERY,
                 )
                 .unwrap(),
                 sub_languages: vec![],
             }
         }
         Java => {
-            let language_fn = tree_sitter_java_orchard::LANGUAGE;
+            let language_fn = tree_sitter_java::LANGUAGE;
             let language = tree_sitter::Language::new(language_fn);
             TreeSitterConfig {
                 language: language.clone(),
@@ -637,11 +614,8 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
                 delimiter_tokens: vec![("(", ")"), ("{", "}"), ("[", "]")],
                 // There aren't many places where Java allows trailing commas.
                 ignore_trailing_tokens: vec![("enum_body", ","), ("array_initializer", ",")],
-                highlight_query: ts::Query::new(
-                    &language,
-                    tree_sitter_java_orchard::HIGHLIGHTS_QUERY,
-                )
-                .unwrap(),
+                highlight_query: ts::Query::new(&language, tree_sitter_java::HIGHLIGHTS_QUERY)
+                    .unwrap(),
                 sub_languages: vec![],
             }
         }
@@ -714,7 +688,7 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
             }
         }
         Kotlin => {
-            let language = unsafe { tree_sitter_kotlin() };
+            let language = tree_sitter::Language::new(tree_sitter_kotlin_sg::LANGUAGE);
             TreeSitterConfig {
                 language: language.clone(),
                 // Flattening nullable type means we can't diff the
@@ -728,16 +702,13 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
                     .into_iter()
                     .collect(),
                 ignore_trailing_tokens: vec![],
-                highlight_query: ts::Query::new(
-                    &language,
-                    include_str!("../../vendored_parsers/highlights/kotlin.scm"),
-                )
-                .unwrap(),
+                highlight_query: ts::Query::new(&language, tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY)
+                    .unwrap(),
                 sub_languages: vec![],
             }
         }
         LaTeX => {
-            let language = unsafe { tree_sitter_latex() };
+            let language = tree_sitter::Language::new(tree_sitter_latex::LANGUAGE);
             TreeSitterConfig {
                 language: language.clone(),
                 atom_nodes: [].into_iter().collect(),
@@ -882,25 +853,31 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
             }
         }
         Perl => {
-            let language_fn = ts_parser_perl::LANGUAGE;
+            let language_fn = tree_sitter_perl::LANGUAGE;
             let language = tree_sitter::Language::new(language_fn);
             TreeSitterConfig {
                 language: language.clone(),
                 atom_nodes: [
-                    "scalar",
-                    "container_variable",
-                    "match_regexp",
-                    "quoted_regexp",
-                    "substitution_regexp",
-                    "string_literal",
-                    "interpolated_string_literal",
-                    "heredoc_content",
+                    "scalar_variable",
+                    "array_variable",
+                    "hash_variable",
+                    "string_single_quoted",
+                    "string_double_quoted",
+                    "string_q_quoted",
+                    "string_qq_quoted",
+                    "heredoc_body_statement",
+                    "regex_pattern_qr",
+                    "substitution_pattern_s",
+                    "transliteration_tr_or_y",
                 ]
                 .into_iter()
                 .collect(),
                 delimiter_tokens: vec![("(", ")"), ("{", "}"), ("[", "]")],
-                highlight_query: ts::Query::new(&language, ts_parser_perl::HIGHLIGHTS_QUERY)
-                    .unwrap(),
+                highlight_query: ts::Query::new(
+                    &language,
+                    include_str!("../../vendored_parsers/highlights/perl.scm"),
+                )
+                .unwrap(),
                 ignore_trailing_tokens: vec![],
                 sub_languages: vec![],
             }
@@ -1023,7 +1000,7 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
             }
         }
         Rust => {
-            let language_fn = tree_sitter_rust_orchard::LANGUAGE;
+            let language_fn = tree_sitter_rust::LANGUAGE;
             let language = tree_sitter::Language::new(language_fn);
 
             TreeSitterConfig {
@@ -1047,11 +1024,8 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
                     // important to keep vec![1] and vec![1,] as equivalent.
                     ("token_tree", ","),
                 ],
-                highlight_query: ts::Query::new(
-                    &language,
-                    tree_sitter_rust_orchard::HIGHLIGHTS_QUERY,
-                )
-                .unwrap(),
+                highlight_query: ts::Query::new(&language, tree_sitter_rust::HIGHLIGHTS_QUERY)
+                    .unwrap(),
                 sub_languages: vec![],
             }
         }
@@ -1095,17 +1069,14 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
             }
         }
         Smali => {
-            let language = unsafe { tree_sitter_smali() };
+            let language = tree_sitter::Language::new(tree_sitter_smali::LANGUAGE);
             TreeSitterConfig {
                 language: language.clone(),
                 atom_nodes: ["string"].into_iter().collect(),
                 delimiter_tokens: Vec::new(),
                 ignore_trailing_tokens: vec![],
-                highlight_query: ts::Query::new(
-                    &language,
-                    include_str!("../../vendored_parsers/highlights/smali.scm"),
-                )
-                .unwrap(),
+                highlight_query: ts::Query::new(&language, tree_sitter_smali::HIGHLIGHTS_QUERY)
+                    .unwrap(),
                 sub_languages: Vec::new(),
             }
         }
@@ -1240,22 +1211,6 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
                 delimiter_tokens: vec![("{", "}"), ("(", ")"), ("[", "]")],
                 highlight_query: ts::Query::new(&language, tree_sitter_yaml::HIGHLIGHTS_QUERY)
                     .unwrap(),
-                sub_languages: vec![],
-            }
-        }
-        Verilog => {
-            let language_fn = tree_sitter_verilog::LANGUAGE;
-            let language = tree_sitter::Language::new(language_fn);
-            TreeSitterConfig {
-                ignore_trailing_tokens: vec![],
-                language: language.clone(),
-                atom_nodes: ["integral_number"].into_iter().collect(),
-                delimiter_tokens: vec![("(", ")"), ("[", "]"), ("begin", "end")],
-                highlight_query: ts::Query::new(
-                    &language,
-                    include_str!("../../vendored_parsers/highlights/verilog.scm"),
-                )
-                .unwrap(),
                 sub_languages: vec![],
             }
         }
@@ -1439,7 +1394,7 @@ fn tree_highlights(
     let mut type_ids = DftHashSet::default();
 
     while let Some(m) = q_matches.next() {
-        for c in m.captures {
+        for c in m.captures() {
             if comment_capture_ids.contains(&c.index) {
                 comment_ids.insert(c.node.id());
             } else if keyword_ish_capture_ids.contains(&c.index) {
@@ -1457,40 +1412,6 @@ fn tree_highlights(
         keyword_ids,
         string_ids,
         type_ids,
-    }
-}
-
-pub(crate) fn print_tree(src: &str, tree: &tree_sitter::Tree) {
-    let mut cursor = tree.walk();
-    print_cursor(src, &mut cursor, 0);
-}
-
-fn print_cursor(src: &str, cursor: &mut ts::TreeCursor, depth: usize) {
-    loop {
-        let node = cursor.node();
-
-        let formatted_node = format!(
-            "{} {} - {}",
-            node.kind().replace('\n', "\\n"),
-            node.start_position(),
-            node.end_position()
-        );
-
-        if node.child_count() == 0 {
-            let node_src = &src[node.start_byte()..node.end_byte()];
-            println!("{}{} {:?}", "  ".repeat(depth), formatted_node, node_src);
-        } else {
-            println!("{}{}", "  ".repeat(depth), formatted_node,);
-        }
-
-        if cursor.goto_first_child() {
-            print_cursor(src, cursor, depth + 1);
-            cursor.goto_parent();
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
     }
 }
 
@@ -1639,6 +1560,7 @@ pub(crate) fn to_syntax<'a>(
 }
 
 /// Parse `src` with tree-sitter and convert to difftastic Syntax.
+#[cfg(test)]
 pub(crate) fn parse<'a>(
     arena: &'a Arena<Syntax<'a>>,
     src: &str,

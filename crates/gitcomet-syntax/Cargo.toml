@@ -107,3 +107,7 @@ gitcomet-text = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true }
 gpui = { workspace = true }
 tempfile = { workspace = true }
+# Grammars only vendor/difftastic uses yet; the ABI test covers every vendored grammar.
+tree-sitter-janet-simple = { workspace = true }
+tree-sitter-latex = { workspace = true }
+tree-sitter-smali = { workspace = true }

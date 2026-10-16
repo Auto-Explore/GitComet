@@ -394,43 +394,6 @@ pub(crate) fn init_all_info<'a>(lhs_roots: &[&'a Syntax<'a>], rhs_roots: &[&'a S
     init_next_prev(rhs_roots);
 }
 
-pub(crate) fn print_as_dot<'a>(roots: &[&'a Syntax<'a>]) {
-    println!("digraph {{");
-    print_as_dot_(roots);
-    println!("}}");
-}
-
-fn print_as_dot_<'a>(nodes: &[&'a Syntax<'a>]) {
-    for node in nodes {
-        let label = match node {
-            List {
-                open_content,
-                close_content,
-                ..
-            } => {
-                if open_content != "" {
-                    format!("[label=\"{open_content}{close_content}\"]")
-                } else {
-                    "[style=dotted]".to_owned()
-                }
-            }
-            Atom { content, .. } => {
-                let content = content.replace('\"', "\\\"");
-                format!("[label=\"{content}\"]")
-            }
-        };
-
-        println!("  id{} {};", node.id().get(), label);
-
-        if let List { children, .. } = node {
-            for child in children {
-                println!("  id{} -> id{};", node.id().get(), child.id().get());
-            }
-            print_as_dot_(children);
-        }
-    }
-}
-
 fn init_info<'a>(lhs_roots: &[&'a Syntax<'a>], rhs_roots: &[&'a Syntax<'a>]) {
     let mut id = NonZeroU32::new(1).unwrap();
     init_info_on_side(lhs_roots, &mut id);
@@ -875,6 +838,7 @@ impl MatchedPos {
         // or end. We still want empty positions in the middle of
         // multiline atoms, as a multiline string literal may include
         // empty lines.
+        let atom_pos = pos;
         let pos = filter_empty_ends(pos);
 
         match ck {
@@ -902,7 +866,9 @@ impl MatchedPos {
                     AtomKind::Comment
                 };
 
-                split_atom_words(this_content, &pos, opposite_content, opposite_pos, kind)
+                // GitComet: words are placed relative to the atom's first line, so
+                // a string that starts with a newline needs its empty first span.
+                split_atom_words(this_content, atom_pos, opposite_content, opposite_pos, kind)
             }
             Unchanged(opposite) => {
                 let opposite_pos = match opposite {

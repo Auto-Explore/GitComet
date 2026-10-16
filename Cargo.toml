@@ -24,6 +24,9 @@ members = [
   "crates/gitcomet-ui-kit",
   "crates/gitcomet-ui-media",
   "crates/gitcomet-ui-terminal",
+  # Upstream source, a member so its grammars resolve to the workspace crates.
+  # See vendor/README.md.
+  "vendor/difftastic",
 ]
 exclude = [
   "vendor/block",
@@ -48,11 +51,13 @@ exclude = [
   "vendor/tree-sitter-gitignore",
   "vendor/tree-sitter-haskell",
   "vendor/tree-sitter-html",
+  "vendor/tree-sitter-janet-simple",
   "vendor/tree-sitter-jinja-dialects",
   "vendor/tree-sitter-julia",
   "vendor/tree-sitter-just",
   "vendor/tree-sitter-kdl",
   "vendor/tree-sitter-kotlin-sg",
+  "vendor/tree-sitter-latex",
   "vendor/tree-sitter-objc",
   "vendor/tree-sitter-ocaml",
   "vendor/tree-sitter-php",
@@ -63,6 +68,7 @@ exclude = [
   "vendor/tree-sitter-rust",
   "vendor/tree-sitter-scala",
   "vendor/tree-sitter-sequel",
+  "vendor/tree-sitter-smali",
   "vendor/tree-sitter-solidity",
   "vendor/tree-sitter-spirv",
   "vendor/tree-sitter-swift",
@@ -88,6 +94,7 @@ default-members = [
   "crates/gitcomet-ui-kit",
   "crates/gitcomet-ui-media",
   "crates/gitcomet-ui-terminal",
+  "vendor/difftastic",
 ]
 
 [workspace.package]
@@ -273,6 +280,9 @@ tree-sitter-html = { path = "vendor/tree-sitter-html" }
 tree-sitter-ini = "1.4.0"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
+# From difftastic's vendored parsers, shared with vendor/difftastic. See the
+# crate headers.
+tree-sitter-janet-simple = { path = "vendor/tree-sitter-janet-simple" }
 tree-sitter-jinja-dialects = { path = "vendor/tree-sitter-jinja-dialects" }
 tree-sitter-jsdoc = "0.25.0"
 tree-sitter-jsonnet = "0.0.1"
@@ -284,6 +294,7 @@ tree-sitter-just = { path = "vendor/tree-sitter-just" }
 tree-sitter-kdl = { path = "vendor/tree-sitter-kdl" }
 tree-sitter-julia = { path = "vendor/tree-sitter-julia" }
 tree-sitter-kotlin-sg = { path = "vendor/tree-sitter-kotlin-sg" }
+tree-sitter-latex = { path = "vendor/tree-sitter-latex" }
 tree-sitter-llvm = "1.1.0"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
@@ -324,6 +335,7 @@ tree-sitter-ruby = { path = "vendor/tree-sitter-ruby" }
 tree-sitter-rust = { path = "vendor/tree-sitter-rust" }
 tree-sitter-scala = { path = "vendor/tree-sitter-scala" }
 tree-sitter-sequel = { path = "vendor/tree-sitter-sequel" }
+tree-sitter-smali = { path = "vendor/tree-sitter-smali" }
 # Vendored to fix its highlight query for the workspace tree-sitter. See
 # vendor/tree-sitter-solidity/Cargo.toml.
 tree-sitter-solidity = { path = "vendor/tree-sitter-solidity" }
@@ -391,6 +403,12 @@ opt-level = 2
 [profile.dev.package.chardetng]
 opt-level = 2
 
+# A structural diff gets five seconds; unoptimized, Difftastic takes several times
+# longer than a release build and misses that on larger files.
+[profile.dev.package.difftastic]
+opt-level = 2
+debug = "line-tables-only"
+
 [profile.test]
 opt-level = 1
 
@@ -422,6 +440,9 @@ opt-level = 1
 
 [profile.ci-test.package.taffy]
 opt-level = 1
+
+[profile.ci-test.package.difftastic]
+debug = 0
 
 # Unoptimized compile/link coverage only. Actual performance measurements use
 # release or bench with the production release settings below.
