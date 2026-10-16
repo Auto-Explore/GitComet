@@ -18,7 +18,17 @@ use std::path::Path;
 /// The raw [`gix::Error`] is returned so callers can map it to their own
 /// error type or treat "not a repository" as absence.
 pub(crate) fn open_worktree_repo(workdir: &Path) -> gix::Result<gix::Repository> {
-    let mut repo = gix::open(git_dir_for_workdir(workdir))?;
+    open_worktree_repo_with(workdir, gix::open::Permissions::default())
+}
+
+/// [`open_worktree_repo`], reading config, environment and attribute files
+/// only from the sources `permissions` allow.
+pub(crate) fn open_worktree_repo_with(
+    workdir: &Path,
+    permissions: gix::open::Permissions,
+) -> gix::Result<gix::Repository> {
+    let options = gix::open::Options::default().permissions(permissions);
+    let mut repo = gix::open_opts(git_dir_for_workdir(workdir), options)?;
     crate::refs::reload_conditional_includes(&mut repo)?;
     Ok(repo)
 }

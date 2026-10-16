@@ -754,9 +754,11 @@ impl GixRepo {
 
     /// A fresh open, for operations that must see config/ref changes made after
     /// this repository was opened (e.g. upstream tracking written by the CLI).
+    /// It reads only the sources the first open could.
     /// Prefer [`Self::repo`]: an open re-parses every config file.
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
-        crate::open::open_worktree_repo(&self.spec.workdir)
+        let permissions = self.repo().open_options().permissions;
+        crate::open::open_worktree_repo_with(&self.spec.workdir, permissions)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo"))
     }
 
@@ -2088,6 +2090,21 @@ pub(crate) fn shared_history_memory() -> (usize, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config refresh reopens the repository; a test's open that reads only
+    /// the repository's own config must stay that way.
+    #[test]
+    fn a_reopen_reads_only_the_sources_the_first_open_could() {
+        let tmp = tempfile::tempdir().unwrap();
+        status::tests::init_test_repo(tmp.path());
+        let isolated = gix::open::Permissions::isolated();
+        let opened = crate::open::open_worktree_repo_with(tmp.path(), isolated).unwrap();
+        let repo = GixRepo::new(tmp.path().to_path_buf(), opened.into_sync());
+
+        let reopened = repo.reopen_repo().unwrap();
+
+        assert_eq!(reopened.open_options().permissions, isolated);
+    }
 
     #[test]
     fn disk_file_stamp_requires_both_timestamps_outside_the_racy_window() {
