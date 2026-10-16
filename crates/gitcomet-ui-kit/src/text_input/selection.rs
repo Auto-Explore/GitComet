@@ -754,19 +754,38 @@ impl TextInput {
         offset
     }
 
+    /// The grapheme boundary before `offset`. A cluster never spans a line
+    /// break (CR LF ends on its LF), so segmenting the row that holds the
+    /// previous character answers for the whole document.
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
-        self.content
+        let content = self.content.snapshot();
+        let offset = offset.min(content.len());
+        if offset == 0 {
+            return 0;
+        }
+        let row = content.line_range_with_terminator(content.row_for_offset(offset - 1));
+        content
+            .slice(row.clone())
             .grapheme_indices(true)
-            .rev()
-            .find_map(|(idx, _)| (idx < offset).then_some(idx))
-            .unwrap_or(0)
+            .map(|(ix, _)| row.start + ix)
+            .take_while(|ix| *ix < offset)
+            .last()
+            .unwrap_or(row.start)
     }
 
+    /// The grapheme boundary after `offset`, from the caret's row alone.
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
-        self.content
+        let content = self.content.snapshot();
+        if offset >= content.len() {
+            return content.len();
+        }
+        let row = content.line_range_with_terminator(content.row_for_offset(offset));
+        content
+            .slice(row.clone())
             .grapheme_indices(true)
-            .find_map(|(idx, _)| (idx > offset).then_some(idx))
-            .unwrap_or(self.content.len())
+            .map(|(ix, _)| row.start + ix)
+            .find(|ix| *ix > offset)
+            .unwrap_or(row.end)
     }
 
     pub(super) fn is_word_char(ch: char) -> bool {

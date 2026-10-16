@@ -1,5 +1,55 @@
 use super::*;
 
+/// Caret steps segment only the caret's row, which must agree with the whole
+/// document everywhere: CR LF, combining marks, ZWJ emoji and flag pairs, at
+/// row starts and ends.
+#[gpui::test]
+fn caret_steps_agree_with_whole_document_graphemes(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "a\r\nb\u{301}\n👩\u{200d}👩\u{200d}👧\r\n🇫🇮🇸🇪\n\ne\u{301}\u{302}x\r\n";
+    let starts: Vec<usize> = text.grapheme_indices(true).map(|(ix, _)| ix).collect();
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text, cx);
+            for offset in 0..=text.len() {
+                let previous = starts.iter().rev().find(|ix| **ix < offset);
+                let next = starts.iter().find(|ix| **ix > offset);
+                assert_eq!(
+                    input.previous_boundary(offset),
+                    previous.copied().unwrap_or(0),
+                    "before {offset}"
+                );
+                assert_eq!(
+                    input.next_boundary(offset),
+                    next.copied().unwrap_or(text.len()),
+                    "after {offset}"
+                );
+            }
+        });
+    });
+}
+
+/// Arrow keys, Backspace and Delete after an edit read the caret's row, not
+/// a flattened copy of the document; at 4.8 MB that copy plus a scan from the
+/// far end took 23-29 ms per key.
+#[gpui::test]
+fn caret_steps_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "let value = compute(alpha, beta);\n".repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let middle = text.len() / 2;
+            input.replace_utf8_range(middle..middle, "x", cx);
+
+            input.previous_boundary(middle);
+            input.next_boundary(middle);
+
+            assert!(!input.content.snapshot().is_materialized());
+        });
+    });
+}
+
 // The identical-replacement shortcut compared by copying the replaced range
 // first, so select-all and typing copied the whole buffer on every keystroke.
 #[gpui::test]
