@@ -112,11 +112,11 @@ mod tests {
             .collect()
     }
 
-    /// Untracked files are in neither index lane, so git reports no counts for
-    /// them — an edit-size mode there would silently sort by path instead. File
-    /// type reads off the path, so it survives the trim.
+    /// Untracked files are in neither index lane, so git reports no counts or
+    /// edits for them — a sort that reads either would silently sort by path
+    /// instead. File type reads off the path, so it survives the trim.
     #[test]
-    fn the_untracked_section_drops_only_the_edit_size_sorts() {
+    fn the_untracked_section_drops_only_the_sorts_that_read_line_counts() {
         use crate::view::StatusSection;
         use crate::view::rows::{CommitFileSort, FileListId};
 
