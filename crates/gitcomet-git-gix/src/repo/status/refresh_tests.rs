@@ -3,6 +3,270 @@ use gitcomet_core::domain::{FileStatus, FileStatusKind};
 use gitcomet_core::services::CancellationToken;
 use std::path::Path;
 
+const CHILD: &str = "modules/child [literal] é";
+
+fn empty_gitlink_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_test_repo(root);
+    write_file(root, "file.txt", "base\n");
+    git_success(root, &["add", "."]);
+    git_success(root, &["commit", "-qm", "seed"]);
+    let oid = crate::refs::head_oid(&gix::open(root).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_string();
+    write_file(
+        root,
+        ".gitmodules",
+        &format!("[submodule \"child\"]\n path = {CHILD}\n url = ../child\n"),
+    );
+    git_success(root, &["add", ".gitmodules"]);
+    git_success(
+        root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            &oid,
+            CHILD,
+        ],
+    );
+    git_success(root, &["commit", "-qm", "gitlink"]);
+    std::fs::create_dir_all(root.join(CHILD)).unwrap();
+    dir
+}
+
+fn selected_gitlinks(root: &Path, staged: &[FileStatus]) -> Option<Vec<std::path::PathBuf>> {
+    super::gitlink_status_paths(&gix::open(root).unwrap(), staged)
+}
+
+fn gitlink_status_from_git(root: &Path) -> (Vec<FileStatus>, Vec<FileStatus>) {
+    let output = crate::util::git_workdir_cmd_for(root)
+        .args([
+            "--literal-pathspecs",
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--ignore-submodules=none",
+            "--",
+            CHILD,
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let (mut staged, mut unstaged) = (Vec::new(), Vec::new());
+    for record in output.stdout.split(|byte| *byte == 0) {
+        if record.starts_with(b"1 ") {
+            super::apply_porcelain_v2_gitlink_status_record(record, &mut staged, &mut unstaged)
+                .unwrap();
+        }
+    }
+    (staged, unstaged)
+}
+
+fn assert_gitlink_lanes_match_git(
+    root: &Path,
+    repo: &super::super::GixRepo,
+    needs_commands: (bool, bool),
+) -> (Vec<FileStatus>, Vec<FileStatus>) {
+    let expected = gitlink_status_from_git(root);
+    let token = CancellationToken::new();
+    let (combined, commands) = crate::command_trace::capture(|| repo.status_impl().unwrap());
+    assert_eq!(*combined.staged, expected.0);
+    assert_eq!(*combined.unstaged, expected.1);
+    assert_eq!(
+        commands.len(),
+        usize::from(needs_commands.0),
+        "{commands:?}"
+    );
+    let (worktree, commands) =
+        crate::command_trace::capture(|| repo.worktree_status_cancellable_impl(&token).unwrap());
+    assert_eq!(worktree, expected.1);
+    assert_eq!(
+        commands.len(),
+        usize::from(needs_commands.1),
+        "{commands:?}"
+    );
+    assert_eq!(
+        repo.staged_status_cancellable_impl(&token).unwrap(),
+        expected.0
+    );
+    expected
+}
+
+fn assert_ignored_native_submodule_provider_is_equivalent(root: &Path) {
+    use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus as _;
+    let repo = gix::open(root).unwrap();
+    let index = repo.index_or_empty().unwrap();
+    let mut builtin = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+        repo.clone().into_sync(),
+        gix::status::Submodule::Given {
+            ignore: gix::submodule::config::Ignore::All,
+            check_dirty: false,
+        },
+    )
+    .unwrap();
+    for entry in index
+        .entries()
+        .iter()
+        .filter(|entry| entry.mode.is_submodule())
+    {
+        assert!(builtin.status(entry, entry.path(&index)).unwrap().is_none());
+        assert!(
+            super::NoopSubmoduleStatus
+                .status(entry, entry.path(&index))
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn empty_gitlinks_skip_git_but_child_initialization_and_dirt_restore_it() {
+    let dir = empty_gitlink_fixture();
+    let root = dir.path();
+    let child = root.join(CHILD);
+    let index_before = std::fs::read(root.join(".git/index")).unwrap();
+    // Check cold staged requests too, before the combined-status cache exists.
+    let repo = open_repo(root);
+    let (staged, commands) = crate::command_trace::capture(|| {
+        repo.staged_status_cancellable_impl(&CancellationToken::new())
+            .unwrap()
+    });
+    assert!(staged.is_empty());
+    assert!(commands.is_empty());
+    for _ in 0..2 {
+        let (staged, unstaged) = assert_gitlink_lanes_match_git(root, &repo, (false, false));
+        assert!(staged.is_empty() && unstaged.is_empty());
+    }
+    assert_ignored_native_submodule_provider_is_equivalent(root);
+
+    init_test_repo(&child);
+    write_file(&child, "child.txt", "base\n");
+    git_success(&child, &["add", "."]);
+    git_success(&child, &["commit", "-qm", "child"]);
+    assert_eq!(
+        std::fs::read(root.join(".git/index")).unwrap(),
+        index_before
+    );
+    let (staged, unstaged) = assert_gitlink_lanes_match_git(root, &repo, (true, true));
+    assert!(staged.is_empty());
+    assert_eq!(unstaged[0].kind, FileStatusKind::Modified);
+    assert_ignored_native_submodule_provider_is_equivalent(root);
+
+    git_success(root, &["add", "--", CHILD]);
+    let (staged, unstaged) = assert_gitlink_lanes_match_git(root, &repo, (true, true));
+    assert_eq!(staged[0].kind, FileStatusKind::Modified);
+    assert!(unstaged.is_empty());
+    git_success(root, &["commit", "-qm", "child pointer"]);
+    let (staged, unstaged) = assert_gitlink_lanes_match_git(root, &repo, (true, true));
+    assert!(staged.is_empty() && unstaged.is_empty());
+    for name in ["child.txt", "untracked.txt"] {
+        write_file(&child, name, "changed\n");
+        let (staged, unstaged) = assert_gitlink_lanes_match_git(root, &repo, (true, true));
+        assert!(staged.is_empty());
+        assert_eq!(unstaged[0].kind, FileStatusKind::Modified);
+        assert_ignored_native_submodule_provider_is_equivalent(root);
+        if name == "child.txt" {
+            git_success(&child, &["checkout", "--", name]);
+        }
+    }
+
+    std::fs::remove_dir_all(&child).unwrap();
+    assert_eq!(selected_gitlinks(root, &[]), Some(vec![CHILD.into()]));
+    assert_gitlink_lanes_match_git(root, &repo, (true, true));
+    std::fs::create_dir(&child).unwrap();
+    let (staged, unstaged) = assert_gitlink_lanes_match_git(root, &repo, (false, false));
+    assert!(staged.is_empty() && unstaged.is_empty());
+}
+
+#[test]
+fn gitlink_selection_keeps_uncertain_layouts_and_staged_changes() {
+    let dir = empty_gitlink_fixture();
+    let root = dir.path();
+    let child = root.join(CHILD);
+    let selected = Some(vec![CHILD.into()]);
+    assert_eq!(selected_gitlinks(root, &[]), Some(Vec::new()));
+    for name in [".git", "ordinary.txt"] {
+        write_file(&child, name, "not an initialized repository\n");
+        assert_eq!(selected_gitlinks(root, &[]), selected);
+        std::fs::remove_file(child.join(name)).unwrap();
+    }
+    write_file(root, "modules/.git", "gitdir: missing\n");
+    assert_eq!(selected_gitlinks(root, &[]), selected);
+    std::fs::remove_file(root.join("modules/.git")).unwrap();
+    std::fs::remove_dir(&child).unwrap();
+    assert_eq!(selected_gitlinks(root, &[]), selected);
+    write_file(root, CHILD, "replacement\n");
+    assert_eq!(selected_gitlinks(root, &[]), selected);
+    std::fs::remove_file(&child).unwrap();
+    std::fs::create_dir(&child).unwrap();
+    for path in [CHILD, "modules"] {
+        let changed = FileStatus {
+            path: path.into(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        };
+        assert_eq!(selected_gitlinks(root, &[changed]), selected);
+    }
+
+    let repo = open_repo(root);
+    git_success(root, &["rm", "--cached", "--", CHILD]);
+    let (staged, _) = assert_gitlink_lanes_match_git(root, &repo, (true, false));
+    assert_eq!(staged[0].kind, FileStatusKind::Deleted);
+    std::fs::remove_dir(&child).unwrap();
+    write_file(root, CHILD, "replacement\n");
+    git_success(root, &["add", "--", CHILD]);
+    let (staged, _) = assert_gitlink_lanes_match_git(root, &repo, (true, false));
+    assert_eq!(staged[0].kind, FileStatusKind::Modified);
+}
+
+#[test]
+fn gitlink_selection_keeps_sparse_intent_to_add_and_conflicted_entries() {
+    use gix::index::entry::{Flags, Stage};
+    let dir = empty_gitlink_fixture();
+    let root = dir.path();
+    let repo = gix::open(root).unwrap();
+    let original = repo.index_or_empty().unwrap();
+    let position = original
+        .entries()
+        .iter()
+        .position(|entry| entry.mode.is_submodule())
+        .unwrap();
+    for flags in [
+        Flags::SKIP_WORKTREE | Flags::EXTENDED,
+        Flags::INTENT_TO_ADD | Flags::EXTENDED,
+        Flags::from_stage(Stage::Ours),
+    ] {
+        let mut index = (*original).clone();
+        index.entries_mut()[position].flags = flags;
+        index.write(Default::default()).unwrap();
+        assert_eq!(selected_gitlinks(root, &[]), Some(vec![CHILD.into()]));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gitlink_selection_keeps_symlinked_checkout_and_ancestors() {
+    use std::os::unix::fs::symlink;
+    let dir = empty_gitlink_fixture();
+    let root = dir.path();
+    let child = root.join(CHILD);
+    let target = root.join("elsewhere");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::remove_dir(&child).unwrap();
+    symlink(&target, &child).unwrap();
+    assert_eq!(selected_gitlinks(root, &[]), Some(vec![CHILD.into()]));
+    std::fs::remove_file(&child).unwrap();
+    std::fs::remove_dir(root.join("modules")).unwrap();
+    std::fs::create_dir(target.join(child.file_name().unwrap())).unwrap();
+    symlink(&target, root.join("modules")).unwrap();
+    assert_eq!(selected_gitlinks(root, &[]), Some(vec![CHILD.into()]));
+}
+
 fn shell_path(path: &Path) -> String {
     format!(
         "'{}'",

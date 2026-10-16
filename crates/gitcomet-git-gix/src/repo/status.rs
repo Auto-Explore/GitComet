@@ -131,7 +131,6 @@ impl GixRepo {
             &repo,
             &self.stat_refreshed_index,
             &mut unstaged,
-            may_have_gitlinks,
             cancellation,
         )?;
         cancellation.check_cancelled()?;
@@ -175,7 +174,6 @@ impl GixRepo {
             &repo,
             &self.stat_refreshed_index,
             &mut unstaged,
-            may_have_gitlinks,
             cancellation,
         )?;
         cancellation.check_cancelled()?;
@@ -696,7 +694,6 @@ fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
     stat_refresh: &std::sync::Mutex<Option<StatRefreshedIndex>>,
     unstaged: &mut Vec<FileStatus>,
-    may_have_gitlinks: bool,
     cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
     let index = repo
@@ -722,7 +719,6 @@ fn collect_index_worktree_status_direct(
             .as_ref()
             .map_or(&index, |refreshed| &refreshed.index),
         unstaged,
-        may_have_gitlinks,
         cancellation,
     )
     .and_then(|result| {
@@ -805,7 +801,6 @@ fn collect_index_worktree_status_direct_from_index(
     repo: &gix::Repository,
     index: &gix::index::File,
     unstaged: &mut Vec<FileStatus>,
-    may_have_gitlinks: bool,
     cancellation: &CancellationToken,
 ) -> Result<(DirectIndexWorktreeStatus, Vec<IndexWorktreeApplyChange>)> {
     let dirwalk_options = repo
@@ -816,33 +811,17 @@ fn collect_index_worktree_status_direct_from_index(
             )))
         })?
         .emit_untracked(gix::dir::walk::EmissionMode::Matching);
-    let collection = if may_have_gitlinks && crate::refs::has_modules(repo)? {
-        let submodule = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
-            repo.clone().into_sync(),
-            gix::status::Submodule::Given {
-                ignore: gix::submodule::config::Ignore::All,
-                check_dirty: false,
-            },
-        )
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status submodules: {e}"))))?;
-        collect_index_worktree_status_direct_with_submodule(
-            repo,
-            index,
-            dirwalk_options,
-            unstaged,
-            submodule,
-            cancellation,
-        )?
-    } else {
-        collect_index_worktree_status_direct_with_submodule(
-            repo,
-            index,
-            dirwalk_options,
-            unstaged,
-            NoopSubmoduleStatus,
-            cancellation,
-        )?
-    };
+    // Git supplies child status below. The previous built-in provider used
+    // Ignore::All, which also always returns None but still loads .gitmodules
+    // and inspects each child's repository layout before ignoring the result.
+    let collection = collect_index_worktree_status_direct_with_submodule(
+        repo,
+        index,
+        dirwalk_options,
+        unstaged,
+        NoopSubmoduleStatus,
+        cancellation,
+    )?;
     Ok((
         DirectIndexWorktreeStatus {
             has_conflicted_unstaged: collection.has_conflicted_unstaged,
@@ -1432,7 +1411,25 @@ fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option
     let mut paths = Vec::new();
     for entry in index.entries() {
         if entry.mode == gix::index::entry::Mode::COMMIT {
-            paths.push(path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?);
+            let path = path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?;
+            // An unchanged gitlink with an empty checkout has no child status
+            // to inspect. Recheck the filesystem each time: initializing the
+            // child must restore the Git query without an index rewrite.
+            if entry.stage_raw() == 0
+                && !entry.flags.intersects(
+                    gix::index::entry::Flags::SKIP_WORKTREE
+                        | gix::index::entry::Flags::INTENT_TO_ADD,
+                )
+                && !staged
+                    .iter()
+                    .any(|change| change.path.starts_with(&path) || path.starts_with(&change.path))
+                && repo
+                    .workdir()
+                    .is_some_and(|workdir| is_empty_gitlink_checkout(workdir, &path))
+            {
+                continue;
+            }
+            paths.push(path);
         }
     }
     // Deleted/replaced gitlinks are absent from the index. Check only the
@@ -1461,6 +1458,47 @@ fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option
         .map(|path| path.as_os_str().len() * 2 + 3)
         .sum();
     (bytes < 16_000).then_some(paths)
+}
+
+fn is_empty_gitlink_checkout(workdir: &Path, path: &Path) -> bool {
+    if path.as_os_str().is_empty() {
+        return false;
+    }
+    let mut absolute = workdir.to_path_buf();
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        absolute.push(name);
+        // Do not follow symlinks/junctions in the checkout or its ancestors.
+        // Missing paths, replacements and unreadable metadata stay with Git.
+        let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
+            return false;
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return false;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+            // FILE_ATTRIBUTE_REPARSE_POINT also covers junctions and other
+            // redirects which need not be exposed as Rust symlink types.
+            if metadata.file_attributes() & 0x400 != 0 {
+                return false;
+            }
+        }
+        if components.peek().is_some() {
+            // A nested repository boundary makes this layout uncertain.
+            match std::fs::symlink_metadata(absolute.join(".git")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return false,
+            }
+        }
+    }
+    // Even a broken .git file, another hidden file, or an enumeration error
+    // retains the existing query. Only a positively empty directory is safe.
+    std::fs::read_dir(absolute).is_ok_and(|mut entries| entries.next().is_none())
 }
 
 #[cfg(test)]

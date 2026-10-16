@@ -9,8 +9,8 @@ mod write;
 pub(crate) use config::reload_conditional_includes;
 pub(crate) use revision::{resolve, resolve_required};
 pub(crate) use state::{
-    RootRef, diff_tree_to_tree, has_modules, head_tree_id_or_empty,
-    index_or_load_from_head_or_empty, operation_state, root_ref, submodule_state, submodules,
+    RootRef, diff_tree_to_tree, head_tree_id_or_empty, index_or_load_from_head_or_empty,
+    operation_state, root_ref, submodule_state, submodules,
 };
 pub(crate) use write::{create, delete, delete_batch, delete_named};
 
