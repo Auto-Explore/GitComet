@@ -146,3 +146,29 @@ fn heuristic_number_literal() {
     let tokens = syntax_tokens_for_line_heuristic("x = 42", DiffSyntaxLanguage::Python);
     assert!(tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number));
 }
+
+/// Dhall comments like Haskell; its `//` merges two records.
+#[test]
+fn dhall_heuristic_comments_take_dashes_and_its_merge_stays_code() {
+    let merge = heuristic_tokens(
+        "let a = { x = 1 } // { y = \"s\" }",
+        DiffSyntaxLanguage::Dhall,
+    );
+    assert!(
+        merge
+            .iter()
+            .any(|token| token.kind == SyntaxTokenKind::String),
+        "{merge:?}"
+    );
+    assert!(
+        !merge
+            .iter()
+            .any(|token| token.kind == SyntaxTokenKind::Comment),
+        "{merge:?}"
+    );
+    let comment = heuristic_tokens("-- note", DiffSyntaxLanguage::Dhall);
+    assert_eq!(
+        comment.iter().map(|token| token.kind).collect::<Vec<_>>(),
+        [SyntaxTokenKind::Comment]
+    );
+}

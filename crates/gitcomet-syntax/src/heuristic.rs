@@ -310,9 +310,10 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // `line_comment` stays None: `haskell_dashes_line_comment` replaces the
         // plain `--` prefix with a rule that knows `-->` is an operator.
         DiffSyntaxLanguage::Haskell => HeuristicCommentConfig::haskell(),
-        // Elm took Haskell's comments but not its user-defined operators (gone
-        // since 0.19), so a plain `--` prefix is always a comment here.
-        DiffSyntaxLanguage::Elm => {
+        // Elm and Dhall took Haskell's comments but not its user-defined
+        // operators, so a plain `--` prefix is always a comment here. Dhall's `//`
+        // merges records; it is code.
+        DiffSyntaxLanguage::Elm | DiffSyntaxLanguage::Dhall => {
             HeuristicCommentConfig::line_block("--", HEURISTIC_HASKELL_BLOCK_COMMENT)
         }
         DiffSyntaxLanguage::Erlang => HeuristicCommentConfig::line("%"),
@@ -414,7 +415,6 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::DeviceTree
         | DiffSyntaxLanguage::Apex
         | DiffSyntaxLanguage::Qml
-        | DiffSyntaxLanguage::Dhall
         | DiffSyntaxLanguage::Kdl
         | DiffSyntaxLanguage::Ron
         | DiffSyntaxLanguage::Cue
