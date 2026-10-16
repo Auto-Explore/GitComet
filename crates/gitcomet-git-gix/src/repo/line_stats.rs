@@ -766,6 +766,7 @@ mod tests {
 
     /// A cleaning driver can turn binary-looking bytes into text, so its
     /// paths are counted from what it stores, not sniffed raw.
+    #[cfg(unix)]
     #[test]
     fn a_cleaning_driver_decides_binary_after_it_runs() {
         let tmp = tempfile::tempdir().unwrap();
