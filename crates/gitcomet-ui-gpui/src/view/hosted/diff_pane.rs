@@ -880,22 +880,6 @@ impl DiffPaneView {
     pub(crate) fn rendered_statuses(&self) -> &[Option<SharedString>] {
         &self.rendered_statuses
     }
-    /// Whether the pane is still fetching its target's content.
-    fn fetching(&self) -> bool {
-        self.loading || self.raw_task.is_some()
-    }
-
-    /// The renderer shows its own loading and empty states; the pane covers
-    /// only the time before it has one.
-    fn status_without_renderer(&self) -> Option<SharedString> {
-        self.renderer.is_none().then(|| {
-            if self.fetching() {
-                "Loading…".into()
-            } else {
-                "No changes".into()
-            }
-        })
-    }
 }
 
 impl Render for DiffPaneView {
@@ -904,10 +888,8 @@ impl Render for DiffPaneView {
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
-        let status = self
-            .error
-            .clone()
-            .or_else(|| self.status_without_renderer());
+        // The renderer shows its own loading and empty states.
+        let status = self.error.clone();
         #[cfg(test)]
         self.rendered_statuses.push(status.clone());
         let legend = (!self.legend.is_empty()).then(|| {
@@ -1109,7 +1091,8 @@ impl DiffPaneImpl for HostedDiffPane {
 
     fn is_loading(&self, cx: &App) -> bool {
         let pane = self.entity.read(cx);
-        pane.fetching()
+        pane.loading
+            || pane.raw_task.is_some()
             || pane
                 .renderer
                 .as_ref()
