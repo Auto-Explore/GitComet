@@ -699,6 +699,7 @@ pub(crate) struct MatchedPos {
 fn split_atom_words(
     content: &str,
     pos: &[SingleLineSpan],
+    content_start: SingleLineSpan,
     opposite_content: &str,
     opposite_pos: &[SingleLineSpan],
     kind: AtomKind,
@@ -742,7 +743,7 @@ fn split_atom_words(
                         },
                         pos: content_newlines.from_region_relative_to(
                             // TODO: don't assume a single line atom.
-                            pos[0],
+                            content_start,
                             offset,
                             offset + word.len(),
                         )[0],
@@ -753,9 +754,11 @@ fn split_atom_words(
             lcs_diff::DiffResult::Both(word, opposite_word) => {
                 // This word is present on both sides.
                 // TODO: don't assume this atom is on a single line.
-                let word_pos =
-                    content_newlines.from_region_relative_to(pos[0], offset, offset + word.len())
-                        [0];
+                let word_pos = content_newlines.from_region_relative_to(
+                    content_start,
+                    offset,
+                    offset + word.len(),
+                )[0];
                 let opposite_word_pos = opposite_content_newlines.from_region_relative_to(
                     opposite_pos[0],
                     opposite_offset,
@@ -868,7 +871,14 @@ impl MatchedPos {
 
                 // GitComet: words are placed relative to the atom's first line, so
                 // a string that starts with a newline needs its empty first span.
-                split_atom_words(this_content, atom_pos, opposite_content, opposite_pos, kind)
+                split_atom_words(
+                    this_content,
+                    &pos,
+                    atom_pos[0],
+                    opposite_content,
+                    opposite_pos,
+                    kind,
+                )
             }
             Unchanged(opposite) => {
                 let opposite_pos = match opposite {
@@ -1248,6 +1258,7 @@ mod tests {
         let res = split_atom_words(
             content,
             &pos,
+            pos[0],
             opposite_content,
             &opposite_pos,
             AtomKind::Comment,

@@ -81,9 +81,9 @@ Changes against the baseline (`git log -- vendor/difftastic`):
   Perl grammar; the other `.scm` files there are upstream's.
 - Fallback reasons are a typed `TextFallbackReason`, and `display/json.rs` builds
   plain data instead of JSON.
-- `MatchedPos::new` places a changed string's words relative to the atom's full
-  line spans, so a string that starts with a newline (a Perl heredoc) keeps its
-  rows.
+- `split_atom_words` anchors a changed string's words on the atom's first line
+  span, which `MatchedPos::new` filtered out when it was empty, so a string that
+  starts with a newline (a Perl heredoc) keeps its rows.
 
 To upgrade, rebuild the baseline for the new tag by the recipe, diff it against
 this import's tree, and apply that upstream diff to `difftastic/`. Then

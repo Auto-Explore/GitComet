@@ -122,6 +122,18 @@ fn perl_substitution_and_heredoc_mark_words_on_their_own_lines() {
 }
 
 #[test]
+fn replaced_heredoc_leaves_the_opener_line_unmarked() {
+    assert_eq!(
+        compare_texts(
+            "script.pl",
+            "print <<END;\nx\nEND\n",
+            "print <<END;\nq r s t u\nEND\n"
+        ),
+        "Perl | 0:0 1:1 2:2 | L1[0-1] R1[0-9]; L2[0-3] R2[0-3]"
+    );
+}
+
+#[test]
 fn latex_change_marks_the_edited_words() {
     assert_eq!(
         compare_texts(
@@ -130,6 +142,14 @@ fn latex_change_marks_the_edited_words() {
             "\\section{Introduction}\nHello there, world.\n"
         ),
         "LaTeX | 0:0 1:1 | L0[9-14] R0[9-21]; L1[] R1[6-11,11-12]"
+    );
+}
+
+#[test]
+fn removed_last_line_is_an_old_only_row() {
+    assert_eq!(
+        compare_texts("a.py", "x = 1\ny = 2\n", "x = 1\n"),
+        "Python | 0:0 1:- | L1[0-1,2-3,4-5]"
     );
 }
 

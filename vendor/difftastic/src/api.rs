@@ -103,14 +103,14 @@ pub fn compare(input: Input<'_>) -> Comparison {
 // Upstream counts the empty line after a final newline; the caller's lines stop
 // before it.
 struct LineCounts {
-    old: u32,
-    new: u32,
+    old: usize,
+    new: usize,
 }
 
 impl LineCounts {
     fn aligned_line(&self, old: Option<u32>, new: Option<u32>) -> Option<AlignedLine> {
-        let old = old.filter(|line| *line < self.old);
-        let new = new.filter(|line| *line < self.new);
+        let old = old.filter(|line| (*line as usize) < self.old);
+        let new = new.filter(|line| (*line as usize) < self.new);
         match (old, new) {
             (Some(old), Some(new)) => Some(AlignedLine::Both { old, new }),
             (Some(old), None) => Some(AlignedLine::Old(old)),
@@ -120,8 +120,12 @@ impl LineCounts {
     }
 
     fn chunk_line(&self, line: json::Line) -> Option<ChunkLine> {
-        let old = line.lhs.filter(|side| side.line_number < self.old);
-        let new = line.rhs.filter(|side| side.line_number < self.new);
+        let old = line
+            .lhs
+            .filter(|side| (side.line_number as usize) < self.old);
+        let new = line
+            .rhs
+            .filter(|side| (side.line_number as usize) < self.new);
         match (old, new) {
             (Some(old), Some(new)) => Some(ChunkLine::Both {
                 old: line_ranges(old),
@@ -134,8 +138,8 @@ impl LineCounts {
     }
 }
 
-fn line_count(source: &str) -> u32 {
-    u32::try_from(source.split_terminator('\n').count()).unwrap_or(u32::MAX)
+fn line_count(source: &str) -> usize {
+    source.split_terminator('\n').count()
 }
 
 // Upstream's CLI adds the newline before diffing, so "foo" and "foo\n" compare
