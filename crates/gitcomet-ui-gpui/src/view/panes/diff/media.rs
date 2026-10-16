@@ -1,7 +1,7 @@
 //! The diff pane's image and diagram previews: inputs, menus and saved
 //! sampling preferences around the media crate's widgets.
 use super::*;
-use crate::view::diagram_preview::{DiagramInput, DiagramPreview};
+use crate::view::diagram_preview::{DiagramInput, DiagramPlacement, DiagramPreview};
 use crate::view::image_preview::{
     self, Group, ImageMenu, ImageSamplingMode, ImageSmoothFilter, Input, Preferences,
 };
@@ -285,11 +285,10 @@ impl DiffRenderer {
         let preview = |id: &'static str, input: Option<DiagramInput>| match input {
             Some(input) => DiagramPreview {
                 id: id.into(),
-                input,
                 theme,
                 source_element: None,
                 force_source: false,
-                embedded: false,
+                placement: DiagramPlacement::Pane(input),
             }
             .into_any_element(),
             None => components::empty_state_message(theme, "No diagram").into_any_element(),

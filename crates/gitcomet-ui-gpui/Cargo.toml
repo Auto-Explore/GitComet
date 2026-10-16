@@ -95,6 +95,7 @@ gpui_platform = { workspace = true, features = ["windows-wgpu"] }
 gpui_wgpu = { workspace = true }
 
 [dev-dependencies]
+gitcomet-diagrams = { workspace = true, features = ["test-support"] }
 # Activate the optional backend for history activation tests with real Git data.
 gitcomet-git-gix = { workspace = true }
 # Activate the optional sidecar writer for the measurement tests.

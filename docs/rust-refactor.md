@@ -358,8 +358,7 @@ The second round, planned on 2026-10-15, is recorded in
 above: the layering direction is preserved while crates may be added and
 `gitcomet-state` may be split into an API crate and a runtime crate, and tests
 move with the code they test, proven by `inventory.py` parity modulo the
-documented module-prefix mapping. `scripts/ci/ratchets.py` records the structure
-counts the round drives and fails when one regresses.
+documented module-prefix mapping.
 
 ### Round 2 migration notes
 

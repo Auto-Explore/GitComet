@@ -1,5 +1,6 @@
 //! Device-pixel image inspection shared by files, diffs and conflict previews.
 use gitcomet_ui_kit::theme::AppTheme;
+use gitcomet_ui_kit::zoom_wheel::ZoomStep;
 use gpui::App;
 use gpui::Entity;
 use gpui::IntoElement;
@@ -48,8 +49,7 @@ pub enum ImageMenu {
 pub enum Zoom {
     Fit,
     Scale(f64),
-    In,
-    Out,
+    Step(ZoomStep),
 }
 
 struct Side {
@@ -81,8 +81,7 @@ pub struct Group {
     active: usize,
     cap_fit: bool,
     dragging: Option<(usize, Point<Pixels>)>,
-    // Ctrl/Cmd+scroll distance not yet spent on a zoom step.
-    zoom_scroll: f32,
+    zoom_wheel: gitcomet_ui_kit::zoom_wheel::ZoomWheel,
 }
 
 /// Re-renders an owner when its next animation frame is due.
@@ -179,7 +178,7 @@ impl Group {
             active: 0,
             cap_fit: false,
             dragging: None,
-            zoom_scroll: 0.0,
+            zoom_wheel: Default::default(),
         }
     }
 
@@ -196,7 +195,7 @@ impl Group {
             self.linked = true;
             self.paused = false;
             self.dragging = None;
-            self.zoom_scroll = 0.0;
+            self.zoom_wheel = Default::default();
             self.active = inputs.iter().position(|i| i.source.is_some()).unwrap_or(0);
         }
         let mut changed = reset;
@@ -278,17 +277,11 @@ impl Group {
         self.layout(index);
         let view = self.sides[index].device_size;
         let camera = &mut self.sides[index].camera;
+        let anchor = pointer.unwrap_or((view.0 / 2.0, view.1 / 2.0));
         match zoom {
             Zoom::Fit => camera.fit = true,
-            _ => {
-                let next = match zoom {
-                    Zoom::Scale(s) => s,
-                    Zoom::In => camera.step(true),
-                    Zoom::Out => camera.step(false),
-                    Zoom::Fit => unreachable!(),
-                };
-                camera.zoom(next, pointer.unwrap_or((view.0 / 2.0, view.1 / 2.0)), view);
-            }
+            Zoom::Scale(scale) => camera.zoom(scale, anchor, view),
+            Zoom::Step(step) => camera.zoom(camera.step(step), anchor, view),
         }
         self.layout(index);
         cx.notify();
@@ -315,8 +308,6 @@ impl Group {
         cx.notify();
     }
 
-    /// Ctrl/Cmd+scroll: one step per wheel notch or per 40 px of smooth
-    /// scrolling, so a trackpad gesture does not run through every level.
     fn wheel_zoom(
         &mut self,
         index: usize,
@@ -326,25 +317,11 @@ impl Group {
         cx: &mut gpui::Context<Self>,
     ) {
         self.active = index;
-        let (delta, step) = match event.delta {
-            gpui::ScrollDelta::Lines(lines) => (lines.y, 1.0),
-            gpui::ScrollDelta::Pixels(pixels) => (f32::from(pixels.y), 40.0),
-        };
-        if event.touch_phase == gpui::TouchPhase::Started || delta * self.zoom_scroll < 0.0 {
-            self.zoom_scroll = 0.0;
-        }
-        self.zoom_scroll += delta;
-        if self.zoom_scroll.abs() < step {
+        let Some(step) = self.zoom_wheel.step(event) else {
             return;
-        }
-        let zoom = if self.zoom_scroll > 0.0 {
-            Zoom::In
-        } else {
-            Zoom::Out
         };
-        self.zoom_scroll = 0.0;
         self.zoom(
-            zoom,
+            Zoom::Step(step),
             Some((
                 f64::from(f32::from(pointer.x)) * dpr,
                 f64::from(f32::from(pointer.y)) * dpr,

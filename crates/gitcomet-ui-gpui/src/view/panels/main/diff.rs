@@ -1131,6 +1131,7 @@ impl DiffRenderer {
         };
         // One document listener serves both sides of a split.
         let row_boxes = rows::MarkdownRowBoxes::default();
+        let diagram_heights = crate::view::diagram_preview::block::DiagramHeights::new(cx);
         let context =
             |this: &Self, region: DiffTextRegion, side: usize| rows::MarkdownDocumentContext {
                 theme,
@@ -1149,6 +1150,7 @@ impl DiffRenderer {
                 query: query.clone(),
                 reveal: this.markdown_interaction.reveal.clone(),
                 scroll: Some(scroll_handle.clone()),
+                diagram_heights: diagram_heights.clone(),
                 hovered_link: this.markdown_interaction.hovered_link.clone(),
                 change_extents: Some(this.diff_markdown.change_extents.clone()),
                 layout: this.diff_markdown.layouts[side].clone(),

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub mod scene;
+pub mod source;
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

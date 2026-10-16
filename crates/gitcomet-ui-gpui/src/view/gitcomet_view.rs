@@ -1373,6 +1373,7 @@ impl GitCometView {
             update_check_in_flight: false,
             update_check_manual_feedback_requested: false,
             ui_scale_percent: ui_scale.percent,
+            zoom_wheel: Default::default(),
             open_repo_panel: false,
             open_repo_input,
             home,

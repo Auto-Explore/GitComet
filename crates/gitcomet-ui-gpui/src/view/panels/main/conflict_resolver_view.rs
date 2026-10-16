@@ -2572,6 +2572,7 @@ impl DiffRenderer {
                     query,
                     reveal: column.reveal,
                     scroll: Some(handle.clone()),
+                    diagram_heights: crate::view::diagram_preview::block::DiagramHeights::new(cx),
                     hovered_link: None,
                     change_extents: None,
                     tasks_editable: false,
