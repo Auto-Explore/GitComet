@@ -836,7 +836,7 @@ impl TextInput {
 
     pub(super) fn previous_word_start(&self, offset: usize) -> usize {
         let content = self.content.snapshot();
-        let mut offset = offset.min(content.len());
+        let mut offset = self.clamp_to_char_boundary(offset);
 
         // Skip any whitespace to the left of the cursor.
         offset = Self::skip_left_while(&content, offset, |ch| ch.is_whitespace());
@@ -853,7 +853,7 @@ impl TextInput {
 
     pub(super) fn next_word_end(&self, offset: usize) -> usize {
         let content = self.content.snapshot();
-        let offset = offset.min(content.len());
+        let offset = self.clamp_to_char_boundary(offset);
         let Some(ch) = content.chars_at(offset).next() else {
             return content.len();
         };

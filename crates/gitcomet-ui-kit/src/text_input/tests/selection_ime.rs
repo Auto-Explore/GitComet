@@ -207,6 +207,21 @@ fn word_moves_cross_rows_like_the_flat_text(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// An offset inside a character walks from that character's start, so a word
+/// move lands on a boundary inside the text.
+#[gpui::test]
+fn word_moves_from_inside_a_character_start_at_it(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text("aé", cx);
+
+            assert_eq!(input.previous_word_start(2), 0);
+            assert_eq!(input.next_word_end(2), 3);
+        });
+    });
+}
+
 /// Word moves after an edit read the characters they pass, not a flattened
 /// copy of the document.
 #[gpui::test]
