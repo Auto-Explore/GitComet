@@ -1,5 +1,5 @@
 use crate::bundled_fonts;
-use gpui::{BorrowAppContext, FontFeatures, Window};
+use gpui::{App, BorrowAppContext, FontFeatures, TextSystem, Window};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -84,15 +84,15 @@ pub fn editor_font_options(window: &Window) -> Arc<[String]> {
     Arc::clone(&font_option_catalog(window).editor_options)
 }
 
-pub fn applied_ui_font_family(selection: &str) -> String {
+pub fn applied_ui_font_family(selection: &str, cx: &App) -> String {
     applied_font_family(selection, || {
-        &system_font_catalog(None).resolved_system_ui_family
+        &system_font_catalog(cx.text_system()).resolved_system_ui_family
     })
 }
 
-pub fn applied_editor_font_family(selection: &str) -> String {
+pub fn applied_editor_font_family(selection: &str, cx: &App) -> String {
     applied_font_family(selection, || {
-        &system_font_catalog(None).resolved_system_ui_family
+        &system_font_catalog(cx.text_system()).resolved_system_ui_family
     })
 }
 
@@ -133,12 +133,9 @@ where
     cx.update_default_global::<AppFontPreferences, _>(|prefs, _cx| prefs.clone())
 }
 
-pub fn current_editor_font_family<C>(cx: &mut C) -> String
-where
-    C: BorrowAppContext,
-{
+pub fn current_editor_font_family(cx: &mut App) -> String {
     let selection = current(cx).editor_font_family;
-    applied_editor_font_family(&selection)
+    applied_editor_font_family(&selection, cx)
 }
 
 /// Stored font choices, as a settings store keeps them.
@@ -210,58 +207,25 @@ where
 
 fn build_font_options(window: &Window, specials: &[&str]) -> Vec<String> {
     build_font_options_from_names(
-        system_font_catalog(Some(window)).all_families.as_ref(),
+        system_font_catalog(window.text_system())
+            .all_families
+            .as_ref(),
         specials,
     )
 }
 
-fn system_font_catalog(window: Option<&Window>) -> &'static SystemFontCatalog {
-    if let Some(catalog) = SYSTEM_FONT_CATALOG.get() {
-        return catalog;
-    }
-
-    if let Some(window) = window {
-        return SYSTEM_FONT_CATALOG.get_or_init(|| collect_system_font_catalog(window));
-    }
-
-    SYSTEM_FONT_CATALOG.get_or_init(collect_fontdb_system_font_catalog)
+fn system_font_catalog(text_system: &TextSystem) -> &'static SystemFontCatalog {
+    SYSTEM_FONT_CATALOG.get_or_init(|| collect_system_font_catalog(text_system))
 }
 
-fn collect_system_font_catalog(window: &Window) -> SystemFontCatalog {
-    let all_families = normalize_font_names(window.text_system().all_font_names());
+fn collect_system_font_catalog(text_system: &TextSystem) -> SystemFontCatalog {
+    let all_families = normalize_font_names(text_system.all_font_names());
     let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
 
     SystemFontCatalog {
         all_families: all_families.into(),
         resolved_system_ui_family,
     }
-}
-
-fn collect_fontdb_system_font_catalog() -> SystemFontCatalog {
-    let all_families = collect_fontdb_families();
-    let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
-
-    SystemFontCatalog {
-        all_families: all_families.into(),
-        resolved_system_ui_family,
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    static FONTDB_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-fn collect_fontdb_families() -> Vec<String> {
-    #[cfg(test)]
-    FONTDB_SCANS.with(|scans| scans.set(scans.get() + 1));
-    let mut db = fontdb::Database::new();
-    bundled_fonts::load_into_fontdb(&mut db);
-    db.load_system_fonts();
-    normalize_font_names(
-        db.faces()
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone())),
-    )
 }
 
 fn normalize_font_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -426,17 +390,6 @@ fn font_option_catalog(window: &Window) -> &'static FontOptionCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A window lists its own fonts. Reading every installed font file on top
-    /// of that took ~17 ms of UI thread at the first Settings open.
-    #[gpui::test]
-    fn window_font_catalog_reads_no_font_files(cx: &mut gpui::TestAppContext) {
-        let window = cx.add_empty_window();
-        window.update(|window, _cx| {
-            collect_system_font_catalog(window);
-        });
-        assert_eq!(FONTDB_SCANS.with(std::cell::Cell::get), 0);
-    }
 
     #[test]
     fn bundled_font_startup_and_application_do_not_enumerate_system_fonts() {
