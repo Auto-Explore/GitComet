@@ -1110,7 +1110,7 @@ impl Driver {
                     .state
                     .repos
                     .iter()
-                    .any(|repo| repo.spec.workdir == *path);
+                    .any(|repo| repo_witness_paths_match(&repo.spec.workdir, path));
             }
             let Some(repo) = view.active_repo() else {
                 return false;
@@ -1150,7 +1150,7 @@ impl Driver {
                 }
                 WitnessKind::RepoClosed { .. } => unreachable!("answered above"),
                 WitnessKind::RepoOpen { path } => {
-                    repo.spec.workdir == *path
+                    repo_witness_paths_match(&repo.spec.workdir, path)
                         && matches!(repo.open, Loadable::Ready(()))
                         && matches!(repo.status, Loadable::Ready(_))
                         && matches!(repo.history_state.log, Loadable::Ready(_))
@@ -1534,6 +1534,15 @@ fn canonical(path: &std::path::Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+fn repo_witness_paths_match(actual: &std::path::Path, expected: &std::path::Path) -> bool {
+    // Windows canonicalization adds a verbatim prefix that the backend strips.
+    // Normalize only for comparison: keep the original paths for filesystem IO,
+    // including UNC paths and paths longer than MAX_PATH.
+    actual == expected
+        || gitcomet_core::path_utils::strip_windows_verbatim_prefix(actual.to_path_buf())
+            == gitcomet_core::path_utils::strip_windows_verbatim_prefix(expected.to_path_buf())
+}
+
 fn write_fixture_files(
     originals: &[(PathBuf, Option<Vec<u8>>)],
     contents: Option<&str>,
@@ -1561,6 +1570,54 @@ fn write_fixture_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn repo_witness_paths_match_windows_canonical_disk_paths() {
+        let dir = tempfile::tempdir().expect("temporary repository path");
+        let expected = canonical(dir.path()).expect("canonical repository path");
+        let actual = gitcomet_core::path_utils::strip_windows_verbatim_prefix(expected.clone());
+        assert_ne!(
+            actual, expected,
+            "exercise the backend/canonical prefix mismatch"
+        );
+        assert!(repo_witness_paths_match(&actual, &expected));
+        assert!(repo_witness_paths_match(&expected, &actual));
+        assert!(!repo_witness_paths_match(&actual.join("other"), &expected));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repo_witness_paths_match_windows_unc_paths() {
+        let actual = std::path::Path::new(r"\\server\share\repo");
+        let expected = std::path::Path::new(r"\\?\UNC\server\share\repo");
+        assert!(repo_witness_paths_match(actual, expected));
+        assert!(repo_witness_paths_match(expected, actual));
+        assert!(!repo_witness_paths_match(
+            std::path::Path::new(r"\\server\other-share\repo"),
+            expected,
+        ));
+        assert!(!repo_witness_paths_match(
+            std::path::Path::new(r"\\other-server\share\repo"),
+            expected,
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repo_witness_paths_match_windows_long_paths_without_filesystem_access() {
+        let relative = "long-component\\".repeat(24) + "repo";
+        for (ordinary_root, verbatim_root) in [
+            (r"C:\", r"\\?\C:\"),
+            (r"\\server\share\", r"\\?\UNC\server\share\"),
+        ] {
+            let actual = PathBuf::from(format!("{ordinary_root}{relative}"));
+            let expected = PathBuf::from(format!("{verbatim_root}{relative}"));
+            assert!(actual.as_os_str().len() > 260);
+            assert!(repo_witness_paths_match(&actual, &expected));
+            assert!(!repo_witness_paths_match(&actual.join("other"), &expected));
+        }
+    }
 
     /// Every step shape scripts/profiling/live-ui.py writes must parse; a
     /// rename on either side would otherwise fail only in a live run.
