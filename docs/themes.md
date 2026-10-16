@@ -352,4 +352,4 @@ These values are numeric and control the corner radius used by major UI elements
 - A file that cannot be read or parsed is ignored and reported with its path and reason. So are files skipped for a reserved file name and themes skipped for a built-in key: **Settings → Appearance** lists each one under the theme tiles.
 - GitComet validates the structure and types of custom themes, but does not
   measure, warn about, reject, or alter their colors based on contrast.
-- GitComet does not expose a separate machine-readable JSON Schema file today; the implementation in [`crates/gitcomet-ui-gpui/src/theme.rs`](crates/gitcomet-ui-gpui/src/theme.rs) is the source of truth.
+- GitComet does not expose a separate machine-readable JSON Schema file today; the implementation in [`crates/gitcomet-ui-kit/src/theme.rs`](../crates/gitcomet-ui-kit/src/theme.rs) is the source of truth.

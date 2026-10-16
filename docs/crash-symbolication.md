@@ -19,7 +19,7 @@ produced it.
 ## The Two Kinds of Crash Report
 
 **GitComet's own crash log.** Written by the panic hook in
-[`crates/gitcomet/src/crashlog.rs`](../crates/gitcomet/src/crashlog.rs) whenever a
+[`crates/gitcomet-app/src/crashlog.rs`](../crates/gitcomet-app/src/crashlog.rs) whenever a
 Rust panic occurs:
 
 | OS | Location |
