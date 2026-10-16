@@ -41,6 +41,17 @@ fn run_helper(command: &mut Command) -> std::process::Output {
 fn answer(askpass: &AskPassScript, auth: Option<&PromptAuth>, prompt: &str) -> String {
     let mut command = Command::new(askpass.path());
     command.arg(prompt).stdin(Stdio::null());
+    respond(command, askpass, auth)
+}
+
+/// [`answer`] through [`raw_prompt_command`], as Git for Windows runs the
+/// helper. `Command` turns `%` into `%%cd:~,%` for a batch file, which the
+/// helper reads back verbatim, so a percent-encoded username never matched.
+fn answer_raw(askpass: &AskPassScript, auth: Option<&PromptAuth>, prompt: &str) -> String {
+    respond(raw_prompt_command(askpass, prompt), askpass, auth)
+}
+
+fn respond(mut command: Command, askpass: &AskPassScript, auth: Option<&PromptAuth>) -> String {
     configure_git_auth_prompt(&mut command, auth, askpass);
     let output = run_helper(&mut command);
     assert!(output.status.success(), "askpass helper did not complete");
@@ -310,7 +321,7 @@ fn credential_and_host_requests_keep_their_typed_challenges() {
 fn typed_credentials_answer_only_their_own_host() {
     let _lock = auth_test_lock();
     clear_session_passphrase();
-    for (challenge_prompt, username, password_prompt) in [
+    for (challenge_prompt, login, password_prompt) in [
         (
             "Username for 'https://git.example.com': ",
             "alice",
@@ -343,29 +354,29 @@ fn typed_credentials_answer_only_their_own_host() {
         );
         let auth = PromptAuth::Explicit(StagedGitAuth {
             kind: GitAuthKind::UsernamePassword,
-            username: Some(username.to_string()),
+            username: Some(login.to_string()),
             secret: "test-password".to_string(),
             challenge: Some(request),
         });
         let askpass = create_askpass_script().expect("askpass helper");
-        let case = format!("{challenge_prompt:?} typed as {username:?}");
+        let case = format!("{challenge_prompt:?} typed as {login:?}");
 
         assert_eq!(
-            answer(
+            answer_raw(
                 &askpass,
                 Some(&auth),
                 "Username for 'https://git.example.com': "
             ),
-            username,
+            login,
             "{case}"
         );
         assert_eq!(
-            answer(&askpass, Some(&auth), password_prompt),
+            answer_raw(&askpass, Some(&auth), password_prompt),
             "test-password",
             "{case}"
         );
         assert_eq!(
-            answer(
+            answer_raw(
                 &askpass,
                 Some(&auth),
                 "Username for 'https://other.example.net': "
@@ -374,7 +385,7 @@ fn typed_credentials_answer_only_their_own_host() {
             "another host's username prompt after {case}"
         );
         assert_eq!(
-            answer(
+            answer_raw(
                 &askpass,
                 Some(&auth),
                 "Password for 'https://alice@other.example.net': "
@@ -536,10 +547,11 @@ fn independent_key_validation_proves_unlock_and_handles_rejection_cancel_and_unk
     clear_session_passphrase();
 }
 
-/// Runs the helper with a prompt spanning several lines, as OpenSSH does for
-/// host keys. `Command` refuses such batch arguments, so Windows gets the
-/// helper on a raw `cmd.exe` command line, where OpenSSH's request also lands.
-fn multiline_prompt_command(askpass: &AskPassScript, prompt: &str) -> Command {
+/// Builds the helper's command so Windows gets it on a raw `cmd.exe` command
+/// line, where Git's and OpenSSH's requests land. `Command` refuses a batch
+/// argument spanning several lines, as OpenSSH's host-key prompts do, and
+/// rewrites `%`.
+fn raw_prompt_command(askpass: &AskPassScript, prompt: &str) -> Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
@@ -572,7 +584,7 @@ ED25519 key fingerprint is SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU.\n
 This key is not known by any other names.\n\
 Are you sure you want to continue connecting (yes/no/[fingerprint])?";
     let askpass = create_askpass_script().expect("askpass helper");
-    let mut command = multiline_prompt_command(&askpass, prompt);
+    let mut command = raw_prompt_command(&askpass, prompt);
     configure_git_auth_prompt(&mut command, None, &askpass);
     let output = run_helper(&mut command);
     assert!(output.status.success());
@@ -624,7 +636,7 @@ fn host_key_confirmation_answers_only_the_host_the_user_saw() {
     let auth = explicit_auth(&request, "yes");
     let askpass = create_askpass_script().expect("askpass helper");
     let answer_multiline = |prompt: &str| {
-        let mut command = multiline_prompt_command(&askpass, prompt);
+        let mut command = raw_prompt_command(&askpass, prompt);
         configure_git_auth_prompt(&mut command, Some(&auth), &askpass);
         let output = run_helper(&mut command);
         assert!(output.status.success());
@@ -652,7 +664,7 @@ fn host_key_confirmation_answers_only_the_host_the_user_saw() {
         secret: "yes".to_string(),
         challenge: None,
     });
-    let mut command = multiline_prompt_command(&askpass, &confirmed);
+    let mut command = raw_prompt_command(&askpass, &confirmed);
     configure_git_auth_prompt(&mut command, Some(&unbound), &askpass);
     let output = run_helper(&mut command);
     assert_eq!(
@@ -700,7 +712,7 @@ fn a_replay_asks_about_an_earlier_host_left_unanswered() {
         });
         let askpass = create_askpass_script().expect("askpass helper");
         for prompt in [&first, &second] {
-            let mut command = multiline_prompt_command(&askpass, prompt);
+            let mut command = raw_prompt_command(&askpass, prompt);
             configure_git_auth_prompt(&mut command, Some(&auth), &askpass);
             assert!(run_helper(&mut command).status.success());
         }

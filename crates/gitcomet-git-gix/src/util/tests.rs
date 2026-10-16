@@ -44,6 +44,15 @@ fn fnv_preserves_existing_cache_hashes() {
 }
 
 #[test]
+fn literal_paths_turn_off_msys_globbing_and_keep_inherited_options() {
+    assert_eq!(msys_without_globbing(None), "noglob");
+    assert_eq!(
+        msys_without_globbing(Some("winsymlinks:nativestrict glob".into())),
+        "winsymlinks:nativestrict glob noglob"
+    );
+}
+
+#[test]
 fn activity_progress_deadline_survives_continuous_small_chunks() {
     let start = Instant::now();
     let mut buffer = ActivityOutputBuffer::default();
