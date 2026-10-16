@@ -2311,6 +2311,7 @@ fn unified_body_line_count(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::status::tests::open_repo;
 
     #[test]
     fn chunked_reads_retry_interruptions_and_remain_cancellable() {
@@ -2475,11 +2476,6 @@ mod tests {
                 ("user.email", "test@example.com"),
             ],
         );
-    }
-
-    fn open_repo(workdir: &Path) -> GixRepo {
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
     }
 
     #[test]

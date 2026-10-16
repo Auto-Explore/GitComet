@@ -878,11 +878,24 @@ mod tests {
         std::fs::write(dir.join("unstaged.bin"), b"smudged payload\n").unwrap();
         std::fs::write(dir.join("untracked.bin"), b"new payload\n").unwrap();
         write_file(dir, "content.bin", "content\nedited\n");
+        // Listed by hand: the status walk itself re-reads the racily clean
+        // `staged.bin` through the filter, which is not the counts' doing.
+        let entries = [
+            ("unstaged.bin", FileStatusKind::Modified),
+            ("untracked.bin", FileStatusKind::Untracked),
+            ("intent.bin", FileStatusKind::Added),
+            ("content.bin", FileStatusKind::Modified),
+        ]
+        .map(|(path, kind)| FileStatus {
+            path: path.into(),
+            kind,
+            conflict: None,
+        });
         let repo = open_repo(dir);
         take_worktree_reads_for_tests();
         for _ in 0..2 {
             let stats = repo
-                .uncommitted_line_stats_impl(&CancellationToken::new())
+                .line_stats_for_entries_impl(&entries, &CancellationToken::new())
                 .unwrap();
             for path in ["unstaged.bin", "untracked.bin", "intent.bin", "content.bin"] {
                 assert_eq!(

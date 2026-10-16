@@ -1918,6 +1918,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::repo::status::tests::open_repo;
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
@@ -2002,11 +2003,6 @@ mod tests {
                 ("user.email", "test@example.com"),
             ],
         );
-    }
-
-    fn open_repo(workdir: &Path) -> GixRepo {
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
     }
 
     /// A submodule whose own nested submodule pointer `vendor/x` moves in

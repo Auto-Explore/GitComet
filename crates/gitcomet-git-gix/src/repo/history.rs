@@ -2275,7 +2275,7 @@ mod tests {
         std::fs::write(path.join("a.txt"), "main\n").unwrap();
         git(&["commit", "-qam", "main"]);
 
-        let repo = super::GixRepo::new(path.to_path_buf(), gix::open(path).unwrap().into_sync());
+        let repo = crate::repo::status::tests::open_repo(path);
         // Cache the pre-merge index in gix's shared snapshot.
         assert!(repo.repo().index_or_empty().is_ok());
         assert!(!repo.index_has_conflicts());

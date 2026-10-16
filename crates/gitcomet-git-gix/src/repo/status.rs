@@ -1596,8 +1596,13 @@ pub(crate) mod tests {
         fs::write(path, contents).expect("write file");
     }
 
+    /// Reads only the repository's own config, as `git_command` runs git: a
+    /// developer's global config must not decide what a test sees.
     pub(crate) fn open_repo(workdir: &Path) -> super::super::GixRepo {
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
+        let thread_safe_repo =
+            crate::open::open_worktree_repo_with(workdir, gix::open::Permissions::isolated())
+                .expect("open repo")
+                .into_sync();
         super::super::GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
     }
 

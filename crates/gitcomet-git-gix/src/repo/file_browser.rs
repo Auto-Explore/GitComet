@@ -275,7 +275,7 @@ fn collect_tree_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::GixRepo;
+    use crate::repo::status::tests::open_repo;
     use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
     use std::fs;
     use std::path::Path;
@@ -326,11 +326,6 @@ mod tests {
         write_file(workdir, path, contents);
         git_success(workdir, &["add", path]);
         git_success(workdir, &["commit", "-m", message]);
-    }
-
-    fn open_repo(workdir: &Path) -> GixRepo {
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
     }
 
     #[test]

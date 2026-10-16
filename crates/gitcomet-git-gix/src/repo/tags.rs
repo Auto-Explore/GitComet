@@ -342,8 +342,7 @@ mod tests {
 
     fn open_repo(workdir: &Path) -> GixRepo {
         run_git(workdir, &["init"]);
-        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+        crate::repo::status::tests::open_repo(workdir)
     }
 
     #[test]
