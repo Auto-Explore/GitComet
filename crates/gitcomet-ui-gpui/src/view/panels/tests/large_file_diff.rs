@@ -4521,6 +4521,33 @@ fn collapsed_source_backed_passes_read_only_visible_rows(cx: &mut gpui::TestAppC
         "a collapsed search rescan read {search_read} bytes"
     );
 
+    // Typing runs the debounced background search over the same rows.
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            let _ = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+            pane.diff_search_input
+                .update(cx, |input, cx| input.set_text("needle new", cx));
+        })
+    });
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(150));
+    cx.run_until_parked();
+    let background_read = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+    cx.update(|_window, app| {
+        let pane = diff_renderer.read(app);
+        assert!(!pane.diff_search_result_pending());
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "the changed row's new line"
+        );
+    });
+    assert!(
+        background_read < 64 * 1024,
+        "a collapsed background search read {background_read} bytes"
+    );
+
     let wrap_read = cx.update(|window, app| {
         diff_renderer.update(app, |pane, cx| {
             pane.diff_search_active = false;

@@ -33,6 +33,16 @@ pub(in crate::view) fn take_search_matchers_built_for_tests() -> usize {
     gitcomet_core::text_search::take_text_search_matchers_built_for_tests()
 }
 
+/// Batches a pass over rows' source-backed text: one handle per file when the
+/// pass visits only a collapsed view's rows, whole files otherwise.
+pub(in crate::view) fn row_pass_batch(collapsed: bool) -> gitcomet_core::file_diff::FileSliceBatch {
+    if collapsed {
+        gitcomet_core::file_diff::batch_file_slice_handles()
+    } else {
+        gitcomet_core::file_diff::batch_file_slice_reads()
+    }
+}
+
 /// The matcher a non-empty query searches with. The query is kept verbatim:
 /// leading and trailing spaces are part of what the user searches for.
 pub(in crate::view) fn diff_search_query_matcher(

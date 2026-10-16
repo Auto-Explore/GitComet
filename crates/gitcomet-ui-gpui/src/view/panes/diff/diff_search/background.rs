@@ -288,6 +288,7 @@ mod tests {
             }),
             wrapped: Arc::from([]),
             streamed: false,
+            collapsed: false,
             previous: Mutex::new(VecDeque::new()),
         }));
         let search = |query, options| {
@@ -407,6 +408,7 @@ mod tests {
             }),
             wrapped: Arc::from([]),
             streamed: false,
+            collapsed: false,
             previous: Mutex::new(VecDeque::new()),
         };
         let document = SearchDocument(DocumentSource::Rows(rows));
@@ -469,6 +471,7 @@ mod tests {
             }),
             wrapped: Arc::from([]),
             streamed: false,
+            collapsed: false,
             previous: Mutex::new(VecDeque::new()),
         };
         let mut matcher = DiffSearchMatcher::new("needle", DiffSearchOptions::default());
@@ -488,6 +491,8 @@ struct RowDocument {
     text: RowText,
     wrapped: Arc<[DiffWrapVisualRow]>,
     streamed: bool,
+    /// The rows are a collapsed view's: a few lines of large sides.
+    collapsed: bool,
     previous: Mutex<VecDeque<SearchCandidates>>,
 }
 
@@ -654,7 +659,7 @@ impl RowDocument {
                 // hundreds of milliseconds on large previews. Scan once and
                 // retain small result sets instead. Keeping broader queries
                 // makes both refinement and backspacing cheap.
-                let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
+                let _batch = super::row_pass_batch(self.collapsed);
                 for ix in (0..self.len).take_while(|_| !matcher.is_cancelled()) {
                     if (0..self.columns).any(|column| {
                         (self.text)(ix, column)
@@ -686,7 +691,7 @@ impl RowDocument {
         }
         // Every row of a source-backed side is read: one read per file, not
         // an open/seek/read per row (and per chunk).
-        let _batch = gitcomet_core::file_diff::batch_file_slice_reads();
+        let _batch = super::row_pass_batch(self.collapsed);
         for column in 0..self.columns {
             let rows = (0..self.len)
                 .take_while(|_| !matcher.is_cancelled())
@@ -894,6 +899,7 @@ impl DiffRenderer {
         }
         let collapsed = (!source_lines && self.is_collapsed_diff_projection_active())
             .then(|| self.collapsed_diff_visible_rows.clone());
+        let collapsed_rows = collapsed.is_some();
         let file_view = if source_lines {
             self.rendered_file_diff_cache_is_current()
         } else {
@@ -1122,6 +1128,7 @@ impl DiffRenderer {
             text,
             wrapped,
             streamed,
+            collapsed: collapsed_rows,
             previous: Mutex::new(VecDeque::new()),
         }))
     }
