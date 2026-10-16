@@ -1,5 +1,6 @@
 use super::*;
-use gitcomet_state::model::{AuthPromptState, PendingCommitRetry};
+use gitcomet_core::domain::CommitDetails;
+use gitcomet_state::model::{AuthPromptState, PendingCommitRetry, RangeSelection};
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -309,9 +310,74 @@ fn indexed_regression_details_fingerprint_tracks_comparison_metadata() {
         repos: vec![repo_state(RepoId(1), "/tmp/indexed-comparison")],
         ..AppState::test_default()
     };
+    state.repos[0].history_state.range_selection = Some(RangeSelection::new(
+        CommitId("a".repeat(40).into()),
+        Some(CommitId("b".repeat(40).into())),
+        "a".into(),
+        "b".into(),
+    ));
     let before = DetailsPaneView::notify_fingerprint(&state);
     state.repos[0].history_state.indexed.rev += 1;
-    assert_ne!(before, DetailsPaneView::notify_fingerprint(&state));
+    let after_index = DetailsPaneView::notify_fingerprint(&state);
+    assert_ne!(before, after_index);
+    state.repos[0].log_rev += 1;
+    assert_ne!(after_index, DetailsPaneView::notify_fingerprint(&state));
+}
+
+/// History pages load and signatures stream in while the user scrolls the
+/// log; outside a comparison the pane shows neither.
+#[test]
+fn details_fingerprint_ignores_history_it_does_not_show() {
+    let shown = CommitId("c".repeat(40).into());
+    let mut state = AppState {
+        active_repo: Some(RepoId(1)),
+        repos: vec![repo_state(RepoId(1), "/tmp/details-history")],
+        ..AppState::test_default()
+    };
+    let history = &mut state.repos[0].history_state;
+    history.commit_details = Loadable::Ready(Arc::new(CommitDetails {
+        id: shown.clone(),
+        message: "shown".into(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
+        committed_at: String::new(),
+        committed_at_unix: 0,
+        parent_ids: Vec::new(),
+        files: Vec::new(),
+    }));
+    let signature = |status| gitcomet_core::domain::CommitSignature {
+        status,
+        format: gitcomet_core::domain::SignatureFormat::OpenPgp,
+        signer: None,
+        key_id: None,
+    };
+    let before = DetailsPaneView::notify_fingerprint(&state);
+
+    let history = &mut state.repos[0].history_state;
+    history.indexed.rev += 1;
+    history.commit_signatures_rev += 1;
+    history.commit_signatures = Arc::new(
+        [(
+            CommitId("d".repeat(40).into()),
+            signature(gitcomet_core::domain::SignatureStatus::Good),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    state.repos[0].log_rev += 1;
+    assert_eq!(DetailsPaneView::notify_fingerprint(&state), before);
+
+    state.repos[0].history_state.commit_signatures_rev += 1;
+    state.repos[0].history_state.commit_signatures = Arc::new(
+        [(
+            shown,
+            signature(gitcomet_core::domain::SignatureStatus::Bad),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    assert_ne!(DetailsPaneView::notify_fingerprint(&state), before);
 }
 
 #[test]

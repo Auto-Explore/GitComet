@@ -140,7 +140,7 @@ pub struct CommitDetails {
 ///
 /// `E` (key missing) and `N` (unsigned) have no variant: both mean "no badge",
 /// and are represented by the absence of a [`CommitSignature`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SignatureStatus {
     /// `G` — good signature from a certified key.
     Good,
@@ -176,7 +176,7 @@ impl SignatureStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SignatureFormat {
     OpenPgp,
     Ssh,
@@ -239,7 +239,7 @@ impl SignatureFormats {
 
 /// A verified commit signature. Only built for commits that earn a badge, so
 /// "absent from the signature map" and "no badge" are the same thing.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CommitSignature {
     pub status: SignatureStatus,
     pub format: SignatureFormat,

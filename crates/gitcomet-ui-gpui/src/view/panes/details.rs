@@ -302,12 +302,19 @@ impl DetailsPaneView {
                 .map(|snapshot| snapshot.revision)
                 .hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
-            repo.history_state.selected_commit_rev.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
-            repo.history_state.indexed.rev.hash(&mut hasher);
-            repo.history_state.commit_details_rev.hash(&mut hasher);
+            let history = &repo.history_state;
+            history.selected_commit_rev.hash(&mut hasher);
+            // Loaded history rows show up only as a comparison's cards.
+            if history.multi_selection.is_multi() || history.range_selection.is_some() {
+                repo.log_rev.hash(&mut hasher);
+                history.indexed.rev.hash(&mut hasher);
+            }
+            history.commit_details_rev.hash(&mut hasher);
             repo.stashes_rev.hash(&mut hasher);
-            repo.history_state.commit_signatures_rev.hash(&mut hasher);
+            // Only the shown commit's signature, not each verified batch.
+            if let Loadable::Ready(details) = &history.commit_details {
+                history.commit_signatures.get(&details.id).hash(&mut hasher);
+            }
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.history_state.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
