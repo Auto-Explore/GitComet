@@ -2,21 +2,33 @@ use super::*;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 /// Caret steps segment only the chunks around the caret, which must agree with
-/// the whole document everywhere: CR LF, combining marks, ZWJ emoji and flag
-/// pairs, at row edges and split across rope chunk seams. The dense texts are
-/// shifted a byte at a time so the seams land inside every kind of cluster.
+/// the whole document everywhere: CR LF, combining marks, ZWJ emoji, flag
+/// pairs and Indic conjuncts, at row edges and split across rope chunk seams.
+/// The dense text is shifted through one whole period, and the test checks that
+/// a seam really lands inside each kind of cluster.
 #[gpui::test]
 fn caret_steps_agree_with_whole_document_graphemes(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
     let unit = "a\r\nb\u{301}\n👩\u{200d}👩\u{200d}👧\r\n🇫🇮🇸🇪\n\ne\u{301}\u{302}x\r\n";
-    let dense = "👩\u{200d}👩\u{200d}👧🇫🇮🇸🇪e\u{301}\u{302}\r\n".repeat(60);
+    let dense = "👩\u{200d}👩\u{200d}👧🇫🇮🇸🇪e\u{301}\u{302}क्ष\r\n";
     let texts = std::iter::once(unit.to_owned())
-        .chain((0..12).map(|pad| format!("{}{dense}", "x".repeat(pad))));
+        .chain((0..dense.len()).map(|pad| format!("{}{}", "x".repeat(pad), dense.repeat(60))));
+    let mut split = std::collections::BTreeSet::new();
     for text in texts {
         let starts: Vec<usize> = text.grapheme_indices(true).map(|(ix, _)| ix).collect();
         cx.update(|_, app| {
             input.update(app, |input, cx| {
                 input.set_text(text.as_str(), cx);
+                let rope = input.content.snapshot().rope();
+                let mut seam = 0;
+                for chunk in rope.chunks() {
+                    seam += chunk.len();
+                    let next = starts.partition_point(|start| *start < seam);
+                    if next > 0 && seam < text.len() && starts.get(next) != Some(&seam) {
+                        let end = starts.get(next).copied().unwrap_or(text.len());
+                        split.insert(cluster_kind(&text[starts[next - 1]..end]));
+                    }
+                }
                 for offset in 0..=text.len() {
                     let before = starts.partition_point(|ix| *ix < offset);
                     let after = starts.partition_point(|ix| *ix <= offset);
@@ -33,6 +45,35 @@ fn caret_steps_agree_with_whole_document_graphemes(cx: &mut gpui::TestAppContext
                 }
             });
         });
+    }
+    for kind in [
+        "ZWJ family",
+        "flag pair",
+        "combining marks",
+        "conjunct",
+        "CR LF",
+    ] {
+        assert!(split.contains(kind), "no chunk seam fell inside a {kind}");
+    }
+}
+
+/// Which kind of cluster the seam test split, by the codepoints that join it.
+fn cluster_kind(cluster: &str) -> &'static str {
+    if cluster.contains('\u{200d}') {
+        "ZWJ family"
+    } else if cluster.contains('\u{94d}') {
+        "conjunct"
+    } else if cluster.contains('\u{301}') {
+        "combining marks"
+    } else if cluster == "\r\n" {
+        "CR LF"
+    } else if cluster
+        .chars()
+        .all(|ch| ('\u{1f1e6}'..='\u{1f1ff}').contains(&ch))
+    {
+        "flag pair"
+    } else {
+        "other"
     }
 }
 

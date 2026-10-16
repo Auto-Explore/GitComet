@@ -1369,8 +1369,8 @@ impl TextInput {
 }
 
 /// Hands `cursor` the text ending at `end`, which it asks for when its own
-/// chunk cannot settle a boundary: a flag pair or ZWJ sequence that started in
-/// an earlier chunk.
+/// chunk cannot settle a boundary: a flag pair, ZWJ sequence or Indic conjunct
+/// that started in an earlier chunk.
 fn provide_grapheme_context(cursor: &mut GraphemeCursor, rope: &Rope, end: usize) {
     let Some(context) = rope.reversed_chunks_in_range(0..end).next() else {
         unreachable!("pre-context is only requested after a nonzero chunk start");
