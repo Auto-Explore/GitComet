@@ -822,7 +822,8 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
             docs.save_all(cx);
         })
     });
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
+    loop {
         cx.run_until_parked();
         let drained = cx.update(|_, app| {
             view.update(app, |view, cx| {
@@ -833,6 +834,10 @@ fn replace_active_destination(cx: &mut gpui::TestAppContext, dirty_destination: 
         if drained {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "document saves did not finish within {DEFAULT_MAIN_PANE_WAIT_TIMEOUT:?}"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     cx.update(|_, app| {

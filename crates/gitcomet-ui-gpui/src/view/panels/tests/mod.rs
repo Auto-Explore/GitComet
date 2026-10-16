@@ -41,7 +41,9 @@ pub(super) fn finish_editor_saves(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    // A save is real disk I/O on two worker threads; loaded Windows CI runners
+    // have taken over 1 s, so this is a hang guard, not a speed check.
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
     loop {
         cx.run_until_parked();
         let drained = cx.update(|_, app| {
@@ -56,7 +58,7 @@ pub(super) fn finish_editor_saves(
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "filesystem save did not finish"
+            "filesystem save did not finish within {DEFAULT_MAIN_PANE_WAIT_TIMEOUT:?}"
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
