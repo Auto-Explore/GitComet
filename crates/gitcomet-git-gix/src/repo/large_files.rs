@@ -76,7 +76,7 @@ pub(crate) fn strip_annex_filter(repo: &mut gix::Repository) {
     }
     let mut config = repo.config_snapshot_mut();
     while config
-        .remove_section("filter", Some(gix::bstr::BStr::new(ANNEX_FILTER_DRIVER)))
+        .remove_section("filter", ANNEX_FILTER_DRIVER)
         .is_some()
     {}
 }
