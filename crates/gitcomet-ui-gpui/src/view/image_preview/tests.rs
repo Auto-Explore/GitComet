@@ -374,7 +374,6 @@ impl Render for Harness {
 
 #[gpui::test]
 fn image_preview_regression_svg_conflict_keeps_encoded_fallback(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="300">
         <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
         <rect width="1100" height="300" fill="#c86432" filter="url(#blur)"/>
@@ -471,7 +470,6 @@ fn image_preview_regression_svg_conflict_keeps_encoded_fallback(cx: &mut gpui::T
 
 #[gpui::test]
 fn viewport_wheel_zoom_pan_drag_and_keyboard(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let input = source(1000, 1000);
     let (view, cx) = cx.add_window_view(|_, cx| Harness {
         group: cx.new(|cx| {
@@ -604,7 +602,6 @@ fn clamped_pan_keeps_fit(cx: &mut gpui::TestAppContext) {
 /// went from 100% to 6400%.
 #[gpui::test]
 fn trackpad_ctrl_scroll_steps_by_distance(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let input = source(1000, 1000);
     let (view, cx) = cx.add_window_view(|_, cx| Harness {
         group: cx.new(|cx| {

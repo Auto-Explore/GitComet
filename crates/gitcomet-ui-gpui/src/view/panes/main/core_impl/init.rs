@@ -47,6 +47,7 @@ impl MainPaneView {
         let remote_markdown_image_policy = preferences.security.remote_markdown_images;
         let auto_save_file_edits = preferences.file_editing.auto_save;
         let history_show_graph = preferences.history.show_graph;
+        let history_show_graph_gradient = preferences.history.show_graph_gradient;
         let history_show_author = preferences.history.show_author;
         let history_show_date = preferences.history.show_date;
         let history_show_sha = preferences.history.show_sha;
@@ -300,6 +301,7 @@ impl MainPaneView {
                 history_relative_dates,
                 history_highlight_commit_chain,
                 history_show_graph,
+                history_show_graph_gradient,
                 history_show_author,
                 history_show_date,
                 history_show_sha,

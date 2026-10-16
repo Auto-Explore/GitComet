@@ -1275,6 +1275,39 @@ fn history_highlight_commit_chain_round_trips_and_defaults_to_unset() {
 }
 
 #[test]
+fn history_show_graph_gradient_round_trips_and_survives_other_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    assert_eq!(load_from_path(&path).history_show_graph_gradient, None);
+
+    for enabled in [false, true] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph_gradient: Some(enabled),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["history_show_graph_gradient"], enabled);
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph: Some(true),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+        persist_recent_repo_to_path(dir.path(), &path).unwrap();
+        assert_eq!(
+            load_from_path(&path).history_show_graph_gradient,
+            Some(enabled)
+        );
+    }
+}
+
+#[test]
 fn remove_recent_repo_drops_matching_entry() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-remove-recent-repo-test-{}-{}",

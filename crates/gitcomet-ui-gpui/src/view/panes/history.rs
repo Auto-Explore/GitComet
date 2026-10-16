@@ -1154,6 +1154,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_col_sha: Pixels,
     pub(in super::super) history_branch_names: HistoryBranchNamesMode,
     pub(in super::super) history_show_graph: bool,
+    pub(in super::super) history_show_graph_gradient: bool,
     pub(in super::super) history_show_author: bool,
     pub(in super::super) history_show_date: bool,
     pub(in super::super) history_show_sha: bool,
@@ -1393,6 +1394,7 @@ impl HistoryView {
         history_relative_dates: bool,
         history_highlight_commit_chain: bool,
         history_show_graph: bool,
+        history_show_graph_gradient: bool,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
@@ -1535,6 +1537,7 @@ impl HistoryView {
             history_col_sha: default_widths.sha,
             history_branch_names,
             history_show_graph,
+            history_show_graph_gradient,
             history_show_author,
             history_show_date,
             history_show_sha,
@@ -2038,6 +2041,18 @@ impl HistoryView {
             return;
         }
         self.history_highlight_commit_chain = enabled;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_history_show_graph_gradient(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_show_graph_gradient == enabled {
+            return;
+        }
+        self.history_show_graph_gradient = enabled;
         cx.notify();
     }
 

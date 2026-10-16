@@ -209,7 +209,6 @@ fn the_base_cache_indexes_every_visible_commit_by_id() {
 fn indexed_author_runs_do_not_change_at_window_edges(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::history_index::HISTORY_BLOCK_SIZE;
 
-    let _guard = crate::test_support::lock_visual_test();
     let (index, commits) = super::refresh::indexed_fixture(3 * HISTORY_BLOCK_SIZE);
     let (view, cx, mut state, store) =
         super::refresh::mount(cx, Arc::new(log_page(commits.clone(), None)));

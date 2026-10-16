@@ -1725,7 +1725,6 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
 fn conflict_canvas_clicks_cannot_transfer_between_rows(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

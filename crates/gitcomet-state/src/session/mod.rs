@@ -79,6 +79,7 @@ pub struct UiSession {
     pub untracked_height: Option<u32>,
     pub history_branch_names: Option<String>,
     pub history_show_graph: Option<bool>,
+    pub history_show_graph_gradient: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -262,6 +263,8 @@ pub(crate) struct UiSessionFile {
     history_branch_names: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     history_show_graph: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    history_show_graph_gradient: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     history_show_author: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
@@ -533,6 +536,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
             .or(file.untracked_height),
         history_branch_names: file.history_branch_names,
         history_show_graph: file.history_show_graph,
+        history_show_graph_gradient: file.history_show_graph_gradient,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,

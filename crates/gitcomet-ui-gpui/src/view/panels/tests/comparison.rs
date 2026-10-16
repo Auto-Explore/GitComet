@@ -715,7 +715,6 @@ mod worktree_uncommitted {
     #[gpui::test]
     fn worktree_filters_activate_on_key_release_like_other_controls(cx: &mut gpui::TestAppContext) {
         use crate::view::rows::{CommitFileFilter, FileListId};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = draw_worktree(
             cx,
             RepoId(103),

@@ -736,7 +736,6 @@ mod tests {
     /// size, so height is the observable that separates them.
     #[gpui::test]
     fn secondary_heading_renders_smaller_than_the_primary(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = crate::theme::AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_window, _cx| HeadingBlock { theme });
         crate::test_support::redraw(cx);
@@ -867,7 +866,6 @@ mod tests {
     /// drawn as given: dropping them left a blank slot.
     #[gpui::test]
     fn extension_menu_icons_draw_their_asset(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_, _| ExtensionIcon { theme });
         crate::test_support::redraw(cx);
@@ -882,7 +880,6 @@ mod tests {
     fn review_collapse_commands_do_not_inherit_group_header_background(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::from_key("sunset_veil").unwrap();
         let (_view, cx) = cx.add_window_view(|_, _| RowKinds { theme });
         crate::test_support::redraw(cx);
@@ -898,7 +895,6 @@ mod tests {
     #[gpui::test]
     fn every_menu_row_kind_shares_one_height(cx: &mut gpui::TestAppContext) {
         for density in crate::appearance::UiDensity::ALL {
-            let _guard = crate::test_support::lock_visual_test();
             cx.update(|app| {
                 app.set_global(crate::appearance::Appearance {
                     density,

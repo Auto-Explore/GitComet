@@ -22,6 +22,28 @@ pub use signature_map::CommitSignatureMap;
 
 pub type Shared<T> = Arc<T>;
 
+/// The entries of a feedback queue appended after entry number `after`.
+///
+/// Notifications, diagnostics and command results are numbered from 1 in the
+/// order they are queued, and `seq` is the newest entry's number. The store
+/// drops entries from the front once the window acknowledges them, so a
+/// queue's length says nothing about which entries are new. An `after` past
+/// `seq` predates a restart of the numbering (a new repository lifetime), so
+/// every queued entry is newer.
+fn feedback_after<T>(entries: &[T], seq: u64, after: u64) -> &[T] {
+    let newer = usize::try_from(seq.wrapping_sub(after))
+        .unwrap_or(usize::MAX)
+        .min(entries.len());
+    &entries[entries.len() - newer..]
+}
+
+/// Drops the entries numbered `through` or lower, keeping any queued after the
+/// acknowledgement was sent.
+fn acknowledge_feedback<T>(entries: &mut Vec<T>, seq: u64, through: u64) {
+    let unacknowledged = feedback_after(entries, seq, through).len();
+    entries.drain(..entries.len() - unacknowledged);
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Loadable<T> {
     NotLoaded,

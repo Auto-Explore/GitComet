@@ -241,7 +241,6 @@ fn opened_urls(opened: &Opened) -> Vec<String> {
 
 #[gpui::test]
 fn the_only_web_page_is_handed_to_the_browser(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = remote_browser_view(
         cx,
         ready(vec![
@@ -268,7 +267,6 @@ fn the_only_web_page_is_handed_to_the_browser(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn several_web_pages_open_a_picker_with_origin_selected(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = remote_browser_view(cx, ready(two_web_remotes()));
 
     let opened = open_with_stub(cx, &view);
@@ -298,7 +296,6 @@ fn several_web_pages_open_a_picker_with_origin_selected(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn nothing_to_open_warns_instead_of_launching(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, view, cx) = remote_browser_view(cx, ready(Vec::new()));
 
     for (ix, (remotes, message)) in [
@@ -334,7 +331,6 @@ fn nothing_to_open_warns_instead_of_launching(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn without_a_repository_nothing_happens(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(backend);
     let (view, cx) =
@@ -356,7 +352,6 @@ fn press(cx: &mut gpui::VisualTestContext, keystroke: &str) {
 
 #[gpui::test]
 fn secondary_k_toggles_the_picker(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = remote_browser_view(cx, ready(two_web_remotes()));
     // Nothing focused: only the app-level handler can hear the chord.
     focus_detached_window_focus(cx);
@@ -388,7 +383,6 @@ fn secondary_k_toggles_the_picker(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn secondary_k_in_the_command_palette_swaps_it_for_the_picker(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = remote_browser_view(cx, ready(two_web_remotes()));
 
     press(cx, "secondary-p");
@@ -416,7 +410,6 @@ fn secondary_k_in_the_command_palette_swaps_it_for_the_picker(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn secondary_k_warns_once_per_press_without_a_web_remote(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = remote_browser_view(cx, ready(Vec::new()));
     let warning = (
         components::ToastKind::Warning,
@@ -436,7 +429,6 @@ fn secondary_k_warns_once_per_press_without_a_web_remote(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn the_palette_command_opens_the_picker_and_tracks_the_remotes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, view, cx) = remote_browser_view(cx, ready(two_web_remotes()));
     let unavailable = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
@@ -469,7 +461,6 @@ fn the_palette_command_opens_the_picker_and_tracks_the_remotes(cx: &mut gpui::Te
 
 #[gpui::test]
 fn a_failed_launch_is_reported_as_an_error_toast(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = remote_browser_view(
         cx,
         ready(vec![remote("origin", Some("git@github.com:org/repo.git"))]),
@@ -510,7 +501,6 @@ fn a_failed_launch_is_reported_as_an_error_toast(cx: &mut gpui::TestAppContext) 
 
 #[gpui::test]
 fn the_picker_replaces_an_open_go_to_dialog(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = remote_browser_view(cx, ready(two_web_remotes()));
     press(cx, "secondary-g");
     assert!(
@@ -533,7 +523,6 @@ fn the_picker_replaces_an_open_go_to_dialog(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn an_open_picker_follows_the_remotes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, view, cx) = remote_browser_view(cx, ready(two_web_remotes()));
     let _ = open_with_stub(cx, &view);
     assert!(cx.debug_bounds("open_remote_in_browser_1").is_some());
@@ -557,7 +546,6 @@ fn an_open_picker_follows_the_remotes(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn secondary_k_without_a_repository_does_nothing(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (view, cx) =

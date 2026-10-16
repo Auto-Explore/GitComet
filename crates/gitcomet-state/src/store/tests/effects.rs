@@ -31,6 +31,7 @@ fn schedule_effect_with_state_for_test(
             history_find_executor: &std::sync::LazyLock::new(|| {
                 super::super::executor::TaskExecutor::new(1)
             }),
+            filesystem_executor: &super::executor::FILESYSTEM_QUEUE,
         },
         &thread_state,
         backend,

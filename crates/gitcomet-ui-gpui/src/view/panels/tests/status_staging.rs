@@ -652,7 +652,6 @@ fn exercise_with_failure(
 
 #[gpui::test]
 fn staging_buttons_keep_the_opposite_diff_open(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::All, Surface::Row, Surface::Selected] {
         exercise(
             cx,
@@ -675,7 +674,6 @@ fn staging_buttons_keep_the_opposite_diff_open(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn staging_buttons_close_only_the_affected_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for surface in [Surface::All, Surface::Row, Surface::Selected] {
             exercise(cx, area, surface, Viewed::Diff(area), "a.txt", true);
@@ -688,7 +686,6 @@ fn staging_buttons_close_only_the_affected_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn staging_buttons_preserve_content_and_unsaved_editors(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for surface in [Surface::All, Surface::Row] {
             for viewed in [Viewed::Content, Viewed::Editor] {
@@ -700,7 +697,6 @@ fn staging_buttons_preserve_content_and_unsaved_editors(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn staging_split_sections_only_close_included_diffs(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     exercise(
         cx,
         DiffArea::Unstaged,
@@ -729,7 +725,6 @@ fn staging_split_sections_only_close_included_diffs(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn staging_confirmation_preserves_opposite_diff_and_content(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for viewed in [Viewed::Diff(DiffArea::Staged), Viewed::Content] {
         exercise(
             cx,
@@ -752,7 +747,6 @@ fn staging_confirmation_preserves_opposite_diff_and_content(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn staging_menus_preserve_opposite_diffs_and_file_content(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::ContextMenu, Surface::CommandPalette] {
         for (area, opposite) in [
             (DiffArea::Unstaged, DiffArea::Staged),
@@ -766,7 +760,6 @@ fn staging_menus_preserve_opposite_diffs_and_file_content(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn failed_staging_preserves_the_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for failure in [Failure::IndexLocked, Failure::GitUnavailable] {
         for area in [DiffArea::Unstaged, DiffArea::Staged] {
             for surface in [Surface::All, Surface::Folder, Surface::CommandPalette] {
@@ -783,7 +776,6 @@ fn failed_staging_preserves_the_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn palette_unstage_all_includes_both_sides_of_a_rename(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     exercise(
         cx,
         DiffArea::Staged,
@@ -796,7 +788,6 @@ fn palette_unstage_all_includes_both_sides_of_a_rename(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn staging_folders_and_palette_close_only_affected_diffs(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         let opposite = if area == DiffArea::Unstaged {
             DiffArea::Staged
@@ -840,7 +831,6 @@ fn staging_folders_and_palette_close_only_affected_diffs(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn staging_shortcuts_consume_the_selected_paths(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for key in [
             "space",
@@ -871,7 +861,6 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
     use crate::view::FileListLayout;
     use crate::view::rows::CommitFileSort;
 
-    let _guard = lock_visual_test();
     for section in [
         StatusSection::CombinedUnstaged,
         StatusSection::Unstaged,
@@ -1064,7 +1053,6 @@ fn status_section_space_after_mouse_selection_advances_and_keeps_list_focus(
 
 #[gpui::test]
 fn staging_a_row_preserves_an_unrelated_multi_selection(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         exercise(
             cx,
@@ -1079,7 +1067,6 @@ fn staging_a_row_preserves_an_unrelated_multi_selection(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn discarding_files_closes_only_the_affected_unstaged_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for surface in [Surface::DiscardSelected, Surface::DiscardPath] {
         for (viewed, path, closes) in [
             (Viewed::Diff(DiffArea::Unstaged), "a.txt", true),
@@ -1134,7 +1121,6 @@ fn conflicted_merge(dir: &Path) {
 
 #[gpui::test]
 fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     std::fs::write(dir.path().join("b.txt"), "base\nchanged\n").unwrap();
@@ -1211,7 +1197,6 @@ enum EditorKeyFocus {
 /// so no key may stage the on-disk file underneath unsaved edits.
 #[gpui::test]
 fn editing_keys_save_the_buffer_and_never_stage(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for focus in [EditorKeyFocus::Panel, EditorKeyFocus::Search] {
         press_editor_keys(cx, focus);
     }
@@ -1316,7 +1301,6 @@ fn press_editor_keys(cx: &mut gpui::TestAppContext, focus: EditorKeyFocus) {
 
 #[gpui::test]
 fn resolve_button_menu_discards_a_conflict_as_ours(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();

@@ -74,7 +74,6 @@ fn row_selector(section: CollapsedSidebarSection, index: usize) -> &'static str 
 
 #[gpui::test]
 fn auxiliary_sidebar_lists_and_popups_keep_rendering_bounded(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -209,7 +208,6 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
 
 #[gpui::test]
 fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -289,7 +287,6 @@ fn scoped_popover_rows_share_density_and_keep_search_fixed(cx: &mut gpui::TestAp
 fn an_open_popover_reuses_its_rows_without_copying_the_persisted_sets(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -387,7 +384,6 @@ pub(super) fn file_fixture(count: usize) -> Arc<AppState> {
 /// is the one that must not build an element per row.
 #[gpui::test]
 fn collapsed_files_popover_renders_a_bounded_window(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

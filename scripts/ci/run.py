@@ -460,6 +460,18 @@ def feature_args(selection):
     return args
 
 
+def split_binary_list(messages):
+    """nextest prints cargo's messages, which the cache prunes units by, beside its own binary list."""
+    cargo, listing = [], []
+    for line in messages.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            (cargo if "reason" in json.loads(line) else listing).append(line)
+    if len(listing) != 1:
+        raise RuntimeError(f"expected one nextest binary list in {messages}, found {len(listing)}")
+    messages.write_text("".join(f"{line}\n" for line in cargo), encoding="utf-8")
+    (messages.parent / "binaries.json").write_text(listing[0] + "\n", encoding="utf-8")
+
+
 def compile_tests(context, profile, test_targets=()):
     directory = paths(context)
     selection = CONTEXTS[context]
@@ -471,10 +483,13 @@ def compile_tests(context, profile, test_targets=()):
     run(f"{context}-features", ["cargo", "tree", "--locked", *selection,
         "--edges", "normal,build,dev", "--prefix", "none", "--format", "{p}|{f}"],
         output=directory / "features.txt")
+    messages = directory / "cargo-messages.jsonl"
     run(f"{context}-compile", ["cargo", "nextest", "list", *selection, *targets,
         "--locked", "--cargo-profile", profile, "--timings",
-        "--list-type", "binaries-only", "--message-format", "json"],
-        output=directory / "binaries.json", env=windows_linker_environment())
+        "--list-type", "binaries-only", "--message-format", "json",
+        "--cargo-message-format", "json-render-diagnostics"],
+        output=messages, env=windows_linker_environment())
+    split_binary_list(messages)
     prepare_runtime_binaries(context)
     run(f"{context}-inventory", ["cargo", "nextest", "list", *reuse_args(context),
         "--message-format", "json", "--ignore-default-filter"], output=directory / "tests.json")

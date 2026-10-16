@@ -1096,8 +1096,23 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_history_show_graph_gradient(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view.update(cx, |view, cx| {
+            view.set_history_show_graph_gradient(enabled, cx)
+        });
+        cx.notify();
+    }
+
     pub(in crate::view) fn history_highlight_commit_chain(&self, cx: &App) -> bool {
         self.history_view.read(cx).history_highlight_commit_chain
+    }
+
+    pub(in crate::view) fn history_show_graph_gradient(&self, cx: &App) -> bool {
+        self.history_view.read(cx).history_show_graph_gradient
     }
 
     pub(in crate::view) fn set_history_relative_dates(

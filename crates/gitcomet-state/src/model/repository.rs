@@ -235,6 +235,45 @@ pub struct RepoFeedbackState {
     pub(crate) command_log_operation_id: Option<GitOperationId>,
 }
 
+impl RepoFeedbackState {
+    /// Queues a diagnostic for the window.
+    pub fn push_diagnostic(&mut self, entry: DiagnosticEntry) {
+        self.diagnostics_seq = self.diagnostics_seq.wrapping_add(1);
+        self.diagnostics.push(entry);
+    }
+
+    /// Queues a command result for the window.
+    pub fn push_command_result(&mut self, entry: CommandLogEntry) {
+        self.command_log_seq = self.command_log_seq.wrapping_add(1);
+        self.command_log.push(entry);
+    }
+
+    /// Diagnostics queued after diagnostic number `seq`.
+    pub fn diagnostics_after(&self, seq: u64) -> &[DiagnosticEntry] {
+        super::feedback_after(&self.diagnostics, self.diagnostics_seq, seq)
+    }
+
+    /// Command results queued after result number `seq`.
+    pub fn command_log_after(&self, seq: u64) -> &[CommandLogEntry] {
+        super::feedback_after(&self.command_log, self.command_log_seq, seq)
+    }
+
+    /// Releases the diagnostics and command results the window has shown, up
+    /// to the given numbers.
+    pub fn acknowledge(&mut self, diagnostics_through_seq: u64, command_log_through_seq: u64) {
+        super::acknowledge_feedback(
+            &mut self.diagnostics,
+            self.diagnostics_seq,
+            diagnostics_through_seq,
+        );
+        super::acknowledge_feedback(
+            &mut self.command_log,
+            self.command_log_seq,
+            command_log_through_seq,
+        );
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiagnosticEntry {
     pub time: SystemTime,

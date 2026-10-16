@@ -5,7 +5,9 @@ use gitcomet_core::large_files::LargeFileCommand;
 use gitcomet_core::services::PullMode;
 use gitcomet_state::model::{CloneOpStatus, GitHookOperationStatus, RepoId};
 use gitcomet_state::msg::FetchMsg;
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 use std::time::SystemTime;
 
 pub(super) struct Operation {
@@ -20,6 +22,9 @@ pub(super) struct Operation {
     started_wall: SystemTime,
     cancel_at: Option<Instant>,
     terminal_reported: bool,
+    /// Results the window showed for this repository while the operation ran.
+    command_results: Rc<RefCell<Vec<gitcomet_state::model::CommandLogEntry>>>,
+    _command_results: gpui::Subscription,
 }
 
 impl Driver {
@@ -146,6 +151,15 @@ impl Driver {
                 _ => return Err(format!("unknown scenario operation: {name}")),
             }
         };
+        let command_results = Rc::new(RefCell::new(Vec::new()));
+        let command_results_subscription = cx.update(|cx| {
+            let command_results = Rc::clone(&command_results);
+            cx.subscribe(&self.view, move |_, event: &CommandResultShown, _| {
+                if event.repo_id == repo_id {
+                    command_results.borrow_mut().push(event.entry.clone());
+                }
+            })
+        });
         let op = op_trace::next_op();
         self.operation = Some(Operation {
             op,
@@ -159,16 +173,13 @@ impl Driver {
             started_wall: SystemTime::now(),
             cancel_at: None,
             terminal_reported: false,
+            command_results,
+            _command_results: command_results_subscription,
         });
         record(
             "scenario_operation",
             json!({"op": op, "name": name, "state": "started"}),
         );
-        cx.update(|cx| {
-            self.view.update(cx, |view, _| {
-                view.scenario_command_results = Some(Vec::new());
-            });
-        });
         {
             let _scope = op_trace::scope(op);
             store.dispatch(msg);
@@ -223,12 +234,12 @@ impl Driver {
             // completion. Their command result still witnesses it; never
             // interpret mere disappearance as success.
             let Some(item) = item else {
-                let results = self.view.read(cx).scenario_command_results.as_ref()?;
-                return results
+                return operation
+                    .command_results
+                    .borrow()
                     .iter()
                     .rev()
-                    .filter(|(repo_id, _)| *repo_id == operation.repo)
-                    .find_map(|(_, entry)| {
+                    .find_map(|entry| {
                         completion_from_log(
                             entry,
                             operation.label,
@@ -280,14 +291,6 @@ impl Driver {
         Ok(())
     }
 
-    fn finish_operation(&mut self, cx: &mut AsyncApp) {
-        self.operation.take();
-        cx.update(|cx| {
-            self.view
-                .update(cx, |view, _| view.scenario_command_results = None);
-        });
-    }
-
     pub(super) async fn wait_operation(
         &mut self,
         timeout_ms: u64,
@@ -301,7 +304,7 @@ impl Driver {
         loop {
             match self.operation_status(cx) {
                 Some(Ok(Some(was_cancelled))) => {
-                    self.finish_operation(cx);
+                    self.operation.take();
                     return if was_cancelled == cancelled {
                         Ok(())
                     } else {
@@ -309,7 +312,7 @@ impl Driver {
                     };
                 }
                 Some(Err(error)) => {
-                    self.finish_operation(cx);
+                    self.operation.take();
                     return Err(error);
                 }
                 _ => {}

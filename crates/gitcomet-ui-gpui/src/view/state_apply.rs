@@ -64,17 +64,6 @@ fn outer_failure_after_hooks(operation: &GitHookOperation) -> bool {
             .any(|hook| hook.status == GitHookRunStatus::Failed)
 }
 
-/// How many entries at the end of a feedback queue arrived after the previous
-/// snapshot. The store drops entries once the window acknowledges them, so
-/// the queue's length says nothing on its own; its sequence counts every
-/// append. Snapshots assembled without a sequence fall back to the length.
-fn new_feedback_entries(len: usize, seq: u64, old_len: usize, old_seq: u64) -> usize {
-    usize::try_from(seq.wrapping_sub(old_seq))
-        .unwrap_or(usize::MAX)
-        .max(len.saturating_sub(old_len))
-        .min(len)
-}
-
 impl GitCometView {
     pub(super) fn sync_workspace_and_registry(&mut self, cx: &mut gpui::Context<Self>) {
         let session_repos = session::snapshot_repos_from_state(self.state.as_ref());
@@ -279,19 +268,14 @@ impl GitCometView {
         // Reported once each after the diff: some failures are recorded both
         // as a notification and as a diagnostic, and one event is one error.
         let mut error_reports: Vec<ErrorReport> = Vec::new();
-        let new_notification_count = new_feedback_entries(
-            next.notifications.len(),
-            next.notifications_seq,
-            self.state.notifications.len(),
-            self.state.notifications_seq,
-        );
-        if new_notification_count > 0 {
+        let new_notifications = next
+            .notifications_after(self.state.notifications_seq)
+            .to_vec();
+        if !new_notifications.is_empty() {
             follow_up_msgs.push(Msg::AcknowledgeNotifications {
                 through_seq: next.notifications_seq,
             });
         }
-        let new_notifications =
-            next.notifications[next.notifications.len() - new_notification_count..].to_vec();
         for notification in new_notifications {
             let kind = match notification.kind {
                 AppNotificationKind::Warning => components::ToastKind::Warning,
@@ -308,25 +292,18 @@ impl GitCometView {
 
         for next_repo in &next.repos {
             let feedback = &next_repo.feedback;
-            let old_feedback = self
+            // The numbering restarts with each lifetime of the repository.
+            let (old_diagnostics_seq, old_command_log_seq) = self
                 .state
                 .repos
                 .iter()
-                .find(|r| r.id == next_repo.id)
-                .map(|r| &r.feedback);
-            let new_diagnostic_count = new_feedback_entries(
-                feedback.diagnostics.len(),
-                feedback.diagnostics_seq,
-                old_feedback.map_or(0, |old| old.diagnostics.len()),
-                old_feedback.map_or(0, |old| old.diagnostics_seq),
-            );
-            let new_command_count = new_feedback_entries(
-                feedback.command_log.len(),
-                feedback.command_log_seq,
-                old_feedback.map_or(0, |old| old.command_log.len()),
-                old_feedback.map_or(0, |old| old.command_log_seq),
-            );
-            if new_diagnostic_count > 0 || new_command_count > 0 {
+                .find(|r| r.id == next_repo.id && r.lifetime() == next_repo.lifetime())
+                .map_or((0, 0), |r| {
+                    (r.feedback.diagnostics_seq, r.feedback.command_log_seq)
+                });
+            let new_diagnostics = feedback.diagnostics_after(old_diagnostics_seq);
+            let new_command_entries = feedback.command_log_after(old_command_log_seq);
+            if !new_diagnostics.is_empty() || !new_command_entries.is_empty() {
                 follow_up_msgs.push(Msg::AcknowledgeRepoFeedback {
                     repo_id: next_repo.id,
                     lifetime: next_repo.lifetime(),
@@ -335,8 +312,7 @@ impl GitCometView {
                 });
             }
 
-            let new_diag_messages = feedback.diagnostics
-                [feedback.diagnostics.len() - new_diagnostic_count..]
+            let new_diag_messages = new_diagnostics
                 .iter()
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
@@ -350,18 +326,11 @@ impl GitCometView {
                 error_reports.push(ErrorReport::message(Some(next_repo.id), msg));
             }
 
-            let new_command_entries = feedback.command_log
-                [feedback.command_log.len() - new_command_count..]
-                .iter()
-                .collect::<Vec<_>>();
-            if let Some(results) = self.scenario_command_results.as_mut() {
-                results.extend(
-                    new_command_entries
-                        .iter()
-                        .map(|entry| (next_repo.id, (*entry).clone())),
-                );
-            }
-            for entry in &new_command_entries {
+            for entry in new_command_entries {
+                cx.emit(CommandResultShown {
+                    repo_id: next_repo.id,
+                    entry: entry.clone(),
+                });
                 if entry.command.starts_with("telemetry.") || entry.handled_by_auth_prompt {
                     continue;
                 }

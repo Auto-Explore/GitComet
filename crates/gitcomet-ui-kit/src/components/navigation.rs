@@ -332,7 +332,6 @@ mod nav_tab_tests {
     /// underlined with the accent.
     #[gpui::test]
     fn nav_tabs_name_their_parts_and_underline_the_selected_tab(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_, _| Tabs { theme });
         crate::test_support::redraw(cx);
@@ -407,7 +406,6 @@ mod nav_tab_tests {
     /// icon only.
     #[gpui::test]
     fn bar_tabs_fill_the_bar_and_underline_the_selected_tab(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_, _| Bar { theme });
         crate::test_support::redraw(cx);

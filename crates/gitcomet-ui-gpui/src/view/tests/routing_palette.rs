@@ -359,7 +359,6 @@ fn a_selected_remote_branch_survives_a_remote_name_containing_a_slash() {
 
 #[gpui::test]
 fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -394,7 +393,6 @@ fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui:
 
 #[gpui::test]
 fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -444,7 +442,6 @@ fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::Test
 
 #[gpui::test]
 fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -480,7 +477,6 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -517,7 +513,6 @@ fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::
 fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -586,7 +581,6 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
 fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -903,7 +897,6 @@ fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette
 
 #[gpui::test]
 fn window_deactivation_clears_live_pointer_feedback(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (_view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -927,7 +920,6 @@ fn window_deactivation_clears_live_pointer_feedback(cx: &mut gpui::TestAppContex
 fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -971,7 +963,6 @@ fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
 /// lower modal when the upper is dismissed.
 #[gpui::test]
 fn reveal_commit_and_the_command_palette_never_stack(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1015,7 +1006,6 @@ fn reveal_commit_and_the_command_palette_never_stack(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1061,7 +1051,6 @@ fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::Test
 /// can drift apart.
 #[gpui::test]
 fn reveal_commit_dialog_toggles_and_escapes_without_latching(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1096,7 +1085,6 @@ fn reveal_commit_dialog_toggles_and_escapes_without_latching(cx: &mut gpui::Test
 /// already can be a tag, and that is where asking starts.
 #[gpui::test]
 fn reveal_commit_asks_git_only_once_the_query_could_be_a_reference(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1139,7 +1127,6 @@ fn reveal_commit_asks_git_only_once_the_query_could_be_a_reference(cx: &mut gpui
 /// full id, so the history walk matches loaded rows outright.
 #[gpui::test]
 fn reveal_commit_enter_reveals_the_resolved_full_id(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
     let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
@@ -1236,7 +1223,6 @@ fn open_palette_on_ready_repo(
 /// greyed out, with a hover tooltip saying why — and Enter does nothing.
 #[gpui::test]
 fn command_palette_keeps_unavailable_commands_listed_with_a_reason(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = open_palette_on_ready_repo(cx, false);
 
     cx.simulate_input("abort merge");
@@ -1277,7 +1263,6 @@ fn command_palette_keeps_unavailable_commands_listed_with_a_reason(cx: &mut gpui
 /// through the action bar's own confirmation.
 #[gpui::test]
 fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (_store, view, cx) = open_palette_on_ready_repo(cx, true);
 
     cx.simulate_input("abort merge");

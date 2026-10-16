@@ -12,6 +12,7 @@ from itertools import product
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -48,6 +49,29 @@ perf_metadata = live_ui.perf_metadata
 lfs_spec = importlib.util.spec_from_file_location("lfs_performance", Path(__file__).resolve().parents[1] / "profiling/lfs-performance.py")
 lfs_performance = importlib.util.module_from_spec(lfs_spec)
 lfs_spec.loader.exec_module(lfs_performance)
+
+
+GIT_REPOSITORY_ENVIRONMENT = patch.dict(os.environ)
+
+
+def setUpModule():
+    # Hooks and `git rebase --exec` export GIT_DIR and friends; tests run git in temporary repositories.
+    GIT_REPOSITORY_ENVIRONMENT.start()
+    local = subprocess.run(["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True)
+    for name in local.stdout.split():
+        os.environ.pop(name, None)
+
+
+def tearDownModule():
+    GIT_REPOSITORY_ENVIRONMENT.stop()
+
+
+def nextest_compile_output(name, command, *, output=None, **kwargs):
+    # `cargo nextest list --cargo-message-format json-render-diagnostics`: cargo's messages, then the binary list.
+    if name.endswith("-compile"):
+        Path(output).write_text('{"reason": "build-finished", "success": true}\n'
+                                '{"rust-build-meta": {}, "rust-binaries": {}}\n')
+    return 0
 
 
 class LfsFixtureTests(unittest.TestCase):
@@ -466,6 +490,7 @@ class CacheTests(unittest.TestCase):
 
     def test_compatible_prefix_restore_reports_actual_bundle_mode(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache, "REPORTS", Path(directory) / "target/ci-reports"), \
                 patch.dict(os.environ, {"CI_CACHE_HIT": "false", "CI_CACHE_RESTORED": "true",
                                        "CI_CACHE_MATCHED_KEY": "compatible-older-lockfile", "CI_COLD_CACHE": "false"}, clear=True), \
                 redirect_stdout(io.StringIO()):
@@ -474,9 +499,9 @@ class CacheTests(unittest.TestCase):
             source.write_text("retained timestamp")
             os.utime(source, (1700000000, 1700000000))
             bundle = root / "cache.tar.gz"
-            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, "target/ci-test/deps/libexternal.rlib")], mode="dependencies")
+            cache.write_bundle(bundle, [(source, "cargo/registry/src/source"), (source, "target/ci-test/deps/libexternal.rlib")], mode="compiled")
             details = cache.restore(bundle, root / "cargo", root / "target")
-            self.assertEqual(details["mode"], "dependencies")
+            self.assertEqual(details["mode"], "compiled")
             self.assertEqual((root / "cargo/registry/src/source").stat().st_mtime, 1700000000)
             self.assertTrue((root / "target/ci-test/deps/libexternal.rlib").exists())
             reports = root / "target/ci-reports"
@@ -484,28 +509,26 @@ class CacheTests(unittest.TestCase):
             (reports / "cache-unpack.json").write_text(json.dumps(details))
             cache.report_restore()
             state = json.loads((reports / "cache-restore.json").read_text())
-            self.assertEqual(state["mode"], "dependencies")
+            self.assertEqual(state["mode"], "compiled")
             self.assertEqual(state["CI_CACHE_HIT"], "false")
             self.assertEqual(state["CI_CACHE_RESTORED"], "true")
             with patch.dict(os.environ, {"CI_COLD_CACHE": "true"}):
                 cache.report_restore()
                 self.assertEqual(json.loads((reports / "cache-restore.json").read_text())["mode"], "bypassed")
 
-    def test_cache_migration_waits_for_replacements_in_the_same_scope(self):
-        def entry(key, scope="refs/heads/dev"):
-            return {"key": key, "ref": scope, "created_at": "2026-09-19"}
-        native = entry("gitcomet-ci-v1-windows-x64-workspace-ci-test-old")
-        bench = entry("gitcomet-ci-v1-windows-x64-benchmarks-ci-bench-old")
-        unrelated = entry("release-cache")
-        other_scope = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new", "refs/heads/main")
-        self.assertEqual(report.obsolete_caches([native, bench, unrelated, other_scope]), [])
-        replacement = entry("gitcomet-ci-v2-deps-windows-x64-workspace-ci-test-compat-new")
-        sources = entry("gitcomet-ci-v2-sources-windows-new")
-        obsolete = report.obsolete_caches([native, bench, unrelated, other_scope, replacement, sources])
-        self.assertCountEqual(obsolete, [native, bench])
-        layout = dict(entry("gitcomet-ci-v2-sources-windows-layout-new"), created_at="2026-09-20")
-        obsolete = report.obsolete_caches([native, bench, unrelated, other_scope, replacement, sources, layout])
-        self.assertCountEqual(obsolete, [native, bench, sources])
+    def test_pruning_keeps_the_newest_bundle_per_scope_and_context(self):
+        def entry(key, created_at, scope="refs/heads/dev"):
+            return {"key": key, "ref": scope, "created_at": created_at}
+        with patch.object(report, "COMPILED_BUDGETS_MIB", {"windows-x64-workspace-ci-test": 1}):
+            older = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-old", "2026-09-19")
+            newer = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-new", "2026-09-20")
+            other_scope = entry("gitcomet-ci-v2-compiled-windows-x64-workspace-ci-test-compat-old", "2026-09-19",
+                                "refs/heads/main")
+            sources = entry("gitcomet-ci-v2-sources-windows-layout1-deps", "2026-09-19")
+            relaid_sources = entry("gitcomet-ci-v2-sources-windows-layout2-deps", "2026-09-20")
+            unrelated = entry("release-cache", "2026-09-18")
+            obsolete = report.obsolete_caches([older, newer, other_scope, sources, relaid_sources, unrelated])
+        self.assertCountEqual(obsolete, [older, sources])
 
     def test_roundtrip_preserves_dependency_and_source_but_no_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -518,7 +541,7 @@ class CacheTests(unittest.TestCase):
             os.utime(source, (1700000000, 1700000000))
             (cargo / "credentials.toml").write_text("never archive")
             bundle = root / "bundle.tar.gz"
-            cache.write_bundle(bundle, list(cache.source_entries(cargo)))
+            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"demo-1.0"}, [])))
             restored = root / "restored"
             cache.restore(bundle, restored, root / "target")
             result = restored / source.relative_to(cargo)
@@ -539,7 +562,7 @@ class CacheTests(unittest.TestCase):
                 path.parent.mkdir(parents=True)
                 path.write_text("content")
             bundle = root / "bundle.tar.gz"
-            cache.write_bundle(bundle, list(cache.source_entries(cargo)))
+            cache.write_bundle(bundle, list(cache.extracted_entries(cargo, {"cc-1.4.7"}, [checkout])))
             restored = root / "restored"
             cache.restore(bundle, restored, root / "target")
             for kept in (module, nested):
@@ -571,28 +594,247 @@ class CacheTests(unittest.TestCase):
                 {"name": "gitcomet-core", "source": None, "targets": [{"name": "gitcomet_core"}]},
                 {"name": "vendored-grammar", "source": None, "targets": [{"name": "vendored_grammar"}]},
             ]}
-            entries = list(cache.dependency_entries(root, metadata))
+            entries = list(cache.dependency_entries(root, metadata, {"0123456789abcdef"}))
             self.assertEqual([p.name for p, _ in entries], ["libserde-0123456789abcdef.rlib"])
 
-    def test_oversized_bundle_is_not_published(self):
+    def cache_job(self, root):
+        # A finished CI job after a prefix restore: current and stale units, current and older crates.
+        cargo, target = root / "cargo-home", root / "target"
+        files = {
+            "cargo-home/registry/cache/index-0000/serde-1.0.2.crate": "current crate",
+            "cargo-home/registry/cache/index-0000/serde-1.0.1.crate": "older lockfile's crate",
+            "cargo-home/registry/index/index-0000/.cache/se/rd/serde": "index entry",
+            "cargo-home/registry/src/index-0000/serde-1.0.2/src/lib.rs": "current source",
+            "cargo-home/registry/src/index-0000/serde-1.0.1/src/lib.rs": "older lockfile's source",
+            "cargo-home/registry/cache/index-0000/windows-0.62.2.crate": "crate this platform never builds",
+            "cargo-home/registry/src/index-0000/windows-0.62.2/src/lib.rs": "source this platform never builds",
+            "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack": "git database",
+            "cargo-home/git/checkouts/gpui-0000/abcdef0/src/lib.rs": "checkout",
+            "cargo-home/git/checkouts/gpui-0000/1234567/src/lib.rs": "older lockfile's checkout",
+            "cargo-home/git/db/dropped-0000/objects/pack/pack-2.pack": "a repository the lockfile dropped",
+            "cargo-home/git/checkouts/dropped-0000/7654321/src/lib.rs": "a repository the lockfile dropped",
+            "target/ci-test/deps/libserde-1111111111111111.rlib": "current unit",
+            "target/ci-test/deps/libserde-2222222222222222.rlib": "stale unit",
+            "target/ci-test/.fingerprint/serde-1111111111111111/lib-serde": "current fingerprint",
+            "target/ci-test/.fingerprint/serde-2222222222222222/lib-serde": "stale fingerprint",
+            "target/ci-test/build/serde-3333333333333333/build-script-build": "current build script",
+            "target/ci-test/build/serde-4444444444444444/out/generated.rs": "current script output",
+            "target/ci-test/build/serde-5555555555555555/out/generated.rs": "stale script output",
+        }
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        package = "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2"
+        messages = [
+            {"reason": "compiler-artifact", "package_id": package,
+             "filenames": [str(target / "ci-test/deps/libserde-1111111111111111.rlib")]},
+            {"reason": "compiler-artifact", "package_id": package,
+             "filenames": [str(target / "ci-test/build/serde-3333333333333333/build-script-build")]},
+            {"reason": "build-script-executed", "package_id": package,
+             "out_dir": str(target / "ci-test/build/serde-4444444444444444/out")},
+            {"reason": "build-finished", "success": True},
+        ]
+        reports = target / "ci-reports/workspace"
+        reports.mkdir(parents=True)
+        (reports / "cargo-messages.jsonl").write_text("".join(json.dumps(message) + "\n" for message in messages))
+        metadata = {"packages": [
+            {"name": "serde", "version": "1.0.2", "source": "registry+https://github.com/rust-lang/crates.io-index",
+             "targets": [{"name": "serde"}]},
+            {"name": "windows", "version": "0.62.2", "source": "registry+https://github.com/rust-lang/crates.io-index",
+             "targets": [{"name": "windows"}]},
+            {"name": "gpui", "version": "0.2.2", "source": "git+https://example.com/gpui.git?rev=abcdef0#"
+             "abcdef0123456789abcdef0123456789abcdef01", "targets": [{"name": "gpui"}]},
+            {"name": "gitcomet-core", "version": "0.3.0", "source": None, "targets": [{"name": "gitcomet_core"}]},
+        ]}
+        return cargo, target, metadata
+
+    def run_cache(self, root, metadata, *arguments):
+        with patch.object(cache, "ROOT", root), patch.object(cache, "REPORTS", root / "target/ci-reports"), \
+                patch.object(sys, "argv", ["cache.py", *arguments]), \
+                patch.object(cache.subprocess, "check_output", return_value=json.dumps(metadata).encode()), \
+                redirect_stdout(io.StringIO()) as printed:
+            cache.main()
+        return printed.getvalue()
+
+    def restored_files(self, root, bundle):
+        restored = root / "restored"
+        cache.restore(bundle, restored / "cargo-home", restored / "target")
+        return {path.relative_to(restored).as_posix() for path in restored.rglob("*") if path.is_file()}
+
+    def test_compiled_bundle_keeps_this_jobs_units_and_current_sources_only(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            bundle = root / "bundle.tar.gz"
+            self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                           "--cargo-home", str(cargo), "--target", str(target))
+            self.assertEqual(self.restored_files(root, bundle), {
+                "cargo-home/registry/cache/index-0000/serde-1.0.2.crate",
+                "cargo-home/registry/cache/index-0000/windows-0.62.2.crate",
+                "cargo-home/registry/index/index-0000/.cache/se/rd/serde",
+                "cargo-home/registry/src/index-0000/serde-1.0.2/src/lib.rs",
+                "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack",
+                "cargo-home/git/checkouts/gpui-0000/abcdef0/src/lib.rs",
+                "target/ci-test/deps/libserde-1111111111111111.rlib",
+                "target/ci-test/.fingerprint/serde-1111111111111111/lib-serde",
+                "target/ci-test/build/serde-3333333333333333/build-script-build",
+                "target/ci-test/build/serde-4444444444444444/out/generated.rs",
+            })
+
+    def test_compiled_bundle_over_budget_fails_and_leaves_nothing_to_save(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            (target / "ci-test/deps/libserde-1111111111111111.rlib").write_bytes(os.urandom(2 * 1024**2))
+            bundle = root / "bundle.tar.gz"
+            with self.assertRaisesRegex(RuntimeError, "over its 1 MiB budget"):
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                               "--cargo-home", str(cargo), "--target", str(target))
+            self.assertFalse(bundle.exists())
+            report = json.loads((target / "ci-reports/cache-compiled.json").read_text())
+            self.assertEqual(report["mode"], "compiled")
+            self.assertGreater(report["bytes"], 1024**2)
+
+    def test_compiled_pack_refuses_package_ids_it_cannot_read(self):
+        # Skipping them would drop every crate's unpacked sources, and a restore would rerun their build scripts.
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            messages = target / "ci-reports/workspace/cargo-messages.jsonl"
+            messages.write_text(messages.read_text().replace(
+                "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.2",
+                "serde 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)"))
+            bundle = root / "bundle.tar.gz"
+            with self.assertRaisesRegex(RuntimeError, "unrecognised cargo package id 'serde 1.0.2"):
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test",
+                               "--bundle", str(bundle), "--cargo-home", str(cargo), "--target", str(target))
+            self.assertFalse(bundle.exists())
+
+    def test_compiled_pack_refuses_without_this_jobs_cargo_messages(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True):
+            root = Path(directory)
+            cargo, target, metadata = self.cache_job(root)
+            (target / "ci-reports/workspace/cargo-messages.jsonl").unlink()
+            bundle = root / "bundle.tar.gz"
+            with self.assertRaisesRegex(RuntimeError, "cargo-messages.jsonl"):
+                self.run_cache(root, metadata, "pack-compiled", "--context", "fixture-workspace-ci-test", "--bundle", str(bundle),
+                               "--cargo-home", str(cargo), "--target", str(target))
+            self.assertFalse(bundle.exists())
+
+    def test_shared_source_bundle_holds_only_what_cargo_would_fetch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            downloads = root / "cargo/registry/cache"
-            downloads.mkdir(parents=True)
-            (downloads / "crate").write_bytes(os.urandom(4096))
-            with patch.object(cache, "ROOT", root), patch.object(cache, "output") as output:
-                cache.pack(root / "bundle.tar.gz", root / "cargo", root / "target", 512, False)
-            self.assertIn(unittest.mock.call("save", "false"), output.call_args_list)
-            self.assertFalse((root / "bundle.tar.gz").exists())
+            cargo, target, metadata = self.cache_job(root)
+            bundle = root / "bundle.tar.gz"
+            self.run_cache(root, metadata, "pack-sources", "--bundle", str(bundle), "--cargo-home", str(cargo),
+                           "--target", str(target))
+            self.assertEqual(self.restored_files(root, bundle), {
+                "cargo-home/registry/cache/index-0000/serde-1.0.2.crate",
+                "cargo-home/registry/cache/index-0000/windows-0.62.2.crate",
+                "cargo-home/registry/index/index-0000/.cache/se/rd/serde",
+                "cargo-home/git/db/gpui-0000/objects/pack/pack-1.pack",
+            })
 
-    def test_pruning_only_retires_owned_superseded_contexts(self):
-        caches = [
-            {"key": "gitcomet-ci-v1-macos15-arm-test-aaa", "created_at": "2026-09-18"},
-            {"key": "gitcomet-ci-v1-macos15-arm-test-bbb", "created_at": "2026-09-19"},
-            {"key": "gitcomet-ci-v1-macos26-arm-test-ccc", "created_at": "2026-09-18"},
-            {"key": "unrelated-release-cache", "created_at": "2026-09-17"},
-        ]
-        self.assertEqual(report.obsolete_caches(caches), [caches[0]])
+    def test_only_budgeted_contexts_restore_compiled_bundles(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(cache.COMPILED_BUDGETS_MIB, {"fixture-workspace-ci-test": 1}, clear=True), \
+                patch.dict(os.environ, {"GITHUB_OUTPUT": ""}):
+            root = Path(directory)
+            (root / "Cargo.lock").write_text("lock")
+            with patch.object(cache.platform, "platform", return_value="test-platform"):
+                compiled = self.run_cache(root, {}, "key", "--context", "fixture-workspace-ci-test")
+                clippy = self.run_cache(root, {}, "key", "--context", "fixture-clippy")
+            self.assertIn("compiled=true\n", compiled)
+            self.assertIn("compiled=false\n", clippy)
+
+    def test_ci_finish_packs_only_after_the_whole_job_succeeded(self):
+        # Inside a composite, success() sees only the action's steps; a skipped compile would pack a partial bundle.
+        finish = (Path(__file__).resolve().parents[2] / ".github/actions/ci-finish/action.yml").read_text(encoding="utf-8")
+        gates = re.findall(r"^      if: (.*)\n      shell: bash\n      run: python3 scripts/ci/cache\.py pack", finish,
+                           re.MULTILINE)
+        self.assertEqual(len(gates), 2)
+        for gate in gates:
+            self.assertIn("!cancelled() && job.status == 'success' && ", gate)
+
+    def test_every_python_setup_pins_one_minor_version(self):
+        github = Path(__file__).resolve().parents[2] / ".github"
+        pins = {(path.name, version) for path in sorted(github.rglob("*.yml"))
+                for version in re.findall(r'python-version: "([^"]+)"', path.read_text(encoding="utf-8"))}
+        self.assertGreaterEqual(len(pins), 3)
+        self.assertEqual(len({version for _, version in pins}), 1, pins)
+        for name, version in pins:
+            self.assertRegex(version, r"^\d+\.\d+$",
+                             f"{name}: an exact patch makes setup-python reinstall when an image caches another patch")
+
+    def test_every_job_running_ci_helpers_sets_up_their_python(self):
+        # The runners' system Python 3.10 has no tomllib, which cache.py (and report.py through it) imports.
+        for workflow in sorted((Path(__file__).resolve().parents[2] / ".github/workflows").glob("*.yml")):
+            jobs = re.split(r"^  (?=[\w-]+:\n)", workflow.read_text(encoding="utf-8").split("\njobs:\n", 1)[-1], flags=re.MULTILINE)
+            for job in jobs:
+                for helper in re.finditer(r"scripts/ci/(?:report|cache)\.py", job):
+                    with self.subTest(workflow=workflow.name, job=job.split(":", 1)[0]):
+                        setup = re.search(r"actions/setup-python@|\./\.github/actions/ci-setup", job)
+                        self.assertTrue(setup and setup.start() < helper.start())
+
+    def test_compiled_lanes_exist_and_fit_the_cache_allowance(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/cross-platform-tests.yml").read_text(encoding="utf-8")
+        self.assertIn("context: ${{ matrix.name }}-workspace-ci-test", workflow)
+        lanes = set(re.findall(r"^\s+- name: ([\w-]+)$", workflow, re.MULTILINE))
+        for context in cache.COMPILED_BUDGETS_MIB:
+            self.assertIn(context.removesuffix("-workspace-ci-test"), lanes)
+        # GitHub evicts beyond 10 GB per repository. The audit binary is the only other owned cache (7 MB).
+        self.assertLessEqual(cache.CACHE_ALLOWANCE_BYTES, 10_000_000_000)
+        budgets = sum(cache.COMPILED_BUDGETS_MIB.values()) + 3 * cache.SOURCES_BUDGET_MIB
+        self.assertLessEqual(budgets * 1024**2 + 64 * 1024**2, cache.CACHE_ALLOWANCE_BYTES)
+
+    def test_budget_changes_keep_every_cache_key(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
+                patch.object(cache.platform, "platform", return_value="test-platform"), \
+                patch.object(cache.subprocess, "check_output", return_value=b"rustc test"):
+            root = Path(directory)
+            (root / "Cargo.lock").write_text("lock")
+            budgets = root / "scripts/ci/cache-budgets.toml"
+            budgets.parent.mkdir(parents=True)
+            budgets.write_text((Path(cache.__file__).with_name("cache-budgets.toml")).read_text(encoding="utf-8"))
+            before = cache.cache_keys("windows-x64-workspace-ci-test")
+            budgets.write_text(budgets.read_text().replace("sources_mib = 600", "sources_mib = 700"))
+            self.assertEqual(cache.cache_keys("windows-x64-workspace-ci-test"), before)
+
+    def test_misspelled_budget_tables_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budgets = Path(directory) / "cache-budgets.toml"
+            budgets.write_text('allowance_bytes = 1\nsources_mib = 1\n[compiled_mb]\nfixture-workspace-ci-test = 1\n')
+            with self.assertRaisesRegex(ValueError, "exactly allowance_bytes, sources_mib and \\[compiled_mib\\]"):
+                cache.load_budgets(budgets)
+            budgets.write_text(budgets.read_text().replace("[compiled_mb]", "[compiled_mib]"))
+            self.assertEqual(cache.load_budgets(budgets), (1, 1, {"fixture-workspace-ci-test": 1}))
+
+    def test_ci_finish_reads_only_the_cache_state_ci_setup_exports(self):
+        actions = Path(__file__).resolve().parents[2] / ".github/actions"
+        setup = (actions / "ci-setup/action.yml").read_text(encoding="utf-8")
+        exported = set(re.search(r"for name in ([A-Z_ ]+); do\n\s+echo \"\$name=\$\{!name\}\" >> \"\$GITHUB_ENV\"",
+                                 setup)[1].split())
+        finish = (actions / "ci-finish/action.yml").read_text(encoding="utf-8")
+        read = set(re.findall(r"env\.(CI_[A-Z_]+)", finish)) | set(re.findall(r"\$(CI_[A-Z_]+)", finish))
+        self.assertTrue({"CI_CACHE_COMPILED", "CI_CACHE_KEY", "CI_SOURCE_KEY"} <= read)
+        self.assertEqual(read - exported, set())
+
+    def test_contexts_without_a_compiled_budget_lose_their_bundles(self):
+        def entry(context, created_at, scope="refs/heads/dev"):
+            return {"key": f"gitcomet-ci-v2-compiled-{context}-compat0123456789-deps0123456789",
+                    "ref": scope, "created_at": created_at}
+        budgeted_old = entry("fixture-workspace-ci-test", "2026-10-14")
+        budgeted_new = entry("fixture-workspace-ci-test", "2026-10-15")
+        orphaned = entry("ubuntu22-x64-workspace-ci-test", "2026-10-15")
+        sources = {"key": "gitcomet-ci-v2-sources-linux-layout0123456789-deps0123456789",
+                   "ref": "refs/heads/dev", "created_at": "2026-10-15"}
+        with patch.object(report, "COMPILED_BUDGETS_MIB", {"fixture-workspace-ci-test": 1}):
+            obsolete = report.obsolete_caches([budgeted_old, budgeted_new, orphaned, sources])
+        self.assertCountEqual(obsolete, [budgeted_old, orphaned])
 
 
 class RunnerTests(unittest.TestCase):
@@ -918,7 +1160,7 @@ class RunnerTests(unittest.TestCase):
                     patch.object(runner.subprocess, "check_output", return_value="rust"):
                 target = Path(directory)
                 # Compile and test are separate CLI invocations; only the latter knows the mode.
-                with patch.object(runner, "run"), redirect_stdout(io.StringIO()):
+                with patch.object(runner, "run", side_effect=nextest_compile_output), redirect_stdout(io.StringIO()):
                     runner.compile_tests("workspace", "ci-test")
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
                 (target / "nextest/ci").mkdir(parents=True)
@@ -1522,7 +1764,7 @@ class ApplicationProbeTests(unittest.TestCase):
         suite = {"package-id": "app", "testcases": {"help_flag_exits_zero": {"ignored": False}}}
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(runner, "REPORTS", Path(directory)), \
-                patch.object(runner, "run") as run_mock, \
+                patch.object(runner, "run", side_effect=nextest_compile_output) as run_mock, \
                 patch.object(runner, "windows_linker_environment", return_value=None), \
                 patch.object(runner, "prepare_runtime_binaries"), \
                 patch.object(runner, "package_names", return_value={"app": "gitcomet"}), \
@@ -1535,6 +1777,36 @@ class ApplicationProbeTests(unittest.TestCase):
             self.assertIn("--test", calls["app-compile"])
             coverage = json.loads((Path(directory) / "app/coverage.json").read_text())
             self.assertEqual(coverage["selection"][-2:], ["--test", "standalone_tool_mode_integration"])
+
+    def test_compile_keeps_cargo_messages_apart_from_the_binary_list(self):
+        suite = {"package-id": "app", "testcases": {"help_flag_exits_zero": {"ignored": False}}}
+        listing = {"rust-build-meta": {"target-directory": "target"}, "rust-binaries": {}}
+        artifact = {"reason": "compiler-artifact", "filenames": ["target/ci-test/deps/libserde-1111111111111111.rlib"]}
+        commands = {}
+
+        def nextest(name, command, *, output=None, **kwargs):
+            commands[name] = command
+            if name == "app-compile":
+                Path(output).write_text(f"{json.dumps(artifact)}\n{json.dumps(listing)}\n"
+                                        '{"reason": "build-finished", "success": true}\n')
+            return 0
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "run", side_effect=nextest), \
+                patch.object(runner, "windows_linker_environment", return_value=None), \
+                patch.object(runner, "prepare_runtime_binaries"), \
+                patch.object(runner, "package_names", return_value={"app": "gitcomet"}), \
+                patch.object(runner, "inventory", return_value={"rust-suites": {"smoke": suite}}), \
+                patch.object(runner.subprocess, "check_output", return_value="rust"), \
+                redirect_stdout(io.StringIO()):
+            runner.compile_tests("app", "ci-test")
+            compile_command = commands["app-compile"]
+            self.assertEqual(compile_command[compile_command.index("--cargo-message-format") + 1],
+                             "json-render-diagnostics")
+            reports = Path(directory) / "app"
+            self.assertEqual(json.loads((reports / "binaries.json").read_text()), listing)
+            messages = (reports / "cargo-messages.jsonl").read_text().splitlines()
+            self.assertEqual([json.loads(line)["reason"] for line in messages], ["compiler-artifact", "build-finished"])
 
     def test_failed_probe_retains_failure_record_and_rejects_stale_results(self):
         for failure in ("metadata", "build"):
@@ -1651,6 +1923,24 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(boundaries.main(), 1)
         self.assertIn("skip gitcomet-ui-kit", out.getvalue())
         self.assertIn("gitcomet (--no-default-features --features gix) reaches forbidden packages: gpui-ce", err.getvalue())
+
+
+class GitIsolationTests(unittest.TestCase):
+    def test_git_location_variables_never_reach_temporary_repositories(self):
+        # `git rebase --exec` and hooks export GIT_DIR; a test's `git add` would then stage into that repository.
+        with tempfile.TemporaryDirectory() as directory:
+            sentinel = Path(directory) / "sentinel"
+            git = ["git", "-c", "maintenance.auto=false", "-C", str(sentinel)]
+            subprocess.run(["git", "-c", "maintenance.auto=false", "init", "-q", str(sentinel)], check=True)
+            (sentinel / "kept.txt").write_text("kept")
+            subprocess.run([*git, "add", "kept.txt"], check=True)
+            index = subprocess.run([*git, "ls-files", "--stage"], capture_output=True, text=True, check=True).stdout
+            child = subprocess.run([sys.executable, "-B", "-m", "unittest", "test_ci.IdentityLiteralTests"],
+                                   cwd=Path(__file__).parent, capture_output=True, text=True,
+                                   env={**os.environ, "GIT_DIR": str(sentinel / ".git")})
+            self.assertEqual(child.returncode, 0, child.stderr[-2000:])
+            after = subprocess.run([*git, "ls-files", "--stage"], capture_output=True, text=True, check=True).stdout
+            self.assertEqual(after, index)
 
 
 class IdentityLiteralTests(unittest.TestCase):

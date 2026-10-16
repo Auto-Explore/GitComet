@@ -626,7 +626,6 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn stage_gutter_cancels_presses_released_on_another_button(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     for area in [DiffArea::Unstaged, DiffArea::Staged] {
         for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
             let (view, cx) = open_stage_gutter_view(cx, worktree_target(area), mode);
@@ -806,7 +805,6 @@ fn open_generated_diff_view_with_status(
 fn diff_view_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
     use std::time::Instant;
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let lines: usize = std::env::var("GITCOMET_BENCH_DIFF_LINES")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -892,7 +890,6 @@ fn diff_view_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
 fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
     use std::time::Instant;
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let _cached_views = crate::view::enable_stable_cached_views_for_test();
     let extra: usize = std::env::var("GITCOMET_PROBE_STATUS_ENTRIES")
         .ok()
@@ -956,7 +953,6 @@ fn timing_main_pane_frame_with_large_status(cx: &mut gpui::TestAppContext) {
 fn timing_main_pane_frame_with_open_toast(cx: &mut gpui::TestAppContext) {
     use std::time::Instant;
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let _cached_views = crate::view::enable_stable_cached_views_for_test();
     let (view, cx, workdir) =
         open_generated_diff_view(cx, RepoId(70935), 400, DiffViewMode::Inline);
@@ -1008,7 +1004,6 @@ fn timing_main_pane_frame_with_open_toast(cx: &mut gpui::TestAppContext) {
 fn timing_diff_cache_checks_on_unchanged_diff(cx: &mut gpui::TestAppContext) {
     use std::time::Instant;
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let lines: usize = std::env::var("GITCOMET_PROBE_DIFF_LINES")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -1037,7 +1032,6 @@ fn a_frame_of_a_text_diff_resolves_what_the_pane_shows_a_bounded_number_of_times
 ) {
     // Whether a preview covers the diff was asked per painted row, and each
     // answer stats the file; a frame answers it once.
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx, workdir) =
         open_generated_diff_view(cx, RepoId(70931), 400, DiffViewMode::Inline);
     for _ in 0..2 {

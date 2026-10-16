@@ -796,11 +796,7 @@ fn reduce_inner(
             Vec::new()
         }
         Msg::AcknowledgeNotifications { through_seq } => {
-            util::drop_acknowledged(
-                &mut state.notifications,
-                state.notifications_seq,
-                through_seq,
-            );
+            state.acknowledge_notifications(through_seq);
             Vec::new()
         }
         Msg::AcknowledgeRepoFeedback {
@@ -814,17 +810,9 @@ fn reduce_inner(
                 .iter_mut()
                 .find(|r| r.id == repo_id && r.lifetime() == lifetime)
             {
-                let feedback = &mut repo_state.feedback;
-                util::drop_acknowledged(
-                    &mut feedback.diagnostics,
-                    feedback.diagnostics_seq,
-                    diagnostics_through_seq,
-                );
-                util::drop_acknowledged(
-                    &mut feedback.command_log,
-                    feedback.command_log_seq,
-                    command_log_through_seq,
-                );
+                repo_state
+                    .feedback
+                    .acknowledge(diagnostics_through_seq, command_log_through_seq);
             }
             Vec::new()
         }

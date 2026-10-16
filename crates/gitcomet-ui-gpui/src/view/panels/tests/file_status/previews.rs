@@ -565,7 +565,6 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
 fn untracked_markdown_file_preview_defaults_to_preview_mode_and_renders_container(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

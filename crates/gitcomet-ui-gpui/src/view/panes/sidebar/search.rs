@@ -548,7 +548,6 @@ mod tests {
 
     #[gpui::test]
     fn sidebar_files_search_shares_options_and_clears_on_close(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             window.activate();
@@ -657,7 +656,6 @@ mod tests {
     fn sidebar_search_shares_query_options_visibility_and_focus_across_modes(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             window.activate();
@@ -755,7 +753,6 @@ mod tests {
     fn sidebar_search_controls_fit_the_minimum_width_at_each_density_and_scale(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -858,7 +855,6 @@ mod tests {
     fn section_locators_use_current_context_and_preserve_minimized_mode(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

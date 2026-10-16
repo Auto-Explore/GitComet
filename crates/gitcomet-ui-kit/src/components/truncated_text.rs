@@ -484,7 +484,6 @@ mod tests {
     /// constructed size reached the shaping.
     #[gpui::test]
     fn the_constructed_size_drives_the_line_box_not_the_ancestor(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (_view, cx) = cx.add_window_view(|_window, _cx| SizedTextBlock);
         crate::test_support::redraw(cx);
 

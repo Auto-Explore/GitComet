@@ -8,7 +8,6 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
     // The row under a picture also listens for a left press, so without the
     // picture stopping propagation the click opens the menu *and* starts a
     // drag-selection behind it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -72,7 +71,6 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
 #[gpui::test]
 fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -132,7 +130,6 @@ fn ctrl_clicking_a_linked_badge_opens_the_browser(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -284,8 +281,6 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
     // Nothing on screen changes when a link's address goes to the clipboard —
     // the document shows the link's text, never its destination — so the copy
     // has to say so or the reader cannot tell it happened.
-    let _visual_guard = lock_visual_test();
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -373,7 +368,6 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -518,7 +512,6 @@ fn a_link_menu_opens_under_the_words_on_the_line_clicked(cx: &mut gpui::TestAppC
     // a link that began a visual line hung its menu off the far end of the
     // previous one; a link over two lines hung it off its first part wherever
     // it was clicked.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -620,7 +613,6 @@ fn a_link_menu_opens_under_the_words_on_the_line_clicked(cx: &mut gpui::TestAppC
 #[gpui::test]
 fn ctrl_clicking_a_web_link_opens_the_browser_without_a_menu(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -697,7 +689,6 @@ fn click_open_in_gitcomet(cx: &mut gpui::VisualTestContext) {
 #[gpui::test]
 fn clicking_a_local_markdown_link_offers_open_in_gitcomet(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -800,7 +791,6 @@ fn clicking_a_local_markdown_link_offers_open_in_gitcomet(cx: &mut gpui::TestApp
 #[gpui::test]
 fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -871,7 +861,6 @@ fn a_local_link_to_a_missing_file_shows_a_disabled_entry(cx: &mut gpui::TestAppC
 #[gpui::test]
 fn ctrl_clicking_a_local_link_opens_the_file_without_a_menu(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -934,7 +923,6 @@ fn ctrl_clicking_a_local_link_opens_the_file_without_a_menu(cx: &mut gpui::TestA
 #[gpui::test]
 fn ctrl_clicking_a_link_to_a_missing_file_still_opens_the_menu(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -971,7 +959,6 @@ fn ctrl_clicking_a_link_to_a_missing_file_still_opens_the_menu(cx: &mut gpui::Te
 #[gpui::test]
 fn a_root_relative_link_resolves_from_the_repo_root(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1022,7 +1009,6 @@ fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // The worktree is not the tree the document came from: a file deleted
     // since that commit is still there to read.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1080,7 +1066,6 @@ fn a_link_in_a_commit_preview_is_offered_even_when_the_worktree_lost_the_file(
 #[gpui::test]
 fn a_local_link_through_a_symlink_out_of_the_repo_is_inert(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1148,7 +1133,6 @@ fn a_linked_blocked_image_whose_link_cannot_open_still_loads_on_click(
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // `./` names no file, so there is no menu to carry Load image: the click
     // must approve the picture directly, as it did before local links opened.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1264,7 +1248,6 @@ fn point_on_link_in_row(
 #[gpui::test]
 fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1353,7 +1336,6 @@ fn clicking_an_anchor_link_in_a_table_scrolls_to_the_heading(cx: &mut gpui::Test
 #[gpui::test]
 fn ctrl_clicking_an_anchor_link_scrolls_to_the_heading(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1402,7 +1384,6 @@ fn ctrl_clicking_an_anchor_link_scrolls_to_the_heading(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn an_anchor_link_without_a_heading_is_plain_text(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1531,7 +1512,6 @@ fn hovering_a_link_underlines_it_and_shows_the_pointer(cx: &mut gpui::TestAppCon
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     use crate::view::rows::MarkdownPreviewHoveredLink;
 
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1615,7 +1595,6 @@ fn hovering_a_link_underlines_it_and_shows_the_pointer(cx: &mut gpui::TestAppCon
 #[gpui::test]
 fn hovering_a_link_in_the_rendered_diff_tracks_it(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1689,7 +1668,6 @@ fn point_on_link_in_cell(
 #[gpui::test]
 fn a_blocked_image_linked_to_an_anchor_still_loads_on_click(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1746,7 +1724,6 @@ fn a_blocked_image_linked_to_an_anchor_still_loads_on_click(cx: &mut gpui::TestA
 #[gpui::test]
 fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1828,7 +1805,6 @@ fn a_linked_image_on_the_new_side_follows_the_new_documents_anchor(cx: &mut gpui
 #[gpui::test]
 fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1945,7 +1921,6 @@ fn a_link_on_the_old_side_of_a_commit_diff_opens_the_parent_version(cx: &mut gpu
 #[gpui::test]
 fn hovering_a_link_that_cannot_open_shows_no_pointer(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1981,7 +1956,6 @@ fn hovering_a_link_that_cannot_open_shows_no_pointer(cx: &mut gpui::TestAppConte
 #[gpui::test]
 fn moving_between_links_in_one_table_row_keeps_the_new_hover(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2023,7 +1997,6 @@ fn moving_between_links_in_one_table_row_keeps_the_new_hover(cx: &mut gpui::Test
 #[gpui::test]
 fn image_paths_resolve_within_the_repository_like_links(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2094,7 +2067,6 @@ fn a_link_on_the_old_copy_of_a_modified_paragraph_opens_the_parent_version(
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     // The inline diff shows a paragraph that changed in part twice, old copy
     // first; both copies are marked modified, not removed and added.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -2182,7 +2154,6 @@ fn moving_over_a_link_that_goes_nowhere_checks_it_once(cx: &mut gpui::TestAppCon
     // A link to no heading stays plain words; working that out slugs every
     // heading (or, for a file link, stats the disk), so it is done once per
     // link the pointer enters, not on every move across it.
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
