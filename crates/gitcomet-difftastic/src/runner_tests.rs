@@ -1,5 +1,23 @@
 use super::*;
 
+#[test]
+#[cfg(unix)]
+fn symlinked_application_uses_helpers_beside_the_real_executable() {
+    let directory = tempfile::tempdir().unwrap();
+    let bundle = directory.path().join("bundle");
+    std::fs::create_dir_all(bundle.join("helpers")).unwrap();
+    let executable = bundle.join("gitcomet");
+    std::fs::write(&executable, b"app").unwrap();
+    let helper = bundle.join("helpers/difft");
+    std::fs::write(&helper, b"helper").unwrap();
+    let alias = directory.path().join("gitcomet");
+    std::os::unix::fs::symlink(&executable, &alias).unwrap();
+    assert_eq!(
+        bundled_executable_for(&alias).unwrap(),
+        helper.canonicalize().unwrap()
+    );
+}
+
 fn fixture(mode: &str, marker: &Path) -> Command {
     let mut command = command(&std::env::current_exe().unwrap());
     command

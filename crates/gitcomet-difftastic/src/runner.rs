@@ -78,7 +78,11 @@ fn compare_inner(
 }
 
 pub fn bundled_executable() -> Result<PathBuf, DifftasticError> {
-    let executable = std::env::current_exe()?;
+    bundled_executable_for(&std::env::current_exe()?)
+}
+
+fn bundled_executable_for(executable: &Path) -> Result<PathBuf, DifftasticError> {
+    let executable = executable.canonicalize()?;
     let directory = executable.parent().ok_or(DifftasticError::Unavailable)?;
     let name = if cfg!(windows) { "difft.exe" } else { "difft" };
     let mut candidates = vec![directory.join("helpers").join(name)];
