@@ -17,8 +17,8 @@ Usage:
 
 `stage` lays out the shared payload: the binary, desktop entry, hicolor icons,
 licence files and README. The .deb, .rpm and AppImage include the full payload.
-The tarball keeps its historical layout with only the binary, README,
-LICENSE-AGPL-3.0 and NOTICE. Each packaging command writes one file in --out.
+The tarball keeps the binary at its root, with Difftastic in helpers/.
+Each packaging command writes one file in --out.
 
 --source is the release source checkout that holds assets/, README.md,
 LICENSE-AGPL-3.0 and NOTICE. VERSION is the release version (1.2.3 or
@@ -66,11 +66,16 @@ asset_version() {
 
 require_payload() {
   [[ -x "$1/usr/bin/gitcomet" ]] || fail "Not a staged payload (missing usr/bin/gitcomet): $1"
+  [[ -x "$1/usr/libexec/gitcomet/difft" ]] || fail "Staged payload is missing the Difftastic helper: $1"
+  [[ -s "$1/usr/share/doc/gitcomet/difftastic-NOTICES.txt" ]] || fail "Staged payload is missing Difftastic notices: $1"
 }
 
 cmd_stage() {
   local out="$1" binary="$2" source="$3" size
   [[ -f "$binary" ]] || fail "Binary not found: $binary"
+  local helpers
+  helpers="$(dirname "$binary")/helpers"
+  python3 "$source/scripts/check-difftastic.py" --helper "$helpers/difft" --notices "$helpers/difftastic-NOTICES.txt"
   [[ -d "$source/assets/linux" ]] || fail "Source checkout has no assets/linux: $source"
   if [[ -e "$out" ]] && [[ -n "$(ls -A "$out")" ]]; then
     fail "Payload directory is not empty: $out"
@@ -78,6 +83,8 @@ cmd_stage() {
   require_tool desktop-file-validate
 
   install -Dm755 "$binary" "$out/usr/bin/gitcomet"
+  install -Dm755 "$helpers/difft" "$out/usr/libexec/gitcomet/difft"
+  install -Dm644 "$helpers/difftastic-NOTICES.txt" "$out/usr/share/doc/gitcomet/difftastic-NOTICES.txt"
   install -Dm644 "$source/assets/linux/gitcomet.desktop" "$out/usr/share/applications/gitcomet.desktop"
   desktop-file-validate "$out/usr/share/applications/gitcomet.desktop"
   for size in "${ICON_SIZES[@]}"; do
@@ -87,6 +94,7 @@ cmd_stage() {
   install -Dm644 "$source/LICENSE-AGPL-3.0" "$out/usr/share/licenses/gitcomet/LICENSE-AGPL-3.0"
   install -Dm644 "$source/NOTICE" "$out/usr/share/licenses/gitcomet/NOTICE"
   install -Dm644 "$source/README.md" "$out/usr/share/doc/gitcomet/README.md"
+  python3 "$source/scripts/check-difftastic.py" --helper "$out/usr/libexec/gitcomet/difft" --notices "$out/usr/share/doc/gitcomet/difftastic-NOTICES.txt"
   echo "Staged payload in $out"
 }
 
@@ -98,6 +106,8 @@ cmd_tarball() {
 
   # The historical layout, which third-party packages (e.g. AUR gitcomet-bin) unpack.
   install -Dm755 "$payload/usr/bin/gitcomet" "$work/$root/gitcomet"
+  install -Dm755 "$payload/usr/libexec/gitcomet/difft" "$work/$root/helpers/difft"
+  install -Dm644 "$payload/usr/share/doc/gitcomet/difftastic-NOTICES.txt" "$work/$root/helpers/difftastic-NOTICES.txt"
   install -m644 "$payload/usr/share/doc/gitcomet/README.md" "$work/$root/README.md"
   install -m644 "$payload/usr/share/licenses/gitcomet/LICENSE-AGPL-3.0" "$work/$root/LICENSE-AGPL-3.0"
   install -m644 "$payload/usr/share/licenses/gitcomet/NOTICE" "$work/$root/NOTICE"
@@ -138,7 +148,7 @@ cmd_deb() {
 
   (
     cd "$work"
-    dpkg-shlibdeps -Tdebian/substvars debian/gitcomet/usr/bin/gitcomet
+    dpkg-shlibdeps -Tdebian/substvars debian/gitcomet/usr/bin/gitcomet debian/gitcomet/usr/libexec/gitcomet/difft
     dpkg-gencontrol -pgitcomet -Pdebian/gitcomet -Tdebian/substvars
   )
   dpkg-deb --root-owner-group --build "$pkg_root" "$pkg_file"

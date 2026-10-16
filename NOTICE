@@ -3,3 +3,10 @@ Contact: info@autoexplore.ai
 
 This project is licensed under the GNU Affero General Public License Version 3
 (AGPL-3.0-only). See LICENSE-AGPL-3.0.
+
+Release packages include Difftastic 0.71.0, distributed under the MIT license.
+Source: https://github.com/Wilfred/difftastic/tree/0.71.0
+Difftastic, its parsers, and its dependencies retain their respective licenses.
+Their license texts and dependency inventory are in difftastic-NOTICES.txt:
+helpers/ in portable packages, share/doc/gitcomet/ on Linux, bin/helpers/ in
+the Windows installation, and GitComet.app/Contents/Resources/ on macOS.

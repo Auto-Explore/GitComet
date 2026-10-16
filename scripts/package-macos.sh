@@ -124,6 +124,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin_src="${repo_root}/target/${mode}/gitcomet"
+helpers="${repo_root}/target/${mode}/helpers"
 
 if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
   cargo_config_output=""
@@ -143,6 +144,11 @@ if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
     cargo build "$@"
   )
 fi
+
+if [[ $build -eq 1 ]]; then
+  python3 "${repo_root}/scripts/build-difftastic.py" --profile "$mode" --output "$helpers"
+fi
+python3 "${repo_root}/scripts/check-difftastic.py" --helper "$helpers/difft" --notices "$helpers/difftastic-NOTICES.txt"
 
 if [[ ! -x "$bin_src" ]]; then
   echo "Binary not found or not executable: $bin_src" >&2
@@ -238,9 +244,12 @@ macos_dir="${contents_dir}/MacOS"
 resources_dir="${contents_dir}/Resources"
 
 rm -rf "$release_dir"
-mkdir -p "$macos_dir" "$resources_dir"
+mkdir -p "$macos_dir" "$resources_dir" "${contents_dir}/Helpers"
 
 install -m755 "$bin_src" "${macos_dir}/gitcomet"
+install -m755 "$helpers/difft" "${contents_dir}/Helpers/difft"
+install -m644 "$helpers/difftastic-NOTICES.txt" "${resources_dir}/difftastic-NOTICES.txt"
+python3 "${repo_root}/scripts/check-difftastic.py" --helper "${contents_dir}/Helpers/difft" --notices "${resources_dir}/difftastic-NOTICES.txt"
 
 # Inside the bundle: the DMG ships only GitComet.app, and it is now the only
 # macOS artifact, so this is what keeps the licence with the program.
@@ -306,6 +315,7 @@ if [[ -n "$codesign_identity" ]]; then
   fi
 
   echo "Signing macOS artifacts with identity: $codesign_identity"
+  codesign "${sign_args[@]}" "${contents_dir}/Helpers/difft"
   codesign "${sign_args[@]}" "${macos_dir}/gitcomet"
   codesign "${sign_args[@]}" "$app_bundle"
 

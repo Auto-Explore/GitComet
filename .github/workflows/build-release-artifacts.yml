@@ -203,6 +203,11 @@ jobs:
             scripts/lib/cli.sh
           sparse-checkout-cone-mode: false
 
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
@@ -285,6 +290,10 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
           cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/build-difftastic.py --output target/release/helpers
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/check-difftastic.py --helper target/release/helpers/difft.exe --notices target/release/helpers/difftastic-NOTICES.txt
 
       # Runs under bash so all three platforms share one guard against
       # silently-empty symbols; Git for Windows provides it on the runner.
@@ -347,12 +356,38 @@ jobs:
             -Path $artifactPath `
             -SignToolPath $env:SIGNTOOL_PATH
 
+      - name: Sign Windows Difftastic helper
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82
+        with:
+          endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.WINDOWS_SIGNING_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\target\release\helpers
+          files-folder-filter: difft.exe
+          file-digest: SHA256
+          timestamp-rfc3161: ${{ env.WINDOWS_SIGNING_TIMESTAMP_RFC3161 }}
+          timestamp-digest: SHA256
+          append-signature: false
+          cache-dependencies: false
+
+      - name: Verify signed Windows Difftastic helper
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
+            -Path "$env:GITHUB_WORKSPACE\target\release\helpers\difft.exe" `
+            -SignToolPath $env:SIGNTOOL_PATH
+
       - name: Package portable ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Path dist\portable -Force | Out-Null
           Copy-Item target\release\gitcomet.exe dist\portable\gitcomet.exe -Force
+          New-Item -ItemType Directory -Path dist\portable\helpers -Force | Out-Null
+          Copy-Item target\release\helpers\difft.exe dist\portable\helpers\difft.exe -Force
+          Copy-Item target\release\helpers\difftastic-NOTICES.txt dist\portable\helpers\difftastic-NOTICES.txt -Force
+          python scripts/check-difftastic.py --helper dist/portable/helpers/difft.exe --notices dist/portable/helpers/difftastic-NOTICES.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item README.md dist\portable\README.md -Force
           Copy-Item LICENSE-AGPL-3.0 dist\portable\LICENSE-AGPL-3.0 -Force
           Copy-Item NOTICE dist\portable\NOTICE -Force
@@ -424,6 +459,22 @@ jobs:
           & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
             -Path $artifactPath `
             -SignToolPath $env:SIGNTOOL_PATH
+
+      - name: Smoke test installed Windows helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = Join-Path $env:GITHUB_WORKSPACE "dist\gitcomet-v$($env:VERSION)-windows-$($env:ARTIFACT_ARCH).msi"
+          $destination = Join-Path $env:RUNNER_TEMP "gitcomet-installed"
+          $install = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', "APPLICATIONFOLDER=`"$destination`"", 'ADDLOCAL=Binaries')
+          if ($install.ExitCode -notin @(0, 3010)) { throw "MSI installation failed: $($install.ExitCode)" }
+          try {
+            python scripts/check-difftastic.py --helper "$destination/bin/helpers/difft.exe" --notices "$destination/bin/helpers/difftastic-NOTICES.txt"
+            if ($LASTEXITCODE -ne 0) { throw "Installed Difftastic smoke test failed" }
+          } finally {
+            $uninstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart')
+            if ($uninstall.ExitCode -notin @(0, 3010)) { throw "MSI cleanup failed: $($uninstall.ExitCode)" }
+          }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -507,6 +558,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             clang \
+            cpio \
             desktop-file-utils \
             dpkg-dev \
             pkg-config \
@@ -514,6 +566,11 @@ jobs:
             libxcb1-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
@@ -538,7 +595,9 @@ jobs:
           # Step-scoped so no other cargo invocation in this job inherits it.
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
-        run: cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
+        run: |
+          cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
+          python3 scripts/build-difftastic.py --output target/release/helpers
 
       - name: Emit Breakpad symbols
         run: |
@@ -569,7 +628,9 @@ jobs:
       # Runtime-loaded libraries are invisible to dpkg-shlibdeps and rpm
       # AutoReq, so the packages declare them by hand; fail if they drift.
       - name: Check runtime library dependencies
-        run: .release-tooling/scripts/check-linux-runtime-deps.sh target/release/gitcomet
+        run: |
+          .release-tooling/scripts/check-linux-runtime-deps.sh target/release/gitcomet
+          .release-tooling/scripts/check-linux-runtime-deps.sh target/release/helpers/difft
 
       - name: Stage package payload
         run: |
@@ -605,6 +666,25 @@ jobs:
           .release-tooling/scripts/package-linux.sh appimage \
             --payload "${RUNNER_TEMP}/payload" --version "${VERSION}" --arch "${ARTIFACT_ARCH}" \
             --appimage-arch "${APPIMAGE_ARCH}" --appimagetool /tmp/appimagetool.AppImage --out dist
+
+      - name: Smoke test extracted Linux packages
+        run: |
+          set -euo pipefail
+          extracted="${RUNNER_TEMP}/difftastic-packages"
+          mkdir -p "$extracted/tar" "$extracted/deb" "$extracted/rpm"
+          tar -xzf dist/*.tar.gz --strip-components=1 -C "$extracted/tar"
+          python3 scripts/check-difftastic.py --helper "$extracted/tar/helpers/difft" --notices "$extracted/tar/helpers/difftastic-NOTICES.txt"
+          dpkg-deb -x dist/*.deb "$extracted/deb"
+          rpm2cpio dist/*.rpm | (cd "$extracted/rpm" && cpio -idm)
+          for package in deb rpm; do
+            python3 scripts/check-difftastic.py --helper "$extracted/$package/usr/libexec/gitcomet/difft" --notices "$extracted/$package/usr/share/doc/gitcomet/difftastic-NOTICES.txt"
+          done
+          if compgen -G 'dist/*.AppImage' > /dev/null; then
+            appimage="$(realpath dist/*.AppImage)"
+            mkdir -p "$extracted/appimage"
+            (cd "$extracted/appimage" && "$appimage" --appimage-extract > /dev/null)
+            python3 scripts/check-difftastic.py --helper "$extracted/appimage/squashfs-root/usr/libexec/gitcomet/difft" --notices "$extracted/appimage/squashfs-root/usr/share/doc/gitcomet/difftastic-NOTICES.txt"
+          fi
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -664,6 +744,11 @@ jobs:
             scripts/install-dump-syms.sh
             scripts/lib/cli.sh
           sparse-checkout-cone-mode: false
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
@@ -797,6 +882,15 @@ jobs:
           fi
 
           scripts/package-macos.sh "${package_args[@]}"
+
+      - name: Smoke test helper from macOS disk image
+        run: |
+          set -euo pipefail
+          mountpoint="${RUNNER_TEMP}/gitcomet-dmg"
+          mkdir -p "$mountpoint"
+          hdiutil attach dist/*.dmg -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          python3 scripts/check-difftastic.py --helper "$mountpoint/GitComet.app/Contents/Helpers/difft" --notices "$mountpoint/GitComet.app/Contents/Resources/difftastic-NOTICES.txt"
 
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload macOS Breakpad symbols

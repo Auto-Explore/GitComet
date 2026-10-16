@@ -50,6 +50,10 @@ package() {
 
   install -Dm755 "$srcdir/gitcomet-v${_version}-linux-${binary_arch}/gitcomet" \
     "$pkgdir/usr/bin/gitcomet"
+  install -Dm755 "$srcdir/gitcomet-v${_version}-linux-${binary_arch}/helpers/difft" \
+    "$pkgdir/usr/libexec/gitcomet/difft"
+  install -Dm644 "$srcdir/gitcomet-v${_version}-linux-${binary_arch}/helpers/difftastic-NOTICES.txt" \
+    "$pkgdir/usr/share/doc/gitcomet/difftastic-NOTICES.txt"
   cd "$srcdir/GitComet-${_version}"
   install -Dm644 assets/linux/gitcomet.desktop "$pkgdir/usr/share/applications/gitcomet.desktop"
   for size in 32 48 128 256 512; do

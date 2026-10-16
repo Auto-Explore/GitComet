@@ -13,6 +13,53 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = ROOT / "crates/gitcomet-difftastic/upstream.json"
+SUPPLEMENTAL_NOTICES = ROOT / "crates/gitcomet-difftastic/notices"
+
+
+def collect_notices(source: Path, output: Path, license_file: str | None = None) -> int:
+    explicit = (source / license_file).resolve() if license_file else None
+    count = 0
+    for path in source.rglob("*"):
+        if not path.is_file():
+            continue
+        if not path.name.lower().startswith(("license", "copying", "notice")) and path.resolve() != explicit:
+            continue
+        destination = output / path.relative_to(source)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+        count += 1
+    return count
+
+
+def binary_dependencies(metadata: dict) -> list[dict]:
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    pending = [metadata["resolve"]["root"]]
+    included = set()
+    while pending:
+        package = pending.pop()
+        if package in included:
+            continue
+        included.add(package)
+        pending.extend(dependency["pkg"] for dependency in nodes[package]["deps"]
+                       if any(kind["kind"] != "dev" for kind in dependency["dep_kinds"]))
+    return [package for package in metadata["packages"] if package["id"] in included]
+
+
+def collect_dependency_notices(package: dict, output: Path) -> None:
+    key = f"{package['name']}-{package['version']}"
+    destination = output / key
+    count = collect_notices(Path(package["manifest_path"]).parent, destination, package.get("license_file"))
+    if count:
+        return
+    supplements = json.loads((SUPPLEMENTAL_NOTICES / "sources.json").read_text(encoding="utf-8"))
+    if key not in supplements:
+        raise RuntimeError(f"Missing license notice for bundled dependency {key}")
+    source = SUPPLEMENTAL_NOTICES / f"{key}.txt"
+    if hashlib.sha256(source.read_bytes()).hexdigest() != supplements[key]["sha256"]:
+        raise RuntimeError(f"Supplemental license checksum mismatch: {key}")
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination / "LICENSE")
+    (destination / "source.txt").write_text(supplements[key]["url"] + "\n", encoding="utf-8")
 
 
 def build(output: Path, target: str | None, profile: str) -> None:
@@ -54,29 +101,26 @@ def build(output: Path, target: str | None, profile: str) -> None:
     output.mkdir(parents=True, exist_ok=True)
     shutil.copy2(executable, output / name)
     notices = output / "difftastic-licenses"
+    if notices.exists():
+        shutil.rmtree(notices)
     notices.mkdir(exist_ok=True)
-    for path in source.rglob("*"):
-        if path.is_file() and path.name.lower().startswith(("license", "copying", "notice")):
-            destination = notices / "difftastic" / path.relative_to(source)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, destination)
+    collect_notices(source, notices / "difftastic")
     metadata_command = ["cargo", "metadata", "--locked", "--format-version=1", "--manifest-path", str(source / "Cargo.toml")]
     if target:
         metadata_command.extend(["--filter-platform", target])
     metadata = json.loads(subprocess.check_output(metadata_command, cwd=ROOT, env=environment))
     inventory = []
-    for package in metadata["packages"]:
+    for package in binary_dependencies(metadata):
         inventory.append({key: package[key] for key in ("name", "version", "license", "license_file", "source")})
-        directory = Path(package["manifest_path"]).parent
-        paths = list(directory.glob("*"))
-        if package.get("license_file"):
-            paths.append(directory / package["license_file"])
-        for path in paths:
-            if path.is_file() and (path.name.lower().startswith(("license", "copying", "notice")) or str(path) == str(directory / (package.get("license_file") or ""))):
-                destination = notices / f"{package['name']}-{package['version']}" / path.name
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, destination)
+        collect_dependency_notices(package, notices)
     (notices / "dependencies.json").write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")
+    with (output / "difftastic-NOTICES.txt").open("wb") as combined:
+        combined.write(f"Difftastic {version}\nhttps://github.com/Wilfred/difftastic/tree/{version}\nSource SHA-256: {pin['sha256']}\n\n".encode())
+        for path in sorted(notices.rglob("*")):
+            if path.is_file():
+                combined.write(f"\n===== {path.relative_to(notices).as_posix()} =====\n\n".encode())
+                combined.write(path.read_bytes())
+                combined.write(b"\n")
     print(f"Built Difftastic {version}: {output / name}")
 
 
