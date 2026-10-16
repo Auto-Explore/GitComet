@@ -1819,6 +1819,41 @@ mod tests {
         assert_eq!(data(), Some((Some(1), Some(0))));
     }
 
+    /// A count kept before git-lfs was configured is not served after it:
+    /// the LFS gate decides before the memo is consulted.
+    #[test]
+    fn an_lfs_driver_configured_after_a_count_leaves_the_file_unknown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, ".gitattributes", "*.bin filter=lfs\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, "new.bin", "payload\n");
+        let _clock = crate::repo::RacyClockSkew::set(std::time::Duration::from_secs(30));
+        let repo = open_repo(dir);
+        let new_bin = || {
+            repo.uncommitted_line_stats_impl(&CancellationToken::new())
+                .unwrap()
+                .unstaged[std::path::Path::new("new.bin")]
+        };
+        // No driver is configured yet, so the file is read as it is.
+        assert_eq!(counts(Some(&new_bin())), Some((Some(1), Some(0))));
+
+        let ran = dir.join("clean-filter-ran");
+        git_success(
+            dir,
+            &[
+                "config",
+                "filter.lfs.clean",
+                &format!("touch '{}'; cat", ran.display()),
+            ],
+        );
+
+        assert_eq!(new_bin(), LineStats::UNKNOWN);
+        assert!(!ran.exists(), "the LFS clean filter must not run");
+    }
+
     /// The memo holds only files the last scan listed, so paths that stop
     /// being untracked do not pile up.
     #[cfg(unix)]
