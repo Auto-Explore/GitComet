@@ -1558,6 +1558,21 @@ pub(crate) mod tests {
         );
     }
 
+    /// Trimmed stdout of a git command that must succeed.
+    pub(crate) fn git_stdout(workdir: &Path, args: &[&str]) -> String {
+        let output = git_output(workdir, args);
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("utf8 stdout")
+            .trim()
+            .to_string()
+    }
+
     fn git_expect_failure(workdir: &Path, args: &[&str]) -> Output {
         let output = git_output(workdir, args);
         assert!(

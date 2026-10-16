@@ -1,21 +1,9 @@
 use super::*;
-use crate::repo::status::tests::{git_command, git_success, init_test_repo, open_repo, write_file};
+use crate::repo::status::tests::{
+    git_command, git_stdout, git_success, init_test_repo, open_repo, write_file,
+};
 use gitcomet_core::domain::UpstreamDivergence;
 use std::fs;
-
-fn git_stdout(workdir: &Path, args: &[&str]) -> String {
-    let output = git_command()
-        .arg("-C")
-        .arg(workdir)
-        .args(args)
-        .output()
-        .expect("spawn git");
-    assert!(output.status.success(), "git {args:?} failed");
-    String::from_utf8(output.stdout)
-        .expect("utf8 stdout")
-        .trim()
-        .to_string()
-}
 
 fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
     write_file(workdir, path, contents);
@@ -49,7 +37,9 @@ fn commit_pointer_classification_outlasts_the_stats_limit() {
         for n in 0..count {
             stream.push_str(&format!("M 100644 :1 {n}.bin\n"));
         }
-        let mut child = crate::util::git_workdir_cmd_for(workdir)
+        let mut child = git_command()
+            .arg("-C")
+            .arg(workdir)
             .args(["fast-import", "--quiet"])
             .stdin(std::process::Stdio::piped())
             .spawn()
@@ -1118,7 +1108,8 @@ fn fast_import_commits(workdir: &Path, branch: &str, from: Option<&str>, count: 
             content.len()
         ));
     }
-    let mut cmd = crate::util::git_workdir_cmd_for(workdir);
+    let mut cmd = git_command();
+    cmd.arg("-C").arg(workdir);
     let mut child = cmd
         .args(["fast-import", "--quiet"])
         .stdin(std::process::Stdio::piped())
@@ -1896,7 +1887,8 @@ fn timing_all_branches_page_with_many_refs() {
         let id = git_stdout(tmp.path(), &["rev-parse", &format!("main~{ix}")]);
         refs.push_str(&format!("create refs/remotes/origin/b{ix} {id}\n"));
     }
-    let mut cmd = crate::util::git_workdir_cmd_for(tmp.path());
+    let mut cmd = git_command();
+    cmd.arg("-C").arg(tmp.path());
     let mut child = cmd
         .args(["update-ref", "--stdin"])
         .stdin(std::process::Stdio::piped())
@@ -1947,7 +1939,8 @@ fn timing_ref_metadata_with_many_refs() {
         let id = git_stdout(tmp.path(), &["rev-parse", &format!("main~{ix}")]);
         refs.push_str(&format!("create refs/remotes/origin/b{ix} {id}\n"));
     }
-    let mut cmd = crate::util::git_workdir_cmd_for(tmp.path());
+    let mut cmd = git_command();
+    cmd.arg("-C").arg(tmp.path());
     let mut child = cmd
         .args(["update-ref", "--stdin"])
         .stdin(std::process::Stdio::piped())

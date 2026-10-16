@@ -276,7 +276,7 @@ fn collect_tree_entries(
 #[cfg(test)]
 mod tests {
     use crate::repo::status::tests::{
-        git_command, git_success, init_test_repo, open_repo, write_file,
+        git_stdout, git_success, init_test_repo, open_repo, write_file,
     };
     use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
     use std::fs;
@@ -410,17 +410,7 @@ mod tests {
 
         let head_entries = repo.list_worktree_files_impl().expect("head tree");
 
-        let output = git_command()
-            .arg("-C")
-            .arg(workdir)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("rev-parse");
-        let head_sha = String::from_utf8(output.stdout)
-            .expect("utf8")
-            .trim()
-            .to_string();
-        let commit_id = CommitId(head_sha.into());
+        let commit_id = CommitId(git_stdout(workdir, &["rev-parse", "HEAD"]).into());
 
         let commit_entries = repo
             .list_tree_files_at_commit_impl(&commit_id)
@@ -443,17 +433,7 @@ mod tests {
 
         commit_file(workdir, "only_in_first.txt", "first", "first commit");
 
-        let output = git_command()
-            .arg("-C")
-            .arg(workdir)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("rev-parse");
-        let first_sha = String::from_utf8(output.stdout)
-            .expect("utf8")
-            .trim()
-            .to_string();
-        let first_commit_id = CommitId(first_sha.into());
+        let first_commit_id = CommitId(git_stdout(workdir, &["rev-parse", "HEAD"]).into());
 
         commit_file(workdir, "added_later.txt", "later", "second commit");
 
