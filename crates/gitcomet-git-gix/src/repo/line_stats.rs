@@ -764,6 +764,30 @@ mod tests {
         assert_eq!(unstaged("new.txt"), Some((Some(3), Some(0))));
     }
 
+    /// A cleaning driver can turn binary-looking bytes into text, so its
+    /// paths are counted from what it stores, not sniffed raw.
+    #[test]
+    fn a_cleaning_driver_decides_binary_after_it_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, ".gitattributes", "*.dat filter=strip\n");
+        write_file(dir, "data.dat", "one\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        git_success(dir, &["config", "filter.strip.clean", "tr -d '\\000'"]);
+        std::fs::write(dir.join("data.dat"), b"one\n\0two\n").unwrap();
+
+        let stats = open_repo(dir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap();
+
+        assert_eq!(
+            counts(stats.unstaged.get(std::path::Path::new("data.dat"))),
+            Some((Some(1), Some(0)))
+        );
+    }
+
     /// `git lfs track` leaves `.gitattributes` uncommitted at first; the
     /// worktree copy already decides which reads would start the filter.
     #[test]
@@ -922,41 +946,48 @@ mod tests {
     #[test]
     #[ignore = "timing probe"]
     fn perf_untracked_binary_line_stats_refresh() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        init_test_repo(dir);
-        write_file(dir, "seed.txt", "seed\n");
-        // As in most repositories: end-of-line conversion may apply.
-        write_file(dir, ".gitattributes", "* text=auto\n");
-        git_success(dir, &["add", "."]);
-        git_success(dir, &["commit", "-q", "-m", "seed"]);
-        for ix in 0..200u32 {
-            let payload: Vec<u8> = (0..2 * 1024 * 1024u32)
-                .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8 ^ ix as u8)
-                .collect();
-            std::fs::write(dir.join(format!("blob{ix:03}.bin")), payload).unwrap();
-        }
-        let repo = open_repo(dir);
-        let token = CancellationToken::new();
-        let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
-        assert_eq!(entries.len(), 200);
-        let mut samples = Vec::new();
-        for _ in 0..6 {
-            let started = std::time::Instant::now();
-            let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
-            samples.push(started.elapsed().as_secs_f64() * 1000.0);
-            assert!(
-                stats
-                    .unstaged
-                    .values()
-                    .all(|stats| *stats == LineStats::UNKNOWN)
+        // End-of-line conversion may apply, as in most repositories; and a
+        // filter naming no configured driver, like `git lfs track`'s line
+        // where git-lfs is not installed.
+        for attributes in [
+            "* text=auto\n",
+            "* text=auto\n*.bin filter=nodriver -text\n",
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path();
+            init_test_repo(dir);
+            write_file(dir, "seed.txt", "seed\n");
+            write_file(dir, ".gitattributes", attributes);
+            git_success(dir, &["add", "."]);
+            git_success(dir, &["commit", "-q", "-m", "seed"]);
+            for ix in 0..200u32 {
+                let payload: Vec<u8> = (0..2 * 1024 * 1024u32)
+                    .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8 ^ ix as u8)
+                    .collect();
+                std::fs::write(dir.join(format!("blob{ix:03}.bin")), payload).unwrap();
+            }
+            let repo = open_repo(dir);
+            let token = CancellationToken::new();
+            let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+            assert_eq!(entries.len(), 200);
+            let mut samples = Vec::new();
+            for _ in 0..6 {
+                let started = std::time::Instant::now();
+                let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
+                samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                assert!(
+                    stats
+                        .unstaged
+                        .values()
+                        .all(|stats| *stats == LineStats::UNKNOWN)
+                );
+            }
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "untracked binaries under {attributes:?}: min {:.1} ms, median {:.1} ms, max {:.1} ms",
+                samples[0], samples[3], samples[5]
             );
         }
-        samples.sort_by(f64::total_cmp);
-        eprintln!(
-            "untracked binaries: min {:.1} ms, median {:.1} ms, max {:.1} ms",
-            samples[0], samples[3], samples[5]
-        );
     }
 
     /// Refresh cost of 200 untracked `working-tree-encoding` files in a
