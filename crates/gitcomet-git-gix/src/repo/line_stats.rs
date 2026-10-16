@@ -169,13 +169,14 @@ impl MemoScan {
             self.next.untracked.insert(owned, entry);
             return entry.stats;
         }
-        let added = count();
-        let stats = added.stats();
-        if !matches!(added, AddedLines::Unreadable) {
-            self.next
-                .untracked
-                .insert(path.to_path_buf(), UntrackedCounts { identity, stats });
-        }
+        let stats = match count() {
+            AddedLines::Counted(stats) => stats,
+            AddedLines::Binary => LineStats::UNKNOWN,
+            AddedLines::Unreadable => return LineStats::UNKNOWN,
+        };
+        self.next
+            .untracked
+            .insert(path.to_path_buf(), UntrackedCounts { identity, stats });
         stats
     }
 }
