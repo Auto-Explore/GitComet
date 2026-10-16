@@ -24,14 +24,10 @@ fn git_reftable_available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         let dir = tempfile::tempdir().unwrap();
-        let available = crate::test_support::git_command()
-            .arg("-C")
-            .arg(dir.path())
-            .args(["init", "--ref-format=reftable"])
-            .output()
-            .unwrap()
-            .status
-            .success();
+        let available =
+            crate::test_support::git_output(dir.path(), &["init", "--ref-format=reftable"])
+                .status
+                .success();
         if !available {
             eprintln!("skipping Git cross-check: reftable is unavailable");
         }
@@ -446,13 +442,7 @@ fn private_worktree_refs_do_not_leak_and_explicit_aliases_route_correctly() {
             (&other, linked.as_path(), format!("main-worktree/{name}")),
         ] {
             // File pseudorefs have no cross-worktree alias in Git's ref store.
-            let output = crate::test_support::git_command()
-                .arg("-C")
-                .arg(workdir)
-                .args(["rev-parse", "--verify", &spec])
-                .output()
-                .unwrap();
-            assert!(!output.status.success());
+            crate::test_support::git_expect_failure(workdir, &["rev-parse", "--verify", &spec]);
             assert!(super::super::resolve(repo, &spec).unwrap().is_none());
             let expected = git(workdir, &["rev-parse", "--verify", name]);
             assert_eq!(
