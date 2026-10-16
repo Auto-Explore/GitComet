@@ -77,8 +77,9 @@ and background spans overlap and must not be added together. In particular,
 `git_runtime_probe_background` does not block window creation, but the Home picker
 displays a loading screen until Git validation completes.
 `native_application` covers native platform, GPU and native font-system setup;
-Windows additionally reports renderer choice and fallback. `fontdb_scan` is a
-separate installed-font scan used when custom font preferences need validation.
+Windows additionally reports renderer choice and fallback. `system_font_catalog`
+covers font-family discovery through GPUI when font preferences or the font
+picker require the installed-font catalog.
 `first_paint` marks prepaint of the initial view and `first_interactive` its next
 frame callback, not an OS presentation timestamp or measured input latency. These
 may refer to the Git-checking loading screen. `home_ready` is the frame after the

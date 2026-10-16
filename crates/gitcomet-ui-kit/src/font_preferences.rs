@@ -219,8 +219,8 @@ fn system_font_catalog(text_system: &TextSystem) -> &'static SystemFontCatalog {
 }
 
 fn collect_system_font_catalog(text_system: &TextSystem) -> SystemFontCatalog {
-    let all_families = normalize_font_names(text_system.all_font_names());
     let _stage = gitcomet_base::startup_trace::span("system_font_catalog");
+    let all_families = normalize_font_names(text_system.all_font_names());
     let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
 
     SystemFontCatalog {
@@ -229,7 +229,6 @@ fn collect_system_font_catalog(text_system: &TextSystem) -> SystemFontCatalog {
     }
 }
 
-    let _stage = gitcomet_base::startup_trace::span("fontdb_scan");
 fn normalize_font_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut names_by_key = BTreeMap::new();
     for name in names {
