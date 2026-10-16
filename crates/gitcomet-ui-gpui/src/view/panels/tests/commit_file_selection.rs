@@ -421,3 +421,58 @@ fn commit_file_click_opens_a_renamed_file_from_its_old_path(cx: &mut gpui::TestA
     assert_eq!(target.file_path(), Some(Path::new("src/new.rs")));
     assert_eq!(target.old_file_path(), Some(Path::new("src/old.rs")));
 }
+
+/// A multi-selection is matched against each frame's rows by reference: redraw
+/// allocations must not grow with the number of selected files.
+#[gpui::test]
+fn commit_file_multi_selection_redraws_without_copying_its_paths(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(12);
+    let path = |ix: usize| format!("src/module_{ix:04}.rs");
+    push_commit(
+        &view,
+        cx,
+        repo_id,
+        SHA_A,
+        (0..3_000).map(|ix| file(&path(ix))).collect(),
+    );
+
+    let mut redraw_allocations = |selected: usize| -> u64 {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.details_pane.update(cx, |pane, _cx| {
+                    pane.file_list_selection.insert(
+                        (repo_id, crate::view::rows::FileListId::CommitFiles),
+                        crate::view::rows::FileListMultiSelection {
+                            paths: (0..selected).map(|ix| path(ix).into()).collect(),
+                            anchor: None,
+                            anchor_index: None,
+                            anchor_order_rev: None,
+                        },
+                    );
+                });
+            });
+        });
+        (0..3)
+            .map(|_| {
+                let ((), allocations) = crate::perf_alloc::measure_allocations(|| {
+                    cx.update(|window, app| {
+                        window.refresh();
+                        let _ = window.draw(app);
+                    })
+                });
+                allocations.alloc_ops
+            })
+            .min()
+            .expect("three samples")
+    };
+    let few = redraw_allocations(2);
+    let many = redraw_allocations(2_000);
+    assert!(
+        many < few + 500,
+        "a redraw allocated {few} times with 2 selected files and {many} with 2,000"
+    );
+}
