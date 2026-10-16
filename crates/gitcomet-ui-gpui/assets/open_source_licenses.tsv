@@ -13,6 +13,8 @@ One Dark Pro (theme colors)	3.20.2	MIT
 t3code (Grove, Ocean, Ember, Iris, T3 Chat palettes)	0.0.45-nightly.20260930	MIT
 Tokyo Night (theme colors)	1.1.2	MIT
 Visual Studio Code Monokai and Solarized themes	1.105.1	MIT
+gpui-component (Rust, HTML, JavaScript and TypeScript highlight queries)	main, 2026-01	Apache-2.0
+nvim-treesitter (Elm highlights, Go injections)	ca581c3 (Elm), master (Go)	Apache-2.0
 accesskit	0.25.1	MIT OR Apache-2.0
 accesskit_atspi_common	0.21.0	MIT OR Apache-2.0
 accesskit_consumer	0.39.1	MIT OR Apache-2.0

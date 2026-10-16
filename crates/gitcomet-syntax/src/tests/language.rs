@@ -464,6 +464,43 @@ const LANGUAGE_BASELINES: &[(DiffSyntaxLanguage, &str, &[SyntaxTokenKind])] = {
             &[K::Comment, K::Preproc, K::Label, K::String, K::Keyword],
         ),
         (
+            DiffSyntaxLanguage::Smali,
+            "# c\n.class public LFoo;\n.super Ljava/lang/Object;\n\n.method public static main()V\n    .registers 1\n    const-string v0, \"hi\"\n    return-void\n.end method\n",
+            &[
+                K::Comment,
+                K::Keyword,
+                K::KeywordControl,
+                K::String,
+                K::Type,
+            ],
+        ),
+        (
+            DiffSyntaxLanguage::Elm,
+            "-- c\nmodule Main exposing (main)\n\nmain =\n    if True then \"hi\" else \"no\"\n",
+            &[K::Comment, K::Keyword, K::KeywordControl, K::String],
+        ),
+        (
+            DiffSyntaxLanguage::DeviceTree,
+            "// c\n/dts-v1/;\n/ {\n    compatible = \"acme,board\";\n    reg = <0x40003000 0x1000>;\n};\n",
+            &[K::Comment, K::Keyword, K::Property, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Fish,
+            "# c\nfunction greet\n    if test -n \"$argv\"\n        echo \"hi\"\n    end\nend\n",
+            &[
+                K::Comment,
+                K::Keyword,
+                K::KeywordControl,
+                K::String,
+                K::Function,
+            ],
+        ),
+        (
+            DiffSyntaxLanguage::Newick,
+            "(A:0.1,B:0.2)95:0.3;\n",
+            &[K::Type, K::Number, K::PunctuationBracket],
+        ),
+        (
             DiffSyntaxLanguage::Dhall,
             "-- c\nlet name = \"demo\"\nin  { greeting = name }\n",
             &[K::Comment, K::String, K::Keyword],

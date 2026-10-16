@@ -49,12 +49,12 @@ tree-sitter-commonlisp = "0.4.1"
 tree-sitter-cpp = { workspace = true }
 tree-sitter-css = { workspace = true }
 tree-sitter-dart = { workspace = true }
-tree-sitter-devicetree = "0.14.1"
+tree-sitter-devicetree = { workspace = true }
 tree-sitter-elisp = "1.7.0"
 tree-sitter-elixir = { workspace = true }
-tree-sitter-elm = "5.8.0"
+tree-sitter-elm = { workspace = true }
 tree-sitter-erlang = { workspace = true }
-tree-sitter-fish = "3.6.0"
+tree-sitter-fish = { workspace = true }
 tree-sitter-fsharp = { workspace = true }
 tree-sitter-gleam = { workspace = true }
 tree-sitter-go = { workspace = true }
@@ -70,7 +70,7 @@ tree-sitter-kotlin-sg = { workspace = true }
 tree-sitter-latex = { workspace = true }
 tree-sitter-lua = { workspace = true }
 tree-sitter-make = { workspace = true }
-tree-sitter-newick = "1.1.0"
+tree-sitter-newick = { workspace = true }
 tree-sitter-nix = { workspace = true }
 tree-sitter-objc = { workspace = true }
 tree-sitter-ocaml = { workspace = true }

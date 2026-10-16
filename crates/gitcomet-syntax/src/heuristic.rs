@@ -301,6 +301,11 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // `line_comment` stays None: `haskell_dashes_line_comment` replaces the
         // plain `--` prefix with a rule that knows `-->` is an operator.
         DiffSyntaxLanguage::Haskell => HeuristicCommentConfig::haskell(),
+        // Elm took Haskell's comments but not its user-defined operators (gone
+        // since 0.19), so a plain `--` prefix is always a comment here.
+        DiffSyntaxLanguage::Elm => {
+            HeuristicCommentConfig::line_block("--", HEURISTIC_HASKELL_BLOCK_COMMENT)
+        }
         DiffSyntaxLanguage::Erlang => HeuristicCommentConfig::line("%"),
         // `.properties` takes `!` as well as `#`, and only at the head of a line;
         // `line_comment` carries the second marker.
@@ -351,6 +356,8 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Toml
         | DiffSyntaxLanguage::Yaml
         | DiffSyntaxLanguage::Bash
+        | DiffSyntaxLanguage::Fish
+        | DiffSyntaxLanguage::Smali
         | DiffSyntaxLanguage::Makefile
         | DiffSyntaxLanguage::Ruby
         | DiffSyntaxLanguage::R
@@ -385,6 +392,8 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Groovy
         | DiffSyntaxLanguage::Solidity
         | DiffSyntaxLanguage::Gleam
+        // Not `#`: `#include` and the `#address-cells` property both start with it.
+        | DiffSyntaxLanguage::DeviceTree
         | DiffSyntaxLanguage::Dhall
         | DiffSyntaxLanguage::Kdl
         | DiffSyntaxLanguage::Ron
@@ -408,8 +417,11 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // of the line. Nix comments are `#` and `/* */` only.
         DiffSyntaxLanguage::Nix => HeuristicCommentConfig::hash_block(HEURISTIC_C_BLOCK_COMMENT),
         DiffSyntaxLanguage::VisualBasic => HeuristicCommentConfig::visual_basic(),
-        // CSV has no comment syntax at all -- every byte is data.
+        // CSV has no comment syntax at all -- every byte is data. Newick allows
+        // `[...]` comments but the grammar rejects them, and a `[`/`]` spec would
+        // grey every `[&&NHX ...]` annotation too.
         DiffSyntaxLanguage::Csv
+        | DiffSyntaxLanguage::Newick
         | DiffSyntaxLanguage::Markdown
         | DiffSyntaxLanguage::MarkdownInline
         | DiffSyntaxLanguage::Css
@@ -433,7 +445,9 @@ fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<Heuristi
         | DiffSyntaxLanguage::FSharp
         | DiffSyntaxLanguage::OCaml
         | DiffSyntaxLanguage::OCamlInterface => Some(HeuristicBlockCommentKind::FSharp),
-        DiffSyntaxLanguage::Haskell => Some(HeuristicBlockCommentKind::Haskell),
+        DiffSyntaxLanguage::Haskell | DiffSyntaxLanguage::Elm => {
+            Some(HeuristicBlockCommentKind::Haskell)
+        }
         DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
         DiffSyntaxLanguage::PowerShell => Some(HeuristicBlockCommentKind::PowerShell),
         DiffSyntaxLanguage::Sql

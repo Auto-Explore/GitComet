@@ -1513,170 +1513,185 @@ fn capture_name_is_intentionally_ignored(name: &str) -> bool {
         || name == "error"
         || name == "nested"
         || name == "spell"
+        || name == "nospell"
         || name == "injection.content"
         || name.starts_with("text.")
         || name.starts_with('_')
 }
 
-fn assert_capture_names_are_supported(language: tree_sitter::Language, source: &str) {
-    let query = tree_sitter::Query::new(&language, source).expect("query should compile");
-    for name in query.capture_names() {
-        assert!(
-            syntax_kind_from_capture_name(name).is_some()
-                || capture_name_is_intentionally_ignored(name),
-            "unsupported capture name in vendored asset: {name}"
-        );
-    }
+/// Predicates `Query::new` accepts but the engine never evaluates, so their
+/// rule applies unconditionally. Each entry is (language, operator, rules,
+/// why that is still right). Anything else fails: rewrite it with an evaluated
+/// predicate (`#match?` for `#lua-match?`) or delete the rule.
+const UNEVALUATED_PREDICATES: &[(DiffSyntaxLanguage, &str, usize, &str)] = &[
+    // `#is-not? local` needs a locals query, which GitComet does not run. Each
+    // rule also carries an evaluated `#match?`/`#eq?` that names the builtins.
+    (
+        DiffSyntaxLanguage::JavaScript,
+        "is-not?",
+        2,
+        "an evaluated #match?/#eq? names the builtins",
+    ),
+    (
+        DiffSyntaxLanguage::TypeScript,
+        "is-not?",
+        2,
+        "an evaluated #match?/#eq? names the builtins",
+    ),
+    (
+        DiffSyntaxLanguage::Tsx,
+        "is-not?",
+        2,
+        "an evaluated #match?/#eq? names the builtins",
+    ),
+    (
+        DiffSyntaxLanguage::Nix,
+        "is-not?",
+        2,
+        "an evaluated #match? names the builtins",
+    ),
+    (
+        DiffSyntaxLanguage::Gleam,
+        "is-not?",
+        3,
+        "it only drops calls of local closures, which are calls anyway",
+    ),
+    (
+        DiffSyntaxLanguage::Julia,
+        "has-ancestor?",
+        1,
+        "#any-of? limits it to `begin`/`end`, identifiers only inside an index",
+    ),
+    (
+        DiffSyntaxLanguage::FSharp,
+        "offset!",
+        2,
+        "the injected markdown/xml then starts at the comment marker, which it renders as text",
+    ),
+    // Pre-existing, each the only filter on its rule.
+    (
+        DiffSyntaxLanguage::ObjectiveC,
+        "has-ancestor?",
+        1,
+        "pre-existing: every identifier is captured @property",
+    ),
+    (
+        DiffSyntaxLanguage::Cmake,
+        "lua-match?",
+        2,
+        "pre-existing: the shebang rule is undone by cmake_supplement.scm; every unquoted argument reads as a constant",
+    ),
+];
+
+/// Captures a wired query emits that no kind maps, left plain on purpose.
+const UNMAPPED_CAPTURES: &[(DiffSyntaxLanguage, &str)] = &[
+    (DiffSyntaxLanguage::Gleam, "warning"),
+    (DiffSyntaxLanguage::Dhall, "whole_identifier"),
+    (DiffSyntaxLanguage::Cue, "symbol"),
+];
+
+/// `#set!` keys on highlight patterns, which GitComet never reads (it reads
+/// settings on injection patterns only): (language, key, rules, why).
+const UNREAD_HIGHLIGHT_SETTINGS: &[(DiffSyntaxLanguage, &str, usize, &str)] = &[(
+    DiffSyntaxLanguage::Zig,
+    "priority",
+    1,
+    "it lets escapes beat strings in nvim; here `(escape_sequence)` comes later and wins anyway",
+)];
+
+/// The (language, name) pairs in `found` that `allowed` does not explain with
+/// the exact count.
+fn unexplained(
+    found: &[(DiffSyntaxLanguage, String)],
+    allowed: &[(DiffSyntaxLanguage, &str, usize, &str)],
+) -> Vec<String> {
+    let mut unexplained: Vec<String> = found
+        .iter()
+        .filter(|(language, name)| {
+            let count = found
+                .iter()
+                .filter(|other| other.0 == *language && &other.1 == name)
+                .count();
+            !allowed
+                .iter()
+                .any(|(l, n, c, _)| l == language && n == name && *c == count)
+        })
+        .map(|(language, name)| format!("{language:?} {name}"))
+        .collect();
+    unexplained.sort();
+    unexplained.dedup();
+    unexplained
 }
 
 #[test]
-fn vendored_capture_names_are_supported_or_ignored() {
-    assert_capture_names_are_supported(tree_sitter_rust::LANGUAGE.into(), RUST_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_html::LANGUAGE.into(), HTML_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_vue::LANGUAGE.into(), VUE_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_css::LANGUAGE.into(), CSS_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_bash::LANGUAGE.into(), BASH_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_javascript::LANGUAGE.into(),
-        JAVASCRIPT_HIGHLIGHTS_QUERY,
+fn no_wired_query_relies_on_a_predicate_the_engine_skips() {
+    let mut predicates: Vec<(DiffSyntaxLanguage, String)> = Vec::new();
+    let mut settings: Vec<(DiffSyntaxLanguage, String)> = Vec::new();
+    for language in all_supported_languages() {
+        let Some(spec) = tree_sitter_highlight_spec(language) else {
+            continue;
+        };
+        for query in std::iter::once(&spec.query).chain(spec.injection_query.as_ref()) {
+            for pattern in 0..query.pattern_count() {
+                predicates.extend(
+                    query
+                        .general_predicates(pattern)
+                        .iter()
+                        .map(|predicate| (language, predicate.operator.to_string())),
+                );
+                predicates.extend(query.property_predicates(pattern).iter().map(
+                    |(_, positive)| {
+                        (
+                            language,
+                            if *positive { "is?" } else { "is-not?" }.to_owned(),
+                        )
+                    },
+                ));
+            }
+        }
+        for pattern in 0..spec.query.pattern_count() {
+            settings.extend(
+                spec.query
+                    .property_settings(pattern)
+                    .iter()
+                    .map(|setting| (language, setting.key.to_string())),
+            );
+        }
+    }
+    assert_eq!(
+        unexplained(&predicates, UNEVALUATED_PREDICATES),
+        Vec::<String>::new(),
+        "unevaluated predicates"
     );
-    assert_capture_names_are_supported(
-        tree_sitter_python::LANGUAGE.into(),
-        PYTHON_HIGHLIGHTS_QUERY,
+    assert_eq!(
+        unexplained(&settings, UNREAD_HIGHLIGHT_SETTINGS),
+        Vec::<String>::new(),
+        "unread #set! keys on highlight patterns"
     );
-    assert_capture_names_are_supported(tree_sitter_go::LANGUAGE.into(), GO_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_json::LANGUAGE.into(), JSON_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_yaml::LANGUAGE.into(), YAML_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        TYPESCRIPT_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_typescript::LANGUAGE_TSX.into(),
-        TSX_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_xml::LANGUAGE_XML.into(), XML_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_c::LANGUAGE.into(), C_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_cpp::LANGUAGE.into(), CPP_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_c_sharp::LANGUAGE.into(),
-        CSHARP_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_java::LANGUAGE.into(),
-        tree_sitter_java::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_php::LANGUAGE_PHP.into(),
-        tree_sitter_php::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_ruby::LANGUAGE.into(), RUBY_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_toml_ng::LANGUAGE.into(),
-        tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_lua::LANGUAGE.into(),
-        tree_sitter_lua::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_make::LANGUAGE.into(),
-        tree_sitter_make::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_kotlin_sg::LANGUAGE.into(),
-        tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_zig::LANGUAGE.into(), ZIG_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        dekobon_tree_sitter_groovy::LANGUAGE.into(),
-        dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_clojure_orchard::LANGUAGE.into(),
-        CLOJURE_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_elixir::LANGUAGE.into(),
-        tree_sitter_elixir::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_erlang::LANGUAGE.into(),
-        tree_sitter_erlang::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_haskell::LANGUAGE.into(),
-        HASKELL_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_julia::LANGUAGE.into(), JULIA_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_ocaml::LANGUAGE_OCAML.into(),
-        OCAML_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_solidity::LANGUAGE.into(),
-        SOLIDITY_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_asm::LANGUAGE.into(), ASM_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_svelte_ng::LANGUAGE.into(),
-        SVELTE_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_bicep::LANGUAGE.into(),
-        tree_sitter_bicep::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_objc::LANGUAGE.into(),
-        tree_sitter_objc::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
-        tree_sitter_fsharp::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_powershell::LANGUAGE.into(),
-        POWERSHELL_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_swift::LANGUAGE.into(),
-        tree_sitter_swift::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_jsdoc::LANGUAGE.into(), JSDOC_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(tree_sitter_regex::LANGUAGE.into(), REGEX_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_r::LANGUAGE.into(),
-        tree_sitter_r::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_dart::LANGUAGE.into(),
-        tree_sitter_dart::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_scala::LANGUAGE.into(),
-        tree_sitter_scala::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_sequel::LANGUAGE.into(),
-        tree_sitter_sequel::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_md::LANGUAGE.into(), MARKDOWN_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_md::INLINE_LANGUAGE.into(),
-        MARKDOWN_INLINE_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_diff::LANGUAGE.into(),
-        tree_sitter_diff::HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(
-        tree_sitter_gitcommit::LANGUAGE.into(),
-        GITCOMMIT_HIGHLIGHTS_QUERY,
-    );
-    assert_capture_names_are_supported(tree_sitter_gomod::LANGUAGE.into(), GOMOD_HIGHLIGHTS_QUERY);
-    assert_capture_names_are_supported(
-        tree_sitter_gowork::LANGUAGE.into(),
-        GOWORK_HIGHLIGHTS_QUERY,
+}
+
+#[test]
+fn every_highlight_capture_is_supported_or_ignored() {
+    let mut unsupported = Vec::new();
+    for language in all_supported_languages() {
+        let Some(spec) = tree_sitter_highlight_spec(language) else {
+            continue;
+        };
+        unsupported.extend(
+            spec.query
+                .capture_names()
+                .iter()
+                .filter(|name| {
+                    syntax_kind_from_capture_name(name).is_none()
+                        && !capture_name_is_intentionally_ignored(name)
+                        && !UNMAPPED_CAPTURES.contains(&(language, **name))
+                })
+                .map(|name| format!("{language:?} @{name}")),
+        );
+    }
+    assert!(
+        unsupported.is_empty(),
+        "unsupported captures: {unsupported:?}"
     );
 }
 

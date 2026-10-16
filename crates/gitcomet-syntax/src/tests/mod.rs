@@ -397,6 +397,11 @@ fn all_supported_languages() -> Vec<DiffSyntaxLanguage> {
         DiffSyntaxLanguage::Spirv,
         DiffSyntaxLanguage::Crontab,
         DiffSyntaxLanguage::Cil,
+        DiffSyntaxLanguage::Smali,
+        DiffSyntaxLanguage::Elm,
+        DiffSyntaxLanguage::DeviceTree,
+        DiffSyntaxLanguage::Fish,
+        DiffSyntaxLanguage::Newick,
         DiffSyntaxLanguage::JavaProperties,
         DiffSyntaxLanguage::Jsonnet,
         DiffSyntaxLanguage::Proto,
@@ -436,6 +441,7 @@ mod batch;
 mod batch_regression;
 mod chunk_cache;
 mod combined_injections;
+mod difftastic_languages;
 mod extra_languages;
 mod grammar_compat;
 mod heuristic;

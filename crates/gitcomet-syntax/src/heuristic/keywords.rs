@@ -107,8 +107,113 @@ pub(super) fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         DiffSyntaxLanguage::Makefile => matches!(ident, "if" | "else" | "endif"),
         // A `.gitignore` has no keywords: every line is a path.
         DiffSyntaxLanguage::Gitignore => false,
-        // A CSV field can be any text; an EBNF file is symbols and rule names.
-        DiffSyntaxLanguage::Csv | DiffSyntaxLanguage::Ebnf => false,
+        // A CSV field can be any text; an EBNF file is symbols and rule names; a
+        // Newick tree is taxon names and numbers.
+        DiffSyntaxLanguage::Csv | DiffSyntaxLanguage::Ebnf | DiffSyntaxLanguage::Newick => false,
+        // Directives arrive as their bare tails (`.method` is looked up as
+        // `method`), like Assembly's.
+        DiffSyntaxLanguage::Smali => matches!(
+            ident,
+            "annotation"
+                | "catch"
+                | "catchall"
+                | "class"
+                | "end"
+                | "enum"
+                | "field"
+                | "implements"
+                | "line"
+                | "local"
+                | "locals"
+                | "method"
+                | "param"
+                | "parameter"
+                | "registers"
+                | "source"
+                | "subannotation"
+                | "super"
+                | "abstract"
+                | "bridge"
+                | "constructor"
+                | "final"
+                | "interface"
+                | "native"
+                | "private"
+                | "protected"
+                | "public"
+                | "static"
+                | "strictfp"
+                | "synchronized"
+                | "synthetic"
+                | "transient"
+                | "varargs"
+                | "volatile"
+                | "true"
+                | "false"
+                | "null"
+        ),
+        DiffSyntaxLanguage::Elm => matches!(
+            ident,
+            "alias"
+                | "as"
+                | "case"
+                | "else"
+                | "exposing"
+                | "if"
+                | "import"
+                | "in"
+                | "let"
+                | "module"
+                | "of"
+                | "port"
+                | "then"
+                | "type"
+                | "True"
+                | "False"
+        ),
+        // dtc directives arrive as their bare tails (`/delete-node/` as `delete`
+        // and `node`), plus the cpp words.
+        DiffSyntaxLanguage::DeviceTree => matches!(
+            ident,
+            "bits"
+                | "delete"
+                | "dts"
+                | "incbin"
+                | "include"
+                | "memreserve"
+                | "omit"
+                | "plugin"
+                | "define"
+                | "defined"
+                | "if"
+                | "else"
+                | "elif"
+                | "elifdef"
+                | "elifndef"
+                | "endif"
+                | "ifdef"
+                | "ifndef"
+                | "undef"
+        ),
+        DiffSyntaxLanguage::Fish => matches!(
+            ident,
+            "and"
+                | "begin"
+                | "break"
+                | "case"
+                | "continue"
+                | "else"
+                | "end"
+                | "for"
+                | "function"
+                | "if"
+                | "in"
+                | "not"
+                | "or"
+                | "return"
+                | "switch"
+                | "while"
+        ),
         DiffSyntaxLanguage::Dhall => matches!(
             ident,
             "let"

@@ -41,11 +41,14 @@ tree-sitter-csv = { workspace = true }
 tree-sitter-cue = { workspace = true }
 tree-sitter-css = { workspace = true }
 tree-sitter-dart = { workspace = true }
+tree-sitter-devicetree = { workspace = true }
 tree-sitter-dhall = { workspace = true }
 tree-sitter-diff = { workspace = true }
 tree-sitter-ebnf = { workspace = true }
 tree-sitter-elixir = { workspace = true }
+tree-sitter-elm = { workspace = true }
 tree-sitter-erlang = { workspace = true }
+tree-sitter-fish = { workspace = true }
 tree-sitter-fsharp = { workspace = true }
 tree-sitter-gitcommit = { workspace = true }
 tree-sitter-gleam = { workspace = true }
@@ -71,6 +74,7 @@ tree-sitter-just = { workspace = true }
 tree-sitter-lua = { workspace = true }
 tree-sitter-make = { workspace = true }
 tree-sitter-md = { workspace = true }
+tree-sitter-newick = { workspace = true }
 tree-sitter-nix = { workspace = true }
 tree-sitter-objc = { workspace = true }
 tree-sitter-ocaml = { workspace = true }
@@ -88,6 +92,7 @@ tree-sitter-ruby = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-scala = { workspace = true }
 tree-sitter-sequel = { workspace = true }
+tree-sitter-smali = { workspace = true }
 tree-sitter-solidity = { workspace = true }
 tree-sitter-spirv = { workspace = true }
 tree-sitter-svelte-ng = { workspace = true }
@@ -111,4 +116,3 @@ tempfile = { workspace = true }
 # Grammars only vendor/difftastic uses yet; the ABI test covers every vendored grammar.
 tree-sitter-janet-simple = { workspace = true }
 tree-sitter-latex = { workspace = true }
-tree-sitter-smali = { workspace = true }

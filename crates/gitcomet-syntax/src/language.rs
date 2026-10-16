@@ -78,6 +78,11 @@ language_registry! {
     DiffSyntaxLanguage::Crontab => ["crontab", "cron", "cronfile"],
     // Not `.ils` or `.cil`: neither is a thing. `ilasm` reads `.il`.
     DiffSyntaxLanguage::Cil => ["il"],
+    DiffSyntaxLanguage::Smali => ["smali"],
+    DiffSyntaxLanguage::Elm => ["elm"],
+    DiffSyntaxLanguage::DeviceTree => ["dts", "dtsi", "dtso", "its", "devicetree"],
+    DiffSyntaxLanguage::Fish => ["fish"],
+    DiffSyntaxLanguage::Newick => ["nwk", "nh", "nhx", "newick"],
     DiffSyntaxLanguage::Kotlin => ["kt", "kts", "kotlin"],
     DiffSyntaxLanguage::Zig => ["zig"],
     // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
@@ -424,6 +429,26 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Cil => Some((
             tree_sitter_cil::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(CIL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Smali => Some((
+            tree_sitter_smali::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(SMALI_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Elm => Some((
+            tree_sitter_elm::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(ELM_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::DeviceTree => Some((
+            tree_sitter_devicetree::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(DEVICETREE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Fish => Some((
+            tree_sitter_fish::language(),
+            TreesitterQueryAsset::highlights(FISH_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Newick => Some((
+            tree_sitter_newick::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(NEWICK_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Crontab => Some((
             tree_sitter_crontab::LANGUAGE.into(),
@@ -882,6 +907,11 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Gleam => highlight_spec_entry!(Gleam),
         DiffSyntaxLanguage::V => highlight_spec_entry!(V),
         DiffSyntaxLanguage::Cil => highlight_spec_entry!(Cil),
+        DiffSyntaxLanguage::Smali => highlight_spec_entry!(Smali),
+        DiffSyntaxLanguage::Elm => highlight_spec_entry!(Elm),
+        DiffSyntaxLanguage::DeviceTree => highlight_spec_entry!(DeviceTree),
+        DiffSyntaxLanguage::Fish => highlight_spec_entry!(Fish),
+        DiffSyntaxLanguage::Newick => highlight_spec_entry!(Newick),
         DiffSyntaxLanguage::Crontab => highlight_spec_entry!(Crontab),
         DiffSyntaxLanguage::Caddyfile => highlight_spec_entry!(Caddyfile),
         DiffSyntaxLanguage::Gitignore => highlight_spec_entry!(Gitignore),

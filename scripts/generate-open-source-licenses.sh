@@ -32,6 +32,8 @@ BUNDLED_ASSET_LICENSE_ROWS=(
   $'t3code (Grove, Ocean, Ember, Iris, T3 Chat palettes)\t0.0.45-nightly.20260930\tMIT'
   $'Tokyo Night (theme colors)\t1.1.2\tMIT'
   $'Visual Studio Code Monokai and Solarized themes\t1.105.1\tMIT'
+  $'gpui-component (Rust, HTML, JavaScript and TypeScript highlight queries)\tmain, 2026-01\tApache-2.0'
+  $'nvim-treesitter (Elm highlights, Go injections)\tca581c3 (Elm), master (Go)\tApache-2.0'
 )
 
 # Crates whose manifest names a licence file instead of an SPDX id, keyed by

@@ -56,6 +56,11 @@ const EBNF_HIGHLIGHTS_QUERY: &str = include_str!("queries/ebnf_highlights.scm");
 const DHALL_HIGHLIGHTS_QUERY: &str = include_str!("queries/dhall_highlights.scm");
 const COFFEE_HIGHLIGHTS_QUERY: &str = include_str!("queries/coffee_highlights.scm");
 const CIL_HIGHLIGHTS_QUERY: &str = include_str!("queries/cil_highlights.scm");
+const SMALI_HIGHLIGHTS_QUERY: &str = include_str!("queries/smali_highlights.scm");
+const ELM_HIGHLIGHTS_QUERY: &str = include_str!("queries/elm_highlights.scm");
+const DEVICETREE_HIGHLIGHTS_QUERY: &str = include_str!("queries/devicetree_highlights.scm");
+const FISH_HIGHLIGHTS_QUERY: &str = include_str!("queries/fish_highlights.scm");
+const NEWICK_HIGHLIGHTS_QUERY: &str = include_str!("queries/newick_highlights.scm");
 const CRONTAB_HIGHLIGHTS_QUERY: &str = include_str!("queries/crontab_highlights.scm");
 const CRONTAB_INJECTIONS_QUERY: &str = include_str!("queries/crontab_injections.scm");
 const GITIGNORE_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitignore_highlights.scm");
@@ -403,6 +408,17 @@ pub enum DiffSyntaxLanguage {
     Pascal,
     /// CIL / MSIL (`.il`). The grammar is written in-tree: there is none anywhere.
     Cil,
+    /// `.smali` -- Dalvik bytecode assembly, as baksmali writes it.
+    Smali,
+    /// `.elm`.
+    Elm,
+    /// Devicetree source (`.dts`, `.dtsi`, `.dtso`) and U-Boot FIT image source
+    /// (`.its`), which shares its syntax.
+    DeviceTree,
+    /// `.fish` -- the fish shell.
+    Fish,
+    /// Newick / New Hampshire X phylogenetic trees (`.nwk`, `.nh`, `.nhx`).
+    Newick,
     Rust,
     Python,
     JavaScript,
