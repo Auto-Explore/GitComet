@@ -795,3 +795,22 @@ the production-line ratchet records 64 more. Three production files remain
 over 3,000 lines (`gitcomet_view.rs`, `panes/diff/diff_text.rs`,
 `rows/conflict_resolver.rs`), plus `rows/benchmarks/conflict.rs`, which the
 size guard counts as production code.
+
+The last three went the same way: the command dispatcher (`execute_command`,
+636 lines) to `gitcomet_view_commands.rs` beside the root, the pane resize
+handle renderer into `gitcomet_view_render.rs`, the diff text's editor context
+menu to `diff_text/editor_context_menu.rs`, and the three-way conflict column
+rows to `conflict_resolver/three_way_rows.rs`. No production file is over 3,000
+lines now and the ratchet holds that at zero. The size guard drops to 3,500
+production and 5,500 test lines, the plan's first milestone, which leaves
+in-flight branches room while the ratchet keeps the stricter line. The typed
+`Command` enum for the dispatcher is still open.
+
+Moving files broke a quiet assumption: the host's interaction guard allowlists
+code by path and never noticed entries for files that had moved to the
+terminal and media crates, so that code was no longer checked anywhere. The
+kit's `discrete_control_violations` now reports an allowlist entry that is
+missing or no longer needed, the host's lists were corrected (including a stale
+`hosted/diff_pane.rs` entry from before this round), and the terminal and media
+crates run the kit's control, clipboard and icon-size guards over their own
+sources.

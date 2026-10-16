@@ -333,11 +333,52 @@ pub mod source_guards {
                 }
             }
         }
+        // An entry must still be needed, so moved or cleaned-up code cannot
+        // leave an exemption behind for whatever lands at that path next.
+        for (list, rule) in [
+            (allow.custom_styling, &pattern),
+            (allow.release_gestures, &raw_release),
+            (allow.primary_press, &primary_press),
+            (allow.context_press, &context_press),
+        ] {
+            for entry in list {
+                match std::fs::read_to_string(src_dir.join(entry)) {
+                    Err(_) => violations.push(format!("{entry}: allowlisted but missing")),
+                    Ok(source) if !rule.is_match(&source) => {
+                        violations.push(format!("{entry}: allowlisted but no longer needed"))
+                    }
+                    Ok(_) => {}
+                }
+            }
+        }
         violations
     }
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn allowlist_entries_that_are_missing_or_unneeded_are_violations() {
+            let sources = tempfile::tempdir().unwrap();
+            std::fs::write(sources.path().join("drag.rs"), ".on_mouse_up(\n").unwrap();
+            std::fs::write(sources.path().join("plain.rs"), "div()\n").unwrap();
+            let violations = super::discrete_control_violations(
+                sources.path(),
+                &super::DiscreteControlAllowlist {
+                    custom_styling: &[],
+                    release_gestures: &["drag.rs", "plain.rs", "moved.rs"],
+                    primary_press: &[],
+                    context_press: &[],
+                },
+            );
+            assert_eq!(
+                violations,
+                [
+                    "plain.rs: allowlisted but no longer needed",
+                    "moved.rs: allowlisted but missing",
+                ]
+            );
+        }
+
         #[test]
         fn source_scans_skip_smoke_modules_but_keep_similarly_named_sources() {
             let sources = tempfile::tempdir().unwrap();

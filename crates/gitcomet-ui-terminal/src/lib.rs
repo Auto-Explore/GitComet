@@ -58,3 +58,6 @@ pub(crate) fn terminal_clipboard_shortcut_action(
         None
     }
 }
+
+#[cfg(test)]
+mod source_guards;

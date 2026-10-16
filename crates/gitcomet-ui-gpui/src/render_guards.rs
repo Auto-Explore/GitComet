@@ -22,11 +22,10 @@ mod tests {
                 // shared SubtargetClick because their input owns pointer selection.
                 release_gestures: &[
                     "view/components/commit_link_menu.rs",
-                    "view/gitcomet_view.rs",
+                    "view/gitcomet_view_render.rs",
                     "view/chrome.rs",
                     "view/settings_window/render.rs",
                     "view/terminal_panel.rs",
-                    "view/terminal_panel/viewport.rs",
                     "view/panels/layout/status_view.rs",
                     "view/panels/repo_tabs_bar.rs",
                     "view/panes/history/history_panel.rs",
@@ -35,18 +34,13 @@ mod tests {
                     "view/panels/main/diff.rs",
                     "view/panels/main/diff_view.rs",
                 ],
-                context_press: &["view/terminal_panel/viewport.rs"],
+                context_press: &[],
                 // Selection, resizing, dragging, focus, and propagation only.
                 // Discrete controls (including hosted group headers) use on_activate.
                 primary_press: &[
-                    // Diagram and image panning start continuous drags.
-                    "view/diagram_preview/surface.rs",
-                    "view/image_preview/surface.rs",
                     "view/chrome.rs",
                     "view/diff_text_selection.rs",
-                    "view/gitcomet_view.rs",
                     "view/gitcomet_view_render.rs",
-                    "view/hosted/diff_pane.rs",
                     "view/panels/layout/status_view.rs",
                     "view/panels/main/conflict_resolver_view.rs",
                     "view/panels/main/diff.rs",
@@ -57,11 +51,11 @@ mod tests {
                     "view/panes/details.rs",
                     "view/panes/history/history_panel.rs",
                     "view/rows/conflict_resolver.rs",
+                    "view/rows/conflict_resolver/three_way_rows.rs",
                     "view/rows/diff_text/build.rs",
                     "view/rows/markdown_document.rs",
                     "view/settings_window/render.rs",
                     "view/terminal_panel.rs",
-                    "view/terminal_panel/viewport.rs",
                 ],
             },
         );

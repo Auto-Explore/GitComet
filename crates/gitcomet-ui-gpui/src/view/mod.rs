@@ -869,6 +869,7 @@ pub(in crate::view) fn diff_split_column_widths(
 pub(crate) use crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY;
 
 mod gitcomet_view;
+mod gitcomet_view_commands;
 mod gitcomet_view_render;
 mod runtime_probe;
 

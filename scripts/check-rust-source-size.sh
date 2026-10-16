@@ -5,8 +5,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 cd "$repo_root"
 
-production_limit="${GITCOMET_MAX_PRODUCTION_RS_LINES:-4500}"
-test_limit="${GITCOMET_MAX_TEST_RS_LINES:-6500}"
+production_limit="${GITCOMET_MAX_PRODUCTION_RS_LINES:-3500}"
+test_limit="${GITCOMET_MAX_TEST_RS_LINES:-5500}"
 
 for value in "$production_limit" "$test_limit"; do
   if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
