@@ -1,5 +1,6 @@
 use crate::diff::AnnotatedDiffLine;
 use rustc_hash::FxHashSet;
+use std::collections::BTreeMap;
 
 pub fn enclosing_hunk_src_ix(diff: &[AnnotatedDiffLine], src_ix: usize) -> Option<usize> {
     let src_ix = src_ix.min(diff.len().saturating_sub(1));
@@ -311,29 +312,12 @@ pub fn build_unified_patch_for_selected_lines_across_hunks(
     diff: &[AnnotatedDiffLine],
     selected_src_ixs: &FxHashSet<usize>,
 ) -> Option<Vec<u8>> {
-    use crate::domain::DiffLineKind as K;
-    use std::collections::BTreeMap;
-
     if selected_src_ixs.is_empty() {
         return None;
     }
 
-    let mut by_hunk: BTreeMap<usize, FxHashSet<usize>> = BTreeMap::new();
-    for &src_ix in selected_src_ixs {
-        let Some(line) = diff.get(src_ix) else {
-            continue;
-        };
-        if !matches!(line.kind, K::Add | K::Remove) {
-            continue;
-        }
-        let Some(hunk_src_ix) = enclosing_hunk_src_ix(diff, src_ix) else {
-            continue;
-        };
-        by_hunk.entry(hunk_src_ix).or_default().insert(src_ix);
-    }
-
     let mut out = Vec::new();
-    for (hunk_src_ix, src_ixs) in by_hunk {
+    for (hunk_src_ix, src_ixs) in selected_lines_by_hunk(diff, selected_src_ixs) {
         let Some(patch) = build_unified_patch_for_hunk_selection(diff, hunk_src_ix, &src_ixs)
         else {
             continue;
@@ -349,29 +333,12 @@ pub fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
     diff: &[AnnotatedDiffLine],
     selected_src_ixs: &FxHashSet<usize>,
 ) -> Option<Vec<u8>> {
-    use crate::domain::DiffLineKind as K;
-    use std::collections::BTreeMap;
-
     if selected_src_ixs.is_empty() {
         return None;
     }
 
-    let mut by_hunk: BTreeMap<usize, FxHashSet<usize>> = BTreeMap::new();
-    for &src_ix in selected_src_ixs {
-        let Some(line) = diff.get(src_ix) else {
-            continue;
-        };
-        if !matches!(line.kind, K::Add | K::Remove) {
-            continue;
-        }
-        let Some(hunk_src_ix) = enclosing_hunk_src_ix(diff, src_ix) else {
-            continue;
-        };
-        by_hunk.entry(hunk_src_ix).or_default().insert(src_ix);
-    }
-
     let mut out = Vec::new();
-    for (hunk_src_ix, src_ixs) in by_hunk {
+    for (hunk_src_ix, src_ixs) in selected_lines_by_hunk(diff, selected_src_ixs) {
         let Some(patch) =
             build_unified_patch_for_hunk_selection_for_reverse_apply(diff, hunk_src_ix, &src_ixs)
         else {
@@ -382,3 +349,28 @@ pub fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
 
     patch_has_content(&out).then_some(out)
 }
+
+fn selected_lines_by_hunk(
+    diff: &[AnnotatedDiffLine],
+    selected: &FxHashSet<usize>,
+) -> BTreeMap<usize, FxHashSet<usize>> {
+    use crate::domain::DiffLineKind as K;
+    let mut by_hunk: BTreeMap<usize, FxHashSet<usize>> = BTreeMap::new();
+    let mut hunk = None;
+    for (ix, line) in diff.iter().enumerate() {
+        match line.kind {
+            K::Header if line.text.starts_with("diff --git ") => hunk = None,
+            K::Hunk => hunk = Some(ix),
+            K::Add | K::Remove if selected.contains(&ix) => {
+                if let Some(hunk) = hunk {
+                    by_hunk.entry(hunk).or_default().insert(ix);
+                }
+            }
+            _ => {}
+        }
+    }
+    by_hunk
+}
+
+#[cfg(test)]
+mod tests;
