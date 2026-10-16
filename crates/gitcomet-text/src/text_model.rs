@@ -386,11 +386,13 @@ impl TextModelSnapshot {
     }
 
     /// The characters from `offset` to the end, read chunk by chunk: a walk
-    /// that stops early never copies or touches the rest of the document.
+    /// that stops early never copies or touches the rest of the document. Both
+    /// walks split the text where [`TextModelSnapshot::slice`] does, so an
+    /// offset inside a character counts as that character's start.
     pub fn chars_at(&self, offset: usize) -> impl Iterator<Item = char> + '_ {
         self.core
             .rope
-            .chunks_in_range(offset..self.len())
+            .chunks_in_range(self.normalized_char_range(offset..self.len()))
             .flat_map(str::chars)
     }
 
@@ -398,7 +400,7 @@ impl TextModelSnapshot {
     pub fn reversed_chars_at(&self, offset: usize) -> impl Iterator<Item = char> + '_ {
         self.core
             .rope
-            .reversed_chunks_in_range(0..offset)
+            .reversed_chunks_in_range(self.normalized_char_range(0..offset))
             .flat_map(|chunk| chunk.chars().rev())
     }
 
@@ -1017,6 +1019,17 @@ mod edit_cost_tests {
         assert!(!history.is_materialized());
         assert!(!history.is_line_index_built());
         assert!(model.snapshot().is_materialized());
+    }
+
+    /// A caret offset inside a character must not hand the character to both
+    /// walks: a word move subtracts what the backward walk passed.
+    #[test]
+    fn char_walks_split_a_mid_character_offset_at_its_start() {
+        let snapshot = TextModel::from_large_text("aé").snapshot();
+
+        assert_eq!(snapshot.reversed_chars_at(2).collect::<String>(), "a");
+        assert_eq!(snapshot.chars_at(2).collect::<String>(), "é");
+        assert_eq!(snapshot.reversed_chars_at(3).collect::<String>(), "éa");
     }
 
     /// `longest_row` backs the horizontal scroll bound, and it must stay a
