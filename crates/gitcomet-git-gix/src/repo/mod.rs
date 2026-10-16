@@ -1048,14 +1048,6 @@ impl GitRepository for GixRepo {
         self.compare_files_impl(from, to, options, cancellation)
     }
 
-    fn merge_base(&self, a: &CommitId, b: &CommitId) -> Result<Option<CommitId>> {
-        self.merge_base_impl(a, b)
-    }
-
-    fn is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
-        self.is_ancestor_impl(ancestor, descendant)
-    }
-
     fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.uncommitted_line_stats_impl(&CancellationToken::new())

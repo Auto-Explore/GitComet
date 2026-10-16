@@ -201,14 +201,6 @@ fn merge_base_comparisons_show_only_what_the_branch_added() {
     let opened = open(&repo);
     let cancel = CancellationToken::new();
 
-    assert_eq!(
-        opened.merge_base(&main, &feature).unwrap(),
-        Some(fork.clone())
-    );
-    assert!(opened.is_ancestor(&fork, &feature).unwrap());
-    assert!(opened.is_ancestor(&feature, &feature).unwrap());
-    assert!(!opened.is_ancestor(&main, &feature).unwrap());
-
     let direct = opened
         .compare_files(&main, Some(&feature), &ComparisonOptions::direct(), &cancel)
         .unwrap();
@@ -252,8 +244,6 @@ fn unrelated_histories_have_no_merge_base() {
     let second = commit_all(&repo, "second root");
     let opened = open(&repo);
 
-    assert_eq!(opened.merge_base(&first, &second).unwrap(), None);
-    assert!(!opened.is_ancestor(&first, &second).unwrap());
     let error = opened
         .compare_files(
             &first,

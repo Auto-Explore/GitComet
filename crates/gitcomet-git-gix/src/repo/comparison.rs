@@ -327,24 +327,11 @@ impl GixRepo {
         Ok(Comparison::new(base, files))
     }
 
-    pub(super) fn merge_base_impl(&self, a: &CommitId, b: &CommitId) -> Result<Option<CommitId>> {
+    fn merge_base_impl(&self, a: &CommitId, b: &CommitId) -> Result<Option<CommitId>> {
         let repo = self.repo();
         let a = resolve_commit(&repo, a)?;
         let b = resolve_commit(&repo, b)?;
         Ok(merge_base_ids(&repo, a, b)?.map(|id| CommitId(id.to_string().into())))
-    }
-
-    pub(super) fn is_ancestor_impl(
-        &self,
-        ancestor: &CommitId,
-        descendant: &CommitId,
-    ) -> Result<bool> {
-        let repo = self.repo();
-        let ancestor = resolve_commit(&repo, ancestor)?;
-        let descendant = resolve_commit(&repo, descendant)?;
-        // `ancestor` is reachable from `descendant` exactly when it is their
-        // merge base; a commit is its own merge base.
-        Ok(merge_base_ids(&repo, ancestor, descendant)? == Some(ancestor))
     }
 }
 

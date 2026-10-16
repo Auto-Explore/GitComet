@@ -921,22 +921,6 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    /// The best common ancestor of `a` and `b`, or `None` when their
-    /// histories are unrelated.
-    fn merge_base(&self, _a: &CommitId, _b: &CommitId) -> Result<Option<CommitId>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "merge-base lookup is not implemented for this backend",
-        )))
-    }
-
-    /// Whether `ancestor` is reachable from `descendant` (a commit is its own
-    /// ancestor).
-    fn is_ancestor(&self, _ancestor: &CommitId, _descendant: &CommitId) -> Result<bool> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "ancestry checks are not implemented for this backend",
-        )))
-    }
-
     /// Added/removed line counts for every uncommitted change, both lanes.
     ///
     /// Separate from `status`, which decides most entries from stat data alone
@@ -2662,22 +2646,11 @@ mod tests {
         ));
         assert_unsupported(repo.commit_amend("message"));
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
-        assert_unsupported(repo.merge_base(&commit, &commit));
-        assert_unsupported(repo.is_ancestor(&commit, &commit));
-        let cancel = super::CancellationToken::new();
-        // Options a fallback cannot honor fail instead of returning a list
-        // that silently leaves files out.
-        assert_unsupported(repo.compare_files(
-            &commit,
-            None,
-            &super::ComparisonOptions::direct().with_untracked(true),
-            &cancel,
-        ));
         assert_unsupported(repo.compare_files(
             &commit,
             Some(&commit),
-            &super::ComparisonOptions::merge_base(),
-            &cancel,
+            &super::ComparisonOptions::direct(),
+            &super::CancellationToken::new(),
         ));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
         assert_unsupported(repo.revert_with_output(&commit, true, None));
