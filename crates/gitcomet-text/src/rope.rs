@@ -557,14 +557,12 @@ impl Rope {
         Point::new(point.row, point.column.min(line_len))
     }
 
-    /// The chunk containing `offset`, from `offset` up to `limit` or the end of
-    /// that chunk, whichever comes first.
+    /// Bytes starting at exactly `offset`, up to `limit` or the end of the chunk
+    /// holding `offset`, whichever comes first. Empty when `offset >= limit`.
     ///
     /// This is the primitive tree-sitter's chunked reader wants: it asks for
     /// bytes at an offset and is happy with however many it gets, so a parse
     /// never needs the document as one buffer.
-    /// Bytes starting at exactly `offset`, at most up to `limit`, from a single
-    /// chunk. Empty when `offset >= limit`.
     ///
     /// Byte-exact on both ends, which `chunks_in_range` deliberately is not:
     /// that widens a range to whole characters so it can hand back `&str`. A
@@ -583,13 +581,14 @@ impl Rope {
         &bytes[..bytes.len().min(limit - offset)]
     }
 
-    /// Identity of each chunk's backing allocation, for tests that assert
-    /// copy-on-write sharing rather than timing it.
+    /// Each chunk's byte length, for tests that place a range on a chunk seam.
     #[cfg(any(test, feature = "test-support"))]
     fn chunk_sizes_for_test(&self) -> Vec<usize> {
         self.chunks.iter().map(|chunk| chunk.0.len()).collect()
     }
 
+    /// Identity of each chunk's backing allocation, for tests that assert
+    /// copy-on-write sharing rather than timing it.
     #[cfg(any(test, feature = "test-support"))]
     fn chunk_identities(&self) -> Vec<*const u8> {
         self.chunks.iter().map(|chunk| chunk.0.as_ptr()).collect()
