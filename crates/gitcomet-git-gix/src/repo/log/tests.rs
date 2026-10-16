@@ -5,6 +5,32 @@ use crate::repo::status::tests::{
 use gitcomet_core::domain::UpstreamDivergence;
 use std::fs;
 
+/// Runs git in `workdir` with `input` on its stdin; it must succeed.
+fn git_with_stdin(workdir: &Path, args: &[&str], input: &[u8]) {
+    use std::io::Write as _;
+    let mut child = git_command()
+        .arg("-C")
+        .arg(workdir)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn git");
+    child
+        .stdin
+        .take()
+        .expect("git stdin")
+        .write_all(input)
+        .expect("write git stdin");
+    let output = child.wait_with_output().expect("git exit");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
     write_file(workdir, path, contents);
     git_success(workdir, &["add", path]);
@@ -37,23 +63,7 @@ fn commit_pointer_classification_outlasts_the_stats_limit() {
         for n in 0..count {
             stream.push_str(&format!("M 100644 :1 {n}.bin\n"));
         }
-        let mut child = git_command()
-            .arg("-C")
-            .arg(workdir)
-            .args(["fast-import", "--quiet"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        {
-            use std::io::Write as _;
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(stream.as_bytes())
-                .unwrap();
-        }
-        assert!(child.wait().unwrap().success());
+        git_with_stdin(workdir, &["fast-import", "--quiet"], stream.as_bytes());
         let id = CommitId(git_stdout(workdir, &["rev-parse", "pointers"]).into());
         let details = open_repo(workdir).commit_details_impl(&id).unwrap();
         assert_eq!(details.files.len(), count);
@@ -1108,30 +1118,7 @@ fn fast_import_commits(workdir: &Path, branch: &str, from: Option<&str>, count: 
             content.len()
         ));
     }
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(workdir);
-    let mut child = cmd
-        .args(["fast-import", "--quiet"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn git fast-import");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("fast-import stdin")
-            .write_all(stream.as_bytes())
-            .expect("write fast-import stream");
-    }
-    let output = child.wait_with_output().expect("fast-import exit");
-    assert!(
-        output.status.success(),
-        "fast-import failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    git_with_stdin(workdir, &["fast-import", "--quiet"], stream.as_bytes());
 }
 
 fn head_commit_id(workdir: &Path) -> CommitId {
@@ -1887,23 +1874,7 @@ fn timing_all_branches_page_with_many_refs() {
         let id = git_stdout(tmp.path(), &["rev-parse", &format!("main~{ix}")]);
         refs.push_str(&format!("create refs/remotes/origin/b{ix} {id}\n"));
     }
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(tmp.path());
-    let mut child = cmd
-        .args(["update-ref", "--stdin"])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("update-ref");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(refs.as_bytes())
-            .expect("write refs");
-    }
-    assert!(child.wait().expect("update-ref exit").success());
+    git_with_stdin(tmp.path(), &["update-ref", "--stdin"], refs.as_bytes());
     git_success(tmp.path(), &["pack-refs", "--all"]);
 
     let repo = open_repo(tmp.path());
@@ -1939,23 +1910,7 @@ fn timing_ref_metadata_with_many_refs() {
         let id = git_stdout(tmp.path(), &["rev-parse", &format!("main~{ix}")]);
         refs.push_str(&format!("create refs/remotes/origin/b{ix} {id}\n"));
     }
-    let mut cmd = git_command();
-    cmd.arg("-C").arg(tmp.path());
-    let mut child = cmd
-        .args(["update-ref", "--stdin"])
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("update-ref");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(refs.as_bytes())
-            .expect("write refs");
-    }
-    assert!(child.wait().expect("update-ref exit").success());
+    git_with_stdin(tmp.path(), &["update-ref", "--stdin"], refs.as_bytes());
     git_success(tmp.path(), &["pack-refs", "--all"]);
 
     let repo = open_repo(tmp.path());
