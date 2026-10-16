@@ -1,5 +1,10 @@
 pub(crate) use gitcomet_ui_kit::test_support::{painted_control_quads, refresh_and_draw};
 
+pub(crate) fn lock_visual_test() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 /// Runs `git -C dir args…`, asserting it succeeds; returns its stdout.
 pub(crate) fn git(dir: &std::path::Path, args: &[&str]) -> Vec<u8> {
     let output = gitcomet_core::test_support::git_fixture::git_command()
