@@ -330,4 +330,28 @@ fn author_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppContext
         Some(2),
         "the active filter's row is marked"
     );
+
+    // Every other input of the author list keys the rows as well.
+    let mut previous = filtered;
+    for (label, bump) in [
+        (
+            "author catalog",
+            (|repo| repo.history_state.authors.rev += 1) as fn(&mut RepoState),
+        ),
+        ("history scope", |repo| {
+            repo.history_state.history_scope = gitcomet_core::domain::HistoryMode::FirstParent
+        }),
+    ] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = repo_with_authors(repo_id, 2, &["Bob", "Alice", "Carol"]);
+                repo.history_state.history_author_filter = Some("Bob".to_owned());
+                bump(&mut repo);
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        let rebuilt = rows(cx);
+        assert!(!std::rc::Rc::ptr_eq(&previous, &rebuilt), "{label}");
+        previous = rebuilt;
+    }
 }

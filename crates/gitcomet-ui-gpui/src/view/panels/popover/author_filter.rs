@@ -4,11 +4,30 @@ use std::sync::Arc;
 
 const ALL_AUTHORS_LABEL: &str = "All authors";
 
-pub(super) struct SuggestionCache {
+/// What decides the author list: the repository, its loaded log and author
+/// catalog revisions, and the history scope. [`suggestions`] rebuilds the list
+/// when it changes, and the cached rows key on it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct AuthorListKey {
     repo_id: RepoId,
     log_rev: u64,
     authors_rev: u64,
     scope: gitcomet_core::domain::HistoryMode,
+}
+
+impl AuthorListKey {
+    fn of(repo: &RepoState) -> Self {
+        Self {
+            repo_id: repo.id,
+            log_rev: repo.history_state.log_rev,
+            authors_rev: repo.history_state.authors.rev,
+            scope: repo.history_state.history_scope,
+        }
+    }
+}
+
+pub(super) struct SuggestionCache {
+    key: AuthorListKey,
     names: Arc<[SharedString]>,
 }
 
@@ -67,14 +86,11 @@ pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[Share
         return empty;
     };
 
-    let log_rev = repo.history_state.log_rev;
+    let key = AuthorListKey::of(repo);
     let catalog = &repo.history_state.authors;
-    let scope = repo.history_state.history_scope;
+    let scope = key.scope;
     if let Some(cached) = &this.history_author_suggestions
-        && cached.repo_id == repo_id
-        && cached.log_rev == log_rev
-        && cached.authors_rev == catalog.rev
-        && cached.scope == scope
+        && cached.key == key
     {
         return cached.names.clone();
     }
@@ -83,7 +99,7 @@ pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[Share
     let cached_for_repo = this
         .history_author_suggestions
         .as_ref()
-        .filter(|cached| cached.repo_id == repo_id && cached.scope == scope)
+        .filter(|cached| cached.key.repo_id == repo_id && cached.key.scope == scope)
         .map(|cached| cached.names.clone());
 
     // A filtered log only describes the author already selected, so keep the
@@ -105,10 +121,7 @@ pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[Share
     };
 
     this.history_author_suggestions = Some(SuggestionCache {
-        repo_id,
-        log_rev,
-        authors_rev: catalog.rev,
-        scope,
+        key,
         names: authors.clone(),
     });
     authors
@@ -156,23 +169,16 @@ pub(super) fn rows(authors: &[SharedString], current: Option<&str>) -> AuthorRow
     }
 }
 
-/// Digests what the rows are built from: the inputs [`suggestions`] keys its
-/// author list on, and the active filter that marks a row.
+/// Digests what the rows are built from: the author list's key, and the active
+/// filter that marks a row.
 fn rows_signature(this: &PopoverHost, repo_id: RepoId) -> u64 {
     use std::hash::Hash;
-    let history = this
-        .state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .map(|repo| &repo.history_state);
+    let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     super::rows_cache::signature(|hasher| {
         repo_id.hash(hasher);
-        if let Some(history) = history {
-            history.log_rev.hash(hasher);
-            history.authors.rev.hash(hasher);
-            history.history_scope.hash(hasher);
-            history.history_author_filter.hash(hasher);
+        if let Some(repo) = repo {
+            AuthorListKey::of(repo).hash(hasher);
+            repo.history_state.history_author_filter.hash(hasher);
         }
     })
 }
