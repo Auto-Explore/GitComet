@@ -155,7 +155,7 @@ consent overrides. In-tree tests enable it through dev dependencies; external te
 harnesses must opt in. Normal app builds leave it disabled. See the
 [profiling guide](scripts/profiling/README.md#backend-measurements) for probe builds.
 
-Formatting, Clippy, and dependency boundaries (matching CI's package contexts):
+Formatting, Clippy, dependency boundaries and grammar symbols (matching CI's package contexts):
 
 ```bash
 cargo fmt --all --check
@@ -163,6 +163,7 @@ cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p
 cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
 cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
 python3 scripts/ci/boundaries.py
+python3 scripts/ci/grammar_symbols.py
 python3 scripts/ci/ratchets.py
 ```
 

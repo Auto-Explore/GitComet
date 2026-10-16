@@ -61,8 +61,9 @@ pristine baseline, built by this recipe:
 
 Unlike the other vendored crates it is a workspace member: that lets its grammars
 use `workspace = true`, so each language resolves to the one grammar crate
-GitComet links. Two crates defining the same `tree_sitter_<lang>` symbol would
-collide at link time. Its manifest pins edition 2021, which keeps `cargo fmt`
+GitComet links. Two crates defining the same `tree_sitter_<lang>` symbol both
+get built and the linker silently keeps one, so `scripts/ci/grammar_symbols.py`
+fails CI when that happens. Its manifest pins edition 2021, which keeps `cargo fmt`
 from rewriting upstream files, and forbids `unsafe` code.
 
 Changes against the baseline (`git log -- vendor/difftastic`):

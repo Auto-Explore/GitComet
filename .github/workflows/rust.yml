@@ -119,6 +119,8 @@ jobs:
         run: cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
       - name: Check crate dependency boundaries
         run: python3 scripts/ci/boundaries.py
+      - name: Check each grammar symbol has one definition
+        run: python3 scripts/ci/grammar_symbols.py
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
