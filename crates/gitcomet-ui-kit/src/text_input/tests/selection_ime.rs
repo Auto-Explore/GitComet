@@ -50,6 +50,52 @@ fn caret_steps_after_an_edit_do_not_flatten_the_document(cx: &mut gpui::TestAppC
     });
 }
 
+/// Home and End stop at the row's own newline, CR included in the row.
+#[gpui::test]
+fn row_bounds_stop_at_the_rows_newlines(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let text = "first\r\n\nthird row\nlast";
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text, cx);
+            for offset in 0..=text.len() {
+                let start = text[..offset].rfind('\n').map_or(0, |ix| ix + 1);
+                let end = text[offset..]
+                    .find('\n')
+                    .map_or(text.len(), |ix| offset + ix);
+                assert_eq!(
+                    input.logical_row_boundaries(offset),
+                    (start, end),
+                    "at {offset}"
+                );
+            }
+        });
+    });
+}
+
+/// Home, End and the protected-line check read one row or one byte, so after
+/// an edit they leave the document unflattened.
+#[gpui::test]
+fn row_bounds_and_protected_checks_do_not_flatten_the_document(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    let row = "let value = compute(alpha, beta);\n";
+    let text = row.repeat(2_000);
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.as_str(), cx);
+            let protected = row.len() * 10..row.len() * 11;
+            input.set_protected_ranges(Arc::from([protected.clone()]));
+            input.replace_utf8_range(0..0, "x", cx);
+            let protected = protected.start + 1..protected.end + 1;
+
+            input.logical_row_boundaries(text.len() / 2);
+            assert!(input.edit_alters_protected_range(&(protected.start - 3..protected.start), ""));
+
+            assert!(!input.content.snapshot().is_materialized());
+        });
+    });
+}
+
 // The identical-replacement shortcut compared by copying the replaced range
 // first, so select-all and typing copied the whole buffer on every keystroke.
 #[gpui::test]

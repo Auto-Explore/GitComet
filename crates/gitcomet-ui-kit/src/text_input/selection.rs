@@ -245,12 +245,9 @@ impl TextInput {
     }
 
     pub(super) fn logical_row_boundaries(&self, offset: usize) -> (usize, usize) {
-        let s = self.content.as_ref();
-        let offset = offset.min(s.len());
-        let start = s[..offset].rfind('\n').map(|ix| ix + 1).unwrap_or(0);
-        let rel_end = s[offset..].find('\n').unwrap_or(s.len() - offset);
-        let end = offset + rel_end;
-        (start, end)
+        let content = self.content.snapshot();
+        let row = content.line_range(content.row_for_offset(offset.min(content.len())));
+        (row.start, row.end)
     }
 
     pub(super) fn row_boundaries(&self, offset: usize) -> (usize, usize) {

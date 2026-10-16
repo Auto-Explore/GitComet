@@ -138,7 +138,7 @@ impl TextInput {
             return false;
         }
 
-        let content = self.content.as_ref();
+        let rope = self.content.snapshot().rope();
         self.protected_ranges.iter().any(|protected| {
             if range.start >= protected.end || range.end < protected.start {
                 return false;
@@ -152,9 +152,9 @@ impl TextInput {
                 Some(last) => *last != b'\n',
                 None => {
                     range.start != 0
-                        && content
-                            .as_bytes()
-                            .get(range.start.saturating_sub(1))
+                        && rope
+                            .bytes_at(range.start - 1, range.start)
+                            .first()
                             .is_some_and(|byte| *byte != b'\n')
                 }
             }
