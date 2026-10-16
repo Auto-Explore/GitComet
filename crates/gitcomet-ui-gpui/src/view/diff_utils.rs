@@ -1325,6 +1325,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = dir.path();
         crate::test_support::git(repo, &["init", "-q"]);
+        // Git for Windows' system config sets autocrlf, so applying a patch
+        // to the worktree would write CRLF.
+        crate::test_support::git(repo, &["config", "core.autocrlf", "false"]);
         std::fs::write(repo.join(name), head).expect("write head");
         crate::test_support::git(repo, &["add", name]);
         crate::test_support::git(
