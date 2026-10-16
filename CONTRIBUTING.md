@@ -159,7 +159,7 @@ Formatting, Clippy, dependency boundaries and grammar symbols (matching CI's pac
 
 ```bash
 cargo fmt --all --check
-cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
+cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -p difftastic -- -D warnings
 cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
 cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
 python3 scripts/ci/boundaries.py
