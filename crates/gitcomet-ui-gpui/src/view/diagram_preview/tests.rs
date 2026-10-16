@@ -540,7 +540,6 @@ fn open_interaction_harness(
 fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, state, cx) = open_interaction_harness(cx);
     let bounds = cx.debug_bounds("diagram_viewport").unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
@@ -582,7 +581,6 @@ fn wheel_scrolls_the_document_and_drag_capture_survives_outside_release(
 /// each one ran a single gesture through every zoom level.
 #[gpui::test]
 fn smooth_ctrl_scroll_steps_the_diagram_zoom_once_per_40_px(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_view, state, cx) = open_interaction_harness(cx);
     let center = cx.debug_bounds("diagram_viewport").unwrap().center();
     let wheel = |cx: &mut gpui::VisualTestContext, dy: f32| {
@@ -634,7 +632,6 @@ impl Render for PaneHarness {
 /// enough for two side-by-side panes to outgrow the tile cache.
 #[gpui::test]
 fn a_zoomed_pane_requests_only_the_rows_inside_it(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let input = DiagramInput::Text {
         kind: DiagramKind::Mermaid,
         text: "flowchart TD;A-->B;B-->C;C-->D;D-->E;E-->F;F-->G;G-->H;H-->I;I-->J".into(),
@@ -690,7 +687,6 @@ fn a_zoomed_pane_requests_only_the_rows_inside_it(cx: &mut gpui::TestAppContext)
 /// taller than the window.
 #[gpui::test]
 fn ctrl_scroll_keeps_the_point_under_the_pointer(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_view, state, cx) = open_interaction_harness(cx);
     let bounds = cx.debug_bounds("diagram_viewport").unwrap();
     let pointer = bounds.origin + gpui::point(px(30.0), px(20.0));
@@ -762,7 +758,6 @@ impl Render for SplitHarness {
 /// re-rastered on every frame, forever.
 #[gpui::test]
 fn side_by_side_diagrams_settle_on_a_large_screen(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     // A grid of boxes large enough to overflow both panes at 100%.
     let mut source = String::from("flowchart TD\n");
     for row in 0..12 {
@@ -827,7 +822,6 @@ fn side_by_side_diagrams_settle_on_a_large_screen(cx: &mut gpui::TestAppContext)
 #[gpui::test]
 fn a_wide_diagram_scrolls_sideways_with_its_scrollbar(cx: &mut gpui::TestAppContext) {
     use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
-    let _guard = crate::test_support::lock_visual_test();
     let source: String = std::iter::once("flowchart LR".to_string())
         .chain((1..30).map(|node| format!("N{}-->N{node}", node - 1)))
         .collect::<Vec<_>>()
@@ -871,7 +865,6 @@ fn a_wide_diagram_scrolls_sideways_with_its_scrollbar(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn a_sideways_swipe_pans_a_wide_diagram(cx: &mut gpui::TestAppContext) {
     use crate::view::components::ScrollbarAxis::Horizontal;
-    let _guard = crate::test_support::lock_visual_test();
     let source: String = std::iter::once("flowchart LR".to_string())
         .chain((1..30).map(|node| format!("N{}-->N{node}", node - 1)))
         .collect::<Vec<_>>()
@@ -913,7 +906,6 @@ fn a_sideways_swipe_pans_a_wide_diagram(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn a_reset_diagram_that_fits_has_nothing_to_scroll(cx: &mut gpui::TestAppContext) {
     use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
-    let _guard = crate::test_support::lock_visual_test();
     let (view, state, cx) = open_interaction_harness(cx);
     cx.update(|_, app| {
         state.update(app, |state, _| {
@@ -935,7 +927,6 @@ fn a_reset_diagram_that_fits_has_nothing_to_scroll(cx: &mut gpui::TestAppContext
 #[gpui::test]
 fn a_collapsed_tall_diagram_scrolls_with_its_vertical_scrollbar(cx: &mut gpui::TestAppContext) {
     use crate::view::components::ScrollbarAxis::{Horizontal, Vertical};
-    let _guard = crate::test_support::lock_visual_test();
     let key = DiagramKey::new(
         DiagramKind::Mermaid,
         "flowchart TD;A-->B;B-->C;C-->D;D-->E;E-->F;F-->G".into(),
@@ -978,7 +969,6 @@ fn a_collapsed_tall_diagram_scrolls_with_its_vertical_scrollbar(cx: &mut gpui::T
 #[gpui::test]
 fn narrowing_the_window_gives_a_fitting_diagram_its_scrollbar(cx: &mut gpui::TestAppContext) {
     use crate::view::components::ScrollbarAxis::Horizontal;
-    let _guard = crate::test_support::lock_visual_test();
     let source: String = std::iter::once("flowchart LR".to_string())
         .chain((1..6).map(|node| format!("N{}-->N{node}", node - 1)))
         .collect::<Vec<_>>()
@@ -1025,7 +1015,6 @@ fn narrowing_the_window_gives_a_fitting_diagram_its_scrollbar(cx: &mut gpui::Tes
 /// the tiles the cache must hold.
 #[gpui::test]
 fn a_block_showing_its_source_shows_no_tiles(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, state, cx) = open_interaction_harness(cx);
     crate::view::test_support::redraw(cx);
     let shown = |cx: &mut gpui::VisualTestContext| {

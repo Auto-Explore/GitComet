@@ -79,7 +79,6 @@ fn zoomed_in(app: &App) -> bool {
 fn ctrl_scroll_over_an_embedded_diagram_zooms_the_diagram_not_the_window(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx, fixture) = open_diagram_preview(
         cx,
         9701,
@@ -165,7 +164,6 @@ fn assert_estimate_matches_drawn_block(
 /// fixed viewport and back.
 #[gpui::test]
 fn a_tall_embedded_diagram_shows_in_full_and_its_bar_collapses_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx, fixture) = open_diagram_preview(
         cx,
         9702,
@@ -215,7 +213,6 @@ fn a_tall_embedded_diagram_shows_in_full_and_its_bar_collapses_it(cx: &mut gpui:
 /// there is nothing to collapse.
 #[gpui::test]
 fn a_short_embedded_diagram_takes_its_own_height_without_a_bar(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx, fixture) = open_diagram_preview(
         cx,
         9703,
@@ -248,7 +245,6 @@ fn a_short_embedded_diagram_takes_its_own_height_without_a_bar(cx: &mut gpui::Te
 /// in the next ones.
 #[gpui::test]
 fn a_full_height_diagram_rasterizes_only_the_tiles_on_screen(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (_view, cx, fixture) = open_diagram_preview(
         cx,
         9704,
@@ -312,7 +308,6 @@ fn a_full_height_diagram_rasterizes_only_the_tiles_on_screen(cx: &mut gpui::Test
 /// fold it out of sight and leave the reader in the text after it.
 #[gpui::test]
 fn collapsing_a_diagram_scrolled_past_its_top_keeps_it_in_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (_view, cx, fixture) = open_diagram_preview(
         cx,
         9705,
@@ -376,7 +371,6 @@ fn paragraphs(count: usize) -> String {
 /// first tile row was always asked for.
 #[gpui::test]
 fn a_diagram_well_below_the_screen_draws_no_tiles(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let source = format!(
         "# Title\n\n{}{}",
         paragraphs(45),
@@ -406,7 +400,6 @@ fn a_diagram_well_below_the_screen_draws_no_tiles(cx: &mut gpui::TestAppContext)
 /// being rebuilt, as it is when an edit above it moves its rows.
 #[gpui::test]
 fn a_collapsed_diagram_stays_collapsed_when_its_block_is_rebuilt(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx, fixture) = open_diagram_preview(
         cx,
         9707,
@@ -437,7 +430,6 @@ fn a_collapsed_diagram_stays_collapsed_when_its_block_is_rebuilt(cx: &mut gpui::
 /// UI font, and counts the diagram's diagnostic lines.
 #[gpui::test]
 fn the_block_estimate_matches_every_density_and_diagnostics(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let diagnosed = "%%{init: {\"notASetting\": 1}}%%\nflowchart LR\nA-->B\n";
     let (view, cx, fixture) = open_diagram_preview(
         cx,
@@ -469,7 +461,6 @@ fn estimate_matches_at_density(
     ui_font_size_px: Option<u32>,
     repo_id: u64,
 ) {
-    let _visual_guard = lock_visual_test();
     let (view, cx, fixture) = open_diagram_preview_with(
         cx,
         |app| {
@@ -492,7 +483,6 @@ fn estimate_matches_at_density(
 /// fold it to just above the top edge, leaving only the bar in sight.
 #[gpui::test]
 fn collapsing_a_diagram_wholly_above_the_screen_brings_it_into_view(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (_view, cx, fixture) = open_diagram_preview(
         cx,
         9711,
@@ -526,7 +516,6 @@ fn collapsing_a_diagram_wholly_above_the_screen_brings_it_into_view(cx: &mut gpu
 /// Sizing undrawn diagram blocks must not hash their sources on every frame.
 #[gpui::test]
 fn undrawn_diagram_blocks_are_sized_without_hashing_each_frame(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let source = format!(
         "# Title\n\n{}{}",
         paragraphs(400),
@@ -580,7 +569,6 @@ fn open_diagram_preview_without_drawing_diagram<'a>(
 /// block used to flip it back to Preview while a collapse survived.
 #[gpui::test]
 fn a_diagrams_code_view_stays_when_its_block_is_rebuilt(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx, fixture) = open_diagram_preview(
         cx,
         9713,
@@ -615,7 +603,6 @@ fn a_diagrams_code_view_stays_when_its_block_is_rebuilt(cx: &mut gpui::TestAppCo
 /// measured a short block and jumped when the diagram arrived.
 #[gpui::test]
 fn a_prepared_diagram_draws_in_the_first_frame_of_its_block(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (view, cx, fixture) = open_diagram_preview(
         cx,
         9714,
@@ -645,7 +632,6 @@ fn a_prepared_diagram_draws_in_the_first_frame_of_its_block(cx: &mut gpui::TestA
 /// block, plus the header and the error line. It used to be the 320 px box.
 #[gpui::test]
 fn a_failed_diagram_is_sized_as_its_error_and_source(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let broken: String = std::iter::once("flowchart TD".to_string())
         .chain((0..30).map(|row| format!("A{row} -->")))
         .collect::<Vec<_>>()

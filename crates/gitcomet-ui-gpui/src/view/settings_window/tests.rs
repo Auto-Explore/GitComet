@@ -3872,7 +3872,6 @@ fn signature_verification_is_discoverable_in_settings_search() {
 
 #[gpui::test]
 fn graph_gradient_toggle_updates_every_main_window(cx: &mut gpui::TestAppContext) {
-    let _guard = lock_visual_test();
     for query in ["graph gradient", "fade", "glow"] {
         assert!(SettingsCategory::GitLog.matches_query(query));
     }
