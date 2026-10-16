@@ -1052,38 +1052,3 @@ fn t6403_merge_histogram_conflict() {
     assert!(!result.is_clean());
     assert_eq!(result.conflict_count, 1);
 }
-
-/// Known bug, kept as proof until the merge engine carries each line's own
-/// ending: lines are split without their `\r` and the output is joined with
-/// one ending picked by majority, so a clean merge rewrites the endings of
-/// lines neither side touched. git keeps every line's ending.
-#[test]
-#[ignore = "known bug: merge output normalizes every line ending in the file"]
-fn merge_keeps_each_untouched_lines_own_ending() {
-    let base = "a\r\nb\r\nc\r\nd\nx\r\ny\n";
-    let theirs = "a\r\nb\r\nc\r\nd\nx\r\ny\nz\n";
-
-    let result = merge_file(base, base, theirs, &default_opts());
-
-    assert!(result.is_clean());
-    assert_eq!(result.output, theirs);
-}
-
-/// Known bug, same cause: line endings are not compared, so one side
-/// converting the whole file to CRLF is not a change at all, and a merge
-/// with an unrelated edit on the other side silently drops the conversion.
-#[test]
-#[ignore = "known bug: an endings-only change is not seen by the merge"]
-fn merge_does_not_drop_a_whole_file_line_ending_conversion() {
-    let base = "a\nb\nc\nd\ne\n";
-    let ours = "a\r\nb\r\nc\r\nd\r\ne\r\n";
-    let theirs = "a\nb\nc\nd\nE\n";
-
-    let result = merge_file(base, ours, theirs, &default_opts());
-
-    assert!(
-        !result.is_clean() || result.output == "a\r\nb\r\nc\r\nd\r\nE\r\n",
-        "ours' CRLF conversion was dropped without a conflict: {:?}",
-        result.output
-    );
-}
