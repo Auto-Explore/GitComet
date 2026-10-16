@@ -351,9 +351,7 @@ impl RepoTabsBarView {
 
     fn is_repo_busy(repo: &RepoState) -> bool {
         matches!(repo.open, Loadable::Loading)
-            || repo
-                .loads_in_flight
-                .is_in_flight(!gitcomet_state::model::RepoLoadsInFlight::WORKTREE_DIRTY)
+            || repo.loads_in_flight.any_foreground_in_flight()
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0
@@ -1458,7 +1456,7 @@ mod tests {
     #[test]
     fn repo_tab_tooltip_reports_missing_repository() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert_eq!(
             RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
             "Repository not found!\n/tmp/missing-repo"
@@ -1468,7 +1466,7 @@ mod tests {
     #[test]
     fn missing_repo_warning_icon_yields_to_spinner() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert!(RepoTabsBarView::repo_tab_shows_missing_warning(
             &repo, false
         ));

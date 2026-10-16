@@ -151,7 +151,7 @@ pub(in crate::view) enum ContextMenuAction {
     },
     /// Throw away the editor's unsaved buffer for this file and reload it from
     /// disk. Handled in the view rather than dispatched: the buffer lives in
-    /// `MainPaneView`, and the store has no message for it.
+    /// `DiffRenderer`, and the store has no message for it.
     DiscardFileEdits {
         repo_id: RepoId,
         path: std::path::PathBuf,
@@ -602,7 +602,7 @@ pub(in crate::view) enum ContextMenuAction {
     TerminalCommand {
         repo_id: RepoId,
         session_seq: u64,
-        command: terminal_panel::TerminalCommand,
+        command: gitcomet_ui_terminal::TerminalCommand,
     },
     TerminalOpenExternal {
         repo_id: RepoId,

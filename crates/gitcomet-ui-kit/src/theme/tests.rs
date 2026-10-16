@@ -2371,9 +2371,12 @@ fn render_code_never_builds_its_own_theme() {
                 || name.ends_with("tests.rs")
                 || name == "theme.rs"
                 || name == "smoke_tests.rs"
-                // TextInput's constructor supplies a default until set_theme is called.
-                // Match path components before formatting platform-specific diagnostics.
-                || path.ends_with(std::path::Path::new("text_input/editing.rs"))
+                // The window theme falls back to the default in the current appearance.
+                || path.ends_with(std::path::Path::new("theme/window.rs"))
+                // TextInput's constructor supplies a default until its first render
+                // reads the window's theme. Match path components before formatting
+                // platform-specific diagnostics.
+                || path.ends_with(std::path::Path::new("text_input/configuration.rs"))
             {
                 continue;
             }

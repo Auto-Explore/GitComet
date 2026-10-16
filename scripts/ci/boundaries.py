@@ -18,9 +18,25 @@ APPLICATION = ("gitcomet", "gitcomet-app")
 
 RULES = (
     ("gitcomet-diagrams", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Shared foundations: no workspace crate below or beside them.
+    ("gitcomet-base", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Text foundations: GPUI's standalone string and tree crates, never GPUI.
+    ("gitcomet-text", (), ("gitcomet-base", "gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Syntax highlighting: tree-sitter and its grammars, never GPUI or the kit.
+    ("gitcomet-syntax", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # The conflict resolver's model: no state, GPUI or UI kit.
+    ("gitcomet-conflict-resolver", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # The markdown preview model: parsing, flattening and wrapping, never GPUI or the kit.
+    ("gitcomet-markdown", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Measurement records and their report: serde only.
+    ("gitcomet-perf", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     ("gitcomet-core", (), ("gitcomet-state", *GPUI, *UI_HOST, *APPLICATION)),
     ("gitcomet-state", (), (*GPUI, "gitcomet-ui-kit", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
-    ("gitcomet-ui-kit", (), ("gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    ("gitcomet-ui-kit", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    # The embedded terminal widget builds on the kit, like any downstream component.
+    ("gitcomet-ui-terminal", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    # Image and diagram previews: the kit and the diagram renderer, never Git or state.
+    ("gitcomet-ui-media", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-extension-api", (), (*UI_HOST, *APPLICATION)),
     # A downstream product library reaches the host only through the API.
     ("gitcomet-extension-example", (), (*UI_HOST, *APPLICATION)),

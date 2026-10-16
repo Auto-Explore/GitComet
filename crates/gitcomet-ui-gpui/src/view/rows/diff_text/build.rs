@@ -1,6 +1,6 @@
 use super::*;
 use crate::kit::click::PointerClickExt as _;
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 use palette::IntoColor;
 
 #[inline]
@@ -152,7 +152,7 @@ pub(in super::super) fn selectable_cached_diff_text(
     base_fg: gpui::Rgba,
     styled: Option<&CachedDiffStyledText>,
     fallback_text: SharedString,
-    cx: &mut gpui::Context<MainPaneView>,
+    cx: &mut gpui::Context<DiffRenderer>,
 ) -> AnyElement {
     let view = cx.entity();
     let (text, highlights) = if let Some(styled) = styled {
@@ -1080,77 +1080,6 @@ pub(super) fn hash_word_ranges(ranges: &[Range<usize>]) -> u64 {
         range.hash(&mut hasher);
     }
     hasher.finish()
-}
-
-fn syntax_highlight_color(theme: AppTheme, kind: SyntaxTokenKind) -> Option<gpui::Rgba> {
-    match kind {
-        SyntaxTokenKind::None => None,
-        SyntaxTokenKind::Comment => Some(theme.syntax.comment),
-        SyntaxTokenKind::CommentDoc => Some(theme.syntax.comment_doc),
-        SyntaxTokenKind::String => Some(theme.syntax.string),
-        SyntaxTokenKind::StringEscape => Some(theme.syntax.string_escape),
-        SyntaxTokenKind::StringRegex => Some(theme.syntax.string_regex),
-        SyntaxTokenKind::StringSpecial => Some(theme.syntax.string_special),
-        SyntaxTokenKind::Keyword => Some(theme.syntax.keyword),
-        SyntaxTokenKind::KeywordControl => Some(theme.syntax.keyword_control),
-        SyntaxTokenKind::Preproc => Some(theme.syntax.preproc),
-        SyntaxTokenKind::Number => Some(theme.syntax.number),
-        SyntaxTokenKind::Boolean => Some(theme.syntax.boolean),
-        SyntaxTokenKind::Function => Some(theme.syntax.function),
-        SyntaxTokenKind::FunctionMethod => Some(theme.syntax.function_method),
-        SyntaxTokenKind::FunctionSpecial => Some(theme.syntax.function_special),
-        SyntaxTokenKind::Constructor => Some(theme.syntax.constructor),
-        SyntaxTokenKind::Type => Some(theme.syntax.type_name),
-        SyntaxTokenKind::TypeBuiltin => Some(theme.syntax.type_builtin),
-        SyntaxTokenKind::TypeInterface => Some(theme.syntax.type_interface),
-        SyntaxTokenKind::Namespace => Some(theme.syntax.namespace),
-        SyntaxTokenKind::Variable => theme.syntax.variable,
-        SyntaxTokenKind::VariableParameter => Some(theme.syntax.variable_parameter),
-        SyntaxTokenKind::VariableSpecial => Some(theme.syntax.variable_special),
-        SyntaxTokenKind::VariableBuiltin => Some(theme.syntax.variable_builtin),
-        SyntaxTokenKind::Property => Some(theme.syntax.property),
-        SyntaxTokenKind::Label => theme.syntax.label,
-        SyntaxTokenKind::Constant => Some(theme.syntax.constant),
-        SyntaxTokenKind::ConstantBuiltin => Some(theme.syntax.constant_builtin),
-        SyntaxTokenKind::Operator => Some(theme.syntax.operator),
-        SyntaxTokenKind::Punctuation => Some(theme.syntax.punctuation),
-        SyntaxTokenKind::PunctuationBracket => Some(theme.syntax.punctuation_bracket),
-        SyntaxTokenKind::PunctuationDelimiter => Some(theme.syntax.punctuation_delimiter),
-        SyntaxTokenKind::PunctuationSpecial => Some(theme.syntax.punctuation_special),
-        SyntaxTokenKind::PunctuationListMarker => Some(theme.syntax.punctuation_list_marker),
-        SyntaxTokenKind::Tag => Some(theme.syntax.tag),
-        SyntaxTokenKind::Attribute => Some(theme.syntax.attribute),
-        SyntaxTokenKind::MarkupHeading => Some(theme.syntax.markup_heading),
-        SyntaxTokenKind::MarkupLink => Some(theme.syntax.markup_link),
-        SyntaxTokenKind::TextLiteral => Some(theme.syntax.text_literal),
-        SyntaxTokenKind::DiffPlus => Some(theme.syntax.diff_plus),
-        SyntaxTokenKind::DiffMinus => Some(theme.syntax.diff_minus),
-        SyntaxTokenKind::DiffDelta => Some(theme.syntax.diff_delta),
-        SyntaxTokenKind::Lifetime => Some(theme.syntax.lifetime),
-    }
-}
-
-pub(super) fn syntax_highlight_style(
-    theme: AppTheme,
-    kind: SyntaxTokenKind,
-) -> Option<gpui::HighlightStyle> {
-    let fg = syntax_highlight_color(theme, kind)?;
-    let mut style = gpui::HighlightStyle {
-        color: Some(fg.into_color()),
-        ..gpui::HighlightStyle::default()
-    };
-    match kind {
-        // Doc comments render italic to distinguish from regular comments.
-        SyntaxTokenKind::CommentDoc => {
-            style.font_style = Some(gpui::FontStyle::Italic);
-        }
-        // Control-flow keywords (if/else/for/while/return/match) render semibold.
-        SyntaxTokenKind::KeywordControl => {
-            style.font_weight = Some(gpui::FontWeight::SEMIBOLD);
-        }
-        _ => {}
-    }
-    Some(style)
 }
 
 fn expanded_text_and_remapped_relative_highlights(

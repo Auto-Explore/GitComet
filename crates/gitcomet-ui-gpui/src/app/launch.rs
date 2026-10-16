@@ -237,80 +237,6 @@ impl UiLaunch {
     }
 }
 
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
-    UiLaunch::new(backend).run().map(|_| ())
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report(
-    backend: Arc<dyn GitBackend>,
-    initial_path: Option<PathBuf>,
-    startup_crash_report: Option<StartupCrashReport>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    UiLaunch::new(backend)
-        .initial_request(BrowserOpenRequest {
-            path: initial_path,
-            target: BrowserOpenTarget::ExistingWindow,
-        })
-        .startup_crash_report(startup_crash_report)
-        .run()
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report_and_shutdown_callback(
-    backend: Arc<dyn GitBackend>,
-    initial_path: Option<PathBuf>,
-    startup_crash_report: Option<StartupCrashReport>,
-    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    #[allow(deprecated)]
-    run_with_startup_crash_report_shutdown_callback_and_browser_requests(
-        backend,
-        initial_path,
-        startup_crash_report,
-        on_shutdown,
-        None,
-    )
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report_shutdown_callback_and_browser_requests(
-    backend: Arc<dyn GitBackend>,
-    initial_path: Option<PathBuf>,
-    startup_crash_report: Option<StartupCrashReport>,
-    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-    browser_requests: Option<crate::BrowserRequestReceiver>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    #[allow(deprecated)]
-    run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
-        backend,
-        BrowserOpenRequest {
-            path: initial_path,
-            target: BrowserOpenTarget::ExistingWindow,
-        },
-        startup_crash_report,
-        on_shutdown,
-        browser_requests,
-    )
-}
-
-#[deprecated(note = "use `UiLaunch`")]
-pub fn run_with_startup_crash_report_shutdown_callback_and_initial_browser_request(
-    backend: Arc<dyn GitBackend>,
-    initial_request: BrowserOpenRequest,
-    startup_crash_report: Option<StartupCrashReport>,
-    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
-    browser_requests: Option<crate::BrowserRequestReceiver>,
-) -> Result<UiRunOutcome, UiLaunchError> {
-    let mut launch = UiLaunch::new(backend)
-        .initial_request(initial_request)
-        .startup_crash_report(startup_crash_report)
-        .browser_requests(browser_requests);
-    launch.on_shutdown = on_shutdown.map(|callback| Arc::new(callback) as ShutdownCallback);
-    launch.run()
-}
-
 /// Configuration for a standalone diff using the same pane as repository views.
 #[derive(Clone, Debug)]
 pub struct FocusedDiffConfig {
@@ -538,7 +464,7 @@ pub(super) fn run_windowed_app(
         launch.view_config.view_mode == GitCometViewMode::Normal,
     );
     #[cfg(not(target_os = "windows"))]
-    let application = application();
+    let application = gpui_platform::application();
     let application = application
         .with_assets(GitCometAssets::with_extensions(extensions.assets()))
         .with_http_client(crate::http::client());
@@ -763,7 +689,7 @@ pub(super) fn open_gitcomet_window(
     clear_clean_shutdown_request(cx);
     let ui_session = session::load();
     let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
-    crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+    crate::session_ui::window_controls(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
     let default_size = fit_default_window_size(
         main_window_default_size_for_percent(ui_scale.percent),
@@ -821,7 +747,7 @@ pub(super) fn open_gitcomet_window(
                     title: Some(window_title.into()),
                     appears_transparent: true,
                     traffic_light_position: Some(
-                        crate::view::chrome::macos_traffic_light_position(),
+                        crate::kit::window_chrome::macos_traffic_light_position(),
                     ),
                 }),
                 app_id: Some(app_id),

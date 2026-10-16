@@ -101,7 +101,7 @@ test profile, with 191,526,448 bytes of checkpoint payload and a first-touch
 
 - `cargo test -p gitcomet-core --lib history_index` checks SHA-1/SHA-256,
   random IDs, prefix collisions and the fanout threshold.
-- `cargo test -p gitcomet-git-gix --test log_integration indexed` exercises all
+- `cargo test -p gitcomet-git-gix --test integration indexed` exercises all
   history modes, author filtering, commit-graph present/absent, shallow histories,
   timestamp parity, stash shapes, cancellation and object-read counts.
 - `cargo test -p gitcomet-state --lib indexed_history` checks range concurrency,

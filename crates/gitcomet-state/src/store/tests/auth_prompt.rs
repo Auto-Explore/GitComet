@@ -1,5 +1,7 @@
 use super::*;
 use crate::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation, PendingCommitRetry};
+use crate::msg::RepoCommandEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{
     GitAuthKind, StagedGitAuth, clear_staged_git_auth, stage_git_auth, take_staged_git_auth,
 };
@@ -30,12 +32,9 @@ fn auth_error(message: &str) -> Error {
     Error::new(ErrorKind::Backend(message.to_string()))
 }
 
-fn setup_open_repo(
-    repo_id: RepoId,
-    workdir: &str,
-) -> (FxHashMap<RepoId, Arc<dyn GitRepository>>, AppState) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    repos.insert(repo_id, Arc::new(DummyRepo::new(workdir)));
+fn setup_open_repo(repo_id: RepoId, workdir: &str) -> (RepositoryRuntimes, AppState) {
+    let mut repos: RepositoryRuntimes = Default::default();
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new(workdir)));
 
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
@@ -94,11 +93,11 @@ fn review_busy_annex_auth_retry_keeps_credentials_until_push_runs() {
     let auth = effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::RunLargeFileCommand {
+            Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand {
                 command: C::AnnexPush { content: true },
                 auth,
                 ..
-            } => auth.as_ref(),
+            }) => auth.as_ref(),
             _ => None,
         })
         .expect("the queued retry must keep its credentials");
@@ -163,7 +162,7 @@ fn large_file_auth_retry_runs_with_the_submitted_credentials() {
         );
         let auth = effects
             .iter()
-            .find(|effect| matches!(effect, Effect::RunLargeFileCommand { command, .. } if *command == expected))
+            .find(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { command, .. }) if *command == expected))
             .unwrap_or_else(|| panic!("expected {expected:?}: {effects:?}"))
             .git_auth()
             .unwrap_or_else(|| panic!("{expected:?} must carry the credentials"));
@@ -235,7 +234,7 @@ fn safe_push_auth_retry_preserves_credentials_when_annex_takeover_is_queued() {
             result: Ok(gitcomet_core::services::CommandOutput::default()),
         }),
     );
-    assert!(effects.iter().any(|effect| matches!(effect, Effect::RunLargeFileCommand { auth: Some(auth), .. } if auth.secret == "test-token")));
+    assert!(effects.iter().any(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { auth: Some(auth), .. }) if auth.secret == "test-token")));
     clear_staged_git_auth();
 }
 
@@ -540,7 +539,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
 #[test]
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
     let _lock = super::staged_auth_test_lock();
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let url = "https://example.com/private/repo.git".to_string();
@@ -577,7 +576,7 @@ fn clone_finished_auth_error_sets_clone_retry_prompt() {
 
 #[test]
 fn clone_finished_bare_ssh_publickey_error_is_terminal() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let url = "git@github.com:private/repo.git".to_string();
@@ -639,12 +638,12 @@ fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PushSetUpstream {
+        [Effect::RepoCommand(RepoCommandEffect::PushSetUpstream {
             repo_id: RepoId(1),
             remote,
             branch,
             ..
-        }] if remote == "origin" && branch == "main"
+        })] if remote == "origin" && branch == "main"
     ));
     assert!(state.auth_prompt.is_none());
     assert_eq!(state.repos[0].push_in_flight, 1);
@@ -696,12 +695,12 @@ fn submit_auth_prompt_stages_credentials_for_a_batch_remote_branch_delete() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::DeleteRemoteBranches {
+        [Effect::RepoCommand(RepoCommandEffect::DeleteRemoteBranches {
             repo_id: RepoId(1),
             remote,
             branches,
             ..
-        }] if remote == "origin" && branches.len() == 2
+        })] if remote == "origin" && branches.len() == 2
     ));
 
     let staged = effects[0]
@@ -851,11 +850,11 @@ fn submit_auth_prompt_replays_safe_push_after_commit() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SafePushAfterCommit {
+        [Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
             repo_id: RepoId(1),
             context: emitted,
             ..
-        }] if emitted == &context
+        })] if emitted == &context
     ));
     let auth = effects[0]
         .git_auth()
@@ -869,7 +868,7 @@ fn submit_auth_prompt_replays_clone_operation() {
     let _lock = super::staged_auth_test_lock();
     clear_staged_git_auth();
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
@@ -944,10 +943,10 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::FetchAll {
+        [Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
     assert!(state.auth_prompt.is_none());
 
@@ -1111,10 +1110,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     let fetch_effects = replay_case(RepoCommandKind::FetchAll);
     assert!(matches!(
         fetch_effects.as_slice(),
-        [Effect::FetchAll {
+        [Effect::RepoCommand(RepoCommandEffect::FetchAll {
             repo_id: RepoId(1),
             ..
-        }]
+        })]
     ));
 
     let pull_branch_effects = replay_case(RepoCommandKind::PullBranch {
@@ -1123,12 +1122,12 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         pull_branch_effects.as_slice(),
-        [Effect::PullBranch {
+        [Effect::RepoCommand(RepoCommandEffect::PullBranch {
             repo_id: RepoId(1),
             remote,
             branch,
             ..
-        }] if remote == "origin" && branch == "main"
+        })] if remote == "origin" && branch == "main"
     ));
 
     let force_with_lease_effects = replay_case(RepoCommandKind::ForcePushWithLease {
@@ -1142,11 +1141,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         force_with_lease_effects.as_slice(),
-        [Effect::ForcePushWithLease {
+        [Effect::RepoCommand(RepoCommandEffect::ForcePushWithLease {
             repo_id: RepoId(1),
             lease,
             ..
-        }] if lease.remote == "origin" && lease.branch == "main"
+        })] if lease.remote == "origin" && lease.branch == "main"
     ));
 
     let push_after_commit_target = gitcomet_core::services::SafePushAfterCommitTarget {
@@ -1161,12 +1160,12 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         push_after_commit_effects.as_slice(),
-        [Effect::PushAfterCommit {
+        [Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
             repo_id: RepoId(1),
             target,
             set_upstream: true,
             ..
-        }] if target == &push_after_commit_target
+        })] if target == &push_after_commit_target
     ));
 
     let unset_upstream_effects = replay_case(RepoCommandKind::UnsetUpstreamBranch {
@@ -1174,10 +1173,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         unset_upstream_effects.as_slice(),
-        [Effect::UnsetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::UnsetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
-        }] if branch == "feature/current"
+        })] if branch == "feature/current"
     ));
 
     let set_upstream_effects = replay_case(RepoCommandKind::SetUpstreamBranch {
@@ -1189,11 +1188,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         set_upstream_effects.as_slice(),
-        [Effect::SetUpstreamBranch {
+        [Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current"
+        })] if branch == "feature/current"
             && upstream.remote == "origin"
             && upstream.branch == "feature/current"
     ));
@@ -1204,11 +1203,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         reset_effects.as_slice(),
-        [Effect::Reset {
+        [Effect::RepoCommand(RepoCommandEffect::Reset {
             repo_id: RepoId(1),
             target,
             mode: ResetMode::Mixed,
-        }] if target == "HEAD~1"
+        })] if target == "HEAD~1"
     ));
 
     let set_remote_url_effects = replay_case(RepoCommandKind::SetRemoteUrl {
@@ -1218,13 +1217,13 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         set_remote_url_effects.as_slice(),
-        [Effect::SetRemoteUrl {
+        [Effect::RepoCommand(RepoCommandEffect::SetRemoteUrl {
             repo_id: RepoId(1),
             name,
             url,
             kind: RemoteUrlKind::Push,
             ..
-        }] if name == "origin" && url == "https://example.com/repo.git"
+        })] if name == "origin" && url == "https://example.com/repo.git"
     ));
 
     let checkout_conflict_effects = replay_case(RepoCommandKind::CheckoutConflict {
@@ -1233,11 +1232,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         checkout_conflict_effects.as_slice(),
-        [Effect::CheckoutConflictSide {
+        [Effect::RepoCommand(RepoCommandEffect::CheckoutConflictSide {
             repo_id: RepoId(1),
             path,
             side: ConflictSide::Ours,
-        }] if path == &PathBuf::from("conflicted.txt")
+        })] if path == &PathBuf::from("conflicted.txt")
     ));
 
     let remove_submodule_effects = replay_case(RepoCommandKind::RemoveSubmodule {
@@ -1245,10 +1244,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     });
     assert!(matches!(
         remove_submodule_effects.as_slice(),
-        [Effect::RemoveSubmodule {
+        [Effect::RepoCommand(RepoCommandEffect::RemoveSubmodule {
             repo_id: RepoId(1),
             path,
-        }] if path == &PathBuf::from("vendor/lib")
+        })] if path == &PathBuf::from("vendor/lib")
     ));
 
     // A revert is replayed whole with the staged auth: the backend resumes one
@@ -1263,13 +1262,13 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         assert!(
             matches!(
                 revert_effects.as_slice(),
-                [Effect::RevertCommit {
+                [Effect::RepoCommand(RepoCommandEffect::RevertCommit {
                     repo_id: RepoId(1),
                     commit: replayed,
                     mainline: Some(1),
                     auth: Some(_),
                     ..
-                }] if *replayed == commit
+                })] if *replayed == commit
             ),
             "commit={commit}: {revert_effects:?}"
         );
@@ -1287,13 +1286,13 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         assert!(
             matches!(
                 pick_effects.as_slice(),
-                [Effect::CherryPickCommit {
+                [Effect::RepoCommand(RepoCommandEffect::CherryPickCommit {
                     repo_id: RepoId(1),
                     commit: replayed,
                     mainline: None,
                     auth: Some(_),
                     ..
-                }] if *replayed == commit
+                })] if *replayed == commit
             ),
             "commit={commit}: {pick_effects:?}"
         );
@@ -1315,10 +1314,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     assert!(
         matches!(
             committing_multi_effects.as_slice(),
-            [Effect::RebaseContinue {
+            [Effect::RepoCommand(RepoCommandEffect::RebaseContinue {
                 repo_id: RepoId(1),
                 auth: Some(_),
-            }]
+            })]
         ),
         "{committing_multi_effects:?}"
     );
@@ -1329,11 +1328,11 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     assert!(
         matches!(
             uncommitted_multi_effects.as_slice(),
-            [Effect::InteractiveCherryPick {
+            [Effect::RepoCommand(RepoCommandEffect::InteractiveCherryPick {
                 repo_id: RepoId(1),
                 entries,
                 commit: false,
-            }] if entries == &multi_entries
+            })] if entries == &multi_entries
         ),
         "{uncommitted_multi_effects:?}"
     );
@@ -1356,10 +1355,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             commit: true,
         });
         assert!(
-            matches!(apply_effects.as_slice(), [Effect::ApplyFileChange {
+            matches!(apply_effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
             commit_retry: replayed,
             repo_id: RepoId(1), target, commit: true, auth: Some(_),
-        }] if target == &apply_target && replayed == &commit_retry),
+        })] if target == &apply_target && replayed == &commit_retry),
             "{apply_effects:?}"
         );
     }
@@ -1443,7 +1442,7 @@ fn tag_push_auth_retry_preserves_mode_destination_and_upstream_choice() {
             },
         );
         assert!(
-            matches!(effects.as_slice(), [Effect::PushWithTags { request: retry, .. }] if retry == &request)
+            matches!(effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::PushWithTags { request: retry, .. })] if retry == &request)
         );
         assert_eq!(effects[0].git_auth().unwrap().secret, "test-token");
         assert_eq!(state.repos[0].push_in_flight, 1);
@@ -1586,7 +1585,7 @@ fn submit_auth_prompt_replays_a_refspec_fetch() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::FetchRefspecs { remote, refspecs, .. }]
+        [Effect::RepoCommand(RepoCommandEffect::FetchRefspecs { remote, refspecs, .. })]
             if remote == "origin" && refspecs == &["+refs/pull/7/head:refs/remotes/origin/pr/7"]
     ));
     assert!(effects[0].git_auth().is_some());

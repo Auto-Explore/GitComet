@@ -1,13 +1,18 @@
 //! Compare raw Git, the backend, and attached operation context on disposable
 //! fixtures. `--diagnostics` captures command stages and backend operation counts;
 //! leave it off for latency acceptance. Fixture creation is outside all samples.
+use gitcomet_core::domain::RepoStatus;
 use gitcomet_core::git_operation::{self, GitOperationContext};
 #[cfg(feature = "benchmarks")]
 use gitcomet_core::git_ops_trace;
 use gitcomet_core::process::{
     GitExecutablePreference, git_command, select_git_executable_preference,
 };
-use gitcomet_core::services::{GitBackend, RemoteUrlKind};
+#[cfg(not(gitcomet_probe_legacy_repository_api))]
+use gitcomet_core::remote_url::RemoteUrlPolicy;
+#[cfg(not(gitcomet_probe_legacy_repository_api))]
+use gitcomet_core::services::CancellationToken;
+use gitcomet_core::services::{CommandOutput, GitBackend, GitRepository, RemoteUrlKind, Result};
 use gitcomet_git_gix::GixBackend;
 #[cfg(feature = "benchmarks")]
 use gitcomet_git_gix::command_trace;
@@ -21,6 +26,33 @@ use std::{
 
 const URL: &str = "https://example.invalid/repo";
 const STATUS_ARGS: &[&str] = &["status", "--porcelain=v1", "-z", "--untracked-files=all"];
+
+fn repository_status(repo: &dyn GitRepository) -> Result<RepoStatus> {
+    #[cfg(gitcomet_probe_legacy_repository_api)]
+    {
+        repo.status()
+    }
+    #[cfg(not(gitcomet_probe_legacy_repository_api))]
+    {
+        repo.status(&CancellationToken::new())
+    }
+}
+
+fn set_remote_url(repo: &dyn GitRepository) -> Result<CommandOutput> {
+    #[cfg(gitcomet_probe_legacy_repository_api)]
+    {
+        repo.set_remote_url_with_output("origin", URL, RemoteUrlKind::Fetch)
+    }
+    #[cfg(not(gitcomet_probe_legacy_repository_api))]
+    {
+        repo.set_remote_url_with_output(
+            "origin",
+            URL,
+            RemoteUrlKind::Fetch,
+            RemoteUrlPolicy::default(),
+        )
+    }
+}
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -268,7 +300,7 @@ fn main() {
         .collect();
     raw_paths.sort();
     assert_eq!(raw_paths, expected, "raw Git fixture status");
-    let status = repo.status().unwrap();
+    let status = repository_status(repo.as_ref()).unwrap();
     assert!(status.staged.is_empty());
     let mut backend_paths: Vec<_> = status
         .unstaged
@@ -305,10 +337,9 @@ fn main() {
                         };
                         let _ = fixture.git(&path, args);
                     } else if action == "remote-set-url" {
-                        repo.set_remote_url_with_output("origin", URL, RemoteUrlKind::Fetch)
-                            .unwrap();
+                        set_remote_url(repo.as_ref()).unwrap();
                     } else {
-                        let status = repo.status().unwrap();
+                        let status = repository_status(repo.as_ref()).unwrap();
                         assert!(status.staged.is_empty());
                         assert!(!status.unstaged.is_empty());
                     }

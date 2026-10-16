@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::kit::interaction as controls;
-use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
+use gitcomet_ui_terminal::{terminal_default_background, terminal_default_foreground};
 
 /// Selectable text fields, kept across renders so a selection survives.
 #[derive(Default)]
@@ -52,9 +52,7 @@ fn text(
         });
     *seen = true;
     let value = value.into();
-    let theme = this.theme;
     input.update(cx, |input, cx| {
-        input.set_theme(theme, cx);
         input.set_text(value, cx);
     });
     let selector = format!("error_details_text_{key}");
@@ -306,7 +304,7 @@ fn detail(
     let available = notice
         .actions
         .iter()
-        .map(|action| this.main_pane.read(cx).error_action_available(action))
+        .map(|action| this.diff_renderer.read(cx).error_action_available(action))
         .collect::<Vec<_>>();
     let mut actions = div().w_full().flex_none().flex().items_center().gap_2();
     for (ix, (action, available)) in notice.actions.iter().zip(available).enumerate() {
@@ -448,9 +446,9 @@ fn run_action(
     match action {
         ErrorAction::ReviewLocalChanges { repo_id } => {
             this.close_popover(cx);
-            let _ = this.root_view.update(cx, |root, cx| {
-                root.review_local_changes(repo_id, window, cx);
-            });
+            let _ =
+                this.root_view
+                    .request(RootRequest::ReviewLocalChanges(repo_id), Some(window), cx);
         }
         ErrorAction::Hosted(action) => {
             this.close_popover_and_restore_focus(window, cx);
@@ -458,7 +456,7 @@ fn run_action(
         }
         ErrorAction::SaveEditorAs { format, .. } => {
             let saved = this
-                .main_pane
+                .diff_renderer
                 .update(cx, |pane, cx| pane.save_file_editor_as(format, cx));
             if saved {
                 dismiss(this, Some(toast_id), window, cx);
@@ -469,7 +467,7 @@ fn run_action(
         }
         ErrorAction::RevealInEditor { line, column, .. } => {
             this.close_popover(cx);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.reveal_in_file_editor(line, column, window, cx)
             });
         }
@@ -480,12 +478,14 @@ fn run_action(
                 move || crate::view::platform_open::open_url_blocking(&url),
                 move |_this, result, cx| {
                     if let Err(err) = result {
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.report_error(
-                                ErrorReport::message(None, format!("Failed to open link: {err}")),
-                                cx,
-                            );
-                        });
+                        let _ = root_view.request(
+                            RootRequest::ReportError(ErrorReport::message(
+                                None,
+                                format!("Failed to open link: {err}"),
+                            )),
+                            None,
+                            cx,
+                        );
                     }
                 },
             );
@@ -516,7 +516,7 @@ pub(super) fn panel(
 
     let ui_scale = popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
-    let window_size = crate::view::chrome::window_surface_bounds(window).size;
+    let window_size = crate::kit::window_chrome::window_surface_bounds(window).size;
     let margin = scaled_px(DIALOG_MARGIN_PX);
     let width = extent(
         (window_size.width - margin * 2.0).max(px(0.0)),

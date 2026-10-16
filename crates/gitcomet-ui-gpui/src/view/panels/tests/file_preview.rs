@@ -19,7 +19,7 @@ fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestA
         view.update(app, |this, cx| {
             let preview_lines = Arc::clone(&preview_lines);
             let preview_path = preview_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_path,
@@ -32,7 +32,7 @@ fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestA
     });
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(pane.worktree_preview_line_count(), Some(3));
         assert_eq!(pane.worktree_preview_line_starts.as_ref(), &[0, 6, 11]);
         assert_eq!(pane.worktree_preview_line_text(0).as_deref(), Some("alpha"));
@@ -80,7 +80,7 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -97,7 +97,7 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
         .debug_bounds("diff_text_empty_space_Inline")
         .unwrap_or_else(|| {
             let snapshot = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
+                let pane = view.read(app).diff_renderer.read(app);
                 let scroll = pane.worktree_preview_scroll.0.borrow();
                 (
                     pane.is_file_preview_active(),
@@ -123,7 +123,7 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
     cx.simulate_mouse_down(below_eof, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(below_eof, MouseButton::Left, Modifiers::default());
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let eof = DiffTextPos {
             source_visible_ix: 1,
             region: DiffTextRegion::Inline,
@@ -137,7 +137,7 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
     cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
     cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
     let selection_before_menu = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.diff_text_has_selection());
         (pane.diff_text_anchor, pane.diff_text_head)
     });
@@ -147,7 +147,7 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
     cx.run_until_parked();
     assert_eq!(
         cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+            let pane = view.read(app).diff_renderer.read(app);
             (pane.diff_text_anchor, pane.diff_text_head)
         }),
         selection_before_menu,
@@ -198,7 +198,7 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -211,7 +211,7 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
     });
 
     let expected_line = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         pane.diff_text_line_for_region(0, DiffTextRegion::Inline)
             .to_string()
     });
@@ -224,7 +224,7 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
         "file preview multi-click hitbox",
     );
     let expected_word = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let offset = pane
             .diff_text_offset_for_position(0, DiffTextRegion::Inline, click)
             .expect("expected file-preview diff text offset");
@@ -234,8 +234,8 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
 
     simulate_counted_click(cx, click, 2);
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -246,8 +246,8 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
 
     simulate_counted_click(cx, click, 3);
     cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.copy_selected_diff_text_to_clipboard(cx)
         });
     });
@@ -258,7 +258,7 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
 
     simulate_counted_click(cx, click, 1);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             !pane.diff_text_has_selection(),
             "single click should clear the file preview text selection"
@@ -316,7 +316,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
             let workdir = workdir.clone();
             let file_rel = file_rel.clone();
             let lines = Arc::clone(&lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     workdir.join(&file_rel),
@@ -424,7 +424,7 @@ fn html_file_preview_renders_injected_javascript_and_css_from_real_document(
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, preview_abs_path, lines, preview_text.len(), cx);
             });
         });
@@ -520,7 +520,7 @@ fn html_file_preview_renders_injected_attribute_syntax_from_real_document(
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, preview_abs_path, lines, preview_text.len(), cx);
             });
         });
@@ -847,7 +847,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -889,7 +889,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("clicking `[` should light its pair");
@@ -925,7 +925,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
     );
     simulate_counted_click(cx, final_glyph_click, 1);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("the right half of the final `}` should light its pair");
@@ -942,7 +942,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
     // caret boundary, but its pixel position is beyond the painted glyph and
     // therefore must clear, rather than recreate, the highlight.
     let trailing_blank_click = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hitbox = pane
             .diff_text_hitboxes
             .get(&(3, DiffTextRegion::Inline))
@@ -960,7 +960,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
     });
     simulate_counted_click(cx, trailing_blank_click, 1);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.diff_text_pair_match_for_tests().is_none());
         assert!(pane.diff_text_occurrences_for_tests().is_empty());
     });
@@ -969,7 +969,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
     // span rather than sitting in one -- the pair must not stay lit under it.
     simulate_counted_click(cx, click, 2);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_text_has_selection(),
             "double click should select the token"
@@ -983,7 +983,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
     simulate_counted_click(cx, click, 1);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 assert!(
                     pane.diff_text_pair_match_for_tests().is_some(),
                     "the single click should restore the pair before the refresh"
@@ -1007,7 +1007,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let refreshed_lines = Arc::clone(&refreshed_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -1019,7 +1019,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
         });
     });
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.diff_text_pair_match_for_tests().is_none(),
             "a preview source refresh must discard pair spans from the old rows"
@@ -1075,7 +1075,7 @@ fn file_preview_click_lights_whole_html_tags_across_lines(cx: &mut gpui::TestApp
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -1114,7 +1114,7 @@ fn file_preview_click_lights_whole_html_tags_across_lines(cx: &mut gpui::TestApp
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("clicking inside `<div ...>` should light the element");
@@ -1193,7 +1193,7 @@ fn file_preview_click_lights_every_use_of_the_clicked_name(cx: &mut gpui::TestAp
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -1232,7 +1232,7 @@ fn file_preview_click_lights_every_use_of_the_clicked_name(cx: &mut gpui::TestAp
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_text_occurrences_for_tests(),
             vec![(1, 8..14), (3, 14..20)],
@@ -1331,7 +1331,7 @@ fn untracked_json_file_preview_keeps_underscored_string_value_highlighted(
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -1440,7 +1440,7 @@ fn large_file_preview_keeps_prepared_syntax_document_above_old_line_gate(
             let workdir = workdir.clone();
             let file_rel = file_rel.clone();
             let lines = Arc::clone(&lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     workdir.join(&file_rel),
@@ -1528,7 +1528,7 @@ fn timing_large_file_preview_frame(cx: &mut gpui::TestAppContext) {
         view.update(app, |this, cx| {
             let path = workdir.join(&file_rel);
             let lines = Arc::clone(&lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, path, lines, preview_text.len(), cx);
             });
         });
@@ -1547,7 +1547,7 @@ fn timing_large_file_preview_frame(cx: &mut gpui::TestAppContext) {
     for query in ["", "preview_value_1"] {
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_search_query = query.into();
                     cx.notify();
                 });
@@ -1555,8 +1555,8 @@ fn timing_large_file_preview_frame(cx: &mut gpui::TestAppContext) {
         });
         let notify_and_draw = |cx: &mut gpui::VisualTestContext| {
             cx.update(|window, app| {
-                let main_pane = view.read(app).main_pane.clone();
-                main_pane.update(app, |_pane, cx| cx.notify());
+                let diff_renderer = view.read(app).diff_renderer.clone();
+                diff_renderer.update(app, |_pane, cx| cx.notify());
                 let _ = window.draw(app);
             });
         };
@@ -1642,7 +1642,7 @@ fn oversized_json_preview_uses_visible_line_fallback_without_prepared_syntax_doc
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, preview_abs_path, lines, preview_text.len(), cx);
             });
         });
@@ -1688,7 +1688,7 @@ fn oversized_json_preview_uses_visible_line_fallback_without_prepared_syntax_doc
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = pane
             .worktree_preview_segments_cache_get(target_line_ix)
             .expect("oversized JSON preview should cache the visible fallback row");
@@ -1755,7 +1755,7 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, preview_abs_path, lines, long_json.len(), cx);
             });
         });
@@ -1805,7 +1805,7 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let hitbox = pane
             .diff_text_hitboxes
             .get(&(0, DiffTextRegion::Inline))
@@ -1841,7 +1841,7 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
                 let max_offset = handle.max_offset();
                 handle.set_offset(point(-max_offset.x.min(px(2400.0)), px(0.0)));
@@ -2030,7 +2030,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.worktree_preview_text.is_empty(),
             "committed deleted preview should stay file-backed"
@@ -2088,7 +2088,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
                 let max_offset = handle.max_offset();
                 handle.set_offset(point(-max_offset.x.min(px(2400.0)), px(0.0)));
@@ -2179,7 +2179,7 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, preview_abs_path, lines, long_json.len(), cx);
             });
         });
@@ -2187,7 +2187,7 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
                     source_visible_ix: 0,
                     region: DiffTextRegion::Inline,
@@ -2210,7 +2210,7 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.worktree_preview_segments_cache_get(0).is_none(),
             "streamed preview partial copy should not populate the styled row cache"
@@ -2300,8 +2300,8 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
     );
 
     cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        main_pane.update(app, |pane, cx| {
+        let diff_renderer = view.read(app).diff_renderer.clone();
+        diff_renderer.update(app, |pane, cx| {
             pane.open_diff_editor_context_menu(
                 0,
                 DiffTextRegion::Inline,
@@ -2374,7 +2374,7 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.worktree_preview_segments_cache_get(0).is_none(),
             "streamed preview context-menu copy should not populate the styled row cache"
@@ -2438,7 +2438,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -2463,7 +2463,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
 
     let target_ix = 1usize;
     let (initial_epoch, initial_highlights_hash) = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = pane
             .worktree_preview_segments_cache_get(target_ix)
             .expect("initial draw should populate the visible fallback preview row cache");
@@ -2511,7 +2511,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
     );
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let styled = pane
             .worktree_preview_segments_cache_get(target_ix)
             .expect("background syntax completion should repopulate the preview row cache");
@@ -2582,7 +2582,7 @@ fn xml_file_preview_renders_syntax_highlights_from_real_document(cx: &mut gpui::
         view.update(app, |this, cx| {
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, preview_abs_path, lines, preview_text.len(), cx);
             });
         });
@@ -2673,7 +2673,7 @@ fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::T
         view.update(app, |this, cx| {
             let preview_abs_path = workdir.join(&file_rel);
             let lines = Arc::clone(&lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, preview_abs_path, lines, preview_text.len(), cx);
                 pane.set_annotate_enabled(true, cx);
             });
@@ -2689,7 +2689,7 @@ fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::T
         .expect("expected `worktree_preview_scroll_container` bounds");
     let column_width = cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .annotate_column_width_px(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
     });
@@ -2701,9 +2701,12 @@ fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::T
     );
 
     cx.update(|_window, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.set_annotate_enabled(false, cx);
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.set_annotate_enabled(false, cx);
+            });
     });
     draw_and_drain_test_window(cx);
     assert!(
@@ -2759,7 +2762,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
             let workdir = workdir.clone();
             let file_rel = file_rel.clone();
             let lines = Arc::clone(&lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     workdir.join(&file_rel),
@@ -2776,7 +2779,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.is_file_preview_active(),
             "this test is about the read-only view"
@@ -2787,7 +2790,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
     // the row style cache, and a row cached before the query carries no wash.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_input
                     .update(cx, |input, cx| input.set_text("needle", cx));
@@ -2797,7 +2800,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
     cx.run_until_parked();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.diff_search_recompute_matches_and_scroll_to_first();
             });
         });
@@ -2825,7 +2828,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
     };
 
     let (plain_wash, current_wash) = cx.update(|_window, app| {
-        let theme = view.read(app).main_pane.read(app).theme;
+        let theme = view.read(app).diff_renderer.read(app).theme;
         (
             theme.colors.editor.search_match_background.into_color(),
             theme.colors.editor.selection_background.into_color(),
@@ -2834,7 +2837,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
 
     let records = draw(cx);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches,
             vec![0, 2],
@@ -2856,7 +2859,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
     // Stepping has to move the emphasis, not just the scroll.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, _cx| pane.diff_search_next_match());
         });
     });
@@ -2864,7 +2867,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
     cx.update(|_window, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .diff_search_current_match_row(),
             Some(2)
@@ -2932,7 +2935,7 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
             let workdir = workdir.clone();
             let file_rel = file_rel.clone();
             let lines = Arc::clone(&lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_word_wrap = false;
                 set_ready_worktree_preview(
                     pane,
@@ -2947,7 +2950,7 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.is_file_preview_active());
         assert_eq!(
             pane.worktree_preview_scroll
@@ -2963,7 +2966,7 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_search_active = true;
                 pane.diff_search_query = "needle".into();
                 pane.diff_search_input
@@ -2980,7 +2983,7 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_search_matches.len(),
             1,
@@ -3056,7 +3059,7 @@ fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppCon
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -3082,7 +3085,7 @@ fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppCon
     // without a redraw in between that would rebuild it first.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.prepared_syntax_documents.clear();
                 assert!(
                     pane.worktree_preview_prepared_syntax_document().is_none(),
@@ -3105,7 +3108,7 @@ fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppCon
     // makes when a preview becomes ready -- and the replay hangs off it.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.refresh_worktree_preview_syntax_document(cx)
             });
         });
@@ -3113,7 +3116,7 @@ fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppCon
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.worktree_preview_prepared_syntax_document().is_some(),
             "the preview should have rebuilt its document"
@@ -3183,7 +3186,7 @@ fn file_preview_click_lights_whole_tags_in_a_template(cx: &mut gpui::TestAppCont
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -3224,7 +3227,7 @@ fn file_preview_click_lights_whole_tags_in_a_template(cx: &mut gpui::TestAppCont
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let pair = pane
             .diff_text_pair_match_for_tests()
             .expect("clicking inside `<div ...>` in a template should light the element");
@@ -3304,7 +3307,7 @@ fn file_preview_click_lights_every_use_of_a_name_in_a_script(cx: &mut gpui::Test
         view.update(app, |this, cx| {
             let preview_abs_path = preview_abs_path.clone();
             let preview_lines = Arc::clone(&preview_lines);
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path,
@@ -3343,7 +3346,7 @@ fn file_preview_click_lights_every_use_of_a_name_in_a_script(cx: &mut gpui::Test
     simulate_counted_click(cx, click, 1);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let occurrences = pane.diff_text_occurrences_for_tests();
         let rows: Vec<usize> = occurrences.iter().map(|(row, _)| *row).collect();
         assert!(
@@ -3437,7 +3440,7 @@ fn select_with_ready_untracked_preview(
     let lines: Arc<Vec<String>> = Arc::new(text.split('\n').map(str::to_owned).collect());
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 set_ready_worktree_preview(pane, path, lines, text.len(), cx);
             });
         });
@@ -3450,7 +3453,7 @@ fn force_background_preview_parses(
 ) {
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.diff_renderer.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
                     foreground_parse: std::time::Duration::ZERO,
                 });
@@ -3465,7 +3468,7 @@ fn preview_path(
 ) -> Option<std::path::PathBuf> {
     cx.update(|_window, app| {
         view.read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .worktree_preview_path
             .clone()
@@ -3473,7 +3476,7 @@ fn preview_path(
 }
 
 /// Rows of the preview whose colours differ from a parse of `text` of its own.
-fn preview_rows_coloured_unlike_a_fresh_parse(pane: &MainPaneView, text: &str) -> Vec<String> {
+fn preview_rows_coloured_unlike_a_fresh_parse(pane: &DiffRenderer, text: &str) -> Vec<String> {
     fresh_document_line_snapshots(pane.theme, rows::DiffSyntaxLanguage::TypeScript, text)
         .into_iter()
         .enumerate()
@@ -3500,7 +3503,7 @@ fn preview_rows_coloured_unlike_a_fresh_parse(pane: &MainPaneView, text: &str) -
         .collect()
 }
 
-fn assert_preview_coloured_as_after_insert(pane: &MainPaneView) {
+fn assert_preview_coloured_as_after_insert(pane: &DiffRenderer) {
     let comment = pane.theme.syntax.comment.into_color();
     let row_14 = pane
         .worktree_preview_segments_cache_get(13)
@@ -3563,7 +3566,7 @@ fn untracked_preview_recolours_a_file_rewritten_while_another_file_was_shown(
     wait_for_parsed_untracked_preview(cx, &view, &workdir.join(helpers), HELPERS_TS_AFTER_INSERT);
 
     cx.update(|_window, app| {
-        assert_preview_coloured_as_after_insert(view.read(app).main_pane.read(app));
+        assert_preview_coloured_as_after_insert(view.read(app).diff_renderer.read(app));
     });
     std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
 }
@@ -3603,7 +3606,7 @@ fn late_background_parse_does_not_colour_a_rewritten_preview(cx: &mut gpui::Test
     wait_for_parsed_untracked_preview(cx, &view, &workdir.join(helpers), HELPERS_TS_AFTER_INSERT);
 
     cx.update(|_window, app| {
-        assert_preview_coloured_as_after_insert(view.read(app).main_pane.read(app));
+        assert_preview_coloured_as_after_insert(view.read(app).diff_renderer.read(app));
     });
     std::fs::remove_dir_all(&workdir).expect("cleanup preview workdir");
 }
@@ -3633,7 +3636,7 @@ fn returning_to_an_unchanged_preview_reuses_its_background_parse(cx: &mut gpui::
     // even with no foreground budget, rather than a second full parse.
     select_with_ready_untracked_preview(cx, &view, repo_id, &workdir, helpers, &text);
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(
             pane.worktree_preview_prepared_syntax_document().is_some(),
             "the parse that landed while another file was shown should be reused"
@@ -3664,7 +3667,7 @@ fn revisiting_previews_keeps_one_cached_parse_per_file(cx: &mut gpui::TestAppCon
     // Every visit has its own rev; older ones must not pile up in the pane's
     // bounded map, where eviction picks an arbitrary, possibly live, entry.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         for file in [helpers, other] {
             let path = workdir.join(file);
             let cached = pane

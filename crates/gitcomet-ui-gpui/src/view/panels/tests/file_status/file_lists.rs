@@ -524,15 +524,15 @@ fn commit_file_projection_changes_notify_the_cached_main_pane(cx: &mut gpui::Tes
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let (details_pane, main_pane) = cx.update(|_window, app| {
+    let (details_pane, diff_renderer) = cx.update(|_window, app| {
         let view = view.read(app);
-        (view.details_pane.clone(), view.main_pane.clone())
+        (view.details_pane.clone(), view.diff_renderer.clone())
     });
 
     let main_notifies = Arc::new(AtomicUsize::new(0));
     let _main_notify_subscription = cx.update(|_window, app| {
         let main_notifies = Arc::clone(&main_notifies);
-        main_pane.update(app, |_pane, cx| {
+        diff_renderer.update(app, |_pane, cx| {
             cx.observe_self(move |_pane, _cx| {
                 main_notifies.fetch_add(1, Ordering::Relaxed);
             })

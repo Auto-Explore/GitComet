@@ -877,11 +877,11 @@ mod tests {
         let token = CancellationToken::new();
         let check = || {
             let repo = open_repo(dir);
-            let status = repo.status_cancellable(&token).unwrap();
+            let status = repo.status(&token).unwrap();
             assert_eq!(
-                repo.uncommitted_line_stats_for_status_cancellable(&status, &token)
+                repo.uncommitted_line_stats_for_status(&status, &token)
                     .unwrap(),
-                repo.uncommitted_line_stats_cancellable(&token).unwrap()
+                repo.uncommitted_line_stats(&token).unwrap()
             );
         };
         check(); // Empty, unborn repository.
@@ -938,11 +938,11 @@ mod tests {
         let token = CancellationToken::new();
         let empty = gitcomet_core::domain::RepoStatus::default();
         let counts = repo
-            .uncommitted_line_stats_for_status_cancellable(&empty, &token)
+            .uncommitted_line_stats_for_status(&empty, &token)
             .unwrap();
         assert!(counts.staged.is_empty() && counts.unstaged.is_empty());
         // Control: a traversal actually needs the broken clean filter.
-        assert!(repo.worktree_status_cancellable(&token).is_err());
+        assert!(repo.worktree_status(&token).is_err());
     }
 
     #[cfg(unix)]
@@ -1019,11 +1019,10 @@ mod tests {
             unstaged: std::sync::Arc::new(entries[..1].to_vec()),
             staged: Default::default(),
         };
-        let subset =
-            gitcomet_core::services::GitRepository::uncommitted_line_stats_for_status_cancellable(
-                &repo, &status, &token,
-            )
-            .unwrap();
+        let subset = gitcomet_core::services::GitRepository::uncommitted_line_stats_for_status(
+            &repo, &status, &token,
+        )
+        .unwrap();
         assert_eq!(subset.unstaged.len(), 1);
     }
 

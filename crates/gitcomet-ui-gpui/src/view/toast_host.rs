@@ -240,11 +240,6 @@ impl ToastHost {
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        for toast in &self.toasts {
-            if let ToastBody::Text { input, .. } = &toast.body {
-                input.update(cx, |input, cx| input.set_theme(theme, cx));
-            }
-        }
         cx.notify();
     }
 
@@ -517,7 +512,6 @@ impl ToastHost {
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
         let id = self.next_id();
-        let theme = self.theme;
         let is_code_message = looks_like_code_message(&message);
         let display_message = if is_code_message {
             strip_code_message_indentation(&message)
@@ -537,7 +531,6 @@ impl ToastHost {
             )
         });
         input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_text(display_message, cx);
             input.set_read_only(true, cx);
         });
@@ -2233,51 +2226,44 @@ mod tests {
     }
 
     #[gpui::test]
-    fn set_theme_rethemes_existing_toast_inputs(cx: &mut gpui::TestAppContext) {
+    fn toast_inputs_follow_their_window_theme(cx: &mut gpui::TestAppContext) {
         let light = AppTheme::gitcomet_light();
         let dark = AppTheme::gitcomet_dark();
 
-        let host = cx.update(|app| {
-            app.new(|cx| {
-                let mut host = ToastHost::new(light, gpui::WeakEntity::new_invalid());
-                host.push_survey_toast(
-                    "survey-id",
-                    "Survey",
-                    "Help shape GitComet by taking a short user survey.",
-                    "https://example.com",
-                    "Open Survey",
-                    "Later",
-                    60,
-                    cx,
-                );
-                host
-            })
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let mut host = ToastHost::new(light, gpui::WeakEntity::new_invalid());
+            host.push_survey_toast(
+                "survey-id",
+                "Survey",
+                "Help shape GitComet by taking a short user survey.",
+                "https://example.com",
+                "Open Survey",
+                "Later",
+                60,
+                cx,
+            );
+            host
         });
-
-        let toast_input = cx.update(|app| {
+        let window_id = cx.update(|window, _| window.window_handle().window_id());
+        let toast_input = cx.update(|_, app| {
             let host = host.read(app);
             assert_eq!(host.toasts.len(), 1);
             let ToastBody::Text { input, .. } = &host.toasts[0].body else {
                 panic!("a survey toast is text");
             };
-            let input = input.clone();
-            assert_eq!(
-                input.read(app).debug_text_color(),
-                light.colors.foreground.primary.into_color()
-            );
-            input
+            input.clone()
         });
 
-        cx.update(|app| {
-            host.update(app, |host, cx| host.set_theme(dark, cx));
-        });
-
-        cx.update(|app| {
-            assert_eq!(
-                toast_input.read(app).debug_text_color(),
-                dark.colors.foreground.primary.into_color()
-            );
-        });
+        for theme in [light, dark] {
+            cx.update(|_, app| crate::theme::set_window_theme(app, window_id, theme));
+            crate::test_support::refresh_and_draw(cx);
+            cx.update(|_, app| {
+                assert_eq!(
+                    toast_input.read(app).debug_text_color(),
+                    theme.colors.foreground.primary.into_color()
+                );
+            });
+        }
     }
 
     #[test]

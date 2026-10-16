@@ -1,17 +1,14 @@
 //! Git LFS and git-annex command, support and queue behaviour.
 
 use super::*;
+use crate::msg::{RepoCommandEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
-fn large_file_fixture() -> (
-    FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    AtomicU64,
-    AppState,
-    RepoId,
-) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+fn large_file_fixture() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId) {
+    let mut repos: RepositoryRuntimes = Default::default();
     let mut state = AppState::test_default();
     let repo_id = RepoId(41);
-    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
     let mut repo_state = RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -41,7 +38,7 @@ fn large_file_command_runs_as_a_local_action_and_lock_changes_reload_locks() {
         },
     );
     assert!(
-        matches!(effects.as_slice(), [Effect::RunLargeFileCommand { command: c, auth: None, .. }] if *c == command),
+        matches!(effects.as_slice(), [Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { command: c, auth: None, .. })] if *c == command),
         "{effects:?}"
     );
     assert_eq!(state.repos[0].local_actions_in_flight, 1);
@@ -332,12 +329,12 @@ fn support_storage_changes_reclassify_rows_before_or_after_an_old_scan_finishes(
             );
         }
         let [
-            Effect::LoadUncommittedLineStats {
+            Effect::Status(StatusEffect::LoadUncommittedLineStats {
                 generation,
                 status: replay_status,
                 large_files: true,
                 ..
-            },
+            }),
         ] = effects.as_slice()
         else {
             panic!("expected one row classification replay: {effects:?}");
@@ -403,10 +400,12 @@ fn pull_and_push_on_adjusted_branch_use_git_annex() {
     assert!(
         matches!(
             effects.as_slice(),
-            [Effect::RunLargeFileCommand {
-                command: LargeFileCommand::AnnexPull { content: false },
-                ..
-            }]
+            [Effect::RepoCommand(
+                RepoCommandEffect::RunLargeFileCommand {
+                    command: LargeFileCommand::AnnexPull { content: false },
+                    ..
+                }
+            )]
         ),
         "{effects:?}"
     );
@@ -431,10 +430,12 @@ fn pull_and_push_on_adjusted_branch_use_git_annex() {
     assert!(
         matches!(
             effects.as_slice(),
-            [Effect::RunLargeFileCommand {
-                command: LargeFileCommand::AnnexPush { content: true },
-                ..
-            }]
+            [Effect::RepoCommand(
+                RepoCommandEffect::RunLargeFileCommand {
+                    command: LargeFileCommand::AnnexPush { content: true },
+                    ..
+                }
+            )]
         ),
         "{effects:?}"
     );
@@ -442,9 +443,10 @@ fn pull_and_push_on_adjusted_branch_use_git_annex() {
     state.large_file_settings.annex_pull_push = false;
     let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
     assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::RunLargeFileCommand { .. })),
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { .. })
+        )),
         "turning the setting off restores plain push"
     );
 }
@@ -470,17 +472,18 @@ fn adjusted_branch_never_uses_plain_git_while_support_is_unknown() {
         ] {
             let effects = reduce(&mut repos, &id_alloc, &mut state, message);
             assert!(
-                effects
-                    .iter()
-                    .any(|e| matches!(e, Effect::RunLargeFileCommand { .. }))
-                    != confirmed_inactive,
+                effects.iter().any(|e| matches!(
+                    e,
+                    Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { .. })
+                )) != confirmed_inactive,
                 "{effects:?}"
             );
             assert!(
-                effects
-                    .iter()
-                    .any(|e| matches!(e, Effect::Push { .. } | Effect::Pull { .. }))
-                    == confirmed_inactive,
+                effects.iter().any(|e| matches!(
+                    e,
+                    Effect::RepoCommand(RepoCommandEffect::Push { .. })
+                        | Effect::RepoCommand(RepoCommandEffect::Pull { .. })
+                )) == confirmed_inactive,
                 "{effects:?}"
             );
         }
@@ -644,7 +647,7 @@ fn review_annex_sync_is_not_blocked_by_fetch_or_prune() {
                     command: command.clone(),
                 },
             );
-            assert!(effects.iter().any(|effect| matches!(effect, Effect::RunLargeFileCommand { command: actual, .. } if actual == &command)), "fetch/prune {operation} must not suppress {command:?}: {effects:?}");
+            assert!(effects.iter().any(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { command: actual, .. }) if actual == &command)), "fetch/prune {operation} must not suppress {command:?}: {effects:?}");
             finish_large_file_effects(&mut repos, &id_alloc, &mut state, &effects);
             assert_eq!(state.repos[0].pull_in_flight, 1);
             assert_eq!(state.repos[0].worktree_pull_in_flight, 0);
@@ -685,9 +688,9 @@ fn review_busy_annex_commands_provide_feedback_and_run_when_ready() {
             !state.notifications.is_empty(),
             "a queued {command:?} must tell the user"
         );
-        let Effect::RunLargeFileCommand {
+        let Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand {
             command: running, ..
-        } = &first[0]
+        }) = &first[0]
         else {
             panic!("{first:?}")
         };
@@ -703,7 +706,7 @@ fn review_busy_annex_commands_provide_feedback_and_run_when_ready() {
                 result: Ok(CommandOutput::default()),
             }),
         );
-        assert!(effects.iter().any(|effect| matches!(effect, Effect::RunLargeFileCommand { command: actual, .. } if actual == &command)), "{effects:?}");
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand { command: actual, .. }) if actual == &command)), "{effects:?}");
     }
 }
 
@@ -812,16 +815,16 @@ fn runs_annex(effects: &[Effect], pull: bool) -> bool {
         matches!(
             (effect, pull),
             (
-                Effect::RunLargeFileCommand {
+                Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand {
                     command: LargeFileCommand::AnnexPull { .. },
                     ..
-                },
+                }),
                 true
             ) | (
-                Effect::RunLargeFileCommand {
+                Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand {
                     command: LargeFileCommand::AnnexPush { .. },
                     ..
-                },
+                }),
                 false
             )
         )
@@ -829,15 +832,17 @@ fn runs_annex(effects: &[Effect], pull: bool) -> bool {
 }
 
 fn finish_large_file_effects(
-    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut RepositoryRuntimes,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     effects: &[Effect],
 ) {
     for effect in effects {
-        if let Effect::RunLargeFileCommand {
-            repo_id, command, ..
-        } = effect
+        if let Effect::RepoCommand(RepoCommandEffect::RunLargeFileCommand {
+            repo_id,
+            command,
+            ..
+        }) = effect
         {
             reduce(
                 repos,
@@ -892,7 +897,9 @@ fn adjusted_branch_takeover_follows_head_not_the_support_snapshot() {
     reduce(&mut repos, &id_alloc, &mut state, head_loaded("main"));
     let effects = reduce(&mut repos, &id_alloc, &mut state, pull());
     assert!(
-        effects.iter().any(|e| matches!(e, Effect::Pull { .. })),
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::RepoCommand(RepoCommandEffect::Pull { .. }))),
         "{effects:?}"
     );
 }
@@ -961,9 +968,10 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
     );
     assert!(runs_annex(&effects, false), "commit & push: {effects:?}");
     assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::SafePushAfterCommit { .. })),
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit { .. })
+        )),
         "{effects:?}"
     );
 
@@ -1001,7 +1009,7 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         },
     ] {
         let label = format!("{msg:?}");
-        state.repos[0].feedback.last_error = None;
+        state.repos[0].feedback_mut().last_error = None;
         let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
         assert!(effects.is_empty(), "{label} must not run git: {effects:?}");
         assert!(
@@ -1030,9 +1038,10 @@ fn every_pull_and_push_path_on_an_adjusted_branch_avoids_plain_git() {
         },
     );
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::PushSetUpstream { .. })),
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::RepoCommand(RepoCommandEffect::PushSetUpstream { .. })
+        )),
         "{effects:?}"
     );
 }

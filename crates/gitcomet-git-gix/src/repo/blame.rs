@@ -383,7 +383,9 @@ impl GixRepo {
         let repo = self.repo();
         let spec = rev.unwrap_or("HEAD");
         let suspect = crate::refs::resolve_required(&repo, spec)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))).with_source(e)
+            })?
             .detach();
         let git_path = gix::path::os_str_into_bstr(path.as_os_str())
             .map(gix::path::to_unix_separators_on_windows)
@@ -480,7 +482,10 @@ impl GixRepo {
             let contents = match area {
                 DiffArea::Unstaged => {
                     let abs_path = self.spec.workdir.join(path);
-                    fs::read(&abs_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?
+                    fs::read(&abs_path).map_err(|error| {
+                        Error::from(error)
+                            .with_context("read worktree blame content", Some(&abs_path))
+                    })?
                 }
                 DiffArea::Staged => staged_blob_for_blame(&repo, path)?,
             };

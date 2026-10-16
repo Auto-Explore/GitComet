@@ -10,7 +10,7 @@ use super::{
     worktree_preview_apply_query_overlay, worktree_row_key,
 };
 use crate::view::markdown_preview::MarkdownInlineSpan;
-use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::diff::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
 use crate::view::{
     HISTORY_COL_HANDLE_PX, HISTORY_MESSAGE_BORDER_GAP_PX, HISTORY_MESSAGE_BORDER_W_PX,

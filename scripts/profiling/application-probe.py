@@ -58,7 +58,7 @@ def main():
         for profile in args.profiles:
             build = directory / f"{profile}-build.jsonl"
             runner.run(f"application-probe-build-{profile}", [
-                "cargo", "build", "--locked", "-p", "gitcomet-git-gix", "--features", "benchmarks",
+                "cargo", "build", "--locked", "-p", "gitcomet-git-gix", "--features", "benchmarks,test-support",
                 "--example", "operation-context-probe", "--profile", profile, "--message-format", "json",
             ], output=build, timeout=1800)
             artifacts = [item for line in build.read_text(encoding="utf-8").splitlines()

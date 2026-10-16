@@ -84,9 +84,7 @@ pub(super) fn panel(
         )
         .on_click(theme, cx, |this, _e, _window, cx| {
             let root_view = this.root_view.clone();
-            let _ = root_view.update(cx, |root, cx| {
-                root.clear_pending_terminal_shutdown_prompt(cx);
-            });
+            let _ = root_view.request(RootRequest::ClearPendingTerminalShutdownPrompt, None, cx);
             this.close_popover(cx);
         }),
         components::Button::new("terminal_shutdown_confirm", confirm_label)
@@ -98,9 +96,11 @@ pub(super) fn panel(
                 // Later close guards read this host. Release its update lease
                 // before checking them or closing the window that owns it.
                 window.defer(cx, move |window, cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.confirm_terminal_shutdown(prompt, window, cx);
-                    });
+                    let _ = root_view.request(
+                        RootRequest::ConfirmTerminalShutdown(prompt),
+                        Some(window),
+                        cx,
+                    );
                 });
             }),
         cx,

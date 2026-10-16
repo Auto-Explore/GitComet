@@ -4,8 +4,7 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 
-#[path = "test_git_env.rs"]
-mod test_git_env;
+use crate::test_git_env;
 
 pub fn git(repo: &Path, args: &[&str]) -> String {
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();
@@ -70,28 +69,61 @@ pub fn open_stage_commit_and_uncommitted_blame(hash: &str, refs: &str) {
     let repo = GixBackend
         .open(dir.path())
         .expect("open SHA-256 repository");
-    assert_eq!(repo.current_branch().unwrap(), "main");
-    assert!(repo.log_head_page(10, None).unwrap().commits.is_empty());
+    assert_eq!(
+        repo.current_branch(&gitcomet_core::services::CancellationToken::new())
+            .unwrap(),
+        "main"
+    );
+    assert!(
+        repo.log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .commits
+            .is_empty()
+    );
     fs::write(dir.path().join("file.txt"), "first\n").unwrap();
-    assert!(!repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        !repo
+            .status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
     let blame = repo
         .blame_worktree_file(Path::new("file.txt"), DiffArea::Unstaged)
         .unwrap();
     assert_eq!(&*blame[0].commit_id, "0".repeat(width));
     repo.stage(&[Path::new("file.txt")]).unwrap();
-    assert_eq!(repo.status().unwrap().staged.len(), 1);
+    assert_eq!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .len(),
+        1
+    );
     repo.unstage(&[Path::new("file.txt")]).unwrap();
-    assert!(repo.status().unwrap().staged.is_empty());
+    assert!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .is_empty()
+    );
     repo.stage(&[Path::new("file.txt")]).unwrap();
     repo.commit("root").unwrap();
-    let page = repo.log_head_page(10, None).unwrap();
+    let page = repo
+        .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     let commits = &page.commits;
     assert_eq!(commits[0].id.as_ref().len(), width);
     for width in [12, 40] {
         let prefix = CommitId(commits[0].id.as_ref()[..width].into());
         assert_eq!(repo.commit_details(&prefix).unwrap().message.trim(), "root");
     }
-    assert_eq!(repo.list_branches().unwrap()[0].target, commits[0].id);
+    assert_eq!(
+        repo.list_branches(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()[0]
+            .target,
+        commits[0].id
+    );
     assert_eq!(
         repo.blame_file(Path::new("file.txt"), Some(commits[0].id.as_ref()))
             .unwrap()[0]
@@ -102,12 +134,29 @@ pub fn open_stage_commit_and_uncommitted_blame(hash: &str, refs: &str) {
     fs::write(dir.path().join("file.txt"), "first\nsecond\n").unwrap();
     let target = DiffTarget::working_tree("file.txt".into(), DiffArea::Unstaged);
     assert!(repo.diff_unified(&target).unwrap().contains("+second"));
-    assert!(repo.diff_file_text(&target).unwrap().is_some());
+    assert!(
+        repo.diff_file_text(
+            &target,
+            None,
+            &gitcomet_core::services::CancellationToken::new()
+        )
+        .unwrap()
+        .is_some()
+    );
     repo.stash_create("sha256 stash", false).unwrap();
-    assert_eq!(repo.stash_list().unwrap().len(), 1);
+    assert_eq!(
+        repo.stash_list(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .len(),
+        1
+    );
     repo.stash_apply(0).unwrap();
     repo.stash_drop(0).unwrap();
-    assert!(repo.stash_list().unwrap().is_empty());
+    assert!(
+        repo.stash_list(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
@@ -127,7 +176,9 @@ pub fn history_loose_commit_graph_and_packs(hash: &str, refs: &str) {
             git(dir.path(), &["gc"]);
         }
         let repo = GixBackend.open(dir.path()).unwrap();
-        let page = repo.log_head_page(10, None).unwrap();
+        let page = repo
+            .log_head_page(10, None, &gitcomet_core::services::CancellationToken::new())
+            .unwrap();
         assert_eq!(page.commits.len(), 2);
         assert_eq!(
             page.commits[0].parent_ids.as_slice(),
@@ -186,20 +237,33 @@ pub fn submodules_and_unconfigured_gitlinks(hash: &str, refs: &str) {
     );
     git(parent.path(), &["commit", "-m", "submodule"]);
     let repo = GixBackend.open(parent.path()).unwrap();
-    let modules = repo.list_submodules().unwrap();
+    let modules = repo
+        .list_submodules(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert_eq!(modules.len(), 1);
     assert_eq!(modules[0].recorded_head.as_ref(), child_id);
     assert_eq!(
         modules[0].checked_out_head.as_ref().unwrap().as_ref(),
         child_id
     );
-    assert!(repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
     fs::write(parent.path().join("module/child.txt"), "edited\n").unwrap();
-    assert_eq!(repo.status().unwrap().unstaged.len(), 1);
-    repo.submodule_diff_summary(&DiffTarget::working_tree(
-        "module".into(),
-        DiffArea::Unstaged,
-    ))
+    assert_eq!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .len(),
+        1
+    );
+    repo.submodule_diff_summary(
+        &DiffTarget::working_tree("module".into(), DiffArea::Unstaged),
+        &gitcomet_core::services::CancellationToken::new(),
+    )
     .unwrap();
     GixBackend.repository_watch_info(parent.path()).unwrap();
     // An index gitlink alone must not cause gix to consult the placeholder HEAD.
@@ -214,7 +278,13 @@ pub fn submodules_and_unconfigured_gitlinks(hash: &str, refs: &str) {
         ],
     );
     let repo = GixBackend.open(unconfigured.path()).unwrap();
-    assert_eq!(repo.status().unwrap().staged.len(), 1);
+    assert_eq!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .staged
+            .len(),
+        1
+    );
 }
 
 fn has_added_line(diff: &gitcomet_core::domain::Diff, text: &str) -> bool {
@@ -233,12 +303,23 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
     git(dir.path(), &["commit", "-m", "first"]);
     let first = git(dir.path(), &["rev-parse", "HEAD"]);
     let repo = GixBackend.open(dir.path()).unwrap();
-    assert!(repo.status().unwrap().unstaged.is_empty());
+    assert!(
+        repo.status(&gitcomet_core::services::CancellationToken::new())
+            .unwrap()
+            .unstaged
+            .is_empty()
+    );
 
     fs::write(dir.path().join("notes.txt"), "one\ntwo\n").unwrap();
     let worktree = DiffTarget::working_tree("notes.txt".into(), DiffArea::Unstaged);
     assert!(has_added_line(
-        &repo.diff_parsed(&worktree).unwrap(),
+        &repo
+            .diff_parsed(
+                &worktree,
+                None,
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .unwrap(),
         "+two"
     ));
     repo.stage(&[Path::new("notes.txt")]).unwrap();
@@ -250,10 +331,21 @@ pub fn status_diff_commit_reflog_and_file_history(hash: &str, refs: &str) {
         git(dir.path(), &["cat-file", "-t", second.as_ref()]),
         "commit"
     );
-    let status = repo.status().unwrap();
+    let status = repo
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
     assert!(status.staged.is_empty() && status.unstaged.is_empty());
     let commit = DiffTarget::commit(second.clone(), "notes.txt".into());
-    assert!(has_added_line(&repo.diff_parsed(&commit).unwrap(), "+two"));
+    assert!(has_added_line(
+        &repo
+            .diff_parsed(
+                &commit,
+                None,
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .unwrap(),
+        "+two"
+    ));
 
     let cancellation = CancellationToken::new();
     let index = repo

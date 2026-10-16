@@ -1,6 +1,7 @@
 //! Window and workspace lifecycle: drops, tabs, splash, close and quit.
 
 use super::*;
+use gitcomet_state::model::LoadKind;
 
 fn assert_external_drag_cleared(view: &GitCometView, app: &gpui::App) {
     assert!(
@@ -134,17 +135,17 @@ fn check_folder_drop_clears_highlight(
             },
         );
         repo.open = Loadable::Ready(());
+        store.replace_snapshot_for_test(Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        }));
         store.insert_repo_for_test(
             repo_id,
             Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
                 path,
             )),
         );
-        store.replace_snapshot_for_test(Arc::new(AppState {
-            repos: vec![repo],
-            active_repo: Some(repo_id),
-            ..AppState::test_default()
-        }));
     }
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -567,18 +568,18 @@ fn dropping_multiple_folders_on_repository_bar_opens_each(cx: &mut gpui::TestApp
         },
     );
     seeded.open = Loadable::Ready(());
-    store.insert_repo_for_test(
-        seeded_id,
-        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
-            seeded_path,
-        )),
-    );
     store.replace_snapshot_for_test(Arc::new(AppState {
         repos: vec![seeded],
         active_repo: Some(seeded_id),
         git_runtime: available_git_runtime_state(),
         ..AppState::test_default()
     }));
+    store.insert_repo_for_test(
+        seeded_id,
+        Arc::new(gitcomet_core::test_support::UnconfiguredRepository::new(
+            seeded_path,
+        )),
+    );
     let store_for_state = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1423,7 +1424,6 @@ fn confirm_quit_app_terminates_other_window_terminals(cx: &mut gpui::TestAppCont
 /// shorter than that must not redraw the tab strip or the action bar.
 #[gpui::test]
 fn refreshes_shorter_than_the_spinner_delay_leave_the_chrome_alone(cx: &mut gpui::TestAppContext) {
-    use gitcomet_state::model::RepoLoadsInFlight;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1446,7 +1446,7 @@ fn refreshes_shorter_than_the_spinner_delay_leave_the_chrome_alone(cx: &mut gpui
     let mut busy = (*idle).clone();
     busy.repos[0]
         .loads_in_flight
-        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+        .request(LoadKind::WorktreeStatus);
     let busy = Arc::new(busy);
     let publish = |state: &Arc<AppState>, cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
@@ -2062,7 +2062,6 @@ fn opening_a_workspace_from_home_adopts_it_into_this_window(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn linked_worktree_scans_do_not_keep_the_active_tab_spinner_busy(cx: &mut gpui::TestAppContext) {
-    use gitcomet_state::model::RepoLoadsInFlight;
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2075,7 +2074,7 @@ fn linked_worktree_scans_do_not_keep_the_active_tab_spinner_busy(cx: &mut gpui::
         );
         repo.open = Loadable::Ready(());
         repo.loads_in_flight
-            .request(RepoLoadsInFlight::WORKTREE_DIRTY);
+            .request_worktree_dirty(gitcomet_state::model::WorktreeDirtyScope::All);
         repo
     });
     let mut state = AppState {
@@ -2116,8 +2115,7 @@ fn linked_worktree_scans_do_not_keep_the_active_tab_spinner_busy(cx: &mut gpui::
             .iter_mut()
             .find(|repo| repo.id == RepoId(id))
             .unwrap();
-        repo.loads_in_flight
-            .request(RepoLoadsInFlight::WORKTREE_STATUS);
+        repo.loads_in_flight.request(LoadKind::WorktreeStatus);
         publish(&state, cx);
         assert!(
             cx.debug_bounds(if id == 1 {
@@ -2134,7 +2132,7 @@ fn linked_worktree_scans_do_not_keep_the_active_tab_spinner_busy(cx: &mut gpui::
             .find(|repo| repo.id == RepoId(id))
             .unwrap()
             .loads_in_flight
-            .finish(RepoLoadsInFlight::WORKTREE_STATUS);
+            .finish(LoadKind::WorktreeStatus);
         publish(&state, cx);
         assert!(
             cx.debug_bounds(if id == 1 {

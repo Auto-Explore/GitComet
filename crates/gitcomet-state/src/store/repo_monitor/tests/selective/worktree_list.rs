@@ -17,7 +17,10 @@ impl LiveWorktrees {
         let repo = backend.open(workdir).unwrap();
         let mut repo_state = RepoState::new_opening(RepoId(1), repo.spec().clone());
         repo_state.set_open(Loadable::Ready(()));
-        repo_state.set_worktrees(Loadable::Ready(repo.list_worktrees().unwrap()));
+        repo_state.set_worktrees(Loadable::Ready(
+            repo.list_worktrees(&gitcomet_core::services::CancellationToken::new())
+                .unwrap(),
+        ));
         let state = AppState {
             active_repo: Some(RepoId(1)),
             repos: vec![repo_state],

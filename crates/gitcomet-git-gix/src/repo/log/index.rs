@@ -105,7 +105,7 @@ impl GixRepo {
         for info in &mut walk.walk {
             cancellation.check_cancelled()?;
             let info = info.map_err(|error| {
-                crate::repo::object_store::gix_error("gix history index", &*error)
+                crate::repo::object_store::gix_error("gix history index", error)
             })?;
             scanned += 1;
             if scanned.is_multiple_of(1024) && last_progress.elapsed() >= Duration::from_millis(100)
@@ -130,7 +130,7 @@ impl GixRepo {
                     .objects
                     .find_commit(info.id.as_ref(), &mut decode_buf)
                     .map_err(|error| {
-                        crate::repo::object_store::gix_error("gix history index object", &error)
+                        crate::repo::object_store::gix_error("gix history index object", error)
                     })?;
                 if !commit
                     .author()
@@ -218,7 +218,7 @@ impl GixRepo {
                 .objects
                 .find_commit(id.as_ref(), &mut header_buf)
                 .map_err(|error| {
-                    crate::repo::object_store::gix_error("gix history range", &error)
+                    crate::repo::object_store::gix_error("gix history range", error)
                 })?;
             // Use precisely the indexed topology (including first-parent,
             // shallow boundaries and parents excluded by an author filter).

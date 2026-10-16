@@ -1654,9 +1654,10 @@ impl SettingsWindowView {
                             false,
                             controls::ControlActivation::Action,
                             cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                                this.update_main_windows(cx, |view, _window, cx| {
-                                    view.reset_history_column_widths(cx);
-                                });
+                                this.broadcast_preference(
+                                    PreferenceChange::ResetHistoryColumnWidths,
+                                    cx,
+                                );
                                 cx.notify();
                             }),
                         ),

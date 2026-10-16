@@ -1,13 +1,24 @@
+mod control;
 mod effect;
 mod message;
 mod message_debug;
+mod persistence;
+mod references;
+mod repo_command;
 mod repo_command_kind;
 mod repo_external_change;
 mod repo_path;
 mod repo_path_list;
+mod status;
 mod store_event;
 
+pub use control::ControlEffect;
 pub use effect::Effect;
+pub use persistence::PersistenceEffect;
+pub use references::ReferenceEffect;
+pub use repo_command::RepoCommandEffect;
+pub use status::StatusEffect;
+
 pub use message::{
     BranchExistsChoice, CommitSelectMode, ConflictAutosolveMode, ConflictAutosolveStats,
     ConflictBulkChoice, ConflictBulkScope, ConflictRegionChoice, ConflictRegionResolutionUpdate,

@@ -1,9 +1,10 @@
 use super::*;
 use crate::history_authors::{HistoryAuthorsEffect, HistoryAuthorsMsg};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use std::sync::OnceLock;
 
 pub(super) fn schedule(
-    repos: &util::RepoMap,
+    repos: &RepositoryRuntimes,
     tx: StoreWorkerSender,
     work: HistoryAuthorsEffect,
     parent: CancellationToken,

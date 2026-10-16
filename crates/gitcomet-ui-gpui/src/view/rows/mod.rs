@@ -3,8 +3,7 @@ use gitcomet_core::edit_signature::EditSignature;
 use gpui::Pixels;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
-use std::hash::{BuildHasherDefault, Hash, Hasher};
-use std::num::NonZeroUsize;
+use std::hash::{Hash, Hasher};
 
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
@@ -41,157 +40,11 @@ pub(in crate::view) fn conflict_line_no_width(scale: impl Into<ui_scale::UiScale
     )
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct LruCacheMetrics {
-    pub(in crate::view) hits: u64,
-    pub(in crate::view) misses: u64,
-    pub(in crate::view) evictions: u64,
-    pub(in crate::view) clears: u64,
-}
-
-#[derive(Debug)]
-pub(in crate::view) struct InstrumentedLruCache<
-    K: std::hash::Hash + Eq,
-    V,
-    S: std::hash::BuildHasher = lru::DefaultHasher,
-> {
-    cache: lru::LruCache<K, V, S>,
-    metrics: LruCacheMetrics,
-}
-
-impl<K: std::hash::Hash + Eq, V> InstrumentedLruCache<K, V> {
-    pub(in crate::view) fn new(cap: usize) -> Self {
-        Self {
-            cache: lru::LruCache::new(non_zero_lru_capacity(cap)),
-            metrics: LruCacheMetrics::default(),
-        }
-    }
-}
-
-impl<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher> InstrumentedLruCache<K, V, S> {
-    pub(in crate::view) fn with_hasher(cap: usize, hash_builder: S) -> Self {
-        Self {
-            cache: lru::LruCache::with_hasher(non_zero_lru_capacity(cap), hash_builder),
-            metrics: LruCacheMetrics::default(),
-        }
-    }
-
-    pub(in crate::view) fn get(&mut self, key: &K) -> Option<&V> {
-        let value = self.cache.get(key);
-        if value.is_some() {
-            self.metrics.hits = self.metrics.hits.saturating_add(1);
-        } else {
-            self.metrics.misses = self.metrics.misses.saturating_add(1);
-        }
-        value
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn peek(&self, key: &K) -> Option<&V> {
-        self.cache.peek(key)
-    }
-
-    pub(in crate::view) fn put(&mut self, key: K, value: V) -> Option<V> {
-        let will_evict =
-            self.cache.peek(&key).is_none() && self.cache.len() >= self.cache.cap().get();
-        let previous = self.cache.put(key, value);
-        if will_evict {
-            self.metrics.evictions = self.metrics.evictions.saturating_add(1);
-        }
-        previous
-    }
-
-    #[cfg(any(test, feature = "benchmarks"))]
-    #[allow(dead_code)]
-    pub(in crate::view) fn len(&self) -> usize {
-        self.cache.len()
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn clear(&mut self) {
-        self.cache.clear();
-        self.metrics.clears = self.metrics.clears.saturating_add(1);
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn metrics(&self) -> LruCacheMetrics {
-        self.metrics
-    }
-}
-
-fn non_zero_lru_capacity(cap: usize) -> NonZeroUsize {
-    NonZeroUsize::new(cap).expect("LRU cache capacity must be > 0")
-}
-
-pub(in crate::view) type LruCache<K, V> = InstrumentedLruCache<K, V>;
-/// LRU cache backed by FxHasher for fast hashing of u64 keys (text layout caches).
-pub(in crate::view) type FxLruCache<K, V> =
-    InstrumentedLruCache<K, V, BuildHasherDefault<FxHasher>>;
-
-pub(in crate::view) fn new_lru_cache<K: std::hash::Hash + Eq, V>(cap: usize) -> LruCache<K, V> {
-    InstrumentedLruCache::new(cap)
-}
-
-/// Create a new FxHasher-backed LRU cache with the given capacity.
-pub(in crate::view) fn new_fx_lru_cache<K: std::hash::Hash + Eq, V>(
-    cap: usize,
-) -> FxLruCache<K, V> {
-    InstrumentedLruCache::with_hasher(cap, BuildHasherDefault::default())
-}
-
-/// A VecDeque-backed recency queue for caches that keep their own entry maps
-/// and only need the touch/evict-order half of an LRU.
-#[derive(Clone, Debug)]
-pub(in crate::view) struct LruTouchQueue<K> {
-    order: std::collections::VecDeque<K>,
-}
-
-impl<K> Default for LruTouchQueue<K> {
-    fn default() -> Self {
-        Self {
-            order: std::collections::VecDeque::new(),
-        }
-    }
-}
-
-impl<K: Eq> LruTouchQueue<K> {
-    pub(in crate::view) fn touch(&mut self, key: K) {
-        if self.order.back() == Some(&key) {
-            return;
-        }
-        if let Some(pos) = self.order.iter().position(|existing| *existing == key) {
-            self.order.remove(pos);
-        }
-        self.order.push_back(key);
-    }
-
-    pub(in crate::view) fn remove(&mut self, key: &K) -> bool {
-        if let Some(pos) = self.order.iter().position(|existing| existing == key) {
-            self.order.remove(pos);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub(in crate::view) fn back(&self) -> Option<&K> {
-        self.order.back()
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn is_empty(&self) -> bool {
-        self.order.is_empty()
-    }
-
-    #[cfg(any(test, feature = "benchmarks"))]
-    pub(in crate::view) fn clear(&mut self) {
-        self.order.clear();
-    }
-
-    pub(in crate::view) fn pop_oldest(&mut self) -> Option<K> {
-        self.order.pop_front()
-    }
-}
+#[cfg(test)]
+pub(in crate::view) use gitcomet_text::cache::LruCacheMetrics;
+pub(in crate::view) use gitcomet_text::cache::{
+    FxLruCache, LruCache, new_fx_lru_cache, new_lru_cache,
+};
 
 #[derive(Clone, Debug)]
 pub(in crate::view) struct CommitFileRowPresentation {
@@ -1237,7 +1090,7 @@ mod canvas_text;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;
-pub(in crate::view) use diff::BlameLabelCache;
+pub(in crate::view) use diff::blame_presentation::BlameLabelCache;
 
 /// A comparison/multi-selection card's per-commit strings, prepared once.
 pub(in crate::view) struct CommitCard {
@@ -1313,7 +1166,7 @@ pub(crate) mod benchmarks;
 pub(in crate::view) use self::conflict_resolver::{
     resolved_output_gutter_width, resolved_output_line_no_width,
 };
-pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
+pub(in crate::view) use self::diff::blame_presentation::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
 #[cfg(test)]
 pub(in crate::view) use self::history::take_markdown_image_stats_for_tests;
@@ -1358,7 +1211,7 @@ pub(in crate::view) use diff_text::{
     DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument, LiveSyntaxSnapshot,
     LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
     PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine,
-    PreparedDiffSyntaxReparseSeed, SyntaxPair, diff_syntax_language_for_code_fence_info,
+    PreparedDiffSyntaxReparseSeed, SyntaxPair, default_diff_syntax_budget,
     diff_syntax_language_for_path, diff_wrap_ranges_for_text,
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
@@ -1377,10 +1230,13 @@ pub(in crate::view) use diff_text::{
 #[cfg(test)]
 pub(in crate::view) use diff_text::{OCCURRENCE_MAX_TEXT_BYTES, SyntaxPairKind};
 
+pub(in crate::view) use self::diff_canvas::annotation::{
+    DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX, DIFF_ANNOTATION_MIN_WIDTH_PX,
+};
+
 pub(in crate::view) use self::diff_canvas::{
-    AnnotArea, DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX,
-    DIFF_ANNOTATION_MIN_WIDTH_PX, DiffStageHover, DiffStageSlot, DiffTextWrapSlice,
-    DiffWrapByteRange, diff_change_bar_width as diff_canvas_change_bar_width,
+    AnnotArea, DiffStageHover, DiffStageSlot, DiffTextWrapSlice, DiffWrapByteRange,
+    diff_change_bar_width as diff_canvas_change_bar_width,
     diff_inline_text_start as diff_canvas_inline_text_start,
     diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
     diff_single_column_text_start as diff_canvas_single_column_text_start,

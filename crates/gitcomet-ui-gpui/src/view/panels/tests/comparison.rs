@@ -579,8 +579,8 @@ mod worktree_uncommitted {
         direction: i8,
     ) -> bool {
         cx.update(|window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
             })
         })

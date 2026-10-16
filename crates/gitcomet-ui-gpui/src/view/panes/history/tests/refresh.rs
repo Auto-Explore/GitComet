@@ -1733,11 +1733,11 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         serde_json::json!(paths.iter().max()),
     );
     allocations.append_to_payload(&mut metrics);
-    let report = crate::perf_sidecar::PerfSidecarReport::new(
+    let report = gitcomet_perf::sidecar::PerfSidecarReport::new(
         format!("indexed_history_frames/{width}_columns/{graph_pixels}_pixels_{scale}_percent"),
         metrics,
     );
-    crate::perf_sidecar::write_criterion_sidecar(&report).unwrap();
+    gitcomet_perf::sidecar::write_criterion_sidecar(&report).unwrap();
     eprintln!(
         "GPUI draw width={width} graph_pixels={graph_pixels} scale={scale} draw_p50_ms={:.3} draw_p95_ms={:.3} draw_p99_ms={:.3} allocations_per_frame={:.1} bytes_per_frame={:.1}",
         draws[50],

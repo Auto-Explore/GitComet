@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import statistics
 import subprocess
@@ -61,6 +62,38 @@ def revision(root):
                 status=command(["git", "status", "--porcelain"], root))
 
 
+def repository_api_mode(source: str) -> str:
+    trait = re.search(r"(?ms)^pub trait GitRepository: Send \+ Sync \{(.*?)^\}", source)
+    if trait is None:
+        raise ValueError("Unsupported GitRepository probe API: trait declaration not found")
+    signatures = []
+    for name in ("status", "set_remote_url_with_output"):
+        matches = re.findall(rf"(?ms)^    fn {name}\((.*?)\)\s*->\s*([^;{{]+)[;{{]", trait[1])
+        if len(matches) != 1:
+            raise ValueError(f"Unsupported GitRepository probe API: expected one {name} declaration")
+        parameters, result = (re.sub(r"\s+", "", part) for part in matches[0])
+        signatures.append((parameters.rstrip(","), result))
+    remote = "&self,_name:&str,_url:&str,_kind:RemoteUrlKind"
+    supported = {
+        "legacy": [("&self", "Result<RepoStatus>"), (remote, "Result<CommandOutput>")],
+        "current": [("&self,cancellation:&CancellationToken", "Result<RepoStatus>"),
+                    (remote + ",_remote_url_policy:crate::remote_url::RemoteUrlPolicy", "Result<CommandOutput>")],
+    }
+    for mode, expected in supported.items():
+        if signatures == expected:
+            return mode
+    raise ValueError(f"Unsupported GitRepository probe API: unknown or mixed signatures {signatures!r}")
+
+
+def repository_api_build_script(mode: str) -> str:
+    if mode not in ("legacy", "current"):
+        raise ValueError(f"Unknown repository API mode: {mode}")
+    text = 'fn main() {\n    println!("cargo:rustc-check-cfg=cfg(gitcomet_probe_legacy_repository_api)");\n'
+    if mode == "legacy":
+        text += '    println!("cargo:rustc-cfg=gitcomet_probe_legacy_repository_api");\n'
+    return text + '}\n'
+
+
 def build(args):
     directory = args.output.resolve()
     directory.mkdir(parents=True, exist_ok=False)
@@ -86,14 +119,20 @@ def build(args):
             source_path = driver / "main.rs"
             if not source_path.exists() or source_path.read_bytes() != source:
                 source_path.write_bytes(source)
+            api_mode = repository_api_mode((root / "crates/gitcomet-core/src/services.rs").read_text(encoding="utf-8"))
+            build_script = driver / "build.rs"
+            build_script.write_text(repository_api_build_script(api_mode), encoding="utf-8")
             manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+            backend_manifest = tomllib.loads((root / "crates/gitcomet-git-gix/Cargo.toml").read_text(encoding="utf-8"))
             # The driver has no benchmarks feature enabled, so diagnostic-only
             # imports are compiled out even on older revisions without them.
             text = '[package]\nname = "gitcomet-local-probe"\nversion = "0.0.0"\nedition = "2024"\n'
             text += '[workspace]\n[features]\nbenchmarks = []\n[[bin]]\nname = "gitcomet-local-probe"\npath = "main.rs"\n'
             text += '[dependencies]\n'
             for package in ("gitcomet-core", "gitcomet-git-gix"):
-                features = ["benchmarks", "test-support"] if package == "gitcomet-core" else ["benchmarks"]
+                features = ["benchmarks"]
+                if package == "gitcomet-core" or "test-support" in backend_manifest["features"]:
+                    features.append("test-support")
                 text += f'{package} = {{ path = {json.dumps((root / "crates" / package).as_posix())}, features = {json.dumps(features)} }}\n'
             for package in ("tempfile", "serde_json"):
                 text += f'{package} = {json.dumps(manifest["workspace"]["dependencies"][package])}\n'
@@ -124,7 +163,8 @@ def build(args):
             dependencies = tomllib.loads((driver / "Cargo.lock").read_text(encoding="utf-8"))["package"]
             resolved = sorted((p["name"], p["version"], p.get("source")) for p in dependencies)
             record["builds"][label] = dict(root=str(root), revision=revision(root), binary=str(frozen),
-                                           binary_sha256=digest(frozen), dependencies=resolved)
+                                           binary_sha256=digest(frozen), dependencies=resolved,
+                                           repository_api_mode=api_mode, adapter_build_sha256=digest(build_script))
         if record["builds"]["baseline"]["dependencies"] != record["builds"]["candidate"]["dependencies"]:
             raise RuntimeError("Dependency versions differ; paired application timing would be confounded")
         record["success"] = True

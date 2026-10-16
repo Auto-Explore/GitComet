@@ -7,6 +7,39 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FileHistoryRequestId(pub(crate) u64);
+
+impl HistoryState {
+    pub(crate) fn clear_file_history(&mut self) {
+        self.file_history_path = None;
+        self.file_history = Loadable::NotLoaded;
+    }
+
+    pub(crate) fn begin_file_history(&mut self, path: PathBuf) -> FileHistoryRequestId {
+        self.file_history_request =
+            FileHistoryRequestId(self.file_history_request.0.wrapping_add(1));
+        self.file_history_path = Some(path);
+        self.file_history = Loadable::Loading;
+        self.file_history_request
+    }
+
+    pub(crate) fn accepts_file_history(
+        &self,
+        request: FileHistoryRequestId,
+        path: &std::path::Path,
+        cursor: Option<&LogCursor>,
+    ) -> bool {
+        self.file_history_request == request
+            && self.file_history_path.as_deref() == Some(path)
+            && match (cursor, &self.file_history) {
+                (None, Loadable::Loading) => true,
+                (Some(cursor), Loadable::Ready(page)) => page.next_cursor.as_ref() == Some(cursor),
+                _ => false,
+            }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HistoryState {
     pub indexed: crate::indexed_history::IndexedHistoryState,
@@ -27,6 +60,7 @@ pub struct HistoryState {
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
     pub file_history: Loadable<Shared<LogPage>>,
+    file_history_request: FileHistoryRequestId,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
     /// Last processed UI selection request, even when it did not change focus.
@@ -177,6 +211,7 @@ impl Default for HistoryState {
             log_rev: 0,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
+            file_history_request: FileHistoryRequestId::default(),
             selected_commit: None,
             selected_commit_rev: 0,
             selection_ack: None,

@@ -52,10 +52,25 @@ pub fn take_text_search_matchers_built_for_tests() -> usize {
 }
 
 impl TextSearchMatcher {
+    /// Matches a literal query without normalizing its bytes. Case-insensitive
+    /// matching folds ASCII only, like the literal mode of [`Self::new`].
+    pub fn new_literal(query: &str, match_case: bool) -> Self {
+        Self::build(
+            query.to_owned(),
+            TextSearchOptions {
+                match_case,
+                ..Default::default()
+            },
+        )
+    }
+
     pub fn new(query: &str, options: TextSearchOptions) -> Self {
+        Self::build(normalize_text_search_query(query).into_owned(), options)
+    }
+
+    fn build(query: String, options: TextSearchOptions) -> Self {
         #[cfg(any(test, feature = "test-support"))]
         SEARCH_MATCHERS_BUILT.with(|built| built.set(built.get() + 1));
-        let query = normalize_text_search_query(query).into_owned();
         let (regex, regex_error) = if options.regex && !query.is_empty() {
             match RegexBuilder::new(&query)
                 .case_insensitive(!options.match_case)
@@ -78,7 +93,8 @@ impl TextSearchMatcher {
         }
     }
 
-    /// The normalized query (see [`normalize_text_search_query`]).
+    /// The query searched: normalized by [`Self::new`], or preserved byte for
+    /// byte by [`Self::new_literal`].
     pub fn query(&self) -> &str {
         self.query.as_str()
     }
@@ -397,6 +413,24 @@ mod tests {
         let matcher = TextSearchMatcher::new("a\r\nb\rc", TextSearchOptions::default());
         assert_eq!(matcher.query(), "a\nb\nc");
         assert!(matcher.is_match("a\nb\nc"));
+    }
+
+    #[test]
+    fn literal_search_preserves_query_bytes_and_case_mode() {
+        for query in ["a\rb", "a\r\nb", "a\nb", "a.b"] {
+            for match_case in [false, true] {
+                let matcher = TextSearchMatcher::new_literal(query, match_case);
+                assert_eq!(matcher.query(), query);
+                assert!(matcher.is_match(query));
+                assert_eq!(matcher.is_match(&query.to_uppercase()), !match_case);
+            }
+        }
+        let cr = TextSearchMatcher::new_literal("a\rb", false);
+        assert!(!cr.is_match("a\nb"));
+        let crlf = TextSearchMatcher::new_literal("a\r\nb", false);
+        assert!(!crlf.is_match("a\nb"));
+        let literal = TextSearchMatcher::new_literal("a.b", false);
+        assert!(!literal.is_match("axb"));
     }
 
     #[test]

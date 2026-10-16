@@ -1,7 +1,7 @@
 use super::*;
 use gitcomet_core::services::HistorySnapshot;
 
-pub(in super::super) struct HistoryAuthorsCache {
+pub(super) struct HistoryAuthorsCache {
     snapshot: HistorySnapshot,
     names: Arc<[Arc<str>]>,
 }
@@ -28,7 +28,8 @@ impl GixRepo {
         let tips = query.tips;
         let shallow = query.shallow;
         if let Some(cached) = self
-            .history_authors_cache
+            .history_cache
+            .authors
             .lock()
             .expect("history authors cache")
             .as_ref()
@@ -51,7 +52,7 @@ impl GixRepo {
         for info in &mut walk.walk {
             cancellation.check_cancelled()?;
             let info = info.map_err(|error| {
-                crate::repo::object_store::gix_error("gix history authors", &*error)
+                crate::repo::object_store::gix_error("gix history authors", error)
             })?;
             if !mode_includes(mode, info.parent_ids.len()) {
                 continue;
@@ -60,7 +61,7 @@ impl GixRepo {
                 .objects
                 .find_commit(info.id.as_ref(), &mut buffer)
                 .map_err(|error| {
-                    crate::repo::object_store::gix_error("gix history author", &error)
+                    crate::repo::object_store::gix_error("gix history author", error)
                 })?;
             let name = commit
                 .author()
@@ -75,7 +76,8 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let names: Arc<[Arc<str>]> = names.into();
         *self
-            .history_authors_cache
+            .history_cache
+            .authors
             .lock()
             .expect("history authors cache") = Some(HistoryAuthorsCache {
             snapshot,

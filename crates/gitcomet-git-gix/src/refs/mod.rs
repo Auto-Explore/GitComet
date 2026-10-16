@@ -271,7 +271,11 @@ impl<'r> RefsView<'r> {
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(failure(e)),
+                Err(error) => {
+                    return Err(failure(&error)
+                        .with_source(error)
+                        .with_context("read Git pseudoref", Some(&path)));
+                }
             };
             let hex = bytes
                 .split(|b| b.is_ascii_whitespace())
@@ -385,7 +389,7 @@ impl<'r> RefsView<'r> {
             // Classified so a pack I/O failure triggers the history store retry.
             let id = head
                 .try_peel_to_id()
-                .map_err(|e| crate::repo::object_store::gix_error("gix head peel", &e))?
+                .map_err(|e| crate::repo::object_store::gix_error("gix head peel", e))?
                 .map(|id| id.detach());
             return match (name, id) {
                 (Some(name), id) => Ok(HeadState::Symbolic { name, id }),

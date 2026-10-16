@@ -426,7 +426,7 @@ impl GixRepo {
                         dirty.insert(path.as_path());
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+                    Err(error) => return Err(Error::from(error)),
                 }
             }
         }

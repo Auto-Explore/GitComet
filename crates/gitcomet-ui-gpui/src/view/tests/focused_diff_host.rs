@@ -291,15 +291,15 @@ fn cancelling_the_focused_mergetool_runs_the_close_guards(cx: &mut gpui::TestApp
     let (view, cx) = mergetool(cx, Arc::clone(&exit_code));
     cx.run_until_parked();
     test_support::redraw(cx);
-    let (host, main_pane) = cx.update(|_, app| {
+    let (host, diff_renderer) = cx.update(|_, app| {
         let view = view.read(app);
         (
             view.extension_window.as_ref().unwrap().host(),
-            view.main_pane.clone(),
+            view.diff_renderer.clone(),
         )
     });
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
+        diff_renderer.update(app, |pane, cx| {
             pane.close_diff_or_cancel(RepoId(1), window, cx)
         })
     });

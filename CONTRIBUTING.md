@@ -35,15 +35,30 @@ Questions about contribution permissions or signing records: info@gitcomet.dev. 
 
 ### Workspace layout
 
-- `crates/gitcomet-core`: domain types, Git service contracts, product identity (`identity`), per-user directories (`platform::dirs`), merge algorithm, conflict session, text utils.
+See [Architecture](docs/architecture.md) for dependency boundaries, state flow,
+repository lifetimes, and document ownership.
+
+- `crates/gitcomet-base`: product identity (`identity`), per-user directories (`platform::dirs`), platform detection, file utilities, operation traces and work counters. No Git domain types; core re-exports these modules at their `gitcomet_core::` paths.
+- `crates/gitcomet-text`: text foundations without GPUI itself: rope and text model, tab expansion, instrumented LRU caches, syntax token kinds, date and time formatting, and cached path display. The UI kit re-exports `rope` and `text_model`.
+- `crates/gitcomet-syntax`: tree-sitter syntax highlighting without GPUI: language detection, the bundled grammars and queries, prepared documents parsed off the UI thread, live documents for editors, injections, occurrences and pairs. Renderers style its token kinds through a `SyntaxPalette`.
+- `crates/gitcomet-conflict-resolver`: the conflict resolver's model without GPUI: marker parsing, two- and three-way row projections, navigation, provenance, resolution and autosolve summaries, and word highlights. Rendering and styled-text caches stay in the UI host.
+- `crates/gitcomet-markdown`: the markdown preview model without GPUI: parsing, HTML and table flattening, inline spans, heading anchors, code-fence languages, row wrapping and scrollbar marker buckets. Rendering and row styling stay in the UI host.
+- `crates/gitcomet-core`: domain types, Git service contracts, merge algorithm, conflict session, text utils.
 - `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
-- `crates/gitcomet-ui-kit`: GPUI foundations reusable without the app: runtime policy (`ui_runtime`, installed live by the app at launch, deterministic otherwise), appearance, UI scale, themes, fonts, interaction primitives, text inputs, tooltips, icons, and components (buttons, pickers, menus, settings rows, navigation tabs, interstitials). No dependency on state, the application, or the UI host.
+- `crates/gitcomet-fs-watch`: native macOS filesystem watcher support used by the state store, plus Windows test support.
+- `crates/gitcomet-diagrams`: offline Mermaid recognition and rendering, independent of GPUI.
+- `crates/gitcomet-fonts`: bundled font assets shared by diagram rendering and the UI kit.
+- `crates/gitcomet-tree-sitter-alloc`: installs the allocator hooks used by tree-sitter.
+- `crates/gitcomet-perf`: performance measurement records (sidecars) written by benchmarks and probes, and the `perf_budget_report` binary that checks them against budgets.
+- `crates/gitcomet-ui-kit`: GPUI foundations reusable without the app: runtime policy (`ui_runtime`, installed live by the app at launch, deterministic otherwise), appearance, UI scale, themes, fonts, interaction primitives, text inputs, tooltips, icons, client-side window chrome (frame, title-bar geometry and drag, resize edges, window controls), and components (buttons, pickers, menus, settings rows, navigation tabs, interstitials). Builds on `gitcomet-base`, with no dependency on core, state, the application, or the UI host.
+- `crates/gitcomet-ui-terminal`: the embedded terminal widget: an alacritty backend on a PTY and the GPUI viewport that paints it, selects text and forwards input. Terminal tabs, sessions, shutdown prompts and preferences stay in the UI host.
+- `crates/gitcomet-ui-media`: image and diagram previews: device-pixel image inspection with tiled resampling, SVG rasterization with the bundled fonts, asynchronous diagram surfaces and the shared source/rendered toggle. The host supplies inputs, opens the menus the toolbars request and saves sampling preferences.
 - `crates/gitcomet-extension-api`: the contract for compiled-in extensions: contributions (repository views, status items, settings pages, commands, key bindings, menu entries, assets, entry gates, close guards), weak window and repository handles, and per-extension session/workspace storage. Depends on core, state, and the UI kit, never on the UI host.
 - `crates/gitcomet-ui-gpui`: the GitComet window: views, panes, panels (focused diff/merge windows, conflict resolver, word diff); `UiLaunch` opens the browser window and hosts extensions (`view/extension_host.rs`). With none registered it installs nothing.
 - `crates/gitcomet-app`: process launch (`AppLaunch`): identity install, crash reporting, CLI (clap), browser-instance broker, difftool/mergetool/setup/uninstall modes. GUI dependencies are optional (`ui-gpui` feature).
 - `crates/gitcomet`: the executable: allocator, platform resources, packaging, and instrumentation binaries.
-- `crates/gitcomet-extension-example` and `-app`: a neutral example product built only on public upstream interfaces, with an extension registering one of every contribution; the UI host's tests run it (`view/tests/extensions.rs`), and CI builds the product in its own context.
+- `crates/gitcomet-extension-example` and `crates/gitcomet-extension-example-app`: a neutral example product built only on public upstream interfaces, with an extension registering one of every contribution; the UI host's tests run it (`view/tests/extensions.rs`), and CI builds the product in its own context.
 
 Product names, identifiers, and links come from `gitcomet_core::identity`, never
 from string literals: `scripts/ci/identity_literals.py` fails on new ones.
@@ -53,6 +68,7 @@ from string literals: `scripts/ci/identity_literals.py` fails on new ones.
 Linux prerequisites:
 
 - Install Clang (`sudo apt-get install clang` on Ubuntu/Debian, `sudo dnf install clang` on Fedora, or `sudo pacman -S clang` on Arch).
+- Install the UI development libraries. On Ubuntu/Debian, CI uses `sudo apt-get install pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev`.
 - Install mold 3.0.0 and its `ld.mold` alias on your `PATH`. The repository installer downloads checksum-pinned upstream binaries for x86_64 and ARM64 Linux:
 
   ```bash
@@ -72,43 +88,78 @@ Windows prerequisites (Windows 10/11):
 - Ensure both MSVC tools and Windows 10/11 SDK components are installed.
 - This repo configures Cargo to use `scripts/windows/windows-lld-linker.cmd` for x64 and ARM64 Windows builds. The wrapper uses the active Rust toolchain's bundled `rust-lld` linker and discovers the MSVC and Windows SDK libraries, so `cargo build` works from a regular PowerShell/CMD shell. No separate LLVM installation is needed; the Visual Studio components above are still required.
 
-Offline-friendly default build (does not build the UI or the Git backend):
+The default build includes the GPUI app and the gix backend:
 
 ```bash
-cargo build
+cargo build --locked
 ```
 
-To build the actual app you'll enable features (requires network for dependencies):
+To build the command-line app without GPUI:
 
 ```bash
-cargo build -p gitcomet --features ui,gix
-```
-
-To also compile the gpui-based UI crate:
-
-```bash
-cargo build -p gitcomet --features ui-gpui,gix
+cargo build --locked -p gitcomet --no-default-features --features gix
 ```
 
 Run (opens the repo passed as the first arg, or falls back to the current directory):
 
 ```bash
-cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
+cargo run --locked -p gitcomet --bin gitcomet -- /path/to/repo
 ```
 
 ### Testing
 
-Full headless test suite (CI mode):
+The [CI runner](scripts/ci/run.py) separates package feature contexts and runs
+GPUI suites in their libtest process. Use the Python and `cargo-nextest` versions
+in [CI setup](.github/actions/ci-setup/action.yml); its nextest installer is
+[install-nextest.py](scripts/ci/install-nextest.py).
+Install Git LFS and initialize the syntax fixture submodule before running tests:
 
 ```bash
-cargo test --workspace --no-default-features --features gix
+git lfs version
+git submodule update --init fixtures/syntax_test
 ```
 
-Clippy (CI mode):
+The [native CI workflow](.github/workflows/cross-platform-tests.yml) lists
+platform prerequisites and the separate git-annex test lane.
+Compile and run the workspace tests, including the UI, with:
 
 ```bash
-cargo clippy --workspace --no-default-features --features gix -- -D warnings
+python3 scripts/ci/run.py compile --context workspace
+python3 scripts/ci/run.py test --context workspace
+python3 scripts/ci/run.py doc --context workspace
 ```
+
+Use `--context core`, `diagrams`, `state`, `backend`, `app`, or `ui` for a focused
+run. The `app` context disables GUI features. Run the same commands with
+`--context example` to check the downstream extension product in its separate
+feature context. Recompile a context after changing its code.
+
+Large unit-test suites use private child modules. Tests move with the code they
+test, including into a new crate: use [inventory.py](scripts/ci/inventory.py) to
+snapshot the compiled harnesses before and after the change, then compare names
+and ignore flags modulo the documented module-prefix mapping. Record intentional
+additions or replacements separately from mechanical moves; retain the existing
+GPUI process isolation and visual/clipboard locks.
+
+The backend's `test-support` feature exposes test Git environments and mergetool
+consent overrides. In-tree tests enable it through dev dependencies; external test
+harnesses must opt in. Normal app builds leave it disabled. See the
+[profiling guide](scripts/profiling/README.md#backend-measurements) for probe builds.
+
+Formatting, Clippy, and dependency boundaries (matching CI's package contexts):
+
+```bash
+cargo fmt --all --check
+cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
+cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
+cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
+python3 scripts/ci/boundaries.py
+python3 scripts/ci/ratchets.py
+```
+
+The ratchet script keeps the [refactor round 2](docs/refactor-round-2.md)
+structure counts from regressing; after a change that improves one, run it with
+`--write` to record the new value.
 
 Coverage (local + CI-compatible):
 

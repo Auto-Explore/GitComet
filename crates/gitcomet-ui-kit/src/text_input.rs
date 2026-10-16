@@ -93,10 +93,16 @@ const TEXT_INPUT_INLINE_TEXT_RUN_CAPACITY: usize = 32;
 mod drag;
 mod editor_line;
 use editor_line::EditorLine;
+mod clipboard;
+mod configuration;
 mod editing;
 mod element;
 mod highlight;
+mod highlight_provider;
+mod layout_cache;
+mod platform_input;
 mod render;
+mod selection;
 mod shaping;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use shaping::take_wrapped_lines_shaped_for_tests;

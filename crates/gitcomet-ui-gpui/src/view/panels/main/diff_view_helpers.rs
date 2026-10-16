@@ -1,7 +1,7 @@
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
-impl MainPaneView {
+impl DiffRenderer {
     /// The worktree chip for the diff currently on screen, when that diff comes
     /// from a linked worktree rather than this tab. `None` for everything else,
     /// including submodule diffs, which the file list already labels.
@@ -75,7 +75,7 @@ impl MainPaneView {
                     self.selected_inline_submodule_diff_entry()
                         .map(|entry| entry.kind)
                 } else {
-                    repo.status_entry_for_path(*area, path.as_path())
+                    self.status_entry_for_path(*area, path.as_path())
                         .map(|entry| entry.kind)
                 }
             }

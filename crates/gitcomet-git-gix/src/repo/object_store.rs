@@ -18,17 +18,23 @@ pub(crate) fn io_failures() -> u64 {
 
 /// A backend error for a failed gix call, with the I/O causes gix keeps out of
 /// its top-level message appended (the pack path and the OS error code).
-pub(crate) fn gix_error(context: &str, error: &(dyn std::error::Error + 'static)) -> Error {
-    let (message, store_failure) = describe(context, error);
+pub(crate) fn gix_error(
+    context: &str,
+    error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+) -> Error {
+    let error = error.into();
+    let (message, store_failure) = describe(&*error);
     if store_failure {
         OBJECT_STORE_IO_FAILURES.fetch_add(1, Ordering::AcqRel);
     }
     Error::new(ErrorKind::Backend(message))
+        .with_source(error)
+        .with_context(context, None)
 }
 
 /// The message, and whether an I/O cause is one gix will not recover from.
-fn describe(context: &str, error: &(dyn std::error::Error + 'static)) -> (String, bool) {
-    let mut message = format!("{context}: {error}");
+fn describe(error: &(dyn std::error::Error + 'static)) -> (String, bool) {
+    let mut message = error.to_string();
     let mut store_failure = false;
     let mut inspect = |cause: &(dyn std::error::Error + 'static)| {
         let Some(io) = cause.downcast_ref::<std::io::Error>() else {
@@ -75,11 +81,24 @@ mod tests {
         let inner = std::io::Error::from_raw_os_error(13);
         let outer = std::io::Error::new(inner.kind(), inner);
 
-        let (message, store_failure) = describe("gix peel", &outer);
-
+        let mapped = gix_error("gix peel", outer);
+        let message = mapped.to_string();
         assert!(message.starts_with("gix peel: "), "{message}");
         assert_eq!(message.matches("os error 13").count(), 1, "{message}");
-        assert!(store_failure);
+        let source = std::error::Error::source(&mapped)
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(
+            source
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(13)
+        );
+        assert!(describe(source).1);
     }
 
     #[test]
@@ -88,7 +107,7 @@ mod tests {
             std::io::ErrorKind::NotFound,
             std::io::ErrorKind::Interrupted,
         ] {
-            let (_, store_failure) = describe("gix find", &std::io::Error::from(kind));
+            let (_, store_failure) = describe(&std::io::Error::from(kind));
             assert!(!store_failure, "{kind:?}");
         }
     }
@@ -99,7 +118,7 @@ mod tests {
             let inner = gix::Error::from_error(std::io::Error::new(kind, "pack mapping failed"));
             let outer = gix::Error::from_error(std::io::Error::new(kind, inner));
 
-            let (message, store_failure) = describe("gix peel", &outer);
+            let (message, store_failure) = describe(&outer);
 
             assert!(store_failure, "{kind:?}: {message}");
             assert_eq!(

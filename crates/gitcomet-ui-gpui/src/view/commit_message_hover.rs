@@ -550,7 +550,8 @@ mod tests {
         let (store, _events) = AppStore::new_test(Arc::new(NoopBackend));
         let store = Arc::new(store);
         cx.update(|cx| {
-            let ui_model = cx.new(|_cx| AppUiModel::new(store.snapshot()));
+            let ui_model =
+                cx.new(|cx| AppUiModel::new(store.snapshot(), Arc::downgrade(&store), cx));
             cx.new(|_cx| CommitMessageHoverHost::new(AppTheme::gitcomet_dark(), store, ui_model))
         })
     }

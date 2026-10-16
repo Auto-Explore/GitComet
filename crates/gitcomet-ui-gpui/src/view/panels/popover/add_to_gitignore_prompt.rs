@@ -98,7 +98,7 @@ pub(super) fn panel(
     // written back over this append the moment the user saves it or the 800 ms
     // autosave fires. Warn rather than block: blocking would strand the user in
     // a dialog with no way forward.
-    let editor_holds_gitignore = this.main_pane.read(cx).file_edits_are_unsaved_for(
+    let editor_holds_gitignore = this.diff_renderer.read(cx).file_edits_are_unsaved_for(
         repo_id,
         std::path::Path::new(gitcomet_core::gitignore::FILE_NAME),
     );

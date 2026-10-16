@@ -1,6 +1,338 @@
 //! Load scheduling: executors, streaming, and conflict-file loads.
 
 use super::*;
+use crate::msg::{ReferenceEffect, RepoCommandEffect, StatusEffect};
+use crate::store::repository_runtime::RepositoryRuntimes;
+
+#[test]
+fn conflict_load_effects_preserve_request_identity_with_available_or_unavailable_git() {
+    for selected in [false, true] {
+        for available in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let repo_id = RepoId(73);
+            let spec = RepoSpec {
+                workdir: directory.path().to_path_buf(),
+            };
+            let mut state = AppState::test_default();
+            let mut repo = RepoState::new_opening(repo_id, spec.clone());
+            repo.open = Loadable::Ready(());
+            let path = PathBuf::from("conflicted.txt");
+            repo.set_conflict_file_path(Some(path.clone()));
+            let mode = crate::model::ConflictFileLoadMode::Full;
+            repo.begin_conflict_load(mode, true);
+            let request = repo.begin_conflict_load(mode, true);
+            state.repos.push(repo);
+            if !available {
+                state.git_runtime.availability =
+                    gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                        detail: "git missing".into(),
+                    };
+            }
+            let effect = if selected {
+                Effect::LoadSelectedConflictFile {
+                    request,
+                    repo_id,
+                    mode,
+                }
+            } else {
+                Effect::LoadConflictFile {
+                    request,
+                    repo_id,
+                    path: path.clone(),
+                    mode,
+                }
+            };
+            let mut repos = RepositoryRuntimes::default();
+            repos.attach_repository_for_test(
+                repo_id,
+                Arc::new(UnsupportedRepo {
+                    spec,
+                    delete_branch_calls: None,
+                    cancel_delete_branch: None,
+                }),
+            );
+            let executor = super::super::executor::TaskExecutor::new(1);
+            let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+            let (tx, rx) = std::sync::mpsc::channel();
+            schedule_effect_with_state_for_test(
+                &executor, &executor, &backend, &mut repos, state, tx, effect,
+            );
+            executor.join();
+            let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: completed,
+                repo_id: completed_repo,
+                path: completed_path,
+                result,
+                conflict_session,
+            }) = rx.try_recv().expect("conflict completion")
+            else {
+                panic!("conflict completion")
+            };
+            assert_eq!(completed, request);
+            assert_eq!(completed_repo, repo_id);
+            assert_eq!(completed_path, path);
+            assert!(result.is_err());
+            assert!(conflict_session.is_none());
+            assert!(rx.try_recv().is_err());
+        }
+    }
+}
+
+#[test]
+fn conflict_load_blocked_older_effect_cannot_replace_reopened_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo_id = RepoId(74);
+    let spec = RepoSpec {
+        workdir: directory.path().to_path_buf(),
+    };
+    let mut state = AppState::test_default();
+    let mut repo = RepoState::new_opening(repo_id, spec.clone());
+    repo.open = Loadable::Ready(());
+    state.repos.push(repo);
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(
+        repo_id,
+        Arc::new(UnsupportedRepo {
+            spec,
+            delete_branch_calls: None,
+            cancel_delete_branch: None,
+        }),
+    );
+    let id_alloc = AtomicU64::new(1);
+    let path = PathBuf::from("tracked.txt");
+    let old_executor = super::super::executor::TaskExecutor::new(1);
+    let fresh_executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    old_executor.spawn(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    entered_rx.recv().unwrap();
+    let old = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: path.clone(),
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (old_tx, old_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &old_executor,
+        &old_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        old_tx,
+        old,
+    );
+    let fresh = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path,
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (fresh_tx, fresh_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &fresh_executor,
+        &fresh_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        fresh_tx,
+        fresh,
+    );
+    fresh_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        fresh_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+    release_tx.send(()).unwrap();
+    old_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        old_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+}
+
+#[test]
+fn file_history_blocked_older_effect_cannot_replace_reopened_result() {
+    let repo_id = RepoId(72);
+    let spec = RepoSpec {
+        workdir: PathBuf::from("/unused/mock-repository"),
+    };
+    let mut state = AppState::test_default();
+    let mut repo = RepoState::new_opening(repo_id, spec.clone());
+    repo.open = Loadable::Ready(());
+    state.repos.push(repo);
+    let mut repos = RepositoryRuntimes::default();
+    repos.attach_repository_for_test(
+        repo_id,
+        Arc::new(UnsupportedRepo {
+            spec,
+            delete_branch_calls: None,
+            cancel_delete_branch: None,
+        }),
+    );
+    let id_alloc = AtomicU64::new(1);
+    let path = PathBuf::from("tracked.txt");
+    let old_executor = super::super::executor::TaskExecutor::new(1);
+    let fresh_executor = super::super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    old_executor.spawn(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    entered_rx.recv().unwrap();
+    let old = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadFileHistory {
+            repo_id,
+            path: path.clone(),
+            limit: 2,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (old_tx, old_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &old_executor,
+        &old_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        old_tx,
+        old,
+    );
+    let fresh = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadFileHistory {
+            repo_id,
+            path,
+            limit: 2,
+        },
+    )
+    .pop()
+    .unwrap();
+    let (fresh_tx, fresh_rx) = std::sync::mpsc::channel();
+    schedule_effect_with_state_for_test(
+        &fresh_executor,
+        &fresh_executor,
+        &backend,
+        &mut repos,
+        state.clone(),
+        fresh_tx,
+        fresh,
+    );
+    fresh_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        fresh_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+    release_tx.send(()).unwrap();
+    old_executor.join();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        old_rx.try_recv().unwrap(),
+    );
+    assert_eq!(state.repos[0].feedback.diagnostics.len(), 1);
+}
+
+#[test]
+fn file_history_effect_preserves_request_identity_with_available_or_unavailable_git() {
+    for available in [true, false] {
+        let repo_id = RepoId(71);
+        let spec = RepoSpec {
+            workdir: PathBuf::from("/unused/mock-repository"),
+        };
+        let mut state = AppState::test_default();
+        let mut repo = RepoState::new_opening(repo_id, spec.clone());
+        repo.open = Loadable::Ready(());
+        let path = PathBuf::from("tracked.txt");
+        repo.history_state.begin_file_history(path.clone());
+        let request = repo.history_state.begin_file_history(path.clone());
+        state.repos.push(repo);
+        if !available {
+            state.git_runtime.availability =
+                gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                    detail: "git missing".into(),
+                };
+        }
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(
+            repo_id,
+            Arc::new(UnsupportedRepo {
+                spec,
+                delete_branch_calls: None,
+                cancel_delete_branch: None,
+            }),
+        );
+        let executor = super::super::executor::TaskExecutor::new(1);
+        let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+        let (tx, rx) = std::sync::mpsc::channel();
+        schedule_effect_with_state_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &mut repos,
+            state,
+            tx,
+            Effect::LoadFileHistory {
+                request,
+                repo_id,
+                path: path.clone(),
+                limit: 2,
+                cursor: None,
+            },
+        );
+        executor.join();
+        let Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
+            request: completed_request,
+            repo_id: completed_repo,
+            path: completed_path,
+            cursor,
+            result,
+        }) = rx.try_recv().expect("file history completion")
+        else {
+            panic!("file history completion")
+        };
+        assert_eq!(completed_request, request);
+        assert_eq!(completed_repo, repo_id);
+        assert_eq!(completed_path, path);
+        assert!(cursor.is_none());
+        assert!(result.is_err());
+        assert!(rx.try_recv().is_err());
+    }
+}
 
 #[test]
 fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
@@ -24,7 +356,9 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -33,19 +367,39 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -54,8 +408,15 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn diff_file_text(
             &self,
             _target: &DiffTarget,
+            _encoding: Option<gitcomet_core::text_format::TextEncoding>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<Option<gitcomet_core::domain::FileDiffText>> {
-            Ok(Some(self.diff.clone()))
+            cancellation.check_cancelled()?;
+            let result: Result<Option<gitcomet_core::domain::FileDiffText>> =
+                { Ok(Some(self.diff.clone())) };
+            let result = result?;
+            cancellation.check_cancelled()?;
+            Ok(result)
         }
         fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
             unimplemented!()
@@ -75,7 +436,11 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -93,10 +458,14 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -135,9 +504,9 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -146,9 +515,10 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::CurrentOnly,
@@ -159,6 +529,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -212,7 +583,9 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -221,19 +594,39 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -243,7 +636,11 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
             self.stage_calls.fetch_add(1, Ordering::SeqCst);
             Ok(None)
         }
-        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+        fn conflict_session(
+            &self,
+            _path: &Path,
+            _encoding: Option<gitcomet_core::text_format::TextEncoding>,
+        ) -> Result<Option<ConflictSession>> {
             Ok(Some(self.session.clone()))
         }
         fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
@@ -264,7 +661,11 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -282,10 +683,14 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -330,9 +735,9 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -341,9 +746,10 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -354,6 +760,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -427,7 +834,9 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -436,19 +845,39 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -458,7 +887,11 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
             self.stage_calls.fetch_add(1, Ordering::SeqCst);
             Ok(None)
         }
-        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+        fn conflict_session(
+            &self,
+            _path: &Path,
+            _encoding: Option<gitcomet_core::text_format::TextEncoding>,
+        ) -> Result<Option<ConflictSession>> {
             Ok(Some(self.session.clone()))
         }
         fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
@@ -479,7 +912,11 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -497,10 +934,14 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -548,9 +989,9 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -559,9 +1000,10 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -572,6 +1014,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -654,7 +1097,9 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -663,19 +1108,39 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -685,7 +1150,11 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
             self.stage_calls.fetch_add(1, Ordering::SeqCst);
             Ok(None)
         }
-        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+        fn conflict_session(
+            &self,
+            _path: &Path,
+            _encoding: Option<gitcomet_core::text_format::TextEncoding>,
+        ) -> Result<Option<ConflictSession>> {
             Ok(Some(self.session.clone()))
         }
         fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
@@ -706,7 +1175,11 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -724,10 +1197,14 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -774,9 +1251,9 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -785,9 +1262,10 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -798,6 +1276,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                request: _,
                 repo_id: rid,
                 path,
                 result,
@@ -876,7 +1355,9 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
             &self,
             _limit: usize,
             _cursor: Option<&LogCursor>,
+            cancellation: &gitcomet_core::services::CancellationToken,
         ) -> Result<std::sync::Arc<LogPage>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -885,19 +1366,39 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
             unimplemented!()
         }
-        fn current_branch(&self) -> Result<String> {
+        fn current_branch(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<String> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_branches(&self) -> Result<Vec<Branch>> {
+        fn list_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Branch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remotes(&self) -> Result<Vec<Remote>> {
+        fn list_remotes(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<Remote>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        fn list_remote_branches(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<RemoteBranch>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
-        fn status(&self) -> Result<RepoStatus> {
+        fn status(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<RepoStatus> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
@@ -906,7 +1407,11 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
             Ok(Some(self.stages.clone()))
         }
-        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+        fn conflict_session(
+            &self,
+            _path: &Path,
+            _encoding: Option<gitcomet_core::text_format::TextEncoding>,
+        ) -> Result<Option<ConflictSession>> {
             Ok(Some(self.session.clone()))
         }
         fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
@@ -927,7 +1432,11 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
-        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        fn stash_list(
+            &self,
+            cancellation: &gitcomet_core::services::CancellationToken,
+        ) -> Result<Vec<StashEntry>> {
+            cancellation.check_cancelled()?;
             unimplemented!()
         }
         fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -945,10 +1454,14 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn commit(&self, _message: &str) -> Result<()> {
             unimplemented!()
         }
-        fn fetch_all(&self) -> Result<()> {
+        fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
-        fn pull(&self, _mode: PullMode) -> Result<()> {
+        fn pull(
+            &self,
+            _mode: PullMode,
+            _prune: bool,
+        ) -> Result<gitcomet_core::services::CommandOutput> {
             unimplemented!()
         }
         fn push(&self) -> Result<()> {
@@ -1026,9 +1539,9 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
 
     let executor = super::super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -1037,9 +1550,10 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadConflictFile {
+            request: crate::model::ConflictLoadRequestId::default(),
             repo_id,
             path: rel.clone(),
             mode: crate::model::ConflictFileLoadMode::Full,
@@ -1055,6 +1569,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
             );
             match msg_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                    request: _,
                     repo_id: rid,
                     path,
                     result,
@@ -1146,14 +1661,14 @@ fn open_repo_effect_emits_repo_opened_ok() {
     let backend: Arc<dyn GitBackend> = Arc::new(Backend { repo });
 
     let executor = super::super::executor::TaskExecutor::new(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::OpenRepo {
             repo_id,
@@ -1198,14 +1713,14 @@ fn open_repo_effect_emits_repo_opened_err() {
     let workdir = unique_temp_path("gitcomet-open-repo-err");
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let executor = super::super::executor::TaskExecutor::new(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::OpenRepo {
             repo_id,
@@ -1265,11 +1780,17 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
     let executor = super::super::executor::TaskExecutor::new(1);
     let repo_load_executor = super::super::executor::TaskExecutor::new(1);
     let metadata_executor = super::super::executor::TaskExecutor::new(1);
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::test_default())));
-    let mut repo_task_tokens = FxHashMap::default();
+    let mut state = AppState::test_default();
+    for (repo_id, workdir) in [(repo_a, workdir_a.clone()), (repo_b, workdir_b.clone())] {
+        state
+            .repos
+            .push(RepoState::new_opening(repo_id, RepoSpec { workdir }));
+    }
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+
     let executors = super::super::effects::EffectExecutors {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
@@ -1285,12 +1806,12 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
     };
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
+        &mut repos,
         msg_tx.clone(),
         Effect::OpenRepo {
             repo_id: repo_a,
@@ -1304,12 +1825,12 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         workdir_a
     );
 
+    repos.bind_test_state(&thread_state.read().unwrap());
     super::super::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut repo_task_tokens,
+        &mut repos,
         msg_tx,
         Effect::OpenRepo {
             repo_id: repo_b,
@@ -1390,9 +1911,9 @@ fn load_log_effect_uses_history_mode_api() {
         },
         calls: Arc::clone(&calls),
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let executor = super::super::executor::TaskExecutor::new(1);
@@ -1402,11 +1923,11 @@ fn load_log_effect_uses_history_mode_api() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
         Effect::LoadLog {
             repo_id,
-            seq: 1,
+            seq: crate::model::LogLoadSeq(1),
             scope: LogScope::NoMerges,
             author: None,
             limit: 20,
@@ -1426,7 +1947,11 @@ fn load_log_effect_uses_history_mode_api() {
             result: Ok(gitcomet_core::services::HistoryReadResult::Page { page, .. }),
         }) => {
             assert_eq!(got_repo_id, repo_id);
-            assert_eq!(seq, 1, "the reply carries the sequence of its request");
+            assert_eq!(
+                seq,
+                crate::model::LogLoadSeq(1),
+                "the reply carries the sequence of its request"
+            );
             assert_eq!(scope, LogScope::NoMerges);
             assert_eq!(got_cursor, Some(cursor));
             assert!(page.commits.is_empty());
@@ -1453,8 +1978,8 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
         let spec = RepoSpec {
             workdir: unique_temp_path("gitcomet-log-streaming"),
         };
-        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-        repos.insert(
+        let mut repos: RepositoryRuntimes = Default::default();
+        repos.attach_repository_for_test(
             repo_id,
             Arc::new(RecordingLogRepo {
                 spec: spec.clone(),
@@ -1478,12 +2003,12 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
             &executor,
             &executor,
             &backend,
-            &repos,
+            &mut repos,
             state,
             tx,
             Effect::LoadLog {
                 repo_id,
-                seq: 1,
+                seq: crate::model::LogLoadSeq(1),
                 scope: LogScope::NoMerges,
                 author: Some("alice".into()),
                 limit: 800,
@@ -1519,9 +2044,9 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
         delete_branch_calls: None,
         cancel_delete_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -1546,9 +2071,9 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
         &executor,
         &executor,
         &backend,
-        &repos,
+        &mut repos,
         msg_tx,
-        Effect::LoadStatus { repo_id },
+        Effect::Status(StatusEffect::LoadStatus { repo_id }),
     );
 
     let msg = msg_rx.recv_timeout(Duration::from_secs(1));
@@ -1572,9 +2097,9 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
 fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
     for (load, expected) in [
         (
-            Effect::LoadRemoteTags {
+            Effect::References(ReferenceEffect::LoadRemoteTags {
                 repo_id: RepoId(510),
-            },
+            }),
             "remote_tags",
         ),
         (
@@ -1597,9 +2122,9 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             release: Arc::clone(&release),
         };
         let (started_tx, started_rx) = std::sync::mpsc::channel::<&'static str>();
-        let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-            let mut repos = FxHashMap::default();
-            repos.insert(
+        let mut repos: RepositoryRuntimes = {
+            let mut repos = RepositoryRuntimes::default();
+            repos.attach_repository_for_test(
                 repo_a,
                 Arc::new(MetadataSchedulingRepo {
                     spec: RepoSpec {
@@ -1610,7 +2135,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
                     release: Arc::clone(&release),
                 }) as Arc<dyn GitRepository>,
             );
-            repos.insert(
+            repos.attach_repository_for_test(
                 repo_b,
                 Arc::new(MetadataSchedulingRepo {
                     spec: RepoSpec {
@@ -1647,7 +2172,7 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             },
         ));
         let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
-        let mut repo_task_tokens = FxHashMap::default();
+
         let executors = super::effects::EffectExecutors {
             executor: &executor,
             repo_load_executor: &repo_load_executor,
@@ -1663,12 +2188,12 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             filesystem_executor: &crate::store::executor::FILESYSTEM_QUEUE,
         };
 
+        repos.bind_test_state(&thread_state.read().unwrap());
         super::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut repo_task_tokens,
+            &mut repos,
             msg_tx.clone(),
             load,
         );
@@ -1679,14 +2204,14 @@ fn slow_large_file_and_remote_tag_loads_do_not_block_other_repo_metadata() {
             expected
         );
 
+        repos.bind_test_state(&thread_state.read().unwrap());
         super::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut repo_task_tokens,
+            &mut repos,
             msg_tx,
-            Effect::LoadTags { repo_id: repo_b },
+            Effect::References(ReferenceEffect::LoadTags { repo_id: repo_b }),
         );
 
         assert_eq!(
@@ -1718,9 +2243,9 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         delete_branch_calls: None,
         cancel_delete_branch: None,
     });
-    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
-        let mut repos = FxHashMap::default();
-        repos.insert(repo_id, repo);
+    let mut repos: RepositoryRuntimes = {
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repo);
         repos
     };
 
@@ -1741,16 +2266,31 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     state.repos.push(repo_state);
     let commit_id = CommitId("deadbeef".into());
     let effect_specs: Vec<(Effect, usize)> = vec![
-        (Effect::LoadBranches { repo_id }, 1),
-        (Effect::LoadRemotes { repo_id }, 1),
-        (Effect::LoadRemoteBranches { repo_id }, 1),
-        (Effect::LoadStatus { repo_id }, 1),
-        (Effect::LoadHeadBranch { repo_id }, 1),
-        (Effect::LoadUpstreamDivergence { repo_id }, 1),
+        (
+            Effect::References(ReferenceEffect::LoadBranches { repo_id }),
+            1,
+        ),
+        (
+            Effect::References(ReferenceEffect::LoadRemotes { repo_id }),
+            1,
+        ),
+        (
+            Effect::References(ReferenceEffect::LoadRemoteBranches { repo_id }),
+            1,
+        ),
+        (Effect::Status(StatusEffect::LoadStatus { repo_id }), 1),
+        (
+            Effect::References(ReferenceEffect::LoadHeadBranch { repo_id }),
+            1,
+        ),
+        (
+            Effect::References(ReferenceEffect::LoadUpstreamDivergence { repo_id }),
+            1,
+        ),
         (
             Effect::LoadLog {
                 repo_id,
-                seq: 1,
+                seq: crate::model::LogLoadSeq(1),
                 scope: LogScope::CurrentBranch,
                 author: None,
                 limit: 20,
@@ -1761,7 +2301,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::LoadLog {
                 repo_id,
-                seq: 2,
+                seq: crate::model::LogLoadSeq(2),
                 scope: LogScope::AllBranches,
                 author: None,
                 limit: 20,
@@ -1773,12 +2313,16 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             },
             1,
         ),
-        (Effect::LoadTags { repo_id }, 1),
-        (Effect::LoadRemoteTags { repo_id }, 1),
+        (Effect::References(ReferenceEffect::LoadTags { repo_id }), 1),
+        (
+            Effect::References(ReferenceEffect::LoadRemoteTags { repo_id }),
+            1,
+        ),
         (Effect::LoadStashes { repo_id, limit: 3 }, 1),
         (Effect::LoadReflog { repo_id, limit: 5 }, 1),
         (
             Effect::LoadFileHistory {
+                request: crate::model::FileHistoryRequestId::default(),
                 repo_id,
                 path: PathBuf::from("tracked.txt"),
                 limit: 10,
@@ -1840,6 +2384,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadConflictFile {
+                request: crate::model::ConflictLoadRequestId::default(),
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
                 mode: crate::model::ConflictFileLoadMode::CurrentOnly,
@@ -1848,20 +2393,21 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (
             Effect::LoadSelectedConflictFile {
+                request: crate::model::ConflictLoadRequestId::default(),
                 repo_id,
                 mode: crate::model::ConflictFileLoadMode::CurrentOnly,
             },
             1,
         ),
         (
-            Effect::SaveWorktreeFile {
+            Effect::RepoCommand(RepoCommandEffect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from("nested/new.txt"),
                 expected_contents: None,
                 contents: "content".to_string().into(),
                 stage: true,
                 completion: None,
-            },
+            }),
             1,
         ),
         (
@@ -1889,29 +2435,29 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::CherryPickCommit {
+            Effect::RepoCommand(RepoCommandEffect::CherryPickCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
                 commit: true,
                 mainline: None,
                 summary: "pick me".into(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::RevertCommit {
+            Effect::RepoCommand(RepoCommandEffect::RevertCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
                 commit: true,
                 mainline: None,
                 summary: "revert me".into(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::ApplyFileChange {
+            Effect::RepoCommand(RepoCommandEffect::ApplyFileChange {
                 commit_retry: None,
                 repo_id,
                 target: gitcomet_core::domain::ApplyChangeTarget::commit(
@@ -1920,7 +2466,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 ),
                 commit: false,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
@@ -1964,37 +2510,37 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::ExportPatch {
+            Effect::RepoCommand(RepoCommandEffect::ExportPatch {
                 repo_id,
                 commit_id: commit_id.clone(),
                 dest: PathBuf::from("out.patch"),
-            },
+            }),
             1,
         ),
         (
-            Effect::ApplyPatch {
+            Effect::RepoCommand(RepoCommandEffect::ApplyPatch {
                 repo_id,
                 patch: PathBuf::from("change.patch"),
-            },
+            }),
             1,
         ),
         (
-            Effect::AddWorktree {
+            Effect::RepoCommand(RepoCommandEffect::AddWorktree {
                 repo_id,
                 path: PathBuf::from("wt"),
                 reference: Some("main".to_string()),
-            },
+            }),
             1,
         ),
         (
-            Effect::RemoveWorktree {
+            Effect::RepoCommand(RepoCommandEffect::RemoveWorktree {
                 repo_id,
                 path: PathBuf::from("wt"),
-            },
+            }),
             1,
         ),
         (
-            Effect::AddSubmodule {
+            Effect::RepoCommand(RepoCommandEffect::AddSubmodule {
                 repo_id,
                 url: "https://example.com/repo.git".to_string(),
                 path: PathBuf::from("sub"),
@@ -2004,45 +2550,45 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 approved_sources: Vec::new(),
                 remote_url_policy: Default::default(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::UpdateSubmodules {
+            Effect::RepoCommand(RepoCommandEffect::UpdateSubmodules {
                 approved_sources: Vec::new(),
                 repo_id,
                 remote_url_policy: Default::default(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::RemoveSubmodule {
+            Effect::RepoCommand(RepoCommandEffect::RemoveSubmodule {
                 repo_id,
                 path: PathBuf::from("sub"),
-            },
+            }),
             1,
         ),
         (
-            Effect::StageHunk {
+            Effect::RepoCommand(RepoCommandEffect::StageHunk {
                 repo_id,
                 patch: "@@ -1 +1 @@".to_string().into(),
-            },
+            }),
             1,
         ),
         (
-            Effect::UnstageHunk {
+            Effect::RepoCommand(RepoCommandEffect::UnstageHunk {
                 repo_id,
                 patch: "@@ -1 +1 @@".to_string().into(),
-            },
+            }),
             1,
         ),
         (
-            Effect::ApplyWorktreePatch {
+            Effect::RepoCommand(RepoCommandEffect::ApplyWorktreePatch {
                 repo_id,
                 patch: "@@ -1 +1 @@".to_string().into(),
                 reverse: true,
-            },
+            }),
             1,
         ),
         (
@@ -2106,7 +2652,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::SafePushAfterCommit {
+            Effect::RepoCommand(RepoCommandEffect::SafePushAfterCommit {
                 repo_id,
                 context: gitcomet_core::services::SafePushAfterCommitContext {
                     amend: false,
@@ -2115,61 +2661,67 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                     post_head: None,
                 },
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::FetchAll {
+            Effect::RepoCommand(RepoCommandEffect::FetchAll {
                 repo_id,
                 prune: true,
                 auth: None,
-            },
+            }),
             1,
         ),
-        (Effect::PruneMergedBranches { repo_id }, 1),
-        (Effect::PruneLocalTags { repo_id }, 1),
         (
-            Effect::Pull {
+            Effect::RepoCommand(RepoCommandEffect::PruneMergedBranches { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::PruneLocalTags { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::Pull {
                 repo_id,
                 mode: PullMode::FastForwardOnly,
                 prune: true,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::PullBranch {
+            Effect::RepoCommand(RepoCommandEffect::PullBranch {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 prune: true,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::MergeRef {
+            Effect::RepoCommand(RepoCommandEffect::MergeRef {
                 repo_id,
                 reference: "origin/main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::SquashRef {
+            Effect::RepoCommand(RepoCommandEffect::SquashRef {
                 repo_id,
                 reference: "origin/main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::Push {
+            Effect::RepoCommand(RepoCommandEffect::Push {
                 repo_id,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::PushAfterCommit {
+            Effect::RepoCommand(RepoCommandEffect::PushAfterCommit {
                 repo_id,
                 target: gitcomet_core::services::SafePushAfterCommitTarget {
                     remote: "origin".to_string(),
@@ -2179,18 +2731,18 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 },
                 set_upstream: false,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::ForcePush {
+            Effect::RepoCommand(RepoCommandEffect::ForcePush {
                 repo_id,
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::ForcePushWithLease {
+            Effect::RepoCommand(RepoCommandEffect::ForcePushWithLease {
                 repo_id,
                 lease: gitcomet_core::services::ForcePushLease {
                     remote: "origin".to_string(),
@@ -2200,157 +2752,163 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                     local_head: CommitId("2222222222222222222222222222222222222222".into()),
                 },
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::PushSetUpstream {
+            Effect::RepoCommand(RepoCommandEffect::PushSetUpstream {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::SetUpstreamBranch {
+            Effect::RepoCommand(RepoCommandEffect::SetUpstreamBranch {
                 repo_id,
                 branch: "main".to_string(),
                 upstream: Upstream {
                     remote: "origin".to_string(),
                     branch: "main".to_string(),
                 },
-            },
+            }),
             1,
         ),
         (
-            Effect::UnsetUpstreamBranch {
+            Effect::RepoCommand(RepoCommandEffect::UnsetUpstreamBranch {
                 repo_id,
                 branch: "main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::DeleteRemoteBranch {
+            Effect::RepoCommand(RepoCommandEffect::DeleteRemoteBranch {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::Reset {
+            Effect::RepoCommand(RepoCommandEffect::Reset {
                 repo_id,
                 target: "HEAD~1".to_string(),
                 mode: gitcomet_core::services::ResetMode::Mixed,
-            },
+            }),
             1,
         ),
         (
-            Effect::Rebase {
+            Effect::RepoCommand(RepoCommandEffect::Rebase {
                 repo_id,
                 onto: "main".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::RebaseContinue {
+            Effect::RepoCommand(RepoCommandEffect::RebaseContinue {
                 repo_id,
                 auth: None,
-            },
+            }),
             1,
         ),
-        (Effect::RebaseAbort { repo_id }, 1),
-        (Effect::MergeAbort { repo_id }, 1),
         (
-            Effect::CreateTag {
+            Effect::RepoCommand(RepoCommandEffect::RebaseAbort { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::MergeAbort { repo_id }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::CreateTag {
                 repo_id,
                 name: "v1.0.0".to_string(),
                 target: "HEAD".to_string(),
                 message: None,
                 annotated: false,
-            },
+            }),
             1,
         ),
         (
-            Effect::DeleteTag {
+            Effect::RepoCommand(RepoCommandEffect::DeleteTag {
                 repo_id,
                 name: "v1.0.0".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::PushTag {
-                repo_id,
-                remote: "origin".to_string(),
-                name: "v1.0.0".to_string(),
-                auth: None,
-            },
-            1,
-        ),
-        (
-            Effect::DeleteRemoteTag {
+            Effect::RepoCommand(RepoCommandEffect::PushTag {
                 repo_id,
                 remote: "origin".to_string(),
                 name: "v1.0.0".to_string(),
                 auth: None,
-            },
+            }),
             1,
         ),
         (
-            Effect::AddRemote {
+            Effect::RepoCommand(RepoCommandEffect::DeleteRemoteTag {
+                repo_id,
+                remote: "origin".to_string(),
+                name: "v1.0.0".to_string(),
+                auth: None,
+            }),
+            1,
+        ),
+        (
+            Effect::RepoCommand(RepoCommandEffect::AddRemote {
                 repo_id,
                 name: "origin".to_string(),
                 url: "https://example.com/repo.git".to_string(),
                 remote_url_policy: Default::default(),
-            },
+            }),
             1,
         ),
         (
-            Effect::RemoveRemote {
+            Effect::RepoCommand(RepoCommandEffect::RemoveRemote {
                 repo_id,
                 name: "origin".to_string(),
-            },
+            }),
             1,
         ),
         (
-            Effect::SetRemoteUrl {
+            Effect::RepoCommand(RepoCommandEffect::SetRemoteUrl {
                 repo_id,
                 name: "origin".to_string(),
                 url: "https://example.com/repo.git".to_string(),
                 kind: gitcomet_core::services::RemoteUrlKind::Fetch,
                 remote_url_policy: Default::default(),
-            },
+            }),
             1,
         ),
         (
-            Effect::CheckoutConflictSide {
+            Effect::RepoCommand(RepoCommandEffect::CheckoutConflictSide {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
                 side: gitcomet_core::services::ConflictSide::Ours,
-            },
+            }),
             1,
         ),
         (
-            Effect::AcceptConflictDeletion {
+            Effect::RepoCommand(RepoCommandEffect::AcceptConflictDeletion {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
-            },
+            }),
             1,
         ),
         (
-            Effect::CheckoutConflictBase {
+            Effect::RepoCommand(RepoCommandEffect::CheckoutConflictBase {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
-            },
+            }),
             1,
         ),
         (
-            Effect::LaunchMergetool {
+            Effect::RepoCommand(RepoCommandEffect::LaunchMergetool {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
-            },
+            }),
             1,
         ),
         (
@@ -2392,12 +2950,12 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         }
         let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(effect_state)));
         let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+        repos.bind_test_state(&thread_state.read().unwrap());
         super::super::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut FxHashMap::default(),
+            &mut repos,
             super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx),
             effect,
         );
@@ -2442,7 +3000,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     repo_state.open = Loadable::Ready(());
     state.repos.push(repo_state);
     state.active_repo = Some(repo_id);
-    let mut repos = FxHashMap::from_iter([(repo_id, repo)]);
+    let mut repos = RepositoryRuntimes::from_iter([(repo_id, repo)]);
     let effects = reduce(
         &mut repos,
         &AtomicU64::new(2),
@@ -2464,7 +3022,7 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     let tx = crate::store::worker_channel::StoreWorkerSender::for_test_msg_sender(tx);
-    let mut tokens = FxHashMap::default();
+
     let executors = EffectExecutors {
         executor: &other,
         repo_load_executor: &foreground,
@@ -2480,15 +3038,15 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
             effect,
             Effect::LoadWorktreeDirty { .. }
                 | Effect::LoadWorktrees { .. }
-                | Effect::LoadHeadBranch { .. }
+                | Effect::References(ReferenceEffect::LoadHeadBranch { .. })
         )
     }) {
+        repos.bind_test_state(&thread_state.read().unwrap());
         crate::store::effects::schedule_effect(
             executors,
             &thread_state,
             &backend,
-            &repos,
-            &mut tokens,
+            &mut repos,
             tx.clone(),
             effect,
         );
@@ -2533,21 +3091,21 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     scans.spawn(move || {
         let _ = release_rx.recv_timeout(Duration::from_secs(5));
     });
+    repos.bind_test_state(&thread_state.read().unwrap());
     crate::store::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut tokens,
+        &mut repos,
         tx.clone(),
         Effect::LoadWorktreeDirty {
             repo_id,
             scope: crate::model::WorktreeDirtyScope::All,
-            workdir: repos[&repo_id].spec().workdir.clone(),
+            workdir: thread_state.read().unwrap().repos[0].spec.workdir.clone(),
             files_for: None,
         },
     );
-    tokens[&repo_id].cancel();
+    repos.load_scope(&repo_id).unwrap().cancel();
     release_tx.send(()).unwrap();
     let (drained_tx, drained_rx) = std::sync::mpsc::channel();
     scans.spawn(move || {
@@ -2563,19 +3121,19 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     // list was cached. Reload may have cleared the view in the meantime.
     {
         let mut state = thread_state.write().unwrap();
-        Arc::make_mut(&mut state).repos[0].load_epoch += 1;
+        Arc::make_mut(&mut state).repos[0].bump_load_epoch();
     }
+    repos.bind_test_state(&thread_state.read().unwrap());
     crate::store::effects::schedule_effect(
         executors,
         &thread_state,
         &backend,
-        &repos,
-        &mut tokens,
+        &mut repos,
         tx,
         Effect::LoadWorktreeDirty {
             repo_id,
             scope: crate::model::WorktreeDirtyScope::All,
-            workdir: repos[&repo_id].spec().workdir.clone(),
+            workdir: thread_state.read().unwrap().repos[0].spec.workdir.clone(),
             files_for: None,
         },
     );

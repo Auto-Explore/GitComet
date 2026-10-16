@@ -219,20 +219,7 @@ pub struct ConflictRegionResolutionUpdate {
     pub resolution: gitcomet_core::conflict_session::ConflictRegionResolution,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ConflictAutosolveStats {
-    pub pass1: usize,
-    pub pass2_split: usize,
-    pub pass1_after_split: usize,
-    pub regex: usize,
-    pub history: usize,
-}
-
-impl ConflictAutosolveStats {
-    pub fn total_resolved(self) -> usize {
-        self.pass1 + self.pass2_split + self.pass1_after_split + self.regex + self.history
-    }
-}
+pub use gitcomet_core::conflict_session::ConflictAutosolveStats;
 
 /// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1356,7 +1343,7 @@ pub enum InternalMsg {
     },
     RepoLoadFinished {
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
@@ -1490,6 +1477,7 @@ pub enum InternalMsg {
         result: Result<String, Error>,
     },
     FileHistoryLoaded {
+        request: crate::model::FileHistoryRequestId,
         repo_id: RepoId,
         path: PathBuf,
         /// The cursor the page was requested with: `None` for the first page,
@@ -1504,6 +1492,7 @@ pub enum InternalMsg {
         result: Result<Vec<gitcomet_core::services::BlameLine>, Error>,
     },
     ConflictFileLoaded {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         path: PathBuf,
         result: Box<Result<Option<crate::model::ConflictFile>, Error>>,

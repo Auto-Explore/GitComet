@@ -1,5 +1,5 @@
 //! Independent generations and a bounded cache for indexed history requests.
-use crate::model::RepoId;
+use crate::model::{RepoId, RepoLoadEpoch};
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::history_index::{HistoryIndexHandle, HistoryIndexProgress, HistoryRange};
 use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
@@ -23,7 +23,7 @@ pub struct IndexedHistoryState {
     pub rev: u64,
     pub status_rev: u64,
     pub ranges_rev: u64,
-    pub epoch: u64,
+    pub epoch: RepoLoadEpoch,
     pub(crate) seq: u64,
     pub(crate) cancellation: CancellationToken,
     pub(crate) desired: Vec<usize>,

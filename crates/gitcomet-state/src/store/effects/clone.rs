@@ -200,7 +200,9 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
             return Err(Error::new(ErrorKind::Backend(format!(
                 "clone aborted, but failed to inspect partially created destination `{}`: {err}",
                 dest.display()
-            ))));
+            )))
+            .with_source(err)
+            .with_context("inspect aborted clone destination", Some(dest)));
         }
     };
 
@@ -230,7 +232,36 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
             "clone aborted, but failed to remove partially created destination `{}`: {err}",
             dest.display()
         )))
+        .with_source(err)
+        .with_context("remove aborted clone destination", Some(dest))
     })
+}
+
+#[derive(Debug)]
+struct CloneCleanupError {
+    original: Error,
+    cleanup: Error,
+}
+
+impl CloneCleanupError {
+    fn combine(original: Error, cleanup: Error, destination: &Path) -> Error {
+        let cause = Self { original, cleanup };
+        Error::new(ErrorKind::Backend(cause.to_string()))
+            .with_source(cause)
+            .with_context("clean up aborted clone", Some(destination))
+    }
+}
+
+impl std::fmt::Display for CloneCleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}; {}", self.original, self.cleanup)
+    }
+}
+
+impl std::error::Error for CloneCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.original)
+    }
 }
 
 pub(super) fn schedule_clone_repo(
@@ -278,7 +309,9 @@ pub(super) fn schedule_clone_repo(
 
         let (askpass_script, prompt_auth) = match (|| {
             let auth = resolve_git_auth(auth);
-            let script = create_askpass_script().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let script = create_askpass_script().map_err(|e| {
+                Error::from(e).with_context("create Git authentication prompt script", None)
+            })?;
             configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
             Ok::<(AskPassScript, Option<PromptAuth>), Error>((script, auth))
         })() {
@@ -301,7 +334,8 @@ pub(super) fn schedule_clone_repo(
         let child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
-                let err = Error::new(ErrorKind::Io(e.kind()));
+                let err = Error::from(e)
+                    .with_context("start git clone", Some(Path::new(cmd.get_program())));
                 send_or_log(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
@@ -451,14 +485,14 @@ pub(super) fn schedule_clone_repo(
                     }
                 }
             }
-            Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+            Err(e) => Err(Error::from(e).with_context("wait for git clone", Some(&dest))),
         };
 
         if result.is_err() && active_clone.cancel_requested()
             && let Err(cleanup_err) = cleanup_aborted_clone_destination(&dest, dest_preexisted) {
                 result = Err(match result {
                     Ok(_) => cleanup_err,
-                    Err(err) => Error::new(ErrorKind::Backend(format!("{err}; {cleanup_err}"))),
+                    Err(err) => CloneCleanupError::combine(err, cleanup_err, &dest),
                 });
             }
 
@@ -494,7 +528,46 @@ mod tests {
     use gitcomet_core::remote_url::validate_remote_url;
 
     use super::*;
+    use std::error::Error as _;
     use std::process::Command;
+
+    #[test]
+    fn clone_cleanup_failure_keeps_both_original_causes() {
+        let destination = Path::new("clone-destination");
+        let original = Error::new(ErrorKind::Backend("clone failed".into()))
+            .with_source(std::io::Error::from_raw_os_error(5));
+        let cleanup = Error::new(ErrorKind::Backend("cleanup failed".into()))
+            .with_source(std::io::Error::from_raw_os_error(28));
+        let error = CloneCleanupError::combine(original, cleanup, destination);
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Backend(message) if message == "clone failed; cleanup failed"
+        ));
+        assert_eq!(error.context().unwrap().path(), Some(destination));
+        let cloned = error.clone();
+        assert!(std::ptr::eq(
+            error.source().unwrap(),
+            cloned.source().unwrap()
+        ));
+        drop(error);
+        let cause = cloned
+            .source()
+            .unwrap()
+            .downcast_ref::<CloneCleanupError>()
+            .unwrap();
+        for (error, expected) in [(&cause.original, 5), (&cause.cleanup, 28)] {
+            assert_eq!(
+                error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(expected)
+            );
+        }
+        assert!(std::ptr::addr_eq(cause.source().unwrap(), &cause.original));
+    }
 
     fn command_env_value(cmd: &Command, key: &str) -> Option<String> {
         use std::ffi::OsStr;

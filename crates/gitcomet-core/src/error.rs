@@ -1,18 +1,107 @@
 use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-#[derive(Clone, Debug, thiserror::Error)]
-#[error("{kind}")]
+#[derive(Clone, Debug)]
 pub struct Error {
+    data: Arc<ErrorData>,
+}
+
+#[derive(Clone, Debug)]
+struct ErrorData {
     kind: ErrorKind,
+    source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+    context: Option<ErrorContext>,
+}
+
+/// The operation and native path associated with a failure. Diagnostic context
+/// does not change the classification callers use to choose recovery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorContext {
+    operation: Arc<str>,
+    path: Option<PathBuf>,
+}
+
+impl ErrorContext {
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
 }
 
 impl Error {
     pub fn new(kind: ErrorKind) -> Self {
-        Self { kind }
+        Self {
+            data: Arc::new(ErrorData {
+                kind,
+                source: None,
+                context: None,
+            }),
+        }
     }
 
     pub fn kind(&self) -> &ErrorKind {
-        &self.kind
+        &self.data.kind
+    }
+
+    /// Retains a concrete cause without making state snapshots clone it.
+    pub fn with_source(
+        mut self,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Arc::make_mut(&mut self.data).source = Some(Arc::from(source.into()));
+        self
+    }
+
+    pub fn with_context(mut self, operation: impl Into<Arc<str>>, path: Option<&Path>) -> Self {
+        Arc::make_mut(&mut self.data).context = Some(ErrorContext {
+            operation: operation.into(),
+            path: path.map(Path::to_path_buf),
+        });
+        self
+    }
+
+    pub fn context(&self) -> Option<&ErrorContext> {
+        self.data.context.as_ref()
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(source: std::io::Error) -> Self {
+        Self::new(ErrorKind::Io(source.kind())).with_source(source)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.data.source.as_deref().map(|source| source as _)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(context) = self.context() {
+            write!(f, "{}", context.operation())?;
+            if let Some(path) = context.path() {
+                write!(f, " ({})", path.display())?;
+            }
+            write!(f, ": ")?;
+        }
+        if matches!(self.kind(), ErrorKind::Io(_))
+            && let Some(source) = std::error::Error::source(self)
+        {
+            fmt::Display::fmt(source, f)?;
+            let mut cause = source.source();
+            while let Some(source) = cause {
+                write!(f, ": {source}")?;
+                cause = source.source();
+            }
+            return Ok(());
+        }
+        self.kind().fmt(f)
     }
 }
 
@@ -180,6 +269,8 @@ pub enum ErrorKind {
 #[cfg(test)]
 mod tests {
     use super::{Error, ErrorKind, GitFailure, GitFailureId};
+    use std::error::Error as _;
+    use std::path::Path;
 
     #[test]
     fn backend_error_kind_display_is_human_readable() {
@@ -191,6 +282,61 @@ mod tests {
     fn error_display_uses_error_kind_display() {
         let error = Error::new(ErrorKind::Backend("message".to_string()));
         assert_eq!(error.to_string(), "message");
+        assert!(error.source().is_none());
+        assert!(error.context().is_none());
+    }
+
+    #[test]
+    fn io_error_clones_share_the_original_cause_and_keep_context() {
+        let source = std::io::Error::from_raw_os_error(13);
+        let kind = source.kind();
+        let message = source.to_string();
+        let error = Error::from(source).with_context("read index", Some(Path::new("repo")));
+        let cloned = error.clone();
+
+        assert!(matches!(cloned.kind(), ErrorKind::Io(actual) if *actual == kind));
+        assert!(std::ptr::eq(
+            error.source().unwrap(),
+            cloned.source().unwrap()
+        ));
+        drop(error);
+
+        let source = cloned
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(source.raw_os_error(), Some(13));
+        let context = cloned.context().unwrap();
+        assert_eq!(context.operation(), "read index");
+        assert_eq!(context.path(), Some(Path::new("repo")));
+        assert_eq!(cloned.to_string(), format!("read index (repo): {message}"));
+    }
+
+    #[test]
+    fn adding_context_to_a_clone_does_not_change_the_retained_error() {
+        let original = Error::from(std::io::Error::other("read failed"))
+            .with_context("read file", Some(Path::new("file")));
+        let contextual = original.clone().with_context("load status", None);
+
+        assert_eq!(original.to_string(), "read file (file): read failed");
+        assert_eq!(contextual.to_string(), "load status: read failed");
+        assert!(std::ptr::eq(
+            original.source().unwrap(),
+            contextual.source().unwrap()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn error_context_preserves_non_utf8_paths() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"repo-\xff".to_vec()));
+        let error = Error::from(std::io::Error::other("read failed"))
+            .with_context("read file", Some(&path));
+
+        assert_eq!(error.context().unwrap().path(), Some(path.as_path()));
     }
 
     #[test]

@@ -13,8 +13,51 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
+use std::path::Path;
 
 const LOCAL_BRANCH_PREFIX: &[u8] = b"refs/heads/";
+
+#[derive(Debug)]
+enum BranchFallbackError {
+    Current { gix: Error, cli: Error },
+    List { cli: Error, gix: Error },
+}
+
+impl BranchFallbackError {
+    fn into_error(self, workdir: &Path) -> Error {
+        let operation = match &self {
+            Self::Current { .. } => "read current branch",
+            Self::List { .. } => "list local branches",
+        };
+        Error::new(ErrorKind::Backend(self.to_string()))
+            .with_source(self)
+            .with_context(operation, Some(workdir))
+    }
+}
+
+impl std::fmt::Display for BranchFallbackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Current { gix, cli } => write!(
+                f,
+                "current branch: gix path failed ({gix}); cli fallback failed ({cli})"
+            ),
+            Self::List { cli, gix } => write!(
+                f,
+                "list branches: git fallback failed ({cli}); gix fallback failed ({gix})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BranchFallbackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(match self {
+            Self::Current { gix, .. } => gix,
+            Self::List { cli, .. } => cli,
+        })
+    }
+}
 
 pub(super) fn head_upstream_divergence(
     repo: &gix::Repository,
@@ -42,9 +85,11 @@ impl GixRepo {
         }
         self.current_branch_gix().or_else(|gix_err| {
             self.current_branch_cli().map_err(|cli_err| {
-                Error::new(ErrorKind::Backend(format!(
-                    "current branch: gix path failed ({gix_err}); cli fallback failed ({cli_err})"
-                )))
+                BranchFallbackError::Current {
+                    gix: gix_err,
+                    cli: cli_err,
+                }
+                .into_error(&self.spec.workdir)
             })
         })
     }
@@ -92,9 +137,11 @@ impl GixRepo {
                 Err(cli_err) => {
                     let repo = self.reopen_repo()?;
                     collect_local_branches(&repo, &self.divergence_cache, true).map_err(|gix_err| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "list branches: git fallback failed ({cli_err}); gix fallback failed ({gix_err})"
-                        )))
+                        BranchFallbackError::List {
+                            cli: cli_err,
+                            gix: gix_err,
+                        }
+                        .into_error(&self.spec.workdir)
                     })
                 }
             };
@@ -169,6 +216,7 @@ impl GixRepo {
             let ref_name = format!("refs/heads/{}", branch.name);
             let Some(branch_ref) = refs.find(ref_name.as_str()).map_err(|e| {
                 Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+                    .with_source(e)
             })?
             else {
                 continue;
@@ -276,18 +324,22 @@ pub(super) fn hash_reference_identity(
 /// `for-each-ref refs/heads refs/remotes` excludes them).
 fn ref_namespace_fingerprint(repo: &gix::Repository) -> Result<u64> {
     use std::hash::Hasher as _;
-    let refs = crate::refs::view(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+    let refs = crate::refs::view(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+    })?;
     let mut hasher = rustc_hash::FxHasher::default();
     for iter in [
-        refs.local_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?,
-        refs.remote_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))))?,
+        refs.local_branches().map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))).with_source(e)
+        })?,
+        refs.remote_branches().map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))).with_source(e)
+        })?,
     ] {
         for reference in iter {
-            let mut reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let mut reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
             hash_reference_identity(&mut hasher, &mut reference);
         }
     }
@@ -299,19 +351,21 @@ fn collect_local_branches(
     divergence_cache: &DivergenceCache,
     has_branch_tracking: bool,
 ) -> Result<Vec<Branch>> {
-    let refs = crate::refs::view(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
-    let iter = refs
-        .local_branches()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?;
+    let refs = crate::refs::view(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+    })?;
+    let iter = refs.local_branches().map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))).with_source(e)
+    })?;
 
     let (branch_count_lower_bound, _) = iter.size_hint();
     let mut branches = Vec::with_capacity(branch_count_lower_bound);
     let mut target_ids = FxHashMap::default();
     let mut last_target = None;
     for reference in iter {
-        let mut reference =
-            reference.map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+        let mut reference = reference.map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+        })?;
         let target_id = branch_target_id(&mut reference)?;
         let name = local_branch_name(reference.name());
         let target = cached_commit_id(&mut target_ids, &mut last_target, target_id);
@@ -630,8 +684,10 @@ fn branch_upstream_target(
         return Ok(None);
     };
 
-    let Some(mut tracking_ref) = crate::refs::find(repo, tracking_ref_name.as_str())
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+    let Some(mut tracking_ref) =
+        crate::refs::find(repo, tracking_ref_name.as_str()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))).with_source(e)
+        })?
     else {
         return Ok(None);
     };
@@ -650,13 +706,73 @@ fn branch_upstream_target(
 #[cfg(test)]
 mod tests {
     use super::{
-        LOCAL_BRANCH_PREFIX, cached_commit_id, local_branch_name,
+        BranchFallbackError, LOCAL_BRANCH_PREFIX, cached_commit_id, local_branch_name,
         parse_local_branches_for_each_ref, parse_ref_metadata_for_each_ref,
         parse_upstream_identity, parse_upstream_track_divergence,
     };
     use gitcomet_core::domain::UpstreamDivergence;
+    use gitcomet_core::error::{Error, ErrorKind};
     use rustc_hash::FxHashMap;
+    use std::error::Error as _;
+    use std::path::Path;
     use std::sync::Arc;
+
+    #[test]
+    fn branch_fallback_failure_keeps_both_causes_and_attempt_order() {
+        let gix = Error::new(ErrorKind::Backend("reference read failed".into()))
+            .with_source(std::io::Error::from_raw_os_error(5));
+        let cli = Error::new(ErrorKind::Backend("Git launch failed".into()))
+            .with_source(std::io::Error::from_raw_os_error(13));
+        for (cause, message, first_code) in [
+            (
+                BranchFallbackError::Current {
+                    gix: gix.clone(),
+                    cli: cli.clone(),
+                },
+                "current branch: gix path failed (reference read failed); cli fallback failed (Git launch failed)",
+                5,
+            ),
+            (
+                BranchFallbackError::List { cli, gix },
+                "list branches: git fallback failed (Git launch failed); gix fallback failed (reference read failed)",
+                13,
+            ),
+        ] {
+            let workdir = Path::new("branch-workdir");
+            let error = cause.into_error(workdir);
+            assert!(matches!(error.kind(), ErrorKind::Backend(actual) if actual == message));
+            assert_eq!(error.context().unwrap().path(), Some(workdir));
+            let cause = error
+                .source()
+                .unwrap()
+                .downcast_ref::<BranchFallbackError>()
+                .unwrap();
+            let (BranchFallbackError::Current { gix, cli }
+            | BranchFallbackError::List { cli, gix }) = cause;
+            for (error, expected) in [(gix, 5), (cli, 13)] {
+                assert_eq!(
+                    error
+                        .source()
+                        .unwrap()
+                        .downcast_ref::<std::io::Error>()
+                        .unwrap()
+                        .raw_os_error(),
+                    Some(expected)
+                );
+            }
+            assert_eq!(
+                cause
+                    .source()
+                    .unwrap()
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(first_code)
+            );
+        }
+    }
 
     #[test]
     fn parse_upstream_identity_requires_an_exact_remote_and_head_ref() {

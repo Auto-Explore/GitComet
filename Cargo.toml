@@ -3,6 +3,8 @@ resolver = "3"
 members = [
   "crates/gitcomet",
   "crates/gitcomet-app",
+  "crates/gitcomet-base",
+  "crates/gitcomet-conflict-resolver",
   "crates/gitcomet-core",
   "crates/gitcomet-diagrams",
   "crates/gitcomet-fonts",
@@ -10,11 +12,17 @@ members = [
   "crates/gitcomet-extension-example",
   "crates/gitcomet-extension-example-app",
   "crates/gitcomet-git-gix",
+  "crates/gitcomet-markdown",
+  "crates/gitcomet-perf",
   "crates/gitcomet-state",
   "crates/gitcomet-fs-watch",
+  "crates/gitcomet-syntax",
+  "crates/gitcomet-text",
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
+  "crates/gitcomet-ui-media",
+  "crates/gitcomet-ui-terminal",
 ]
 exclude = [
   "vendor/block",
@@ -65,11 +73,19 @@ exclude = [
 default-members = [
   "crates/gitcomet",
   "crates/gitcomet-app",
+  "crates/gitcomet-base",
+  "crates/gitcomet-conflict-resolver",
   "crates/gitcomet-core",
   "crates/gitcomet-git-gix",
+  "crates/gitcomet-markdown",
+  "crates/gitcomet-perf",
   "crates/gitcomet-state",
+  "crates/gitcomet-syntax",
+  "crates/gitcomet-text",
   "crates/gitcomet-ui-gpui",
   "crates/gitcomet-ui-kit",
+  "crates/gitcomet-ui-media",
+  "crates/gitcomet-ui-terminal",
 ]
 
 [workspace.package]
@@ -87,15 +103,23 @@ block = { path = "vendor/block" }
 [workspace.dependencies]
 # Internal crates
 gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
+gitcomet-base = { path = "crates/gitcomet-base" }
+gitcomet-conflict-resolver = { path = "crates/gitcomet-conflict-resolver" }
 gitcomet-core = { path = "crates/gitcomet-core" }
 gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
 gitcomet-fonts = { path = "crates/gitcomet-fonts" }
 gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
+gitcomet-markdown = { path = "crates/gitcomet-markdown" }
+gitcomet-perf = { path = "crates/gitcomet-perf" }
 gitcomet-state = { path = "crates/gitcomet-state" }
+gitcomet-syntax = { path = "crates/gitcomet-syntax" }
+gitcomet-text = { path = "crates/gitcomet-text" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 gitcomet-ui-kit = { path = "crates/gitcomet-ui-kit" }
+gitcomet-ui-media = { path = "crates/gitcomet-ui-media" }
+gitcomet-ui-terminal = { path = "crates/gitcomet-ui-terminal" }
 
 # External crates
 alacritty_terminal = "0.26"
@@ -131,6 +155,8 @@ gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", re
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", features = ["font-kit"] }
 gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
 gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
 image = "0.25.10"
 fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
@@ -318,10 +344,17 @@ x11-clipboard = "0.9.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(gitcomet_probe_legacy_repository_api)"] }
 
 [profile.dev]
 incremental = true
 opt-level = 0
+
+# Dependencies use the same settings under `cargo build` and `cargo test` (the
+# test profile inherits this), so switching between them reuses every artifact.
+[profile.dev.package."*"]
+opt-level = 1
+debug = "line-tables-only"
 
 # Keep application code quick to rebuild while optimizing the layout/render
 # dependencies. Windows measurements and reproduction: scripts/profiling/README.md.
@@ -355,17 +388,6 @@ opt-level = 2
 
 [profile.test]
 opt-level = 1
-split-debuginfo = "packed"
-
-# Test profiles inherit dev package overrides; retain their measured settings.
-[profile.test.package.gpui-ce]
-opt-level = 1
-
-[profile.test.package.gpui_ce_windows]
-opt-level = 1
-
-[profile.test.package.taffy]
-opt-level = 1
 
 # CI avoids generating and packaging debugger symbols on ephemeral runners.
 # Keep algorithm/dependency optimization; the large UI crate favors fast builds.
@@ -379,6 +401,10 @@ codegen-units = 256
 incremental = false
 debug-assertions = true
 overflow-checks = true
+
+# Overrides the inherited dev dependency debug info.
+[profile.ci-test.package."*"]
+debug = 0
 
 [profile.ci-test.package.gitcomet-ui-gpui]
 opt-level = 0

@@ -676,7 +676,7 @@ build_measurement_binaries() {
   fi
   if [[ ${run_report} -eq 1 ]]; then
     frozen_report="$(build_and_freeze perf_budget_report \
-      -p gitcomet-ui-gpui --bin perf_budget_report)"
+      -p gitcomet-perf --bin perf_budget_report)"
   fi
 }
 

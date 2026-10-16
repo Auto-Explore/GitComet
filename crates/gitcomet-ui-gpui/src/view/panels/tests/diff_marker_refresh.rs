@@ -54,8 +54,8 @@ fn show(
     loop {
         draw_and_drain_test_window(cx);
         let caught_up = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
-            let builds_file_rows = pane.main_pane_surface().supports_diff_content_toggle;
+            let pane = view.read(app).diff_renderer.read(app);
+            let builds_file_rows = pane.diff_surface().supports_diff_content_toggle;
             !builds_file_rows
                 || (pane.diff_cache_rev == diff_rev
                     && pane.file_diff_cache_rev == diff_file_rev
@@ -81,7 +81,7 @@ fn marker_starts(
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> (Vec<f32>, Vec<f32>) {
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         let starts = |markers: Vec<components::ScrollbarMarker>| {
             markers
                 .into_iter()
@@ -128,7 +128,7 @@ fn markers_follow_an_in_place_external_edit(
     store.insert_repo_for_test(repo_id, repo);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, _| pane.diff_view = view_mode)
         });
     });
@@ -240,7 +240,7 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     store.insert_repo_for_test(repo_id, repo);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, _| pane.diff_view = DiffViewMode::Split)
         });
     });
@@ -279,14 +279,14 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     show(cx, &view, snapshot);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx))
         });
     });
     super::shortcuts::wait_until(cx, "the editor text", |cx| {
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
-            !pane.file_editor_loading
+            let pane = view.read(app).diff_renderer.read(app);
+            !pane.file_editor_loading()
                 && pane.file_editor_input.read(app).text() == lines(&[(35, "changed near the end")])
         })
     });
@@ -310,7 +310,7 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     super::shortcuts::wait_until(cx, "the changed-file notice", |cx| {
         cx.update(|_, app| {
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .file_disk_notice
                 .is_some()
@@ -318,14 +318,14 @@ fn markers_are_current_after_editing_reloading_and_reopening_the_diff(
     });
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane
+            this.diff_renderer
                 .update(cx, |pane, cx| pane.reload_file_from_disk_notice(cx))
         });
     });
     super::shortcuts::wait_until(cx, "the reloaded editor text", |cx| {
         cx.update(|_, app| {
-            let pane = view.read(app).main_pane.read(app);
-            !pane.file_editor_loading
+            let pane = view.read(app).diff_renderer.read(app);
+            !pane.file_editor_loading()
                 && pane.file_editor_input.read(app).text()
                     == lines(&[(5, "asdads;"), (35, "changed near the end")])
         })

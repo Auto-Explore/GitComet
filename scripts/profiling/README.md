@@ -53,7 +53,7 @@ mirrors. All ref/worktree mutations for transfers happen in disposable copies.
 run manifests also hash worktree differences, binaries and the harness.
 Existing snapshots are validated rather than overwritten.
 Build the backend probe and app separately, as above, so Cargo feature
-unification does not enable benchmark-only instrumentation in the app.
+unification does not enable benchmark instrumentation or test overrides in the app.
 
 On another host pass `--repo-root PATH` to prepare and run, and override sources
 with repeated `--source git=PATH --source bun=PATH --source chromium=PATH`.
@@ -258,6 +258,17 @@ Harness verification: `python3 -m unittest discover -s scripts/profiling -p
 'test_*.py' -v`, plus the Rust scenario-driver and platform-directory tests.
 
 ## Backend measurements
+
+`application-probe.py` enables `benchmarks,test-support` for the backend's
+`operation-context-probe`, whose Git subprocesses use an isolated test environment.
+To build that probe directly, run `cargo build --release -p gitcomet-git-gix
+--features benchmarks,test-support --example operation-context-probe`.
+`local-performance.py` also enables `test-support` on revisions that provide it.
+It copies one byte-identical workload into both checkouts and selects the probe's
+legacy or current repository adapter from the exact supported trait signatures.
+Unknown or mixed signatures fail the build. The build record keeps the shared
+workload hash plus each checkout's API mode and adapter build-script hash; this
+compatibility code is confined to the measurement driver.
 
 ```sh
 python scripts/profiling/application-probe.py --profiles release --samples 35 --output target/profiling/application

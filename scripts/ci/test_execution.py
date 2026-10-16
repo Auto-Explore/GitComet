@@ -81,7 +81,7 @@ class ExecutionTests(unittest.TestCase):
                     "kind": "lib", "testcases": {
                 name: {"ignored": False} for name in names}}
         suites = {"gitcomet-core": suite("core", ["conflict_session::a", "process::isolated"]),
-                  runner.UI: suite("ui", ["view::word_diff::tests::a", "view::rendered"])}
+                  runner.UI: suite("ui", ["view::history_graph::walk::tests::a", "view::rendered"])}
         packages = dict(core="gitcomet-core", ui=runner.UI)
         barrier, calls = threading.Barrier(3), []
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
@@ -108,7 +108,7 @@ class ExecutionTests(unittest.TestCase):
                         barrier.wait(timeout=5)
                 else:
                     self.assertEqual(kwargs["threads"], 4)
-                    self.assertEqual(kwargs["skip_prefixes"], ("view::word_diff::tests::",))
+                    self.assertEqual(kwargs["skip_prefixes"], ("view::history_graph::walk::tests::",))
                     calls.append("ui")
                     barrier.wait(timeout=5)
                 return 0

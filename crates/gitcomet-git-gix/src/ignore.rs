@@ -11,7 +11,7 @@ pub(crate) fn repository_watch_info(
         strip_windows_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
     };
     let repo = crate::open::open_worktree_repo(workdir)
-        .map_err(|error| crate::open::map_open_error(error, "watch metadata"))?;
+        .map_err(|error| crate::open::map_open_error(error, "watch metadata", workdir))?;
     let mut info = gitcomet_core::services::RepositoryWatchInfo::default();
     let home = gix::path::env::home_dir();
     if let Some(global) = std::env::var_os("GIT_CONFIG_GLOBAL") {
@@ -39,11 +39,7 @@ pub(crate) fn repository_watch_info(
             // Submodule::open() also opens retained administrative repositories
             // after deinit. Their configured workdir is not an initialized
             // checkout and cannot be used to construct an ignore matcher.
-            if workdir
-                .join(".git")
-                .try_exists()
-                .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?
-            {
+            if workdir.join(".git").try_exists().map_err(Error::from)? {
                 info.worktrees.push(normalize(workdir));
                 // `git add child` can record an embedded repository as a
                 // gitlink without a .gitmodules entry. Follow the index too,
@@ -67,7 +63,11 @@ pub(crate) fn repository_watch_info(
                         // .git input above, so initialization rebuilds coverage.
                         Err(error) if error.is_not_found() => {}
                         Err(error) => {
-                            return Err(crate::open::map_open_error(error, "watch gitlink"));
+                            return Err(crate::open::map_open_error(
+                                error,
+                                "watch gitlink",
+                                &child,
+                            ));
                         }
                     }
                 }
@@ -182,9 +182,9 @@ pub(crate) fn repository_watch_info(
         {
             info.ignore_inputs.push(path);
         }
-        if let Some(submodules) = crate::refs::submodules(&repo)
-            .map_err(|error| Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))))?
-        {
+        if let Some(submodules) = crate::refs::submodules(&repo).map_err(|error| {
+            Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))).with_source(error)
+        })? {
             for submodule in submodules {
                 if let Some(child) = submodule.open().map_err(|error| {
                     Error::new(ErrorKind::Backend(format!("watch submodule: {error}")))
@@ -275,8 +275,9 @@ pub(crate) struct GixWorktreeIgnoreMatcher {
 
 impl GixWorktreeIgnoreMatcher {
     pub(crate) fn load(workdir: &Path) -> Result<Self> {
-        let repo = crate::open::open_worktree_repo(workdir)
-            .map_err(|error| crate::open::map_open_error(error, "gix ignore matcher open"))?;
+        let repo = crate::open::open_worktree_repo(workdir).map_err(|error| {
+            crate::open::map_open_error(error, "gix ignore matcher open", workdir)
+        })?;
         repo.worktree().ok_or_else(|| {
             Error::new(ErrorKind::Backend(
                 "gix ignore matcher: repository has no worktree".to_string(),

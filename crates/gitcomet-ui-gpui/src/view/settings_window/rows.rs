@@ -294,7 +294,7 @@ impl SettingsWindowView {
                     format!("settings_window_{}_{}", row.key, index)
                 }
                 .into();
-                let input = self.environment_value_input(id.clone(), row.value, theme, cx);
+                let input = self.environment_value_input(id.clone(), row.value, cx);
                 shown.insert(id.clone());
                 card = card.child(self.info_row(id, row.label, input, theme));
             }
@@ -309,7 +309,6 @@ impl SettingsWindowView {
         &mut self,
         id: SharedString,
         value: String,
-        theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = self
@@ -332,7 +331,6 @@ impl SettingsWindowView {
             })
             .clone();
         input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_text(value, cx);
         });
         input
@@ -595,7 +593,6 @@ impl SettingsWindowView {
                 .operating_system
                 .clone()
                 .unwrap_or_default(),
-            theme,
             cx,
         );
         div()

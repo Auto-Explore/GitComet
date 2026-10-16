@@ -1,7 +1,6 @@
 use crate::app::{
     CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRepository, ResetUiScale,
 };
-use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gitcomet_core::diff::AnnotatedDiffLine;
@@ -34,8 +33,8 @@ use gpui::{
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
     ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, Styled, TextRun,
-    Tiling, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div,
-    fill, point, px, relative, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, fill,
+    point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(test)]
@@ -249,19 +248,24 @@ pub(crate) mod clone_progress;
 mod close_guards;
 mod color;
 mod command_palette;
+mod commands;
 mod commit_message_hover;
 mod commit_message_text;
 mod commit_signature;
 pub(crate) mod components;
 mod conflict_markers;
-pub(crate) mod conflict_resolver;
-mod date_time;
-mod diagram_preview;
-mod image_preview;
+pub(crate) use gitcomet_conflict_resolver as conflict_resolver;
+mod conflict_style_cache;
 #[cfg(feature = "benchmarks")]
 pub use diagram_preview::benchmarks::MermaidPreviewFixture;
+use gitcomet_text::{date_time, path_display};
+use gitcomet_ui_media::rendered_preview::{
+    RenderedPreviewKind, RenderedPreviewMode, RenderedPreviewModes,
+};
+use gitcomet_ui_media::{diagram_preview, image_preview, rendered_preview};
 #[cfg(feature = "benchmarks")]
 pub use image_preview::benchmarks::ImageInspectionFixture;
+mod diff_commands;
 pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
@@ -286,7 +290,9 @@ pub(crate) mod hosted;
 mod large_file_card;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
-mod markdown_preview;
+use gitcomet_markdown as markdown_preview;
+mod markdown_scrollbar;
+mod menu_presentation;
 mod mod_helpers;
 mod native_transfers;
 mod open_source_licenses_data;
@@ -295,16 +301,15 @@ mod pane_store;
 mod panels;
 mod panes;
 mod patch_split;
-mod path_display;
 mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
 mod pop_out;
+mod preference_change;
 mod preference_sync;
 mod preferences;
 mod reflog_panel;
-mod rendered_preview;
 mod repo_open;
 mod repository_views;
 mod reveal_commit;
@@ -319,8 +324,7 @@ mod sidebar_sticky;
 mod splash;
 mod state_apply;
 mod status_actions;
-pub(in crate::view) mod tab_width;
-mod terminal_alacritty;
+pub(in crate::view) use gitcomet_text::tab_width;
 mod terminal_panel;
 mod terminal_preferences;
 #[cfg(test)]
@@ -333,7 +337,7 @@ mod update_check;
 mod workspace_picker;
 pub(crate) use update_check::{update_checks_available, update_checks_disabled_by_environment};
 mod user_survey;
-mod word_diff;
+use gitcomet_core::word_diff;
 
 use app_model::AppUiModel;
 use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};
@@ -364,9 +368,9 @@ pub(in crate::view) use terminal_preferences::{
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 use commit_message_hover::{CommitMessageHoverHost, CommitMessageHoverState};
+use diff_text_model::CachedDiffStyledText;
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
-use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{
     ConflictRowSelectionTracker, DiffTextEmptySpaceDecoration, DiffTextSelectionOverlay,
     DiffTextSelectionTracker, empty_diff_text_document, flowing_diff_text_empty_space,
@@ -384,6 +388,7 @@ use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
+use gitcomet_text::SyntaxTokenKind;
 use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
 pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
@@ -395,11 +400,11 @@ use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
     action_bar_density, action_bar_height, bottom_status_bar_height,
 };
-pub(crate) use panes::MainPaneView;
+pub(crate) use panes::DiffRenderer;
 use panes::{
-    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryPrimarySelection,
-    HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
-    history_primary_selection,
+    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, DiffRendererInit,
+    HistoryPrimarySelection, HistoryView, MainPaneView, ReflogPaneInit, ReflogPaneView,
+    SidebarPaneView, history_primary_selection,
 };
 pub(crate) use settings_window::{
     SettingsWindowView, open_settings_window, open_settings_window_to_workspace,
@@ -409,7 +414,7 @@ pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
-pub(crate) use chrome::window_frame;
+pub(crate) use crate::kit::window_chrome::window_frame;
 use color::{composite_over, with_alpha};
 pub(crate) use icons::svg_icon;
 use icons::svg_spinner;
@@ -862,7 +867,9 @@ pub(in crate::view) fn diff_split_column_widths(
 pub(crate) use crate::bundled_fonts::UI_MONOSPACE_FONT_FAMILY;
 
 mod gitcomet_view;
+mod gitcomet_view_commands;
 mod gitcomet_view_render;
+mod gitcomet_view_requests;
 mod runtime_probe;
 
 #[cfg(test)]

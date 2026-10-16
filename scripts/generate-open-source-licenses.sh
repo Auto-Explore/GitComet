@@ -13,6 +13,7 @@ BUNDLED_ASSET_LICENSE_ROWS=(
   $'Noto Emoji\t3.002\tSIL OFL-1.1'
   $'Lilex\t2.621\tSIL OFL-1.1'
   $'Catppuccin for VSCode (theme colors)\t3.19.0\tMIT'
+  $'Eldritch (theme colors)\tc14f4df\tMIT'
   $'GitHub VS Code Theme (theme colors)\t6.3.5\tMIT'
   $'Gruvbox Theme (theme colors)\t1.29.1\tMIT'
   $'Night Owl (theme colors)\t2.1.1\tMIT'
