@@ -1733,15 +1733,15 @@ impl DetailsPaneView {
         sort: crate::view::rows::CommitFileSort,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.publish_file_sort(list, sort) {
-            return;
-        }
         match list {
             crate::view::rows::FileListId::Status(section) => {
                 self.set_status_file_sort(section, sort, cx)
             }
             crate::view::rows::FileListId::CommitFiles => self.set_commit_file_sort(sort, cx),
             other => {
+                if self.publish_file_sort(other, sort) {
+                    return;
+                }
                 let Some(repo_id) = self.active_repo_id() else {
                     return;
                 };
