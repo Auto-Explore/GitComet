@@ -58,6 +58,8 @@ pub(crate) struct DiffPaneView {
     renderer_subscription: Option<gpui::Subscription>,
     preferences_subscription: Option<gpui::Subscription>,
     exact_patch_preview: bool,
+    #[cfg(test)]
+    rendered_statuses: Vec<Option<SharedString>>,
     source: PaneSource,
     view_id: DiffViewId,
     options: DiffPaneOptions,
@@ -112,6 +114,8 @@ impl DiffPaneView {
             renderer_subscription: None,
             preferences_subscription: None,
             exact_patch_preview: false,
+            #[cfg(test)]
+            rendered_statuses: Vec::new(),
             file_cache: None,
             raw: [None, None],
             raw_task: None,
@@ -872,6 +876,30 @@ impl DiffPaneView {
             .and_then(|renderer| renderer.read(cx).hosted_decor.as_ref())
             .map_or(0, |decor| decor.marker_builds)
     }
+    /// The pane's note when it has no rows. The renderer refreshes its row
+    /// list in its own render, which runs after this pane's.
+    fn empty_status(&self, cx: &mut gpui::Context<Self>) -> Option<SharedString> {
+        let (empty, computing) = self.renderer.as_ref().map_or((true, false), |renderer| {
+            renderer.update(cx, |pane, _| {
+                pane.ensure_diff_visible_indices();
+                (
+                    pane.diff_visible_len() == 0,
+                    pane.file_diff_cache_inflight.is_some(),
+                )
+            })
+        });
+        empty.then(|| {
+            if self.loading || computing {
+                "Loading…".into()
+            } else {
+                "No changes".into()
+            }
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn rendered_statuses(&self) -> &[Option<SharedString>] {
+        &self.rendered_statuses
+    }
 }
 
 impl Render for DiffPaneView {
@@ -880,21 +908,9 @@ impl Render for DiffPaneView {
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
-        let status = if let Some(error) = &self.error {
-            Some(error.clone())
-        } else if self
-            .renderer
-            .as_ref()
-            .is_none_or(|renderer| renderer.read(cx).diff_visible_len() == 0)
-        {
-            Some(if self.loading {
-                "Loading…".into()
-            } else {
-                "No changes".into()
-            })
-        } else {
-            None
-        };
+        let status = self.error.clone().or_else(|| self.empty_status(cx));
+        #[cfg(test)]
+        self.rendered_statuses.push(status.clone());
         let legend = (!self.legend.is_empty()).then(|| {
             div()
                 .id(("hosted_diff_legend", pane_id))

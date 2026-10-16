@@ -207,6 +207,53 @@ fn focused_file_pair_retains_context_outside_patch_and_uses_native_layouts(
 }
 
 #[gpui::test]
+fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(
+            store,
+            events,
+            GitCometViewConfig {
+                view_mode: GitCometViewMode::FocusedDiff,
+                focused_diff: Some(crate::FocusedDiffConfig {
+                    label_left: "before".into(),
+                    label_right: "after".into(),
+                    display_path: Some("notes.txt".into()),
+                    input: crate::FocusedDiffInput::FilePair {
+                        path: "notes.txt".into(),
+                        old: "first\nold\n".into(),
+                        new: "first\nnew\n".into(),
+                    },
+                }),
+                workspace: WorkspaceBootstrap::Empty,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let pane = view.read(app).focused_diff_pane.clone().unwrap().pane;
+        let entity = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap();
+        let entity = entity.read(app);
+        assert!(entity.renderer().unwrap().read(app).diff_visible_len() > 0);
+        // Each frame's own status: a frame redrawn later would hide a stale one.
+        let statuses = entity.rendered_statuses();
+        assert!(
+            statuses
+                .iter()
+                .all(|status| status.as_deref() != Some("No changes")),
+            "{statuses:?}"
+        );
+        assert_eq!(statuses.last(), Some(&None), "{statuses:?}");
+    });
+}
+
+#[gpui::test]
 fn focused_diff_uses_the_common_pane_and_gate_at_each_width(cx: &mut gpui::TestAppContext) {
     let (view, cx) = focused(cx, false);
     cx.run_until_parked();
