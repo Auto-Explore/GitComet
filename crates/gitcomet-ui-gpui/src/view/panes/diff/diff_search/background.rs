@@ -454,6 +454,67 @@ mod tests {
         );
     }
 
+    /// A collapsed view's document holds a few rows of large sides; both scans
+    /// read those rows rather than loading the sides whole.
+    #[test]
+    fn collapsed_background_searches_read_only_their_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sides = ["old.txt", "new.txt"].map(|name| {
+            let path = Arc::new(dir.path().join(name));
+            let text: String = (0..20_000)
+                .map(|row| {
+                    let needle = if row == 10_002 { "needle" } else { "plain" };
+                    format!("row {row:05}: {needle} {name}\n")
+                })
+                .collect();
+            std::fs::write(&*path, &text).expect("write side");
+            let mut start = 0;
+            let lines: Vec<_> = text
+                .split_inclusive('\n')
+                .map(|line| {
+                    let range = start..start + line.len() - 1;
+                    start += line.len();
+                    range
+                })
+                .collect();
+            (path, lines)
+        });
+        let document = SearchDocument(DocumentSource::Rows(RowDocument {
+            len: 5,
+            columns: 2,
+            text: Box::new(move |ix, column| {
+                let (path, lines) = &sides[column];
+                let range = lines.get(10_000 + ix)?.clone();
+                Some(FileDiffLineText::file_slice(
+                    Arc::clone(path),
+                    range,
+                    true,
+                    false,
+                ))
+            }),
+            wrapped: Arc::from([]),
+            streamed: false,
+            collapsed: true,
+            previous: Mutex::new(VecDeque::new()),
+        }));
+
+        for match_case in [false, true] {
+            let _ = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+            let found = document.search(
+                "needle",
+                DiffSearchOptions {
+                    match_case,
+                    ..Default::default()
+                },
+                CancellationToken::new(),
+            );
+            assert_eq!(found.matches, vec![2], "match_case={match_case}");
+            let read = gitcomet_core::file_diff::take_file_slice_bytes_read_for_tests();
+            // Ten ~25-byte rows, not two ~500 KB sides.
+            assert!(read < 4_096, "match_case={match_case}: read {read} bytes");
+        }
+    }
+
     #[test]
     fn background_search_cancellation_does_not_cache_partial_results() {
         let token = CancellationToken::new();
@@ -689,8 +750,6 @@ impl RowDocument {
             }
             return out;
         }
-        // Every row of a source-backed side is read: one read per file, not
-        // an open/seek/read per row (and per chunk).
         let _batch = super::row_pass_batch(self.collapsed);
         for column in 0..self.columns {
             let rows = (0..self.len)
