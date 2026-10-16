@@ -894,11 +894,10 @@ impl DiffRenderer {
         }
         let collapsed = (!source_lines && self.is_collapsed_diff_projection_active())
             .then(|| self.collapsed_diff_visible_rows.clone());
-        // Collapsed hunks list file-diff rows, as the full file view does.
         let file_view = if source_lines {
             self.rendered_file_diff_cache_is_current()
         } else {
-            self.is_file_diff_view_active() || collapsed.is_some()
+            self.lists_file_diff_rows()
         };
         let (len, columns, text): (usize, usize, RowText) = if !source_lines
             && self.is_file_preview_active()

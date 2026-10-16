@@ -1674,8 +1674,7 @@ impl DiffRenderer {
             }
         } else {
             if self.diff_view == DiffViewMode::Inline
-                && !self.is_file_diff_view_active()
-                && !self.is_collapsed_diff_projection_active()
+                && !self.lists_file_diff_rows()
                 && !self.diff_word_wrap
                 && self.diff_search_scan_inline_patch_diff_with_needle(query)
             {
@@ -1798,8 +1797,7 @@ impl DiffRenderer {
         }
 
         if self.diff_view == DiffViewMode::Inline
-            && !self.is_file_diff_view_active()
-            && !self.is_collapsed_diff_projection_active()
+            && !self.lists_file_diff_rows()
             && !self.diff_word_wrap
             && self.diff_search_scan_inline_patch_diff_general(matcher)
         {
@@ -2163,8 +2161,7 @@ impl DiffRenderer {
             || self.is_file_preview_active()
             || self.active_conflict_target().is_some()
             || self.diff_view != DiffViewMode::Inline
-            || self.is_file_diff_view_active()
-            || self.is_collapsed_diff_projection_active()
+            || self.lists_file_diff_rows()
             || self.diff_word_wrap
         {
             return false;

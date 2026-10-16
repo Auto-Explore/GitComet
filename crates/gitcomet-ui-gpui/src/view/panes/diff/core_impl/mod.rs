@@ -2176,6 +2176,12 @@ impl DiffRenderer {
             && self.rendered_file_diff_cache_is_current()
     }
 
+    /// Whether the rows on screen are file-diff rows: the full file view, or
+    /// collapsed hunks listing them.
+    pub(in crate::view) fn lists_file_diff_rows(&self) -> bool {
+        self.is_file_diff_view_active() || self.is_collapsed_diff_projection_active()
+    }
+
     /// Whether the rasterized image diff on screen belongs to the current
     /// target. Deliberately not gated on [`DiffContentMode`]: an image has no
     /// collapsed form, so its rendered view is the same in either diff mode.
