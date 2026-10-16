@@ -71,7 +71,7 @@
     "extend-protocol" "deftest" "testing" "are" "is"))
 
 ;; The name a `def`-like form binds. `def` and `defonce` bind a value, which is
-;; a function only when it is an `fn`.
+;; a function only when it is an `fn` or `#(...)`, docstring or not.
 
 (list_lit
   .
@@ -101,12 +101,33 @@
   (sym_lit
     name: (sym_name) @function)
   .
+  (str_lit)?
+  .
   (list_lit
     .
     (sym_lit
       name: (sym_name) @_fn))
   (#any-of? @_def "def" "defonce")
   (#any-of? @_fn "fn" "fn*"))
+
+(list_lit
+  .
+  (sym_lit
+    name: (sym_name) @_def)
+  .
+  (sym_lit
+    name: (sym_name) @function)
+  .
+  (str_lit)?
+  .
+  (anon_fn_lit)
+  (#any-of? @_def "def" "defonce"))
+
+;; `*earmuffed*` names are dynamic vars, as in the other Lisps.
+
+((sym_lit
+  name: (sym_name) @variable.special)
+  (#match? @variable.special "^\\*.+\\*$"))
 
 ;; A namespaced symbol reads as `namespace/name`; the namespace half is the part
 ;; worth telling apart.
