@@ -320,6 +320,7 @@ impl DiffRenderer {
         let engine = self.effective_diff_engine();
         if self.file_diff_cache_target.as_ref() != Some(&diff_target) {
             self.diff_engine_anchor = None;
+            self.diff_wrap_pending_scroll = None;
         }
         let diff_target_for_task = diff_target.clone();
         let patch_signature = patch_diff

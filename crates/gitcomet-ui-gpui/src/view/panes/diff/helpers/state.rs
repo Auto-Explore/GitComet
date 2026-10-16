@@ -479,6 +479,8 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view::panes::diff) patch_review: Option<super::super::diff_patch::PatchReview>,
     pub(in crate::view::panes::diff) patch_review_seq: u64,
     pub(in crate::view) diff_engine_anchor: Option<gitcomet_extension_api::DiffScrollAnchor>,
+    /// A scroll to a source row, waiting for word-wrapped rows to be built.
+    pub(in crate::view) diff_wrap_pending_scroll: Option<(usize, gpui::ScrollStrategy)>,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
     pub(in crate::view) diff_split_last_synced_x: [Pixels; 2],
     pub(in crate::view) diff_split_last_synced_y: [Pixels; 2],

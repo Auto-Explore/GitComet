@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_extension_api::{DiffLayout, Registry};
+use gitcomet_extension_api::{DiffLayout, DiffLineSide, Registry};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 /// A focused mergetool window on a repository that need not exist; its exit
@@ -206,14 +206,13 @@ fn focused_file_pair_retains_context_outside_patch_and_uses_native_layouts(
     }
 }
 
-/// The status each frame of a focused diff over `input` drew, once its rows
-/// are in. Each frame's own: a later test frame would hide a stale one.
-fn statuses_while_rows_arrive(
+/// A focused diff window over `input`, shown as `notes.txt`.
+fn focused_over(
     cx: &mut gpui::TestAppContext,
     input: crate::FocusedDiffInput,
-) -> Vec<Option<SharedString>> {
+) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
+    cx.add_window_view(|window, cx| {
         GitCometView::new_with_config(
             store,
             events,
@@ -231,14 +230,33 @@ fn statuses_while_rows_arrive(
             window,
             cx,
         )
-    });
+    })
+}
+
+fn hosted_pane(
+    view: &Entity<GitCometView>,
+    app: &App,
+) -> Entity<crate::view::hosted::diff_pane::DiffPaneView> {
+    view.read(app)
+        .focused_diff_pane
+        .as_ref()
+        .unwrap()
+        .pane
+        .view()
+        .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+        .unwrap()
+}
+
+/// The status each frame of a focused diff over `input` drew, once its rows
+/// are in. Each frame's own: a later test frame would hide a stale one.
+fn statuses_while_rows_arrive(
+    cx: &mut gpui::TestAppContext,
+    input: crate::FocusedDiffInput,
+) -> Vec<Option<SharedString>> {
+    let (view, cx) = focused_over(cx, input);
     cx.run_until_parked();
     cx.update(|_, app| {
-        let pane = view.read(app).focused_diff_pane.clone().unwrap().pane;
-        let entity = pane
-            .view()
-            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
-            .unwrap();
+        let entity = hosted_pane(&view, app);
         let entity = entity.read(app);
         assert!(entity.renderer().unwrap().read(app).diff_visible_len() > 0);
         entity.rendered_statuses().to_vec()
@@ -272,6 +290,80 @@ fn focused_patch_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::Test
         ),
     );
     assert!(statuses.iter().all(Option::is_none), "{statuses:?}");
+}
+
+/// 400 lines that each wrap into several rows; line 300 differs.
+fn wrapped_pair() -> crate::FocusedDiffInput {
+    let pad = "x".repeat(400);
+    let old: String = (1..=400).map(|i| format!("line {i} {pad}\n")).collect();
+    let new = old.replace(
+        &format!("line 300 {pad}\n"),
+        &format!("line 300 changed {pad}\n"),
+    );
+    crate::FocusedDiffInput::FilePair {
+        path: "notes.txt".into(),
+        old: old.into(),
+        new: new.into(),
+    }
+}
+
+/// The `line N` labels the pane painted, with the wrapped rows built.
+fn painted_lines(view: &Entity<GitCometView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
+    cx.update(|_, app| {
+        let entity = hosted_pane(view, app);
+        let renderer = entity.read(app).renderer().unwrap().read(app);
+        assert!(renderer.diff_wrap_visible_rows.len() > 400);
+        let mut lines: Vec<String> = renderer
+            .diff_text_hitboxes
+            .values()
+            .filter_map(|hitbox| {
+                let mut words = hitbox.painted_text.split(' ');
+                (words.next() == Some("line"))
+                    .then(|| format!("line {}", words.next().unwrap_or("")))
+            })
+            .collect();
+        lines.sort();
+        lines.dedup();
+        lines
+    })
+}
+
+fn wrap_and_reveal(view: &Entity<GitCometView>, line: u32, cx: &mut gpui::VisualTestContext) {
+    cx.update(|_, app| {
+        let renderer = hosted_pane(view, app).read(app).renderer().unwrap().clone();
+        renderer.update(app, |pane, cx| pane.set_diff_word_wrap(true, cx));
+        let pane = view.read(app).focused_diff_pane.clone().unwrap().pane;
+        pane.reveal(DiffLineSide::New, line, app);
+    });
+}
+
+/// A reveal asked for before a word-wrapped pane's rows arrive must land on
+/// its line. Its row was a source row, applied to the wrapped list once built.
+#[gpui::test]
+fn a_reveal_before_wrapped_rows_arrive_lands_on_its_line(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = focused_over(cx, wrapped_pair());
+    wrap_and_reveal(&view, 200, cx);
+    cx.run_until_parked();
+    let painted = painted_lines(&view, cx);
+    assert!(painted.iter().any(|line| line == "line 200"), "{painted:?}");
+}
+
+/// Switching engines keeps a word-wrapped pane on the line it showed.
+#[gpui::test]
+fn an_engine_switch_keeps_a_wrapped_pane_on_its_line(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = focused_over(cx, wrapped_pair());
+    cx.run_until_parked();
+    wrap_and_reveal(&view, 200, cx);
+    cx.run_until_parked();
+    let before = painted_lines(&view, cx);
+    assert!(before.iter().any(|line| line == "line 200"), "{before:?}");
+    cx.update(|_, app| {
+        let pane = view.read(app).focused_diff_pane.clone().unwrap().pane;
+        pane.set_engine_override(Some(DiffEngine::Difftastic), app);
+    });
+    cx.run_until_parked();
+    let after = painted_lines(&view, cx);
+    assert!(after.iter().any(|line| line == "line 200"), "{after:?}");
 }
 
 #[gpui::test]

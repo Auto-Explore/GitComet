@@ -457,6 +457,7 @@ impl DiffRenderer {
             patch_review: None,
             patch_review_seq: 0,
             diff_engine_anchor: None,
+            diff_wrap_pending_scroll: None,
             file_diff_cache_engine: DiffEngine::LineByLine,
             file_diff_cancellation: gitcomet_core::services::CancellationToken::new(),
             file_diff_cache_inflight: None,

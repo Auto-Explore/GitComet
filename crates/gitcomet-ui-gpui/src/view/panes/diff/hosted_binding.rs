@@ -97,6 +97,13 @@ impl DiffRenderer {
         &self,
         visible: usize,
     ) -> (Option<u32>, Option<u32>) {
+        self.diff_source_visible_ix_for_visible_ix(visible)
+            .map_or((None, None), |source| {
+                self.hosted_source_line_numbers(source)
+            })
+    }
+
+    fn hosted_source_line_numbers(&self, source: usize) -> (Option<u32>, Option<u32>) {
         if self
             .rendered_diff_target()
             .and_then(DiffTarget::file_path)
@@ -104,9 +111,6 @@ impl DiffRenderer {
         {
             return (None, None);
         }
-        let Some(source) = self.diff_source_visible_ix_for_visible_ix(visible) else {
-            return (None, None);
-        };
         if self.is_collapsed_diff_projection_active() {
             return self
                 .collapsed_visible_row(source)
@@ -114,7 +118,7 @@ impl DiffRenderer {
                 .and_then(|row| self.collapsed_diff_file_row_line_numbers(row))
                 .unwrap_or_default();
         }
-        let Some(row) = self.diff_mapped_ix_for_visible_ix(visible) else {
+        let Some(row) = self.diff_source_mapped_ix_for_visible_ix(source) else {
             return (None, None);
         };
         if self.is_file_diff_view_active() {
@@ -230,26 +234,22 @@ impl DiffRenderer {
         top: bool,
     ) -> bool {
         self.ensure_diff_visible_indices();
-        let found = (0..self.diff_visible_len()).find(|&row| {
-            let (old, new) = self.hosted_line_numbers(row);
+        let Some(source) = (0..self.diff_source_visible_len()).find(|&source| {
+            let (old, new) = self.hosted_source_line_numbers(source);
             (match side {
                 DiffLineSide::Old => old,
                 DiffLineSide::New => new,
             }) == Some(line)
-        });
-        if let Some(row) = found {
-            self.scroll_diff_to_item_strict(
-                row,
-                if top {
-                    gpui::ScrollStrategy::Top
-                } else {
-                    gpui::ScrollStrategy::Center
-                },
-            );
-            true
+        }) else {
+            return false;
+        };
+        let strategy = if top {
+            gpui::ScrollStrategy::Top
         } else {
-            false
-        }
+            gpui::ScrollStrategy::Center
+        };
+        self.scroll_diff_to_source_row(source, strategy);
+        true
     }
 
     pub(in crate::view) fn set_hosted_decor(
