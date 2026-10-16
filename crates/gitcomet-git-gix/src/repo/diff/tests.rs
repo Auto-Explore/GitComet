@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{git_success, init_test_repo, open_repo};
 
 #[test]
 fn chunked_reads_retry_interruptions_and_remain_cancellable() {
@@ -136,39 +137,6 @@ fn cancelled_copy_stops_between_chunks_without_publishing_partial_content() {
 use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget};
 use gitcomet_core::error::ErrorKind;
 
-fn run_git(workdir: &Path, args: &[&str]) {
-    let output = gitcomet_core::test_support::git_fixture::git_command()
-        .arg("-C")
-        .arg(workdir)
-        .args(args)
-        .output()
-        .expect("git command to run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn init_test_repo(workdir: &Path) {
-    run_git(workdir, &["init"]);
-    gitcomet_core::test_support::git_fixture::append_config(
-        workdir,
-        &[
-            ("commit.gpgsign", "false"),
-            ("user.name", "Test User"),
-            ("user.email", "test@example.com"),
-        ],
-    );
-}
-
-fn open_repo(workdir: &Path) -> GixRepo {
-    let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
-    GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
-}
-
 #[test]
 fn attributes_fingerprint_keeps_lfs_and_drops_other_filter_drivers() {
     let temp = tempfile::tempdir().unwrap();
@@ -179,7 +147,7 @@ fn attributes_fingerprint_keeps_lfs_and_drops_other_filter_drivers() {
         "*.bin filter=lfs\n*.raw filter=other\n*.txt text\n",
     )
     .unwrap();
-    run_git(root, &["config", "filter.lfs.clean", "one"]);
+    git_success(root, &["config", "filter.lfs.clean", "one"]);
     let repo = open_repo(root).repo();
     let lfs = worktree_attributes_fingerprint(&repo, Path::new("a.bin"));
     assert!(lfs.is_some(), "lfs output is a pure function of the bytes");
@@ -190,7 +158,7 @@ fn attributes_fingerprint_keeps_lfs_and_drops_other_filter_drivers() {
         worktree_attributes_fingerprint(&repo, Path::new("a.txt"))
     );
 
-    run_git(root, &["config", "filter.lfs.clean", "two"]);
+    git_success(root, &["config", "filter.lfs.clean", "two"]);
     let repo = open_repo(root).repo();
     assert_ne!(
         worktree_attributes_fingerprint(&repo, Path::new("a.bin")),
@@ -206,9 +174,9 @@ fn worktree_diff_does_not_write_index() {
     init_test_repo(root);
     let file = root.join("file.txt");
     std::fs::write(&file, "unchanged content\n").unwrap();
-    run_git(root, &["add", "file.txt"]);
-    run_git(root, &["commit", "-m", "Initial"]);
-    run_git(root, &["config", "diff.autoRefreshIndex", "true"]);
+    git_success(root, &["add", "file.txt"]);
+    git_success(root, &["commit", "-m", "Initial"]);
+    git_success(root, &["config", "diff.autoRefreshIndex", "true"]);
     let index = root.join(".git/index");
     let before = std::fs::read(&index).unwrap();
     std::fs::OpenOptions::new()
@@ -246,15 +214,15 @@ fn commit_diff_pairs_a_copied_file_with_its_source() {
     init_test_repo(root);
     let body: String = (1..=40).map(|n| format!("line {n}\n")).collect();
     std::fs::write(root.join("a.rs"), &body).unwrap();
-    run_git(root, &["add", "a.rs"]);
-    run_git(root, &["commit", "-m", "seed"]);
+    git_success(root, &["add", "a.rs"]);
+    git_success(root, &["commit", "-m", "seed"]);
     std::fs::write(
         root.join("b.rs"),
         body.replace("line 20\n", "line twenty\n"),
     )
     .unwrap();
-    run_git(root, &["add", "b.rs"]);
-    run_git(root, &["commit", "-m", "copy"]);
+    git_success(root, &["add", "b.rs"]);
+    git_success(root, &["commit", "-m", "copy"]);
 
     let repo = open_repo(root);
     let head = super::super::history::gix_head_id_or_none(&repo.repo())
@@ -358,7 +326,7 @@ fn windows_worktree_verification_repairs_cache_and_observes_open_writer() {
 
 fn stage_blob(workdir: &Path, relative: &str, content: &[u8]) -> gix::ObjectId {
     std::fs::write(workdir.join(relative), content).expect("write file");
-    run_git(workdir, &["add", relative]);
+    git_success(workdir, &["add", relative]);
     gix::objs::compute_hash(
         gix::open(workdir).unwrap().object_hash(),
         gix::objs::Kind::Blob,
@@ -719,7 +687,7 @@ fn repeated_worktree_source_load_preserves_content_addressed_cache_file() {
 fn diff_file_text_for_staged_gitlink_returns_empty_sources() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_repo(tmp.path());
-    run_git(
+    git_success(
         tmp.path(),
         &[
             "update-index",

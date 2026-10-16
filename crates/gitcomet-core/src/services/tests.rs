@@ -98,36 +98,6 @@ fn repository_options_are_refused_by_backends_that_cannot_honor_them() {
     );
 }
 
-/// The default comparison is `diff_range_files`, measured from `from`,
-/// and a merge base comes from `merge_base` when a backend provides one.
-#[test]
-fn default_compare_files_delegates_to_the_range_listing_and_merge_base() {
-    let repo = RecordingHistoryModeRepo::new();
-    let cancel = super::CancellationToken::new();
-    let main = CommitId("main".into());
-    let feature = CommitId("feature".into());
-    let direct = repo
-        .compare_files(
-            &main,
-            Some(&feature),
-            &super::ComparisonOptions::direct(),
-            &cancel,
-        )
-        .unwrap();
-    assert_eq!(direct.base, main);
-    assert_eq!(direct.files[0].path, PathBuf::from("from-main"));
-    let since_fork = repo
-        .compare_files(
-            &main,
-            Some(&feature),
-            &super::ComparisonOptions::merge_base(),
-            &cancel,
-        )
-        .unwrap();
-    assert_eq!(since_fork.base, CommitId("fork".into()));
-    assert_eq!(since_fork.files[0].path, PathBuf::from("from-fork"));
-}
-
 /// Pins the fallback behavior of every provided [`GitRepository`] method.
 ///
 /// These defaults are what a backend inherits when it does not implement an
@@ -198,22 +168,11 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     ));
     assert_unsupported(repo.commit_amend("message"));
     assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
-    assert_unsupported(repo.merge_base(&commit, &commit));
-    assert_unsupported(repo.is_ancestor(&commit, &commit));
-    let cancel = super::CancellationToken::new();
-    // Options a fallback cannot honor fail instead of returning a list
-    // that silently leaves files out.
-    assert_unsupported(repo.compare_files(
-        &commit,
-        None,
-        &super::ComparisonOptions::direct().with_untracked(true),
-        &cancel,
-    ));
     assert_unsupported(repo.compare_files(
         &commit,
         Some(&commit),
-        &super::ComparisonOptions::merge_base(),
-        &cancel,
+        &super::ComparisonOptions::direct(),
+        &super::CancellationToken::new(),
     ));
     assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
     assert_unsupported(repo.revert_with_output(&commit, true, None));
@@ -357,21 +316,6 @@ impl RecordingHistoryModeRepo {
 impl GitRepository for RecordingHistoryModeRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
-    }
-
-    fn diff_range_files(
-        &self,
-        from: &CommitId,
-        _to: Option<&CommitId>,
-    ) -> super::Result<Vec<crate::domain::CommitFileChange>> {
-        Ok(vec![crate::domain::CommitFileChange::new(
-            PathBuf::from(format!("from-{from}")),
-            crate::domain::FileStatusKind::Modified,
-        )])
-    }
-
-    fn merge_base(&self, _a: &CommitId, _b: &CommitId) -> super::Result<Option<CommitId>> {
-        Ok(Some(CommitId("fork".into())))
     }
 
     fn log_head_page(

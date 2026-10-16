@@ -123,7 +123,7 @@ fn range_files_loaded_populates_only_the_current_comparison() {
 
     let files = vec![
         CommitFileChange::new(std::path::PathBuf::from("a.rs"), FileStatusKind::Modified)
-            .with_line_counts(Some(1), Some(0)),
+            .with_line_stats((Some(1), Some(0)).into()),
     ];
 
     // A stale result (wrong `from`) is dropped.

@@ -1,5 +1,5 @@
 use crate::test_git_env;
-use gitcomet_core::domain::{CommitId, FileStatusKind, HistoryMode, LogCursor};
+use gitcomet_core::domain::{CommitId, FileStatusKind, HistoryMode, LineStats, LogCursor};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::GitBackend;
 use gitcomet_core::test_support::git_fixture::{
@@ -2172,8 +2172,8 @@ fn commit_details_reports_merge_parents_and_file_changes() {
         .find(|file| file.path == Path::new("base.txt"))
         .expect("the file modified on the merged branch should be listed");
     assert_eq!(base_change.kind, FileStatusKind::Modified);
-    assert_eq!(base_change.additions, Some(1));
-    assert_eq!(base_change.deletions, Some(0));
+    assert_eq!(base_change.line_stats.additions, Some(1));
+    assert_eq!(base_change.line_stats.deletions, Some(0));
 
     let feature_change = merge_details
         .files
@@ -2181,8 +2181,8 @@ fn commit_details_reports_merge_parents_and_file_changes() {
         .find(|file| file.path == Path::new("feature.txt"))
         .expect("the file added on the merged branch should be listed");
     assert_eq!(feature_change.kind, FileStatusKind::Added);
-    assert_eq!(feature_change.additions, Some(1));
-    assert_eq!(feature_change.deletions, Some(0));
+    assert_eq!(feature_change.line_stats.additions, Some(1));
+    assert_eq!(feature_change.line_stats.deletions, Some(0));
     assert!(
         merge_details
             .files
@@ -2348,8 +2348,11 @@ fn commit_details_reports_root_and_rename_file_changes() {
                 Path::new("old name.txt").to_path_buf(),
                 FileStatusKind::Added
             )
-            .with_line_counts(Some(1), Some(0))
-            .with_edit(added.finish())
+            .with_line_stats(LineStats {
+                additions: Some(1),
+                deletions: Some(0),
+                edit: added.finish()
+            })
             .with_ids(None, Some(blob.clone()))
             .with_modes(None, regular)
         ]
@@ -2365,7 +2368,7 @@ fn commit_details_reports_root_and_rename_file_changes() {
                 Path::new("new name.txt").to_path_buf(),
                 FileStatusKind::Renamed
             )
-            .with_line_counts(Some(0), Some(0))
+            .with_line_stats((Some(0), Some(0)).into())
             // A pure rename keeps its content; the source is recorded.
             .with_old_path(Some(Path::new("old name.txt").to_path_buf()))
             .with_ids(Some(blob.clone()), Some(blob))

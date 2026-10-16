@@ -357,20 +357,10 @@ fn status_select_all_range_tracks_line_stats_and_refresh_prunes_only_missing_fil
             .unwrap()
             .clone()
     });
-    repo.uncommitted_line_stats =
-        Loadable::Ready(Arc::new(gitcomet_core::domain::UncommittedLineStats {
-            staged: Default::default(),
-            unstaged: [("a.rs", 100), ("b.rs", 1), ("c.rs", 10)]
-                .into_iter()
-                .map(|(path, additions)| {
-                    (
-                        path.into(),
-                        gitcomet_core::domain::LineStats::from((Some(additions), Some(0))),
-                    )
-                })
-                .collect(),
-        }));
-    repo.unstaged_line_stats_rev += 1;
+    load_unstaged_line_stats(
+        &mut repo,
+        &[("a.rs", 100, 0), ("b.rs", 1, 0), ("c.rs", 10, 0)],
+    );
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
     cx.update(|_window, app| {
         view.read(app).details_pane.clone().update(app, |pane, cx| {

@@ -302,11 +302,10 @@ pub struct CommitFileChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub is_submodule: bool,
-    /// Added line count; `None` for binary files, submodules, or when the
-    /// commit was too large to compute per-file stats.
-    pub additions: Option<u32>,
-    /// Removed line count; `None` under the same conditions as `additions`.
-    pub deletions: Option<u32>,
+    /// Added and removed lines and the edit. Against the working tree the
+    /// edit can be missing while git counted the lines: past the file cap, or
+    /// when the file was left unread for the reasons [`LineStats`] lists.
+    pub line_stats: LineStats,
     /// Set when the new side (or the old side of a deletion) is a Git LFS
     /// pointer or git-annex key.
     pub large_file: Option<crate::large_files::LargeFileState>,
@@ -319,10 +318,6 @@ pub struct CommitFileChange {
     /// The mode on each side; `None` where the side is absent or unknown.
     pub old_mode: Option<FileMode>,
     pub new_mode: Option<FileMode>,
-    /// The edit as text, for ordering files changed the same way together;
-    /// `None` under the same conditions as `additions`, or when nothing in
-    /// the file's text changed.
-    pub edit: Option<crate::edit_signature::EditSignature>,
 }
 
 impl CommitFileChange {
@@ -331,15 +326,13 @@ impl CommitFileChange {
             path,
             kind,
             is_submodule: false,
-            additions: None,
-            deletions: None,
+            line_stats: LineStats::UNKNOWN,
             old_path: None,
             old_id: None,
             new_id: None,
             old_mode: None,
             new_mode: None,
             large_file: None,
-            edit: None,
         }
     }
 
@@ -348,20 +341,8 @@ impl CommitFileChange {
         self
     }
 
-    pub fn with_line_counts(mut self, additions: Option<u32>, deletions: Option<u32>) -> Self {
-        self.additions = additions;
-        self.deletions = deletions;
-        self
-    }
-
-    /// The counts and the edit together, as a line diff reports them.
-    pub fn with_line_stats(self, stats: LineStats) -> Self {
-        self.with_line_counts(stats.additions, stats.deletions)
-            .with_edit(stats.edit)
-    }
-
-    pub fn with_edit(mut self, edit: Option<crate::edit_signature::EditSignature>) -> Self {
-        self.edit = edit;
+    pub fn with_line_stats(mut self, line_stats: LineStats) -> Self {
+        self.line_stats = line_stats;
         self
     }
 
@@ -593,14 +574,16 @@ pub struct FileStatus {
     pub conflict: Option<FileConflictKind>,
 }
 
-/// `None` means unknown: binary, over the size cap, or not reported by git at
-/// all — an untracked file is in neither index lane.
+/// `None` means unknown: binary, a submodule, over the size cap, in a change
+/// set over the file cap, unreadable or gone when read, or content left unread
+/// (an LFS or annex payload).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LineStats {
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
-    /// The edit as text; `None` when the counts are unknown or nothing in
-    /// the text changed.
+    /// The edit as text, for ordering files changed the same way together;
+    /// `None` when the counts are unknown, nothing in the text changed, or
+    /// the counts came from git without the text.
     pub edit: Option<crate::edit_signature::EditSignature>,
 }
 

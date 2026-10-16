@@ -2,11 +2,11 @@ mod tag_push;
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
-    DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry,
-    HistoryMode, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
-    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
-    Tag, Upstream, UpstreamDivergence, Worktree,
+    Branch, Commit, CommitDetails, CommitId, CommitSignature, Diff, DiffArea, DiffPreviewTextFile,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
+    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -619,9 +619,11 @@ impl GixRepo {
 
     /// A fresh open, for operations that must see config/ref changes made after
     /// this repository was opened (e.g. upstream tracking written by the CLI).
+    /// It reads only the sources the first open could.
     /// Prefer [`Self::repo`]: an open re-parses every config file.
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
-        crate::open::open_worktree_repo(&self.spec.workdir)
+        let permissions = self.repo().open_options().permissions;
+        crate::open::open_worktree_repo_with(&self.spec.workdir, permissions)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo", &self.spec.workdir))
     }
 
@@ -843,22 +845,6 @@ impl GitRepository for GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::services::Comparison> {
         self.compare_files_impl(from, to, options, cancellation)
-    }
-
-    fn merge_base(&self, a: &CommitId, b: &CommitId) -> Result<Option<CommitId>> {
-        self.merge_base_impl(a, b)
-    }
-
-    fn is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
-        self.is_ancestor_impl(ancestor, descendant)
-    }
-
-    fn diff_range_files(
-        &self,
-        from: &CommitId,
-        to: Option<&CommitId>,
-    ) -> Result<Vec<CommitFileChange>> {
-        self.diff_range_files_impl(from, to)
     }
 
     fn uncommitted_line_stats(
@@ -1672,6 +1658,22 @@ pub(crate) fn shared_history_memory() -> (usize, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config refresh reopens the repository; a test's open that reads only
+    /// the repository's own config must stay that way.
+    #[test]
+    fn a_reopen_reads_only_the_sources_the_first_open_could() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::test_support::init_test_repo(tmp.path());
+        let repo = crate::test_support::open_repo(tmp.path());
+
+        let reopened = repo.reopen_repo().unwrap();
+
+        assert_eq!(
+            reopened.open_options().permissions,
+            gix::open::Permissions::isolated()
+        );
+    }
 
     #[test]
     fn disk_file_stamp_requires_both_timestamps_outside_the_racy_window() {
