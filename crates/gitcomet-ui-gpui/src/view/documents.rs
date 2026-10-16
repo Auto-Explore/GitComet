@@ -671,6 +671,9 @@ impl StandaloneBuffer {
                             cx,
                         );
                         this.document.seat_text(fingerprint, None, cx);
+                        // Unchanged text emits no change event, and a restyle
+                        // asked for while loading still has to happen.
+                        this.refresh_syntax(cx);
                     }
                     Err(error) => this.document.fail_read(generation, error.into(), cx),
                 }

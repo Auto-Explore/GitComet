@@ -1345,3 +1345,42 @@ fn standalone_caret_notifies_do_not_refingerprint_the_document(cx: &mut gpui::Te
         "typing back the saved text is still reported"
     );
 }
+
+/// A theme change resets the syntax provider, which a loading buffer defers.
+/// A reload that brings back the same text emits no text change, so the end
+/// of the read itself has to apply the new provider.
+#[gpui::test]
+fn a_theme_change_during_a_reload_restyles_unchanged_text(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("restyle.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let docs = cx.update(|_, app| root.read(app).documents.clone());
+    cx.update(|_, app| docs.update(app, |docs, cx| docs.open(path.clone(), true, cx)));
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = docs.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| b.reload(cx));
+        docs.update(app, |docs, cx| {
+            docs.set_theme(crate::theme::AppTheme::gitcomet_light(), cx)
+        });
+    });
+    drain(&root, cx);
+
+    cx.update(|_, app| {
+        let b = buffer.read(app);
+        let snapshot = b.input.read(app).text_snapshot();
+        assert_eq!(b.input.read(app).text(), "fn main() {}\n");
+        assert_eq!(
+            b.syntax_key,
+            Some((snapshot.model_id(), snapshot.revision())),
+            "the restyle waits for the read and must happen once it lands"
+        );
+    });
+}
