@@ -3,9 +3,9 @@
 #![allow(clippy::mutable_key_type)] // Hash for Syntax doesn't use mutable fields.
 
 use std::cell::Cell;
+use std::fmt;
 use std::hash::Hash;
 use std::num::NonZeroU32;
-use std::{env, fmt};
 
 use line_numbers::{LinePositions, SingleLineSpan};
 use typed_arena::Arena;
@@ -157,7 +157,6 @@ impl<'a> fmt::Debug for Syntax<'a> {
                 children,
                 close_content,
                 close_position,
-                info,
                 ..
             } => {
                 let mut ds = f.debug_struct(&format!(
@@ -172,23 +171,10 @@ impl<'a> fmt::Debug for Syntax<'a> {
                     .field("close_content", &close_content)
                     .field("close_position", &dbg_pos(close_position));
 
-                if env::var("DFT_VERBOSE").is_ok() {
-                    let next_sibling_s = match info.next_sibling.get() {
-                        Some(List { .. }) => "Some(List)",
-                        Some(Atom { .. }) => "Some(Atom)",
-                        None => "None",
-                    };
-                    ds.field("next_sibling", &next_sibling_s);
-                }
-
                 ds.finish()
             }
             Atom {
-                content,
-                position,
-                info,
-                kind: highlight,
-                ..
+                content, position, ..
             } => {
                 let mut ds = f.debug_struct(&format!(
                     "Atom id:{} content_id:{}",
@@ -197,16 +183,6 @@ impl<'a> fmt::Debug for Syntax<'a> {
                 ));
                 ds.field("content", &content);
                 ds.field("position", &dbg_pos(position));
-
-                if env::var("DFT_VERBOSE").is_ok() {
-                    ds.field("highlight", highlight);
-                    let next_sibling_s = match info.next_sibling.get() {
-                        Some(List { .. }) => "Some(List)",
-                        Some(Atom { .. }) => "Some(Atom)",
-                        None => "None",
-                    };
-                    ds.field("next_sibling", &next_sibling_s);
-                }
 
                 ds.finish()
             }
@@ -647,14 +623,8 @@ pub(crate) enum MatchKind {
     /// words more prominently. UnchangedPartOfNovelItem represents
     /// the parts that don't get this special highlighting.
     ///
-    /// For example, line-based diffs we want to highlight `a` and `b`
-    /// differently to `foo` here.
-    ///
-    /// foo a
-    /// foo b
-    ///
-    /// Whereas for syntactic diffs, we want to do the same thing for
-    /// strings and comments.
+    /// For example, in strings and comments we want to highlight `a`
+    /// and `b` differently to `foo` here.
     ///
     /// "foo a"
     /// "foo b"
@@ -666,8 +636,8 @@ pub(crate) enum MatchKind {
         self_pos: SingleLineSpan,
         opposite_pos: Vec<SingleLineSpan>,
     },
-    /// The novel part of the novel item. For line-based diffs, this
-    /// is the words that are unique to this line.
+    /// The novel part of the novel item: the words that are unique to
+    /// this string or comment.
     ///
     /// See the discussion in `UnchangedPartOfNovelItem`.
     NovelWord { highlight: TokenKind },
@@ -993,9 +963,12 @@ fn change_positions_<'a>(
     seen_unchanged: &mut bool,
 ) {
     for node in nodes {
-        let change = change_map
-            .get(node)
-            .unwrap_or_else(|| panic!("Should have changes set in all nodes: {:#?}", node));
+        let change = change_map.get(node).unwrap_or_else(|| {
+            panic!(
+                "Should have changes set in all nodes: {}",
+                node.dbg_content()
+            )
+        });
 
         if matches!(change, ChangeKind::Unchanged(_)) {
             *seen_unchanged = true;

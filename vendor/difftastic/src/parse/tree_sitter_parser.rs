@@ -1,5 +1,7 @@
 //! Load and configure parsers written with tree-sitter.
 
+use std::cell::Cell;
+use std::ops::ControlFlow;
 use std::sync::{LazyLock, Mutex};
 
 use line_numbers::{LineNumber, LinePositions};
@@ -10,6 +12,7 @@ use typed_arena::Arena;
 use super::syntax::{self, MatchedPos, StringKind};
 use crate::constants::Side;
 use crate::hash::{DftHashMap, DftHashSet};
+use crate::interrupt::Interrupted;
 use crate::options::DiffOptions;
 use crate::parse::guess_language as guess;
 use crate::parse::syntax::{AtomKind, Syntax};
@@ -1248,6 +1251,7 @@ fn build_config(language: guess::Language) -> TreeSitterConfig {
 }
 
 /// Parse `src` with tree-sitter.
+#[cfg(test)]
 pub(crate) fn to_tree(src: &str, config: &TreeSitterConfig) -> tree_sitter::Tree {
     let mut parser = ts::Parser::new();
     parser
@@ -1258,20 +1262,106 @@ pub(crate) fn to_tree(src: &str, config: &TreeSitterConfig) -> tree_sitter::Tree
 }
 
 #[derive(Debug)]
-pub(crate) struct ExceededByteLimit(pub(crate) usize);
+pub(crate) enum TreeStop {
+    ByteLimit(usize),
+    NestingLimit,
+    Interrupted,
+}
 
 pub(crate) fn to_tree_with_limit(
     diff_options: &DiffOptions,
     config: &TreeSitterConfig,
     lhs_src: &str,
     rhs_src: &str,
-) -> Result<(tree_sitter::Tree, tree_sitter::Tree), ExceededByteLimit> {
+) -> Result<(tree_sitter::Tree, tree_sitter::Tree), TreeStop> {
     if lhs_src.len() > diff_options.byte_limit || rhs_src.len() > diff_options.byte_limit {
         let num_bytes = std::cmp::max(lhs_src.len(), rhs_src.len());
-        return Err(ExceededByteLimit(num_bytes));
+        return Err(TreeStop::ByteLimit(num_bytes));
     }
 
-    Ok((to_tree(lhs_src, config), to_tree(rhs_src, config)))
+    let mut parser = ts::Parser::new();
+    parser
+        .set_language(&config.language)
+        .expect("Incompatible tree-sitter version");
+    let lhs_tree = parse_unless_stopped(&mut parser, lhs_src, diff_options.should_stop)
+        .ok_or(TreeStop::Interrupted)?;
+    let rhs_tree = parse_unless_stopped(&mut parser, rhs_src, diff_options.should_stop)
+        .ok_or(TreeStop::Interrupted)?;
+    if nested_deeper_than(&lhs_tree, diff_options.nesting_limit)
+        || nested_deeper_than(&rhs_tree, diff_options.nesting_limit)
+    {
+        return Err(TreeStop::NestingLimit);
+    }
+    Ok((lhs_tree, rhs_tree))
+}
+
+// GitComet: conversion and diffing recurse once per tree level, so a tree deeper
+// than `limit` (edges from the root) would overflow the stack.
+fn nested_deeper_than(tree: &tree_sitter::Tree, limit: usize) -> bool {
+    let mut cursor = tree.walk();
+    loop {
+        if cursor.depth() as usize > limit {
+            return true;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return false;
+            }
+        }
+    }
+}
+
+// GitComet: the depth of each of `nodes` in `tree`, from one walk of the tree.
+fn depths_in<'tree>(
+    tree: &'tree tree_sitter::Tree,
+    nodes: &[ts::Node<'tree>],
+) -> DftHashMap<usize, usize> {
+    if nodes.is_empty() {
+        return DftHashMap::default();
+    }
+    let wanted: DftHashSet<usize> = nodes.iter().map(ts::Node::id).collect();
+    let mut depths = DftHashMap::default();
+    let mut cursor = tree.walk();
+    loop {
+        if wanted.contains(&cursor.node().id()) {
+            depths.insert(cursor.node().id(), cursor.depth() as usize);
+            if depths.len() == wanted.len() {
+                return depths;
+            }
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return depths;
+            }
+        }
+    }
+}
+
+// GitComet: a parse that `should_stop` cancels returns `None`.
+fn parse_unless_stopped(
+    parser: &mut ts::Parser,
+    src: &str,
+    should_stop: &dyn Fn() -> bool,
+) -> Option<tree_sitter::Tree> {
+    let mut progress = |_: &ts::ParseState| {
+        if should_stop() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let bytes = src.as_bytes();
+    parser.parse_with_options(
+        &mut |offset, _| bytes.get(offset..).unwrap_or_default(),
+        None,
+        Some(ts::ParseOptions::new().progress_callback(&mut progress)),
+    )
 }
 
 /// Find any nodes that can be parsed as other languages (e.g. JavaScript embedded in HTML),
@@ -1281,27 +1371,31 @@ pub(crate) fn parse_subtrees(
     src: &str,
     config: &TreeSitterConfig,
     tree: &tree_sitter::Tree,
-) -> DftHashMap<
-    usize,
-    (
-        tree_sitter::Tree,
-        &'static TreeSitterConfig,
-        HighlightedNodeIds,
-    ),
+    diff_options: &DiffOptions,
+) -> Result<
+    DftHashMap<
+        usize,
+        (
+            tree_sitter::Tree,
+            &'static TreeSitterConfig,
+            HighlightedNodeIds,
+        ),
+    >,
+    Interrupted,
 > {
     let mut subtrees = DftHashMap::default();
 
     for language in &config.sub_languages {
-        let mut query_cursor = tree_sitter::QueryCursor::new();
-        let mut query_matches =
-            query_cursor.matches(&language.query, tree.root_node(), src.as_bytes());
-
-        while let Some(m) = query_matches.next() {
+        let mut nodes = vec![];
+        for_each_match_unless_stopped(&language.query, tree, src, diff_options.should_stop, |m| {
             let node = m.nodes_for_capture_index(0).next().unwrap();
-            if node.byte_range().is_empty() {
-                continue;
+            if !node.byte_range().is_empty() {
+                nodes.push(node);
             }
+        })?;
 
+        let host_depths = depths_in(tree, &nodes);
+        for node in nodes {
             let subconfig = from_language(language.parse_as);
             let mut parser = ts::Parser::new();
             parser
@@ -1311,23 +1405,69 @@ pub(crate) fn parse_subtrees(
                 .set_included_ranges(&[node.range()])
                 .expect("Incompatible tree-sitter version");
 
-            let tree = parser.parse(src, None).unwrap();
-            let sub_highlights = tree_highlights(&tree, src, subconfig);
+            let tree = parse_unless_stopped(&mut parser, src, diff_options.should_stop)
+                .ok_or(Interrupted)?;
+            let budget = diff_options
+                .nesting_limit
+                .saturating_sub(host_depths[&node.id()]);
+            if nested_deeper_than(&tree, budget) {
+                debug!(
+                    "{:?} nested past the limit; diffed with the host grammar",
+                    language.parse_as
+                );
+                continue;
+            }
+            let sub_highlights = tree_highlights(&tree, src, subconfig, diff_options.should_stop)?;
 
             subtrees.insert(node.id(), (tree, subconfig, sub_highlights));
         }
     }
 
-    subtrees
+    Ok(subtrees)
+}
+
+// GitComet: runs `query` over `tree` and reports `Interrupted` when `should_stop`
+// cut the query short.
+pub(crate) fn for_each_match_unless_stopped<'tree>(
+    query: &ts::Query,
+    tree: &'tree tree_sitter::Tree,
+    src: &str,
+    should_stop: &dyn Fn() -> bool,
+    mut each: impl FnMut(&ts::QueryMatch<'_, 'tree>),
+) -> Result<(), Interrupted> {
+    let stopped = Cell::new(false);
+    let mut progress = |_: &ts::QueryCursorState| {
+        if should_stop() {
+            stopped.set(true);
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    let mut cursor = ts::QueryCursor::new();
+    let mut matches = cursor.matches_with_options(
+        query,
+        tree.root_node(),
+        src.as_bytes(),
+        ts::QueryCursorOptions::new().progress_callback(&mut progress),
+    );
+    while let Some(m) = matches.next() {
+        each(m);
+    }
+    if stopped.get() {
+        return Err(Interrupted);
+    }
+    Ok(())
 }
 
 /// Calculate which tree-sitter node IDs should have which syntax
 /// highlighting.
-fn tree_highlights(
+pub(crate) fn tree_highlights(
     tree: &tree_sitter::Tree,
     src: &str,
     config: &TreeSitterConfig,
-) -> HighlightedNodeIds {
+    should_stop: &dyn Fn() -> bool,
+) -> Result<HighlightedNodeIds, Interrupted> {
     let mut keyword_ish_capture_ids: Vec<u32> = vec![];
     let mut string_capture_ids = vec![];
     let mut type_capture_ids = vec![];
@@ -1385,15 +1525,12 @@ fn tree_highlights(
         }
     }
 
-    let mut qc = ts::QueryCursor::new();
-    let mut q_matches = qc.matches(&config.highlight_query, tree.root_node(), src.as_bytes());
-
     let mut comment_ids = DftHashSet::default();
     let mut keyword_ids = DftHashSet::default();
     let mut string_ids = DftHashSet::default();
     let mut type_ids = DftHashSet::default();
 
-    while let Some(m) = q_matches.next() {
+    for_each_match_unless_stopped(&config.highlight_query, tree, src, should_stop, |m| {
         for c in m.captures() {
             if comment_capture_ids.contains(&c.index) {
                 comment_ids.insert(c.node.id());
@@ -1405,28 +1542,32 @@ fn tree_highlights(
                 type_ids.insert(c.node.id());
             }
         }
-    }
+    })?;
 
-    HighlightedNodeIds {
+    Ok(HighlightedNodeIds {
         comment_ids,
         keyword_ids,
         string_ids,
         type_ids,
-    }
+    })
 }
 
 pub(crate) fn comment_positions(
     tree: &tree_sitter::Tree,
     src: &str,
     config: &TreeSitterConfig,
-) -> Vec<MatchedPos> {
+    diff_options: &DiffOptions,
+) -> Result<Vec<MatchedPos>, Interrupted> {
     let arena = Arena::new();
-    let ignore_comments = false;
+    let options = DiffOptions {
+        ignore_comments: false,
+        ..*diff_options
+    };
 
-    let (nodes, _errors) = to_syntax(tree, src, &arena, config, ignore_comments);
+    let (nodes, _errors) = to_syntax(tree, src, &arena, config, &options)?;
     let positions = syntax::comment_positions(&nodes);
 
-    positions
+    Ok(positions
         .into_iter()
         .map(|pos| MatchedPos {
             kind: syntax::MatchKind::Ignored {
@@ -1434,7 +1575,19 @@ pub(crate) fn comment_positions(
             },
             pos,
         })
-        .collect()
+        .collect())
+}
+
+#[derive(Debug)]
+pub(crate) enum SyntaxStop {
+    ParseErrors(ExceededParseErrorLimit),
+    Interrupted,
+}
+
+impl From<Interrupted> for SyntaxStop {
+    fn from(_: Interrupted) -> Self {
+        Self::Interrupted
+    }
 }
 
 #[derive(Debug)]
@@ -1476,21 +1629,9 @@ pub(crate) fn to_syntax_with_limit<'a>(
     arena: &'a Arena<Syntax<'a>>,
     config: &TreeSitterConfig,
     diff_options: &DiffOptions,
-) -> Result<(Vec<&'a Syntax<'a>>, Vec<&'a Syntax<'a>>), ExceededParseErrorLimit> {
-    let (lhs_nodes, lhs_errors) = to_syntax(
-        lhs_tree,
-        lhs_src,
-        arena,
-        config,
-        diff_options.ignore_comments,
-    );
-    let (rhs_nodes, rhs_errors) = to_syntax(
-        rhs_tree,
-        rhs_src,
-        arena,
-        config,
-        diff_options.ignore_comments,
-    );
+) -> Result<(Vec<&'a Syntax<'a>>, Vec<&'a Syntax<'a>>), SyntaxStop> {
+    let (lhs_nodes, lhs_errors) = to_syntax(lhs_tree, lhs_src, arena, config, diff_options)?;
+    let (rhs_nodes, rhs_errors) = to_syntax(rhs_tree, rhs_src, arena, config, diff_options)?;
     syntax::init_all_info(&lhs_nodes, &rhs_nodes);
 
     let error_count = lhs_errors.count + rhs_errors.count;
@@ -1503,10 +1644,10 @@ pub(crate) fn to_syntax_with_limit<'a>(
             (None, Some((line, column))) => Some((line, column, Side::Left)),
             (None, None) => None,
         };
-        return Err(ExceededParseErrorLimit {
+        return Err(SyntaxStop::ParseErrors(ExceededParseErrorLimit {
             error_count,
             first_error_pos,
-        });
+        }));
     }
 
     Ok((lhs_nodes, rhs_nodes))
@@ -1517,20 +1658,21 @@ pub(crate) fn to_syntax<'a>(
     src: &str,
     arena: &'a Arena<Syntax<'a>>,
     config: &TreeSitterConfig,
-    ignore_comments: bool,
-) -> (Vec<&'a Syntax<'a>>, ParseErrors) {
+    diff_options: &DiffOptions,
+) -> Result<(Vec<&'a Syntax<'a>>, ParseErrors), Interrupted> {
+    let ignore_comments = diff_options.ignore_comments;
     // Don't return anything on an empty input. Most parsers return a
     // zero-width top-level AST node on empty files, which is
     // confusing and not useful for diffing.
     if src.trim().is_empty() {
-        return (vec![], ParseErrors::default());
+        return Ok((vec![], ParseErrors::default()));
     }
 
-    let highlights = tree_highlights(tree, src, config);
+    let highlights = tree_highlights(tree, src, config, diff_options.should_stop)?;
 
     // Parse sub-languages, if any, which will be used both for
     // highlighting and for more precise Syntax nodes where applicable.
-    let subtrees = parse_subtrees(src, config, tree);
+    let subtrees = parse_subtrees(src, config, tree, diff_options)?;
 
     let nl_pos = LinePositions::from(src);
     let mut cursor = tree.walk();
@@ -1556,7 +1698,7 @@ pub(crate) fn to_syntax<'a>(
         &subtrees,
         ignore_comments,
     );
-    (nodes, errors)
+    Ok((nodes, errors))
 }
 
 /// Parse `src` with tree-sitter and convert to difftastic Syntax.
@@ -1568,7 +1710,12 @@ pub(crate) fn parse<'a>(
     ignore_comments: bool,
 ) -> Vec<&'a Syntax<'a>> {
     let tree = to_tree(src, config);
-    let (nodes, _errors) = to_syntax(&tree, src, arena, config, ignore_comments);
+    let options = DiffOptions {
+        ignore_comments,
+        ..DiffOptions::default()
+    };
+    let (nodes, _errors) =
+        to_syntax(&tree, src, arena, config, &options).expect("never asked to stop");
     nodes
 }
 

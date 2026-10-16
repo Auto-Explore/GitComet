@@ -70,7 +70,8 @@ Changes against the baseline (`git log -- vendor/difftastic`):
 
 - A library: the CLI, terminal display, file reading, directory and conflict
   modes are removed. `src/api.rs` is GitComet's entry point and
-  `src/api_tests.rs` pins its output for a few inputs. `api::compare` repeats
+  `src/api_tests.rs` holds GitComet's tests: rendered output per language,
+  fallbacks, stopping and nesting. `api::compare` repeats
   the CLI's final-newline step and reports lines in the caller's numbering;
   `diff_file_content` guesses the language from the new text unless that is
   empty.
@@ -85,6 +86,25 @@ Changes against the baseline (`git log -- vendor/difftastic`):
 - `split_atom_words` anchors a changed string's words on the atom's first line
   span, which `MatchedPos::new` filtered out when it was empty, so a string that
   starts with a newline (a Perl heredoc) keeps its rows.
+- Stopping: `api::compare` takes a `should_stop` closure, checked by
+  tree-sitter's parse and query progress callbacks (embedded languages
+  included), on the graph search's first vertex and every
+  `STOP_CHECK_INTERVAL` vertices, and between phases; a stop returns
+  `Interrupted`. The longest stretch without a check is about 0.5 s, in the
+  syntax conversion and `mark_unchanged` of a 1 MB release diff.
+- Nesting: a tree deeper than the caller's limit falls back with
+  `NestingLimit` before the recursive conversion. An embedded language's tree
+  gets only the depth its host leaves, or is left to the host grammar, so one
+  limit bounds both. Diff passes recurse up to twice that limit, since a node
+  can gain a wrapper list.
+- Fallbacks skip difftastic's line diff (`line_parser.rs` is removed), and no
+  `DFT_*` environment variable is read (`clippy.toml` disallows `std::env`
+  reads). Panic messages no longer format whole syntax trees, and graph
+  vertices have no `Debug`, whose derive walked every neighbour.
+- Speed: `display/json.rs` groups novel positions by line once instead of
+  rescanning them for every line, and `display/hunks.rs` scans a hunk's
+  matched lines forward from its start instead of back from the end. A 1 MB
+  release diff took 11 s before and 2.4 s after.
 
 To upgrade, rebuild the baseline for the new tag by the recipe, diff it against
 this import's tree, and apply that upstream diff to `difftastic/`. Then

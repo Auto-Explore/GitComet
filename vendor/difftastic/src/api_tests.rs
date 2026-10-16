@@ -2,13 +2,17 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use super::*;
+use crate::options::never_stop;
+
+const NESTING_LIMIT: usize = 10_000;
 
 fn compare_texts(path: &str, old: &str, new: &str) -> String {
-    render(compare(Input {
+    let input = Input {
         path: Path::new(path),
         old,
         new,
-    }))
+    };
+    render(compare(input, NESTING_LIMIT, &never_stop).expect("never asked to stop"))
 }
 
 fn render(comparison: Comparison) -> String {
@@ -219,11 +223,193 @@ fn graph_limit_is_a_typed_fallback() {
             graph_limit: 1,
             ..DiffOptions::default()
         },
-    );
+    )
+    .unwrap();
     assert!(matches!(
         result.file_format,
         FileFormat::TextFallback {
             reason: TextFallbackReason::GraphLimit
         }
     ));
+}
+
+#[test]
+fn a_stop_request_before_any_work_interrupts() {
+    let input = Input {
+        path: Path::new("notes.txt"),
+        old: "a\n",
+        new: "b\n",
+    };
+    assert_eq!(compare(input, NESTING_LIMIT, &|| true), Err(Interrupted));
+}
+
+#[test]
+fn a_stop_request_while_parsing_interrupts() {
+    use crate::parse::guess_language::Language;
+    use crate::parse::tree_sitter_parser::{from_language, to_tree_with_limit, TreeStop};
+
+    let source = "let a = [1, 2, 3];\n".repeat(20_000);
+    let options = DiffOptions {
+        should_stop: &|| true,
+        ..DiffOptions::default()
+    };
+    let result = to_tree_with_limit(
+        &options,
+        from_language(Language::JavaScript),
+        &source,
+        &source,
+    );
+    assert!(matches!(result, Err(TreeStop::Interrupted)));
+}
+
+#[test]
+fn a_stop_request_during_the_graph_search_interrupts() {
+    use std::cell::Cell;
+
+    use typed_arena::Arena;
+
+    use crate::diff::changes::ChangeMap;
+    use crate::diff::shortest_path::{mark_syntax, SearchStop};
+    use crate::options::DEFAULT_GRAPH_LIMIT;
+    use crate::parse::guess_language::Language;
+    use crate::parse::syntax::init_all_info;
+    use crate::parse::tree_sitter_parser::{from_language, parse};
+
+    let items = |odd: &str| {
+        (0..200)
+            .map(|item| {
+                if item % 2 == 0 {
+                    item.to_string()
+                } else {
+                    odd.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let old = format!("let a = [{}];\n", items("x"));
+    let new = format!("let a = [{}];\n", items("y"));
+    let search = |should_stop: &dyn Fn() -> bool| {
+        let arena = Arena::new();
+        let config = from_language(Language::JavaScript);
+        let lhs = parse(&arena, &old, config, false);
+        let rhs = parse(&arena, &new, config, false);
+        init_all_info(&lhs, &rhs);
+        let mut change_map = ChangeMap::default();
+        mark_syntax(
+            lhs.first().copied(),
+            rhs.first().copied(),
+            &mut change_map,
+            DEFAULT_GRAPH_LIMIT,
+            should_stop,
+        )
+    };
+    let checks = Cell::new(0);
+    let count = || {
+        checks.set(checks.get() + 1);
+        false
+    };
+    assert!(search(&count).is_ok());
+    assert!(
+        checks.get() > 1,
+        "the search must run past one check interval"
+    );
+    let calls = Cell::new(0);
+    let stop_after_first_check = || {
+        calls.set(calls.get() + 1);
+        calls.get() > 1
+    };
+    assert!(matches!(
+        search(&stop_after_first_check),
+        Err(SearchStop::Interrupted)
+    ));
+}
+
+#[test]
+fn a_stop_request_while_highlighting_interrupts() {
+    use crate::parse::guess_language::Language;
+    use crate::parse::tree_sitter_parser::{from_language, to_tree, tree_highlights};
+
+    let source = "let a = [1, \"b\", c];\n".repeat(20_000);
+    let config = from_language(Language::JavaScript);
+    let tree = to_tree(&source, config);
+    assert!(matches!(
+        tree_highlights(&tree, &source, config, &|| true),
+        Err(Interrupted)
+    ));
+}
+
+fn nested_json(depth: usize, value: &str) -> String {
+    format!("{}{value}{}\n", "[".repeat(depth), "]".repeat(depth))
+}
+
+#[test]
+fn nesting_at_the_limit_compares_and_one_deeper_falls_back() {
+    let old = nested_json(9, "1");
+    let new = nested_json(9, "2");
+    let input = Input {
+        path: Path::new("a.json"),
+        old: &old,
+        new: &new,
+    };
+    assert!(matches!(
+        compare(input, 10, &never_stop),
+        Ok(Comparison::Changed(_))
+    ));
+    assert_eq!(
+        compare(input, 9, &never_stop),
+        Ok(Comparison::Fallback(Fallback::NestingLimit))
+    );
+}
+
+#[test]
+fn an_embedded_tree_gets_the_depth_its_host_leaves() {
+    use crate::parse::guess_language::Language;
+    use crate::parse::tree_sitter_parser::{from_language, parse_subtrees, to_tree};
+
+    // The style text sits 12 levels deep in the HTML tree; the CSS tree alone is 42 deep.
+    let css = format!("{}color: red;{}", "a {".repeat(20), "}".repeat(20));
+    let html = format!(
+        "{}<style>{css}</style>{}\n",
+        "<div>".repeat(10),
+        "</div>".repeat(10)
+    );
+    let config = from_language(Language::Html);
+    let tree = to_tree(&html, config);
+    let subtrees = |nesting_limit| {
+        let options = DiffOptions {
+            nesting_limit,
+            ..DiffOptions::default()
+        };
+        parse_subtrees(&html, config, &tree, &options)
+            .unwrap()
+            .len()
+    };
+    assert_eq!(subtrees(60), 1);
+    assert_eq!(subtrees(50), 0);
+}
+
+#[test]
+fn a_stop_request_cuts_a_query_short() {
+    use crate::parse::guess_language::Language;
+    use crate::parse::tree_sitter_parser::{for_each_match_unless_stopped, from_language, to_tree};
+
+    let source = "let a = [1, \"b\", c];\n".repeat(20_000);
+    let tree = to_tree(&source, from_language(Language::JavaScript));
+    let query = tree_sitter::Query::new(
+        &tree_sitter_javascript::LANGUAGE.into(),
+        "(identifier) @name",
+    )
+    .unwrap();
+    let count = |should_stop: &dyn Fn() -> bool| {
+        let mut matches = 0;
+        let result =
+            for_each_match_unless_stopped(&query, &tree, &source, should_stop, |_| matches += 1);
+        (matches, result)
+    };
+    let (all, finished) = count(&never_stop);
+    let (before_stop, stopped) = count(&|| true);
+    assert_eq!(finished, Ok(()));
+    assert_eq!(stopped, Err(Interrupted));
+    assert!(before_stop < all / 2, "{before_stop} of {all} matches ran");
 }

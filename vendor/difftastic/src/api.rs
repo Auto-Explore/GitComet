@@ -3,6 +3,8 @@ use std::ops::Range;
 use std::path::Path;
 
 use crate::display::json::{self, Status};
+use crate::interrupt;
+pub use crate::interrupt::Interrupted;
 use crate::options::{DiffOptions, DEFAULT_BYTE_LIMIT};
 use crate::parse::guess_language::language_name;
 use crate::summary::{FileFormat, TextFallbackReason};
@@ -31,6 +33,7 @@ pub enum Fallback {
     ParseErrors,
     ByteLimit,
     GraphLimit,
+    NestingLimit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,21 +63,38 @@ pub struct LineRanges {
     pub ranges: Vec<Range<u32>>,
 }
 
-pub fn compare(input: Input<'_>) -> Comparison {
+/// Falls back to `NestingLimit` when either side's tree is deeper than
+/// `nesting_limit` tree-sitter levels; an embedded language that would take its
+/// host past the limit is diffed with the host grammar instead. The diff
+/// recurses up to twice the limit, as a node can gain a wrapper list.
+/// `should_stop` is polled during the work and must not panic: tree-sitter
+/// calls it from `extern "C"`, where a panic aborts.
+pub fn compare(
+    input: Input<'_>,
+    nesting_limit: usize,
+    should_stop: &dyn Fn() -> bool,
+) -> Result<Comparison, Interrupted> {
+    interrupt::check(should_stop)?;
     let old = with_final_newline(input.old);
     let new = with_final_newline(input.new);
-    let result = crate::diff_file_content(input.path, &old, &new, &DiffOptions::default());
+    let options = DiffOptions {
+        nesting_limit,
+        should_stop,
+        ..DiffOptions::default()
+    };
+    let result = crate::diff_file_content(input.path, &old, &new, &options)?;
     let language = match result.file_format {
         FileFormat::SupportedLanguage(language) => language_name(language),
-        FileFormat::PlainText => return Comparison::Fallback(Fallback::UnsupportedLanguage),
-        FileFormat::TextFallback { reason } => return Comparison::Fallback(fallback(reason)),
+        FileFormat::PlainText => return Ok(Comparison::Fallback(Fallback::UnsupportedLanguage)),
+        FileFormat::TextFallback { reason } => return Ok(Comparison::Fallback(fallback(reason))),
     };
+    interrupt::check(should_stop)?;
     let file = json::File::from(&result);
     let lines = LineCounts {
         old: line_count(input.old),
         new: line_count(input.new),
     };
-    match file.status {
+    Ok(match file.status {
         Status::Unchanged => Comparison::Unchanged,
         Status::Created => Comparison::Created { language },
         Status::Deleted => Comparison::Deleted { language },
@@ -97,7 +117,7 @@ pub fn compare(input: Input<'_>) -> Comparison {
                 .filter(|chunk| !chunk.is_empty())
                 .collect(),
         }),
-    }
+    })
 }
 
 // Upstream counts the empty line after a final newline; the caller's lines stop
@@ -156,6 +176,7 @@ fn fallback(reason: TextFallbackReason) -> Fallback {
         TextFallbackReason::ByteLimit => Fallback::ByteLimit,
         TextFallbackReason::ParseErrors => Fallback::ParseErrors,
         TextFallbackReason::GraphLimit => Fallback::GraphLimit,
+        TextFallbackReason::NestingLimit => Fallback::NestingLimit,
     }
 }
 

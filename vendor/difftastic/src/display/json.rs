@@ -5,6 +5,7 @@ use line_numbers::LineNumber;
 use crate::display::context::{all_matched_lines_filled, opposite_positions};
 use crate::display::hunks::{matched_lines_indexes_for_hunk, matched_pos_to_hunks, merge_adjacent};
 use crate::display::side_by_side::lines_with_novel;
+use crate::hash::DftHashMap;
 use crate::lines::MaxLine;
 use crate::parse::syntax::MatchedPos;
 use crate::summary::DiffResult;
@@ -92,6 +93,8 @@ impl From<&DiffResult> for File {
             .collect();
 
         let mut matched_lines = &matched_lines[..];
+        let lhs_novel_by_line = novel_by_line(&summary.lhs_positions);
+        let rhs_novel_by_line = novel_by_line(&summary.rhs_positions);
 
         let mut chunks = Vec::with_capacity(hunks.len());
         for hunk in &hunks {
@@ -115,18 +118,10 @@ impl From<&DiffResult> for File {
                     });
 
                 if let Some(line_num) = lhs_line_num {
-                    add_changes_to_side(
-                        line.lhs.as_mut().unwrap(),
-                        *line_num,
-                        &summary.lhs_positions,
-                    );
+                    add_changes_to_side(line.lhs.as_mut().unwrap(), *line_num, &lhs_novel_by_line);
                 }
                 if let Some(line_num) = rhs_line_num {
-                    add_changes_to_side(
-                        line.rhs.as_mut().unwrap(),
-                        *line_num,
-                        &summary.rhs_positions,
-                    );
+                    add_changes_to_side(line.rhs.as_mut().unwrap(), *line_num, &rhs_novel_by_line);
                 }
             }
 
@@ -173,9 +168,12 @@ pub(crate) struct Change {
     pub(crate) end: u32,
 }
 
-fn add_changes_to_side(side: &mut Side, line_num: LineNumber, all_matches: &[MatchedPos]) {
-    let matches = matches_for_line(all_matches, line_num);
-    for m in matches {
+fn add_changes_to_side(
+    side: &mut Side,
+    line_num: LineNumber,
+    novel_by_line: &DftHashMap<LineNumber, Vec<&MatchedPos>>,
+) {
+    for m in novel_by_line.get(&line_num).into_iter().flatten() {
         side.changes.push(Change {
             start: m.pos.start_col,
             end: m.pos.end_col,
@@ -183,10 +181,11 @@ fn add_changes_to_side(side: &mut Side, line_num: LineNumber, all_matches: &[Mat
     }
 }
 
-fn matches_for_line(matches: &[MatchedPos], line_num: LineNumber) -> Vec<&MatchedPos> {
-    matches
-        .iter()
-        .filter(|m| m.pos.line == line_num)
-        .filter(|m| m.kind.is_novel())
-        .collect()
+// GitComet: one pass over the positions, rather than one per changed line.
+fn novel_by_line(matches: &[MatchedPos]) -> DftHashMap<LineNumber, Vec<&MatchedPos>> {
+    let mut by_line: DftHashMap<LineNumber, Vec<&MatchedPos>> = DftHashMap::default();
+    for m in matches.iter().filter(|m| m.kind.is_novel()) {
+        by_line.entry(m.pos.line).or_default().push(m);
+    }
+    by_line
 }

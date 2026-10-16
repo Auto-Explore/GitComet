@@ -47,7 +47,7 @@ use crate::parse::syntax::{AtomKind, Syntax, SyntaxId};
 ///
 /// Vertices are arena allocated (the 'v lifetime) and have references
 /// to syntax nodes (the 's lifetime).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Vertex<'s, 'v> {
     /// The neighbours of this vertex. This is computed lazily, on
     /// first access.

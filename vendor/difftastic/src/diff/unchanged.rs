@@ -51,14 +51,7 @@ fn split_unchanged<'a>(
     rhs_nodes: &[&'a Syntax<'a>],
     change_map: &mut ChangeMap<'a>,
 ) -> Vec<(Vec<&'a Syntax<'a>>, Vec<&'a Syntax<'a>>)> {
-    let size_threshold = if let Ok(env_threshold) = std::env::var("DFT_TINY_THRESHOLD") {
-        env_threshold
-            .parse::<u32>()
-            .ok()
-            .unwrap_or(TINY_TREE_THRESHOLD)
-    } else {
-        TINY_TREE_THRESHOLD
-    };
+    let size_threshold = TINY_TREE_THRESHOLD;
 
     let mut res: Vec<(Vec<&'a Syntax<'a>>, Vec<&'a Syntax<'a>>)> = vec![];
     for (cs, lhs_section_nodes, rhs_section_nodes) in

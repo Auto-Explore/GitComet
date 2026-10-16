@@ -42,7 +42,6 @@
 //! effective.
 
 use std::cmp::Reverse;
-use std::env;
 
 use bumpalo::Bump;
 use radix_heap::RadixHeapMap;
@@ -53,7 +52,13 @@ use crate::hash::DftHashMap;
 use crate::parse::syntax::Syntax;
 
 #[derive(Debug)]
-pub(crate) struct ExceededGraphLimit {}
+pub(crate) enum SearchStop {
+    GraphLimit,
+    Interrupted,
+}
+
+// GitComet: how many vertices the search visits between stop checks.
+const STOP_CHECK_INTERVAL: usize = 1024;
 
 /// Return the shortest route from `start` to the end vertex.
 fn shortest_vertex_path<'s, 'v>(
@@ -61,7 +66,8 @@ fn shortest_vertex_path<'s, 'v>(
     vertex_arena: &'v Bump,
     size_hint: usize,
     graph_limit: usize,
-) -> Result<Vec<&'v Vertex<'s, 'v>>, ExceededGraphLimit> {
+    should_stop: &dyn Fn() -> bool,
+) -> Result<Vec<&'v Vertex<'s, 'v>>, SearchStop> {
     // We want to visit nodes with the shortest distance first, but
     // RadixHeapMap is a max-heap. Ensure nodes are wrapped with
     // Reverse to flip comparisons.
@@ -72,7 +78,12 @@ fn shortest_vertex_path<'s, 'v>(
     let mut seen = DftHashMap::default();
     seen.reserve(size_hint);
 
+    let mut visited: usize = 0;
     let end: &'v Vertex<'s, 'v> = loop {
+        if visited.is_multiple_of(STOP_CHECK_INTERVAL) && should_stop() {
+            return Err(SearchStop::Interrupted);
+        }
+        visited += 1;
         match heap.pop() {
             Some((Reverse(distance), current)) => {
                 if current.is_end() {
@@ -103,7 +114,7 @@ fn shortest_vertex_path<'s, 'v>(
                         "Reached graph limit, arena consumed {}",
                         humansize::format_size(vertex_arena.allocated_bytes(), humansize::BINARY),
                     );
-                    return Err(ExceededGraphLimit {});
+                    return Err(SearchStop::GraphLimit);
                 }
             }
             None => panic!("Ran out of graph nodes before reaching end"),
@@ -158,14 +169,16 @@ fn shortest_path<'s, 'v>(
     vertex_arena: &'v Bump,
     size_hint: usize,
     graph_limit: usize,
-) -> Result<Vec<(Edge, &'v Vertex<'s, 'v>)>, ExceededGraphLimit> {
+    should_stop: &dyn Fn() -> bool,
+) -> Result<Vec<(Edge, &'v Vertex<'s, 'v>)>, SearchStop> {
     let start: &'v Vertex<'s, 'v> = vertex_arena.alloc(start);
-    let vertex_path = shortest_vertex_path(start, vertex_arena, size_hint, graph_limit)?;
+    let vertex_path =
+        shortest_vertex_path(start, vertex_arena, size_hint, graph_limit, should_stop)?;
     Ok(shortest_path_with_edges(&vertex_path))
 }
 
 fn edge_between<'s, 'v>(before: &Vertex<'s, 'v>, after: &Vertex<'s, 'v>) -> Edge {
-    assert_ne!(before, after);
+    assert!(before != after, "a route edge joins two distinct vertices");
 
     let mut shortest_edge: Option<Edge> = None;
     if let Some(neighbours) = before.neighbours.get() {
@@ -190,9 +203,16 @@ fn edge_between<'s, 'v>(before: &Vertex<'s, 'v>, after: &Vertex<'s, 'v>) -> Edge
         return edge;
     }
 
+    let content = |vertex: &Vertex<'s, 'v>| {
+        (
+            vertex.lhs_syntax.map(Syntax::dbg_content),
+            vertex.rhs_syntax.map(Syntax::dbg_content),
+        )
+    };
     panic!(
-        "Expected a route between the two vertices {:#?} and {:#?}",
-        before, after
+        "Expected a route between the two vertices {:?} and {:?}",
+        content(before),
+        content(after)
     );
 }
 
@@ -219,7 +239,8 @@ pub(crate) fn mark_syntax<'a>(
     rhs_syntax: Option<&'a Syntax<'a>>,
     change_map: &mut ChangeMap<'a>,
     graph_limit: usize,
-) -> Result<(), ExceededGraphLimit> {
+    should_stop: &dyn Fn() -> bool,
+) -> Result<(), SearchStop> {
     let lhs_node_count = node_count(lhs_syntax) as usize;
     let rhs_node_count = node_count(rhs_syntax) as usize;
     info!(
@@ -246,13 +267,9 @@ pub(crate) fn mark_syntax<'a>(
     let start = Vertex::new(lhs_syntax, rhs_syntax);
     let vertex_arena = Bump::new();
 
-    let route = shortest_path(start, &vertex_arena, size_hint, graph_limit)?;
+    let route = shortest_path(start, &vertex_arena, size_hint, graph_limit, should_stop)?;
 
-    let print_length = if env::var("DFT_VERBOSE").is_ok() {
-        50
-    } else {
-        5
-    };
+    let print_length = 5;
     debug!(
         "Initial {} items on path: {:#?}",
         print_length,
@@ -285,7 +302,7 @@ mod tests {
     use super::*;
     use crate::diff::changes::ChangeKind;
     use crate::diff::graph::Edge::*;
-    use crate::options::DEFAULT_GRAPH_LIMIT;
+    use crate::options::{never_stop, DEFAULT_GRAPH_LIMIT};
     use crate::syntax::{init_all_info, AtomKind};
 
     fn pos_helper(line: u32) -> Vec<SingleLineSpan> {
@@ -307,7 +324,8 @@ mod tests {
 
         let start = Vertex::new(Some(lhs), Some(rhs));
         let vertex_arena = Bump::new();
-        let route = shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT).unwrap();
+        let route =
+            shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT, &never_stop).unwrap();
 
         let actions = route.iter().map(|(action, _)| *action).collect::<Vec<_>>();
         assert_eq!(
@@ -349,7 +367,8 @@ mod tests {
 
         let start = Vertex::new(lhs.first().copied(), rhs.first().copied());
         let vertex_arena = Bump::new();
-        let route = shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT).unwrap();
+        let route =
+            shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT, &never_stop).unwrap();
 
         let actions = route.iter().map(|(action, _)| *action).collect::<Vec<_>>();
         assert_eq!(
@@ -391,7 +410,8 @@ mod tests {
 
         let start = Vertex::new(lhs.first().copied(), rhs.first().copied());
         let vertex_arena = Bump::new();
-        let route = shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT).unwrap();
+        let route =
+            shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT, &never_stop).unwrap();
 
         let actions = route.iter().map(|(action, _)| *action).collect::<Vec<_>>();
         assert_eq!(
@@ -437,7 +457,8 @@ mod tests {
 
         let start = Vertex::new(lhs.first().copied(), rhs.first().copied());
         let vertex_arena = Bump::new();
-        let route = shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT).unwrap();
+        let route =
+            shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT, &never_stop).unwrap();
 
         let actions = route.iter().map(|(action, _)| *action).collect::<Vec<_>>();
         assert_eq!(
@@ -478,7 +499,8 @@ mod tests {
 
         let start = Vertex::new(lhs.first().copied(), rhs.first().copied());
         let vertex_arena = Bump::new();
-        let route = shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT).unwrap();
+        let route =
+            shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT, &never_stop).unwrap();
 
         let actions = route.iter().map(|(action, _)| *action).collect::<Vec<_>>();
         assert_eq!(
@@ -510,7 +532,8 @@ mod tests {
 
         let start = Vertex::new(lhs.first().copied(), rhs.first().copied());
         let vertex_arena = Bump::new();
-        let route = shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT).unwrap();
+        let route =
+            shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT, &never_stop).unwrap();
 
         let actions = route.iter().map(|(action, _)| *action).collect::<Vec<_>>();
         assert_eq!(
@@ -550,7 +573,8 @@ mod tests {
 
         let start = Vertex::new(lhs.first().copied(), rhs.first().copied());
         let vertex_arena = Bump::new();
-        let route = shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT).unwrap();
+        let route =
+            shortest_path(start, &vertex_arena, 0, DEFAULT_GRAPH_LIMIT, &never_stop).unwrap();
 
         let actions = route.iter().map(|(action, _)| *action).collect::<Vec<_>>();
         assert_eq!(
@@ -572,7 +596,14 @@ mod tests {
         init_all_info(&[lhs], &[rhs]);
 
         let mut change_map = ChangeMap::default();
-        mark_syntax(Some(lhs), Some(rhs), &mut change_map, DEFAULT_GRAPH_LIMIT).unwrap();
+        mark_syntax(
+            Some(lhs),
+            Some(rhs),
+            &mut change_map,
+            DEFAULT_GRAPH_LIMIT,
+            &never_stop,
+        )
+        .unwrap();
 
         assert_eq!(change_map.get(lhs), Some(ChangeKind::Unchanged(rhs)));
         assert_eq!(change_map.get(rhs), Some(ChangeKind::Unchanged(lhs)));
@@ -586,7 +617,14 @@ mod tests {
         init_all_info(&[lhs], &[rhs]);
 
         let mut change_map = ChangeMap::default();
-        mark_syntax(Some(lhs), Some(rhs), &mut change_map, DEFAULT_GRAPH_LIMIT).unwrap();
+        mark_syntax(
+            Some(lhs),
+            Some(rhs),
+            &mut change_map,
+            DEFAULT_GRAPH_LIMIT,
+            &never_stop,
+        )
+        .unwrap();
         assert_eq!(change_map.get(lhs), Some(ChangeKind::Novel));
         assert_eq!(change_map.get(rhs), Some(ChangeKind::Novel));
     }

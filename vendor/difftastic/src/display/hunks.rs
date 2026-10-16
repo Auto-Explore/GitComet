@@ -656,15 +656,32 @@ pub(crate) fn matched_lines_indexes_for_hunk(
         }
     }
 
+    let mut start_i = start_i.expect("Hunk lines should be present in matched lines");
+
+    // GitComet: each side's line numbers only grow, so scan forward from the
+    // start until both sides pass the hunk's last line, rather than from the end.
+    let (lhs_largest, rhs_largest) = hunk_largest;
+    let mut lhs_pending = lhs_largest.is_some();
+    let mut rhs_pending = rhs_largest.is_some();
     let mut end_i = None;
-    for (i, matched_line) in matched_lines.iter().enumerate().rev() {
-        if either_side_equal(matched_line, &hunk_largest) {
-            end_i = Some(i + 1);
+    for (i, (lhs, rhs)) in matched_lines.iter().enumerate().skip(start_i) {
+        if let (Some(line), Some(largest)) = (lhs, lhs_largest) {
+            if *line == largest {
+                end_i = Some(i + 1);
+            }
+            lhs_pending &= *line < largest;
+        }
+        if let (Some(line), Some(largest)) = (rhs, rhs_largest) {
+            if *line == largest {
+                end_i = Some(i + 1);
+            }
+            rhs_pending &= *line < largest;
+        }
+        if !lhs_pending && !rhs_pending {
             break;
         }
     }
 
-    let mut start_i = start_i.expect("Hunk lines should be present in matched lines");
     let mut end_i = end_i.expect("Hunk lines should be present in matched lines");
     if start_i >= num_context_lines {
         start_i -= num_context_lines;

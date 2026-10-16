@@ -8,6 +8,7 @@ pub(crate) enum TextFallbackReason {
     ByteLimit,
     ParseErrors,
     GraphLimit,
+    NestingLimit,
 }
 
 #[derive(Debug, Clone)]

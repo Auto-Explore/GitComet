@@ -45,7 +45,6 @@ mod constants;
 mod diff;
 mod display;
 mod hash;
-mod line_parser;
 mod lines;
 mod options;
 mod parse;
@@ -56,30 +55,37 @@ mod words;
 extern crate log;
 
 pub mod api;
+mod interrupt;
 
-use std::env;
 use std::path::Path;
 
 use typed_arena::Arena;
 
 use crate::diff::changes::ChangeMap;
-use crate::diff::shortest_path::ExceededGraphLimit;
+use crate::diff::shortest_path::SearchStop;
 use crate::diff::sliders::fix_all_sliders;
 use crate::diff::{shortest_path, unchanged};
+use crate::interrupt::Interrupted;
 use crate::options::DiffOptions;
 use crate::parse::guess_language::guess;
-use crate::parse::syntax;
+use crate::parse::syntax::{self, MatchedPos};
 use crate::parse::tree_sitter_parser as tsp;
 use crate::shortest_path::mark_syntax;
 use crate::summary::{DiffResult, FileFormat, TextFallbackReason};
 use crate::syntax::init_next_prev;
+
+// GitComet: callers show their own line diff for a fallback, so difftastic's
+// line-based positions would be discarded.
+fn fallback_positions() -> (Vec<MatchedPos>, Vec<MatchedPos>) {
+    (vec![], vec![])
+}
 
 pub(crate) fn diff_file_content(
     path: &Path,
     lhs_src: &str,
     rhs_src: &str,
     diff_options: &DiffOptions,
-) -> DiffResult {
+) -> Result<DiffResult, Interrupted> {
     let guess_src = if rhs_src.is_empty() { lhs_src } else { rhs_src };
 
     let language = guess(path, guess_src);
@@ -93,19 +99,19 @@ pub(crate) fn diff_file_content(
 
         // If the two files are byte-for-byte identical, return early
         // rather than doing any more work.
-        return DiffResult {
+        return Ok(DiffResult {
             file_format,
             lhs_src: String::new(),
             rhs_src: String::new(),
             lhs_positions: vec![],
             rhs_positions: vec![],
-        };
+        });
     }
 
     let (file_format, lhs_positions, rhs_positions) = match lang_config {
         None => {
             let file_format = FileFormat::PlainText;
-            let (lhs_positions, rhs_positions) = line_parser::change_positions(lhs_src, rhs_src);
+            let (lhs_positions, rhs_positions) = fallback_positions();
             (file_format, lhs_positions, rhs_positions)
         }
         Some((language, lang_config)) => {
@@ -122,12 +128,11 @@ pub(crate) fn diff_file_content(
                         diff_options,
                     ) {
                         Ok((lhs, rhs)) => {
+                            interrupt::check(diff_options.should_stop)?;
                             let mut change_map = ChangeMap::default();
-                            let possibly_changed = if env::var("DFT_DBG_KEEP_UNCHANGED").is_ok() {
-                                vec![(lhs.clone(), rhs.clone())]
-                            } else {
-                                unchanged::mark_unchanged(&lhs, &rhs, &mut change_map)
-                            };
+                            let possibly_changed =
+                                unchanged::mark_unchanged(&lhs, &rhs, &mut change_map);
+                            interrupt::check(diff_options.should_stop)?;
 
                             let mut exceeded_graph_limit = false;
 
@@ -140,9 +145,11 @@ pub(crate) fn diff_file_content(
                                     rhs_section_nodes.first().copied(),
                                     &mut change_map,
                                     diff_options.graph_limit,
+                                    diff_options.should_stop,
                                 ) {
                                     Ok(()) => {}
-                                    Err(ExceededGraphLimit {}) => {
+                                    Err(SearchStop::Interrupted) => return Err(Interrupted),
+                                    Err(SearchStop::GraphLimit) => {
                                         exceeded_graph_limit = true;
                                         break;
                                     }
@@ -150,8 +157,7 @@ pub(crate) fn diff_file_content(
                             }
 
                             if exceeded_graph_limit {
-                                let (lhs_positions, rhs_positions) =
-                                    line_parser::change_positions(lhs_src, rhs_src);
+                                let (lhs_positions, rhs_positions) = fallback_positions();
                                 (
                                     FileFormat::TextFallback {
                                         reason: TextFallbackReason::GraphLimit,
@@ -162,17 +168,27 @@ pub(crate) fn diff_file_content(
                             } else {
                                 fix_all_sliders(language, &lhs, &mut change_map);
                                 fix_all_sliders(language, &rhs, &mut change_map);
+                                interrupt::check(diff_options.should_stop)?;
 
                                 let mut lhs_positions = syntax::change_positions(&lhs, &change_map);
+                                interrupt::check(diff_options.should_stop)?;
                                 let mut rhs_positions = syntax::change_positions(&rhs, &change_map);
 
                                 if diff_options.ignore_comments {
-                                    let lhs_comments =
-                                        tsp::comment_positions(&lhs_tree, lhs_src, lang_config);
+                                    let lhs_comments = tsp::comment_positions(
+                                        &lhs_tree,
+                                        lhs_src,
+                                        lang_config,
+                                        diff_options,
+                                    )?;
                                     lhs_positions.extend(lhs_comments);
 
-                                    let rhs_comments =
-                                        tsp::comment_positions(&rhs_tree, rhs_src, lang_config);
+                                    let rhs_comments = tsp::comment_positions(
+                                        &rhs_tree,
+                                        rhs_src,
+                                        lang_config,
+                                        diff_options,
+                                    )?;
                                     rhs_positions.extend(rhs_comments);
                                 }
 
@@ -183,10 +199,11 @@ pub(crate) fn diff_file_content(
                                 )
                             }
                         }
-                        Err(tsp::ExceededParseErrorLimit {
+                        Err(tsp::SyntaxStop::Interrupted) => return Err(Interrupted),
+                        Err(tsp::SyntaxStop::ParseErrors(tsp::ExceededParseErrorLimit {
                             error_count,
                             first_error_pos,
-                        }) => {
+                        })) => {
                             debug!(
                                 "{}: {error_count} parse errors, first at {first_error_pos:?}",
                                 path.display()
@@ -195,13 +212,22 @@ pub(crate) fn diff_file_content(
                                 reason: TextFallbackReason::ParseErrors,
                             };
 
-                            let (lhs_positions, rhs_positions) =
-                                line_parser::change_positions(lhs_src, rhs_src);
+                            let (lhs_positions, rhs_positions) = fallback_positions();
                             (file_format, lhs_positions, rhs_positions)
                         }
                     }
                 }
-                Err(tsp::ExceededByteLimit(num_bytes)) => {
+                Err(tsp::TreeStop::Interrupted) => return Err(Interrupted),
+                Err(tsp::TreeStop::NestingLimit) => {
+                    debug!("{}: nesting exceeds the limit", path.display());
+                    let file_format = FileFormat::TextFallback {
+                        reason: TextFallbackReason::NestingLimit,
+                    };
+
+                    let (lhs_positions, rhs_positions) = fallback_positions();
+                    (file_format, lhs_positions, rhs_positions)
+                }
+                Err(tsp::TreeStop::ByteLimit(num_bytes)) => {
                     debug!(
                         "{}: {num_bytes} bytes exceed the byte limit",
                         path.display()
@@ -210,21 +236,20 @@ pub(crate) fn diff_file_content(
                         reason: TextFallbackReason::ByteLimit,
                     };
 
-                    let (lhs_positions, rhs_positions) =
-                        line_parser::change_positions(lhs_src, rhs_src);
+                    let (lhs_positions, rhs_positions) = fallback_positions();
                     (file_format, lhs_positions, rhs_positions)
                 }
             }
         }
     };
 
-    DiffResult {
+    Ok(DiffResult {
         file_format,
         lhs_src: lhs_src.to_owned(),
         rhs_src: rhs_src.to_owned(),
         lhs_positions,
         rhs_positions,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -234,7 +259,7 @@ mod tests {
     #[test]
     fn test_diff_identical_content() {
         let s = "foo";
-        let res = diff_file_content(Path::new("foo.el"), s, s, &DiffOptions::default());
+        let res = diff_file_content(Path::new("foo.el"), s, s, &DiffOptions::default()).unwrap();
 
         assert_eq!(res.lhs_positions, vec![]);
         assert_eq!(res.rhs_positions, vec![]);
