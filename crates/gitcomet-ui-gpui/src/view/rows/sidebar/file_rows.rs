@@ -862,3 +862,54 @@ fn worktree_file_menu_invoker(
     )
     .into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every row pass builds this lookup, three per frame. Copying the
+    /// selection into it cost one allocation per selected file each time.
+    #[gpui::test]
+    fn the_multi_selection_lookup_borrows_the_selected_paths(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let repo_id = RepoId(12);
+        let list = crate::view::rows::FileListId::CommitFiles;
+        let selected = 2_000;
+
+        cx.update(|_window, app| {
+            let pane = view.read(app).details_pane.clone();
+            pane.update(app, |pane, _cx| {
+                pane.file_list_selection.insert(
+                    (repo_id, list),
+                    crate::view::rows::FileListMultiSelection {
+                        paths: (0..selected)
+                            .map(|ix| format!("src/module_{ix:04}.rs").into())
+                            .collect(),
+                        anchor: None,
+                        anchor_index: None,
+                        anchor_order_rev: None,
+                    },
+                );
+            });
+            let pane = pane.read(app);
+            // `measure_allocations` watches a process-global allocator, so a
+            // parallel test can only ever inflate a sample: take the smallest.
+            let fewest = (0..3)
+                .map(|_| {
+                    let (len, allocations) = crate::perf_alloc::measure_allocations(|| {
+                        multi_selected_paths(pane, repo_id, list).map(|paths| paths.len())
+                    });
+                    assert_eq!(len, Some(selected));
+                    allocations.alloc_ops
+                })
+                .min()
+                .expect("three samples");
+            assert!(
+                fewest < selected as u64 / 2,
+                "the lookup over {selected} selected files allocated {fewest} times"
+            );
+        });
+    }
+}
