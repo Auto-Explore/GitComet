@@ -81,6 +81,9 @@ pub(crate) fn strip_annex_filter(repo: &mut gix::Repository) {
     {}
 }
 
+/// The `filter` attribute value Git LFS assigns, and its driver's name.
+pub(crate) const LFS_FILTER_DRIVER: &str = "lfs";
+
 pub(crate) fn lfs_filter_configured(config: &gix::config::File) -> bool {
     ["filter.lfs.process", "filter.lfs.clean"]
         .iter()
@@ -386,7 +389,7 @@ fn scan_lfs_attributes(
             for assignment in assignments.flatten() {
                 match (assignment.name.as_str(), assignment.state) {
                     ("filter", gix::attrs::StateRef::Value(value)) => {
-                        lfs = value.as_bstr() == "lfs";
+                        lfs = value.as_bstr() == LFS_FILTER_DRIVER;
                     }
                     ("filter", _) => lfs = false,
                     ("lockable", state) => lockable = matches!(state, gix::attrs::StateRef::Set),

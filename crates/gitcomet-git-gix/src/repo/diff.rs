@@ -2012,7 +2012,9 @@ fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Optio
         if assignment.name.as_str() == "filter" {
             match assignment.state {
                 gix::attrs::StateRef::Value(value) if value.as_bstr() == b"annex" => {}
-                gix::attrs::StateRef::Value(value) if value.as_bstr() == b"lfs" => {
+                gix::attrs::StateRef::Value(value)
+                    if value.as_bstr() == super::large_files::LFS_FILTER_DRIVER =>
+                {
                     for key in [
                         "filter.lfs.clean",
                         "filter.lfs.process",

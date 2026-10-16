@@ -576,7 +576,7 @@ impl<'repo> WorktreeReader<'repo> {
                 .find(|driver| **driver == name.as_bstr()),
             _ => None,
         };
-        if driver.is_some_and(|driver| *driver == "lfs") {
+        if driver.is_some_and(|driver| *driver == super::large_files::LFS_FILTER_DRIVER) {
             return false;
         }
         #[cfg(test)]

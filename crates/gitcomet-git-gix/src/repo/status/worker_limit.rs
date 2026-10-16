@@ -22,13 +22,6 @@ pub(super) fn for_index(
 }
 
 #[cfg(any(windows, test))]
-fn has_lfs_filter(config: &gix::config::File) -> bool {
-    ["filter.lfs.process", "filter.lfs.clean"]
-        .iter()
-        .any(|key| config.string(*key).is_some_and(|value| !value.is_empty()))
-}
-
-#[cfg(any(windows, test))]
 fn bounded_limit() -> usize {
     std::thread::available_parallelism()
         .map_or(1, usize::from)
@@ -42,7 +35,7 @@ fn production_limit(
     cancellation: &CancellationToken,
 ) -> Result<Option<usize>> {
     use gix::index::entry::Mode;
-    if !has_lfs_filter(&repo.config_snapshot()) {
+    if !super::super::large_files::lfs_filter_configured(&repo.config_snapshot()) {
         return Ok(None);
     }
     cancellation.check_cancelled()?;
@@ -69,7 +62,7 @@ fn production_limit(
         };
         platform.matching_attributes(&mut outcome);
         let lfs = outcome.iter().any(|matched| {
-            matched.assignment.name.as_str() == "filter" && matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == b"lfs")
+            matched.assignment.name.as_str() == "filter" && matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == super::super::large_files::LFS_FILTER_DRIVER)
         });
         if !lfs {
             continue;
