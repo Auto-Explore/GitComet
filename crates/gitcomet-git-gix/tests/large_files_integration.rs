@@ -111,7 +111,7 @@ fn lfs_repository_reports_filter_patterns_and_store() {
     let support = opened
         .large_file_support_cancellable(&CancellationToken::new())
         .unwrap();
-    assert!(support.lfs.filter_configured && support.lfs.filter_required);
+    assert!(support.lfs.filter_configured);
     assert!(
         support.lfs.has_local_store,
         "committing through clean fills the store"

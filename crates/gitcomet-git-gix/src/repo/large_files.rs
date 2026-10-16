@@ -103,15 +103,6 @@ fn lfs_storage_dir(repo: &gix::Repository) -> PathBuf {
     lfs::storage_dir(storage.as_deref(), repo.common_dir())
 }
 
-fn truthy_env(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
 fn backend_error(context: &str, error: impl std::fmt::Display) -> Error {
     Error::new(ErrorKind::Backend(format!("{context}: {error}")))
 }
@@ -643,25 +634,11 @@ impl super::GixRepo {
         let repo = self.repo_with_current_config()?;
         let config = repo.config_snapshot();
         let storage_dir = lfs_storage_dir(&repo);
-        let skip_flag = |key: &str| {
-            config
-                .string_by("filter", LFS_FILTER_DRIVER, key)
-                .is_some_and(|value| value.contains_str("--skip"))
-        };
         cancellation.check_cancelled()?;
         let mut lfs = LfsRepoInfo {
             filter_configured: lfs_filter_configured(&config),
-            filter_required: config
-                .boolean_by("filter", LFS_FILTER_DRIVER, "required")
-                .ok()
-                .flatten()
-                .unwrap_or(false),
             has_local_store: storage_dir.join("objects").is_dir(),
             storage_dir,
-            skip_smudge: truthy_env("GIT_LFS_SKIP_SMUDGE")
-                || skip_flag("smudge")
-                || skip_flag("process"),
-            locks_verify: config.boolean("lfs.locksverify"),
             ..LfsRepoInfo::default()
         };
         scan_lfs_attributes(&repo, cancellation, |pattern, lockable| {
