@@ -5,6 +5,10 @@ use gitcomet_core::services::CancellationToken;
 use gitcomet_extension_api::{DiffSnapshot, HostedAction, HostedMenuItem};
 use gitcomet_state::diff_session::DiffViewId;
 
+#[cfg(test)]
+#[path = "diff_patch_tests.rs"]
+mod tests;
+
 #[derive(Clone)]
 struct PatchOrigin {
     repo_id: RepoId,
@@ -74,6 +78,7 @@ impl MainPaneView {
         visible: usize,
         region: DiffTextRegion,
         anchor: Point<Pixels>,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(selection) = self.structural_line_selection(visible, region) else {
@@ -89,7 +94,7 @@ impl MainPaneView {
         {
             scopes.push(("block", block));
         }
-        self.open_structural_menu(scopes, copy, anchor, cx);
+        self.open_structural_menu(scopes, copy, anchor, window, cx);
     }
 
     pub(super) fn structural_line_selection(
@@ -151,6 +156,7 @@ impl MainPaneView {
         &mut self,
         source: usize,
         anchor: Point<Pixels>,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         if let Some(selection) = self.structural_block_lines(source) {
@@ -164,6 +170,7 @@ impl MainPaneView {
                     vec![(&format!("block at line {line}"), selection)],
                     None,
                     anchor,
+                    window,
                     cx,
                 );
             }
@@ -193,6 +200,7 @@ impl MainPaneView {
         scopes: Vec<(&str, SourceLineSelection)>,
         copy: Option<String>,
         anchor: Point<Pixels>,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let mut items = vec![HostedMenuItem::Header(
@@ -201,7 +209,13 @@ impl MainPaneView {
         if let Some(copy) = copy {
             items.push(HostedMenuItem::action(HostedAction::new(
                 "Copy",
-                move |cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone())),
+                move |cx| {
+                    gitcomet_ui_kit::clipboard::write_text(
+                        cx,
+                        copy.clone(),
+                        gitcomet_ui_kit::clipboard::CopySource::DiffContextMenu,
+                    )
+                },
             )));
         }
         if let Some(DiffTarget::WorkingTree { area, .. }) = self.rendered_diff_target() {
@@ -233,11 +247,18 @@ impl MainPaneView {
                 }
             }
         }
-        if let Ok(Some(host)) = self.root_view.read_with(cx, |root, _| {
-            root.extension_window.as_ref().map(|window| window.host())
-        }) {
-            let _ = host.open_menu(anchor, items, cx);
-        }
+        let root = self.root_view.clone();
+        let window = window.window_handle();
+        let id = crate::view::extension_host::next_dialog_id();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = root.update(cx, |root, cx| {
+                    root.popover_host.update(cx, |host, cx| {
+                        host.open_hosted_menu(id, items, anchor, window, cx)
+                    });
+                });
+            });
+        });
     }
 
     fn patch_operation_allowed(&self, operation: PatchOperation) -> bool {
@@ -357,59 +378,61 @@ impl MainPaneView {
             })
             .await;
             let _ = weak.update(cx, |this, cx| {
-                let Some(review) = &this.patch_review else {
-                    return;
-                };
-                if review.sequence != sequence {
-                    return;
-                }
-                if !this.patch_origin_current(&review.origin) {
-                    this.patch_review.as_mut().unwrap().state = ReviewState::Error(
-                        "The comparison changed. Close this preview and review a new patch.".into(),
-                    );
-                    cx.notify();
-                    return;
-                }
-                let state = result
-                    .and_then(|prepared| {
-                        let path = match prepared.target() {
-                            DiffTarget::WorkingTree { path, .. } => path.clone(),
-                            _ => unreachable!(),
-                        };
-                        let diff = gitcomet_core::patch_action::parse_exact_diff(
-                            prepared.target().clone(),
-                            prepared.patch().to_vec(),
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let host = this
-                            .root_view
-                            .read_with(cx, |root, _| {
-                                root.extension_window.as_ref().map(|window| window.host())
-                            })
-                            .map_err(|error| error.to_string())?
-                            .ok_or_else(|| "The window was closed.".to_owned())?;
-                        let root = this.root_view.clone();
-                        let pane = cx.new(|cx| {
-                            DiffPaneView::exact_patch(
-                                host,
-                                DiffSnapshot::from_patch(path, diff),
-                                root,
-                                cx,
-                            )
-                        });
-                        let subscription = cx.observe(&pane, |_, _, cx| cx.notify());
-                        Ok(ReviewState::Ready {
-                            prepared: Arc::new(prepared),
-                            pane,
-                            _subscription: subscription,
-                        })
-                    })
-                    .unwrap_or_else(|error| ReviewState::Error(error.into()));
-                this.patch_review.as_mut().unwrap().state = state;
-                cx.notify();
+                this.complete_structural_patch(sequence, result, cx);
             });
         })
         .detach();
+        cx.notify();
+    }
+
+    fn complete_structural_patch(
+        &mut self,
+        sequence: u64,
+        result: Result<PreparedDiffPatch, String>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(review) = &self.patch_review else {
+            return;
+        };
+        if review.sequence != sequence {
+            return;
+        }
+        if !self.patch_origin_current(&review.origin) {
+            self.patch_review.as_mut().unwrap().state = ReviewState::Error(
+                "The comparison changed. Close this preview and review a new patch.".into(),
+            );
+            cx.notify();
+            return;
+        }
+        let state = result
+            .and_then(|prepared| {
+                let path = match prepared.target() {
+                    DiffTarget::WorkingTree { path, .. } => path.clone(),
+                    _ => unreachable!(),
+                };
+                let diff = gitcomet_core::patch_action::parse_exact_diff(
+                    prepared.target().clone(),
+                    prepared.patch().to_vec(),
+                )
+                .map_err(|error| error.to_string())?;
+                let root = self.root_view.clone();
+                let pane = cx.new(|cx| {
+                    DiffPaneView::exact_patch(
+                        DiffSnapshot::from_patch(path, diff),
+                        root,
+                        self.theme,
+                        cx,
+                    )
+                });
+                let subscription = cx.observe(&pane, |_, _, cx| cx.notify());
+                Ok(ReviewState::Ready {
+                    prepared: Arc::new(prepared),
+                    pane,
+                    _subscription: subscription,
+                })
+            })
+            .unwrap_or_else(|error| ReviewState::Error(error.into()));
+        self.patch_review.as_mut().unwrap().state = state;
         cx.notify();
     }
 

@@ -1,8 +1,8 @@
 use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
-use crate::view::panes::main::DiskSurface;
 use crate::view::panes::main::diff_search::DiffSearchOptions;
+use crate::view::panes::main::{DiskSurface, MainPaneBody};
 use gpui::Focusable;
 
 struct DiffSearchOverlayLayer {
@@ -1849,14 +1849,35 @@ impl MainPaneView {
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
 
-        let mut controls = div().flex().items_center().gap_1();
-        if !is_conflict_resolver && self.effective_diff_engine() == DiffEngine::Difftastic {
-            controls = controls.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.foreground.secondary)
-                    .child(self.diff_engine_label()),
-            );
+        let engine_notice = if matches!(surface.body, MainPaneBody::FileDiff | MainPaneBody::Patch)
+            && !inline_submodule_diff_active
+            && !surface.markdown_preview
+            && !is_image_diff_view
+            && !is_diagram_preview_view
+            && self.effective_diff_engine() == DiffEngine::Difftastic
+        {
+            let mut notice = div()
+                .debug_selector(|| "diff_engine_notice".to_string())
+                .w_full()
+                .flex_none()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .border_b_1()
+                .border_color(theme.colors.stroke.default)
+                .child(
+                    div()
+                        .debug_selector(|| "diff_engine_notice_label".to_string())
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .whitespace_normal()
+                        .text_xs()
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(self.diff_engine_label()),
+                );
             if matches!(
                 self.diff_engine_status,
                 DiffEngineStatus::Difftastic {
@@ -1865,7 +1886,7 @@ impl MainPaneView {
                 }
             ) {
                 if self.effective_diff_content_mode() == DiffContentMode::Collapsed {
-                    controls = controls.child(
+                    notice = notice.child(
                         components::Button::new("difftastic_show_full", "Show full text").on_click(
                             theme,
                             cx,
@@ -1873,7 +1894,7 @@ impl MainPaneView {
                         ),
                     );
                 }
-                controls = controls.child(
+                notice = notice.child(
                     components::Button::new("difftastic_show_line_changes", "Show line changes")
                         .on_click(theme, cx, |this, _, _, cx| {
                             this.set_diff_whitespace_mode(DiffWhitespaceMode::Show, cx);
@@ -1881,7 +1902,11 @@ impl MainPaneView {
                         }),
                 );
             }
-        }
+            Some(notice)
+        } else {
+            None
+        };
+        let mut controls = div().flex().items_center().gap_1();
         let mut change_navigation = None;
         let is_simple_conflict_strategy = matches!(
             self.conflict_resolver.strategy,
@@ -2681,6 +2706,12 @@ impl MainPaneView {
             }
         } else if wants_file_diff || wants_collapsed_diff {
             self.render_selected_file_diff(theme, window, cx)
+        } else if surface.body == MainPaneBody::Patch
+            && self.rendered_diff_target().is_some()
+            && (self.hosted_decor.is_some()
+                || Self::is_file_diff_target(self.rendered_diff_target()))
+        {
+            self.render_selected_patch_diff(theme, window, cx)
         } else {
             components::empty_state(
                 theme,
@@ -2839,6 +2870,7 @@ impl MainPaneView {
                     .border_color(theme.colors.stroke.default),
             )
             .when_some(disk_notice, |d, strip| d.child(strip))
+            .when_some(engine_notice, |d, strip| d.child(strip))
             .child(
                 div()
                     .id("diff_body_container")

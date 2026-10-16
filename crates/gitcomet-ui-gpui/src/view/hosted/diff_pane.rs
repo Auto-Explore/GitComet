@@ -30,6 +30,42 @@ enum PaneSource {
     Snapshot(DiffSnapshot),
 }
 
+enum PaneHost {
+    Window {
+        host: WindowHost,
+        root: Option<WeakEntity<GitCometView>>,
+    },
+    Native {
+        root: WeakEntity<GitCometView>,
+        theme: Box<AppTheme>,
+    },
+}
+
+impl PaneHost {
+    fn root(&self) -> Option<&WeakEntity<GitCometView>> {
+        match self {
+            Self::Window { root, .. } => root.as_ref(),
+            Self::Native { root, .. } => Some(root),
+        }
+    }
+
+    fn theme(&self, cx: &App) -> AppTheme {
+        match self {
+            Self::Window { host, .. } => host.theme(cx),
+            Self::Native { root, theme } => {
+                root.read_with(cx, |root, _| root.theme).unwrap_or(**theme)
+            }
+        }
+    }
+
+    fn state(&self, cx: &App) -> Option<Arc<AppState>> {
+        match self {
+            Self::Window { host, .. } => host.state(cx).ok(),
+            Self::Native { root, .. } => root.read_with(cx, |root, _| root.state.clone()).ok(),
+        }
+    }
+}
+
 /// Orders panes by when the user last engaged with them, for routing the
 /// diff keys (F1–F4, F7) to the one in front of them.
 static ENGAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -39,11 +75,10 @@ fn next_engaged() -> u64 {
 }
 
 pub(crate) struct DiffPaneView {
-    host: WindowHost,
+    host: PaneHost,
     /// Bumped when the pane is given a file and when its diff takes focus.
     engaged: u64,
     _focus_in: Option<gpui::Subscription>,
-    root: Option<WeakEntity<GitCometView>>,
     renderer: Option<Entity<MainPaneView>>,
     renderer_model: Option<Entity<AppUiModel>>,
     file_cache: Option<Arc<SharedFileDiffCache>>,
@@ -111,7 +146,7 @@ impl DiffPaneView {
         })
     }
 
-    fn with_source(host: WindowHost, source: PaneSource, mut options: DiffPaneOptions) -> Self {
+    fn with_source(host: PaneHost, source: PaneSource, mut options: DiffPaneOptions) -> Self {
         if matches!(source, PaneSource::Snapshot(_)) {
             options.policy.allow_edit = false;
             options.policy.allow_stage = false;
@@ -123,7 +158,6 @@ impl DiffPaneView {
             host,
             engaged: next_engaged(),
             _focus_in: None,
-            root: None,
             renderer: None,
             renderer_model: None,
             file_cache: None,
@@ -182,7 +216,7 @@ impl DiffPaneView {
             repository,
             target: target.clone(),
         };
-        let mut pane = Self::with_source(host, source, options);
+        let mut pane = Self::with_source(PaneHost::Window { host, root: None }, source, options);
         pane._state = state;
         pane.open(target);
         pane
@@ -194,40 +228,46 @@ impl DiffPaneView {
         options: DiffPaneOptions,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let mut pane = Self::with_source(host, PaneSource::Snapshot(snapshot.clone()), options);
+        let mut pane = Self::with_source(
+            PaneHost::Window { host, root: None },
+            PaneSource::Snapshot(snapshot.clone()),
+            options,
+        );
         pane.set_snapshot(snapshot, cx);
         pane
     }
 
     pub(in crate::view) fn exact_patch(
-        host: WindowHost,
         snapshot: DiffSnapshot,
         root: WeakEntity<GitCometView>,
+        theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let mut policy = DiffPanePolicy::read_only();
         policy.select_lines = true;
         policy.search = true;
-        let mut pane = Self::snapshot(
-            host,
-            snapshot,
+        let mut pane = Self::with_source(
+            PaneHost::Native {
+                root,
+                theme: Box::new(theme),
+            },
+            PaneSource::Snapshot(snapshot.clone()),
             DiffPaneOptions {
                 engine_override: Some(DiffEngine::LineByLine),
                 layout: gitcomet_extension_api::DiffLayout::Inline,
                 policy,
                 ..Default::default()
             },
-            cx,
         );
         pane.exact_patch_preview = true;
-        pane.attach_root(root);
+        pane.set_snapshot(snapshot, cx);
         pane
     }
 
     /// Inline or Split as the user set it for diffs, for `DiffLayout::Preferred`.
     fn preferred_view_mode(&self, cx: &App) -> DiffViewMode {
-        self.root
-            .as_ref()
+        self.host
+            .root()
             .and_then(|root| root.upgrade())
             .map(|root| root.read(cx).ui_model.read(cx).preferences.diff.view_mode)
             .unwrap_or_else(|| crate::view::preferences::DiffPreferences::default().view_mode)
@@ -235,8 +275,8 @@ impl DiffPaneView {
 
     fn effective_engine(&self, cx: &App) -> DiffEngine {
         self.options.engine_override.unwrap_or_else(|| {
-            self.root
-                .as_ref()
+            self.host
+                .root()
                 .and_then(WeakEntity::upgrade)
                 .map(|root| root.read(cx).ui_model.read(cx).preferences.diff.engine)
                 .unwrap_or_default()
@@ -248,8 +288,8 @@ impl DiffPaneView {
             .as_ref()
             .map(|pane| pane.read(cx).diff_whitespace_mode)
             .unwrap_or_else(|| {
-                self.root
-                    .as_ref()
+                self.host
+                    .root()
                     .and_then(WeakEntity::upgrade)
                     .map(|root| {
                         root.read(cx)
@@ -292,7 +332,10 @@ impl DiffPaneView {
     }
 
     pub(crate) fn attach_root(&mut self, root: WeakEntity<GitCometView>) {
-        self.root = Some(root);
+        match &mut self.host {
+            PaneHost::Window { root: attached, .. } => *attached = Some(root),
+            PaneHost::Native { root: attached, .. } => *attached = root,
+        }
     }
 
     pub(in crate::view) fn exact_patch_ready(&self, cx: &App) -> bool {
@@ -301,7 +344,9 @@ impl DiffPaneView {
             && self.error.is_none()
             && self.renderer.as_ref().is_some_and(|pane| {
                 let pane = pane.read(cx);
-                pane.rendered_patch_diff_cache_is_current() && pane.patch_diff_row_len() > 0
+                pane.main_pane_surface().body == crate::view::panes::main::MainPaneBody::Patch
+                    && pane.rendered_patch_diff_cache_is_current()
+                    && pane.patch_diff_row_len() > 0
             })
     }
 
@@ -309,7 +354,7 @@ impl DiffPaneView {
         if self.renderer.is_some() {
             return;
         }
-        let Some(root) = self.root.clone() else {
+        let Some(root) = self.host.root().cloned() else {
             return;
         };
         let Ok((mut preferences, tooltip, store, root_model)) = root.read_with(cx, |root, cx| {
@@ -711,7 +756,7 @@ impl DiffPaneView {
             self.rows_rev = None;
             self.building_rev = None;
         }
-        let Ok(state) = self.host.state(cx) else {
+        let Some(state) = self.host.state(cx) else {
             return;
         };
         let Some(session) = self.session(&state) else {
@@ -1590,7 +1635,7 @@ impl DiffPaneImpl for HostedDiffPane {
         if let Some(target) = &pane.pending_target {
             return Some(target.clone());
         }
-        let state = pane.host.state(cx).ok()?;
+        let state = pane.host.state(cx)?;
         pane.session(&state)?.diff_target.clone()
     }
 

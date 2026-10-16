@@ -69,6 +69,72 @@ fn focused(
 }
 
 #[gpui::test]
+fn structural_fallback_notice_remains_visible_in_narrow_focused_panes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (root, cx) = focused(cx, true);
+    cx.update(|_, app| {
+        let pane = root
+            .read(app)
+            .focused_diff_pane
+            .as_ref()
+            .unwrap()
+            .pane
+            .clone();
+        pane.set_engine_override(Some(DiffEngine::Difftastic), app);
+    });
+    cx.run_until_parked();
+    for width in [640.0, 400.0] {
+        cx.simulate_resize(gpui::size(px(width), px(800.0)));
+        test_support::redraw(cx);
+        let notice = cx.debug_bounds("diff_engine_notice").unwrap();
+        let label = cx.debug_bounds("diff_engine_notice_label").unwrap();
+        let header = cx.debug_bounds("diff_file_header").unwrap();
+        assert!(notice.top() >= header.bottom());
+        assert!(label.left() >= notice.left());
+        assert!(label.right() <= notice.right());
+        assert!(label.size.height > px(0.0));
+    }
+}
+
+#[gpui::test]
+fn focused_patch_fallback_paints_both_sides_in_each_layout(cx: &mut gpui::TestAppContext) {
+    let (root, cx) = focused(cx, true);
+    let pane = cx.update(|_, app| {
+        root.read(app)
+            .focused_diff_pane
+            .as_ref()
+            .unwrap()
+            .pane
+            .clone()
+    });
+    cx.update(|_, app| pane.set_engine_override(Some(DiffEngine::Difftastic), app));
+    for layout in [DiffLayout::Split, DiffLayout::Inline] {
+        cx.update(|_, app| pane.set_layout(layout, app));
+        test_support::redraw(cx);
+        pump_until(cx, "standalone patch rows painted", |cx| {
+            cx.update(|_, app| {
+                let hosted = pane
+                    .view()
+                    .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+                    .unwrap();
+                let Some(renderer) = hosted.read(app).renderer() else {
+                    return false;
+                };
+                let renderer = renderer.read(app);
+                ["old", "new"].into_iter().all(|text| {
+                    renderer
+                        .diff_text_hitboxes
+                        .values()
+                        .any(|hitbox| hitbox.painted_text.contains(text))
+                })
+            })
+        });
+        assert!(cx.debug_bounds("diff_engine_notice").is_some());
+    }
+}
+
+#[gpui::test]
 fn focused_file_pair_retains_context_outside_patch_and_uses_native_layouts(
     cx: &mut gpui::TestAppContext,
 ) {

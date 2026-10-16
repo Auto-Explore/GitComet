@@ -2850,7 +2850,7 @@ impl MainPaneView {
             return;
         }
         if self.structural_diff_active() {
-            self.open_structural_line_menu(visible_ix, region, anchor, cx);
+            self.open_structural_line_menu(visible_ix, region, anchor, window, cx);
             return;
         }
         let Some(repo) = self.active_repo() else {

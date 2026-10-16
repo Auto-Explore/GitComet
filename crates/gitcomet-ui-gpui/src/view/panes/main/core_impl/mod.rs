@@ -1665,7 +1665,7 @@ impl MainPaneView {
         if self.structural_diff_active()
             && let PopoverKind::DiffHunkMenu { src_ix, .. } = &kind.kind
         {
-            self.open_structural_block_menu(*src_ix, anchor, cx);
+            self.open_structural_block_menu(*src_ix, anchor, window, cx);
             return;
         }
         let root_view = self.root_view.clone();
