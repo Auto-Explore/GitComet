@@ -206,10 +206,12 @@ fn focused_file_pair_retains_context_outside_patch_and_uses_native_layouts(
     }
 }
 
-/// The standalone difftool said "No changes" above a full diff: the pane read
-/// the renderer's row count before the renderer refreshed it in that frame.
-#[gpui::test]
-fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::TestAppContext) {
+/// The status each frame of a focused diff over `input` drew, once its rows
+/// are in. Each frame's own: a later test frame would hide a stale one.
+fn statuses_while_rows_arrive(
+    cx: &mut gpui::TestAppContext,
+    input: crate::FocusedDiffInput,
+) -> Vec<Option<SharedString>> {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         GitCometView::new_with_config(
@@ -221,11 +223,7 @@ fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::
                     label_left: "before".into(),
                     label_right: "after".into(),
                     display_path: Some("notes.txt".into()),
-                    input: crate::FocusedDiffInput::FilePair {
-                        path: "notes.txt".into(),
-                        old: "first\nold\n".into(),
-                        new: "first\nnew\n".into(),
-                    },
+                    input,
                 }),
                 workspace: WorkspaceBootstrap::Empty,
                 ..Default::default()
@@ -243,16 +241,42 @@ fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::
             .unwrap();
         let entity = entity.read(app);
         assert!(entity.renderer().unwrap().read(app).diff_visible_len() > 0);
-        // Each frame's own status: a frame redrawn later would hide a stale one.
-        let statuses = entity.rendered_statuses();
-        assert!(
-            statuses
-                .iter()
-                .all(|status| status.as_deref() != Some("No changes")),
-            "{statuses:?}"
-        );
-        assert_eq!(statuses.last(), Some(&None), "{statuses:?}");
-    });
+        entity.rendered_statuses().to_vec()
+    })
+}
+
+/// The standalone difftool said "No changes" above a full diff: the pane read
+/// the renderer's row count before the renderer refreshed it in that frame.
+#[gpui::test]
+fn focused_file_pair_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::TestAppContext) {
+    let statuses = statuses_while_rows_arrive(
+        cx,
+        crate::FocusedDiffInput::FilePair {
+            path: "notes.txt".into(),
+            old: "first\nold\n".into(),
+            new: "first\nnew\n".into(),
+        },
+    );
+    assert!(
+        statuses
+            .iter()
+            .all(|status| status.as_deref() != Some("No changes")),
+        "{statuses:?}"
+    );
+    assert_eq!(statuses.last(), Some(&None), "{statuses:?}");
+}
+
+/// Patch input (directories, mode changes) builds its rows when the renderer
+/// is created rather than when a file diff lands; its first frame went stale.
+#[gpui::test]
+fn focused_patch_never_says_no_changes_while_its_rows_arrive(cx: &mut gpui::TestAppContext) {
+    let statuses = statuses_while_rows_arrive(
+        cx,
+        crate::FocusedDiffInput::Patch(
+            "diff --git a/notes.txt b/notes.txt\n--- a/notes.txt\n+++ b/notes.txt\n@@ -1,2 +1,2 @@\n first\n-old\n+new\n".into(),
+        ),
+    );
+    assert!(statuses.iter().all(Option::is_none), "{statuses:?}");
 }
 
 #[gpui::test]
