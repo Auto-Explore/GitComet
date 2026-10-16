@@ -125,10 +125,13 @@ impl CommitFileSort {
 
     /// Whether the sort reads the line diff, which an untracked file lacks.
     pub(in crate::view) const fn needs_line_stats(self) -> bool {
-        matches!(
-            self,
-            Self::EditSizeAscending | Self::EditSizeDescending | Self::Edits
-        )
+        match self {
+            Self::EditSizeAscending | Self::EditSizeDescending | Self::Edits => true,
+            Self::PathAscending
+            | Self::PathDescending
+            | Self::FileTypeAscending
+            | Self::FileTypeDescending => false,
+        }
     }
 
     /// Each option reads "Ascending"/"Descending" its own way -- path A→Z, file

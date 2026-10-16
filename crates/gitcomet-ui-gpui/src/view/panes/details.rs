@@ -1871,7 +1871,7 @@ impl DetailsPaneView {
             entries,
             &base,
             sort,
-            status_section_line_stats(repo, section),
+            status_section_line_stats(repo, section).filter(|_| sort.needs_line_stats()),
         );
         cache[slot] = Some((key, Arc::clone(&ordered)));
         Some(ordered)

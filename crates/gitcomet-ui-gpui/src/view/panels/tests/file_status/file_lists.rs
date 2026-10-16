@@ -1390,6 +1390,7 @@ fn status_line_stats_resort_only_sections_sorted_by_edit_size(cx: &mut gpui::Tes
     });
     draw_and_drain_test_window(cx);
     let size_sorted = order(cx);
+    assert_eq!(&*size_sorted, &[2, 1, 0], "largest edit first");
     push_stats(cx, 3);
     assert!(
         !Arc::ptr_eq(&size_sorted, &order(cx)),
