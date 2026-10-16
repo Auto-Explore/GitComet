@@ -3,7 +3,7 @@ use super::{
     conflict_stages::conflict_kind_from_stage_mask, git_ops::head_upstream_divergence,
     repo_file_stamp,
 };
-use crate::util::{git_workdir_cmd_for, path_buf_from_git_bytes, run_git_raw_output};
+use crate::util::{git_workdir_cmd_for, path_buf_from_git_bytes, run_git_background_output};
 use gitcomet_core::domain::{
     FileConflictKind, FileStatus, FileStatusKind, RepoStatus, UpstreamDivergence,
 };
@@ -19,6 +19,10 @@ mod worker_limit;
 #[cfg(test)]
 #[path = "status/cancellation_tests.rs"]
 mod cancellation_tests;
+
+#[cfg(test)]
+#[path = "status/refresh_tests.rs"]
+mod refresh_tests;
 
 use cancellation::StatusCancellation;
 
@@ -151,6 +155,7 @@ impl GixRepo {
             staged,
             unstaged,
             direct.has_conflicted_unstaged,
+            cancellation,
         )
     }
 
@@ -189,6 +194,7 @@ impl GixRepo {
                 &repo,
                 &mut Vec::new(),
                 &mut unstaged,
+                cancellation,
             )?;
             cancellation.check_cancelled()?;
         }
@@ -231,6 +237,7 @@ impl GixRepo {
                 &repo,
                 &mut staged,
                 &mut Vec::new(),
+                cancellation,
             )?;
             cancellation.check_cancelled()?;
         }
@@ -333,6 +340,7 @@ fn finalize_status(
     mut staged: Vec<FileStatus>,
     mut unstaged: Vec<FileStatus>,
     has_conflicted_unstaged: bool,
+    cancellation: &CancellationToken,
 ) -> Result<RepoStatus> {
     // Some platforms may omit certain unmerged shapes (notably stage-1-only both-deleted
     // conflicts) from gix status output. Supplement conflict entries from the index's unmerged
@@ -349,8 +357,15 @@ fn finalize_status(
     // or gitlinks. This avoids a full `git status` subprocess on every refresh for the common
     // case.
     if may_have_gitlinks {
-        supplement_gitlink_status_from_porcelain(workdir, repo, &mut staged, &mut unstaged)?;
+        supplement_gitlink_status_from_porcelain(
+            workdir,
+            repo,
+            &mut staged,
+            &mut unstaged,
+            cancellation,
+        )?;
     }
+    cancellation.check_cancelled()?;
 
     sort_and_dedup_status_entries(&mut staged);
     sort_and_dedup_status_entries(&mut unstaged);
@@ -670,10 +685,12 @@ pub(super) struct StatRefreshedIndex {
     index: gix::index::File,
 }
 
-/// Re-hashing less than this per walk is cheaper than holding a second copy of
-/// the index.
+/// Avoid a second large index for a few inexpensive content checks.
 const STAT_REFRESH_MIN_BYTES: u64 = 256 * 1024;
 const STAT_REFRESH_MIN_ENTRIES: usize = 64;
+/// Small indexes are cheap to retain, even when a few small files took costly
+/// external clean filters to verify. Byte count alone does not capture that cost.
+const STAT_REFRESH_SMALL_INDEX_ENTRIES: usize = 128;
 
 fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
@@ -753,7 +770,10 @@ fn apply_stat_refresh(
                     IndexWorktreeApplyChange::SetSizeToZero { .. } => 0,
                 })
                 .sum();
-            if rehashed_bytes < STAT_REFRESH_MIN_BYTES && changes.len() < STAT_REFRESH_MIN_ENTRIES {
+            if base.entries().len() > STAT_REFRESH_SMALL_INDEX_ENTRIES
+                && rehashed_bytes < STAT_REFRESH_MIN_BYTES
+                && changes.len() < STAT_REFRESH_MIN_ENTRIES
+            {
                 return None;
             }
             StatRefreshedIndex {
@@ -847,6 +867,14 @@ impl gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus for NoopS
     }
 }
 
+fn filesystem_cache_enabled(repo: &gix::Repository) -> bool {
+    // Match gix's normal status path. Repository opens use its lenient config
+    // policy, so an absent or invalid value gets the platform default.
+    repo.config_snapshot()
+        .boolean(gix::config::tree::Core::FS_CACHE)
+        .unwrap_or(cfg!(windows))
+}
+
 fn collect_index_worktree_status_direct_with_submodule<S>(
     repo: &gix::Repository,
     index: &gix::index::File,
@@ -896,6 +924,7 @@ where
     let fs_caps = repo
         .filesystem_options()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status fs options: {e}"))))?;
+    let fscache = filesystem_cache_enabled(repo);
     let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
     let resource_cache = gix::diff::resource_cache(
         repo,
@@ -937,11 +966,11 @@ where
         },
         gix::status::plumbing::index_as_worktree_with_renames::Options {
             sorting: None,
-            fscache: false,
+            fscache,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
                 thread_limit: worker_limit::for_index(repo, index, cancellation)?,
-                fscache: false,
+                fscache,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
                 })?,
@@ -1340,7 +1369,9 @@ fn supplement_gitlink_status_from_porcelain(
     repo: &gix::Repository,
     staged: &mut Vec<FileStatus>,
     unstaged: &mut Vec<FileStatus>,
+    cancellation: &CancellationToken,
 ) -> Result<()> {
+    cancellation.check_cancelled()?;
     let mut command = git_workdir_cmd_for(workdir);
     command
         .arg("--literal-pathspecs")
@@ -1355,7 +1386,8 @@ fn supplement_gitlink_status_from_porcelain(
         }
         command.arg("--").args(paths);
     }
-    let output = match run_git_raw_output(command, "git status --porcelain=v2") {
+    let output = match run_git_background_output(command, "git status --porcelain=v2", cancellation)
+    {
         Ok(output) => output,
         // Gitlink supplementation is best-effort parity glue on top of the primary
         // gix status result. If the subprocess itself times out, keep the base status.
