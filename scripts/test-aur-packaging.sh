@@ -16,9 +16,7 @@ cd "$repo_dir"
 for version in 0.0.0 0.0.1-rc.1; do
   fixtures="$work/$version"
   aur_dir="$fixtures/aur"
-  mkdir -p "$aur_dir" "$fixtures/helpers"
-  gcc scripts/fixtures/difftastic.c -o "$fixtures/helpers/difft"
-  printf 'Packaging fixture helper\n' > "$fixtures/helpers/difftastic-NOTICES.txt"
+  mkdir -p "$aur_dir"
   for arch in x86_64 arm64; do
     # Distinct ELF fixtures catch accidentally packaging the other architecture.
     cp /usr/bin/true "$fixtures/binary-$arch"
@@ -99,8 +97,6 @@ for version in 0.0.0 0.0.1-rc.1; do
       grep -Fxq "arch = $arch" "$installed/.PKGINFO"
       cmp "$fixtures/binary-$binary_arch" "$installed/usr/bin/gitcomet"
       test -x "$installed/usr/bin/gitcomet"
-      cmp "$fixtures/helpers/difft" "$installed/usr/libexec/gitcomet/difft"
-      python3 "$repo_dir/scripts/check-difftastic.py" --helper "$installed/usr/libexec/gitcomet/difft" --notices "$installed/usr/share/doc/gitcomet/difftastic-NOTICES.txt"
       desktop-file-validate "$installed/usr/share/applications/gitcomet.desktop"
       for size in 32 48 128 256 512; do
         cmp "$repo_dir/assets/linux/hicolor/${size}x${size}/apps/gitcomet.png" \

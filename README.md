@@ -149,11 +149,8 @@ On Linux, install Clang and mold first; see [developer setup](CONTRIBUTING.md#ge
 
 ```bash
 cargo build -p gitcomet --features ui-gpui,gix
-python3 scripts/build-difftastic.py --profile debug --output target/debug/helpers
 cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
 ```
-
-Difftastic is bundled in release packages. Choose **Settings → Diff → Diff Engine** to make it the default, or use the diff viewer's cog for a temporary override. Both Split and Inline layouts support it. See [Difftastic](docs/difftastic.md) for partial staging, fallbacks, and helper build requirements.
 
 ### Contributing
 
@@ -252,6 +249,10 @@ Verification is disabled by default because it can slow down the Git log. Enable
 GitComet shows verification badges on signed commits. Git performs the check, using `gpg` for GPG and X.509 signatures and `ssh-keygen` for SSH signatures, so badges need those programs and the signers' public keys. **Settings → Executables** shows which programs GitComet found.
 
 To install GnuPG, trust GitHub's signing key, and configure SSH allowed signers, see the [commit signature guide](docs/commit-signatures.md).
+
+### Difftastic
+
+Choose **Settings → Diff → Diff Engine** to make Difftastic the default, or use the diff viewer's cog for a temporary override. Both Split and Inline layouts support it. See [Difftastic](docs/difftastic.md) for partial staging and fallbacks.
 
 ### Themes
 

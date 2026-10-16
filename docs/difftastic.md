@@ -30,16 +30,7 @@ These actions preserve unrelated edits, line endings, and missing final newlines
 
 ## Building and packaging
 
-Release packages bundle [Difftastic 0.71.0](https://github.com/Wilfred/difftastic/releases/tag/0.71.0). Development builds need Python 3.12 or newer, Cargo, and the platform's Rust/C build toolchain:
-
-```sh
-python3 scripts/build-difftastic.py --profile debug --output target/debug/helpers
-python3 scripts/check-difftastic.py --helper target/debug/helpers/difft --notices target/debug/helpers/difftastic-NOTICES.txt
-```
-
-Use `python` and `difft.exe` on Windows. For release builds use `--profile release --output target/release/helpers`. `--target` supports an explicit Rust target with the appropriate cross-compilation toolchain. The builder verifies the pinned source archive checksum and builds with upstream's lockfile in an isolated Cargo workspace. It also generates `difftastic-NOTICES.txt`, including parser/dependency licenses and an inventory.
-
-The Linux installer and macOS packager build the helper unless `--no-build` is supplied. All package paths require the helper and notices. Release CI checks extracted Linux packages, the installed Windows MSI, and the mounted macOS disk image. The Windows and macOS signing flows also sign the helper.
+Difftastic is [0.71.0](https://github.com/Wilfred/difftastic/releases/tag/0.71.0). It and its grammars are listed under **Settings → Links → Open source licenses**. `vendor/README.md` records the import recipe and how to upgrade.
 
 ## Runtime contract
 

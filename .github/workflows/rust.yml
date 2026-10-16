@@ -119,6 +119,8 @@ jobs:
         run: python3 scripts/ci/boundaries.py
       - name: Check each grammar symbol has one definition
         run: python3 scripts/ci/grammar_symbols.py
+      - name: Check the open-source licence list matches Cargo.lock
+        run: bash scripts/generate-open-source-licenses.sh --check
       - uses: ./.github/actions/ci-finish
         if: always()
         with:

@@ -19,8 +19,6 @@ iconsroot="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
 icon_sizes=(32 48 128 256 512)
 
 rm -f "${bindir}/gitcomet"
-rm -f "${prefix}/libexec/gitcomet/difft"
-rm -f "${prefix}/share/doc/gitcomet/difftastic-NOTICES.txt"
 rm -f "${appdir}/gitcomet.desktop"
 for size in "${icon_sizes[@]}"; do
   rm -f "${iconsroot}/${size}x${size}/apps/gitcomet.png"

@@ -100,15 +100,6 @@ To build the command-line app without GPUI:
 cargo build --locked -p gitcomet --no-default-features --features gix
 ```
 
-To enable Difftastic in a development build, use Python 3.12 or newer to build the pinned helper:
-
-```sh
-python3 scripts/build-difftastic.py --profile debug --output target/debug/helpers
-python3 scripts/check-difftastic.py --helper target/debug/helpers/difft --notices target/debug/helpers/difftastic-NOTICES.txt
-```
-
-On Windows, use `python` and `difft.exe`. The helper has its own Cargo workspace under `target/difftastic`; its Tree-sitter dependencies stay separate from GitComet. Building it requires network access on the first run. The application and offline tests build without it; selecting Difftastic then shows an explicit line-engine fallback. Release packaging requires the helper and generated notices. See [Difftastic integration](docs/difftastic.md).
-
 Run (opens the repo passed as the first arg, or falls back to the current directory):
 
 ```bash
@@ -155,7 +146,7 @@ consent overrides. In-tree tests enable it through dev dependencies; external te
 harnesses must opt in. Normal app builds leave it disabled. See the
 [profiling guide](scripts/profiling/README.md#backend-measurements) for probe builds.
 
-Formatting, Clippy, dependency boundaries and grammar symbols (matching CI's package contexts):
+Formatting, Clippy, dependency boundaries, grammar symbols and the licence list (matching CI's package contexts):
 
 ```bash
 cargo fmt --all --check
@@ -164,7 +155,10 @@ cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --featur
 cargo clippy --locked -p gitcomet-ui-kit -p gitcomet-extension-api -p gitcomet-extension-example -p gitcomet-ui-gpui -p gitcomet-app -- -D warnings
 python3 scripts/ci/boundaries.py
 python3 scripts/ci/grammar_symbols.py
+bash scripts/generate-open-source-licenses.sh --check
 ```
+
+After a dependency change, run `scripts/generate-open-source-licenses.sh` to refresh the open-source licence list the app shows.
 
 Coverage (local + CI-compatible):
 
@@ -219,7 +213,7 @@ You can also run `.github/workflows/deploy-homebrew-tap.yml` manually for backfi
 
 ### Linux packages
 
-`scripts/package-linux.sh` builds the release artifacts from one staged payload. The `.deb`, `.rpm` and AppImage include the app, Difftastic helper and notices, desktop entry, all five icon sizes, licence files and README. The tarball contains the app, README, `LICENSE-AGPL-3.0`, `NOTICE`, and a `helpers` directory with `difft` and `difftastic-NOTICES.txt`. Package metadata lives in `packaging/linux/`: `debian-control.in` for the `.deb`, `gitcomet.spec` for the `.rpm`, and `PKGBUILD.in` for the AUR's `gitcomet-bin`.
+`scripts/package-linux.sh` builds the release artifacts from one staged payload. The `.deb`, `.rpm` and AppImage include the binary, desktop entry, all five icon sizes, licence files and README. The tarball preserves its historical layout for third-party packagers: only the binary, README, `LICENSE-AGPL-3.0` and `NOTICE`. Package metadata lives in `packaging/linux/`: `debian-control.in` for the `.deb`, `gitcomet.spec` for the `.rpm`, and `PKGBUILD.in` for the AUR's `gitcomet-bin`.
 
 Linked libraries are declared automatically by `dpkg-shlibdeps` and rpm AutoReq, and explicitly in `PKGBUILD.in`. Libraries the app loads at runtime (Vulkan, EGL, Wayland) are declared by hand. `scripts/check-linux-runtime-deps.sh` runs in CI and on every release build, and fails when the binary's libraries or its glibc baseline drift from those declarations. Update all three package templates when the runtime dependencies change. Arch requires `libglvnd` for EGL and offers `vulkan-icd-loader` as an optional dependency; `wayland` is optional because X11 is the fallback.
 

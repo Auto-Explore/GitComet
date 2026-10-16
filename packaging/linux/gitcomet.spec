@@ -36,10 +36,8 @@ cp -a %{gc_payload}/. %{buildroot}/
 
 %files
 %{_bindir}/gitcomet
-%{_libexecdir}/gitcomet/difft
 %{_datadir}/applications/gitcomet.desktop
 %{_datadir}/icons/hicolor/*/apps/gitcomet.png
 %license %{_datadir}/licenses/gitcomet/LICENSE-AGPL-3.0
 %license %{_datadir}/licenses/gitcomet/NOTICE
 %doc %{_datadir}/doc/gitcomet/README.md
-%license %{_datadir}/doc/gitcomet/difftastic-NOTICES.txt

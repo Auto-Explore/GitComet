@@ -7,7 +7,6 @@ Usage: scripts/install-linux.sh [--release|--debug] [--prefix PATH] [--no-build]
 
 Installs:
   - binary to <prefix>/bin/gitcomet
-  - Difftastic to <prefix>/libexec/gitcomet/difft and notices to <prefix>/share/doc/gitcomet
   - desktop entry to ~/.local/share/applications/gitcomet.desktop
   - icons to ~/.local/share/icons/hicolor/<size>x<size>/apps/gitcomet.png
     sizes: 32, 48, 128, 256, 512
@@ -34,7 +33,6 @@ done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin_src="${repo_root}/target/${mode}/gitcomet"
-helpers="${repo_root}/target/${mode}/helpers"
 
 if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
   cargo_mode_flag=()
@@ -43,11 +41,6 @@ if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
   fi
   (cd "$repo_root" && cargo build -p gitcomet "${cargo_mode_flag[@]}")
 fi
-
-if [[ $build -eq 1 ]]; then
-  python3 "${repo_root}/scripts/build-difftastic.py" --profile "$mode" --output "$helpers"
-fi
-python3 "${repo_root}/scripts/check-difftastic.py" --helper "$helpers/difft" --notices "$helpers/difftastic-NOTICES.txt"
 
 if [[ ! -x "$bin_src" ]]; then
   echo "Binary not found or not executable: $bin_src" >&2
@@ -61,9 +54,6 @@ iconsroot="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
 icon_sizes=(32 48 128 256 512)
 
 install -Dm755 "$bin_src" "${bindir}/gitcomet"
-install -Dm755 "$helpers/difft" "${prefix}/libexec/gitcomet/difft"
-install -Dm644 "$helpers/difftastic-NOTICES.txt" "${prefix}/share/doc/gitcomet/difftastic-NOTICES.txt"
-python3 "${repo_root}/scripts/check-difftastic.py" --helper "${prefix}/libexec/gitcomet/difft" --notices "${prefix}/share/doc/gitcomet/difftastic-NOTICES.txt"
 
 # Install desktop file with absolute Exec path so it works even if ~/.local/bin isn't on PATH.
 tmp_desktop="$(mktemp)"

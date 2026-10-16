@@ -70,14 +70,6 @@
                                 Source='$(var.CargoTargetBinDir)\gitcomet.exe'
                                 KeyPath='yes'/>
                         </Component>
-                        <Directory Id='Helpers' Name='helpers'>
-                            <Component Id='DifftasticBinary' Guid='*'>
-                                <File Id='DifftasticExe' Name='difft.exe' Source='$(var.CargoTargetBinDir)\helpers\difft.exe' KeyPath='yes'/>
-                            </Component>
-                            <Component Id='DifftasticNotices' Guid='*'>
-                                <File Id='DifftasticNoticesFile' Name='difftastic-NOTICES.txt' Source='$(var.CargoTargetBinDir)\helpers\difftastic-NOTICES.txt' KeyPath='yes'/>
-                            </Component>
-                        </Directory>
                     </Directory>
                 </Directory>
             </Directory>
@@ -119,8 +111,6 @@
             Absent='disallow'>
             <ComponentRef Id='License'/>
             <ComponentRef Id='MainBinary'/>
-            <ComponentRef Id='DifftasticBinary'/>
-            <ComponentRef Id='DifftasticNotices'/>
             <ComponentRef Id='StartMenuShortcut'/>
 
             <Feature

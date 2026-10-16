@@ -766,7 +766,7 @@ tree-sitter-llvm	1.1.0	MIT
 tree-sitter-lua	0.5.0	MIT
 tree-sitter-make	1.1.1	MIT
 tree-sitter-md	0.3.2	MIT
-tree-sitter-newick	1.1.0	SEE LICENSE.txt
+tree-sitter-newick	1.1.0	CECILL-C
 tree-sitter-nix	0.3.0	MIT
 tree-sitter-objc	3.0.2	MIT
 tree-sitter-ocaml	0.26.0	MIT
@@ -870,9 +870,9 @@ wgpu-core-deps-windows-linux-android	29.0.4	MIT OR Apache-2.0
 wgpu-hal	29.0.4	MIT OR Apache-2.0
 wgpu-naga-bridge	29.0.4	MIT OR Apache-2.0
 wgpu-types	29.0.4	MIT OR Apache-2.0
-wgsl-rs	0.1.0	UNKNOWN
-wgsl-rs-ir	0.1.0	UNKNOWN
-wgsl-rs-macros	0.1.0	UNKNOWN
+wgsl-rs	0.1.0	MIT
+wgsl-rs-ir	0.1.0	MIT
+wgsl-rs-macros	0.1.0	MIT
 which	8.0.6	MIT
 winapi	0.3.9	MIT/Apache-2.0
 winapi-i686-pc-windows-gnu	0.4.0	MIT/Apache-2.0
