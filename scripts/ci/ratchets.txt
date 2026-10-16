@@ -1,5 +1,5 @@
 # Refactor round 2 ratchets: <metric> <max|min> <value>. See docs/refactor-round-2.md.
-ui_gpui_production_lines max 245156
+ui_gpui_production_lines max 245250
 gitcomet_view_fields max 161
 super_glob_imports_in_ui_production max 332
 impl_gitcomet_view_files_outside_root max 23

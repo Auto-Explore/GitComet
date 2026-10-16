@@ -2,6 +2,7 @@ use super::*;
 use crate::appearance::{Appearance, FontRole, UiDensity};
 use crate::preference_writer::PreferenceWriter;
 use crate::ui_scale;
+use crate::view::preference_change::PreferenceChange;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, current_git_runtime, select_git_executable_path,

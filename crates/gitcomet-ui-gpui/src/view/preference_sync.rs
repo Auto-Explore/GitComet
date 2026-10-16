@@ -1,3 +1,4 @@
+use super::preference_change::PreferenceChange;
 use super::*;
 
 impl GitCometView {
@@ -914,5 +915,95 @@ impl GitCometView {
         self.update_ui_preferences(cx, move |preferences| {
             preferences.history.default_mode = mode;
         });
+    }
+}
+
+impl GitCometView {
+    /// Applies a change the settings window broadcast to every main window.
+    pub(in crate::view) fn apply_preference_change(
+        &mut self,
+        change: &PreferenceChange,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match change.clone() {
+            PreferenceChange::Terminal(next) => self.apply_terminal_preferences(next, cx),
+            PreferenceChange::Toast(kind, message) => self.push_toast(kind, message, cx),
+            PreferenceChange::ThemeMode(mode) => self.set_theme_mode(mode, window.appearance(), cx),
+            PreferenceChange::Fonts => self.notify_font_preferences_changed(cx),
+            PreferenceChange::DateTimeFormat(format) => {
+                self.set_date_time_format_preference(format, cx)
+            }
+            PreferenceChange::Timezone(timezone) => self.set_timezone_preference(timezone, cx),
+            PreferenceChange::ShowTimezone(enabled) => {
+                self.set_show_timezone_preference(enabled, cx)
+            }
+            PreferenceChange::ChangeTrackingView(next) => self.set_change_tracking_view(next, cx),
+            PreferenceChange::FileListLayout(next) => self.set_file_list_layout(next, cx),
+            PreferenceChange::FileListSort(next) => self.set_file_list_sort(next, cx),
+            PreferenceChange::DiffScrollSync(next) => self.set_diff_scroll_sync(next, cx),
+            PreferenceChange::DiffContentMode(next) => self.set_diff_content_mode(next, cx),
+            PreferenceChange::DiffWhitespaceMode(next) => self.set_diff_whitespace_mode(next, cx),
+            PreferenceChange::DiffViewMode(next) => self.set_diff_view_mode(next, cx),
+            PreferenceChange::DiffRevealWhitespaceChars(next) => {
+                self.set_diff_reveal_whitespace_chars(next, cx)
+            }
+            PreferenceChange::DiffWordWrap(next) => self.set_diff_word_wrap(next, cx),
+            PreferenceChange::DiffTabSize(next) => self.set_diff_tab_size(next, cx),
+            PreferenceChange::DiffShowLineNumbers(next) => {
+                self.set_diff_show_line_numbers(next, cx)
+            }
+            PreferenceChange::AutoSaveFileEdits(next) => self.set_auto_save_file_edits(next, cx),
+            PreferenceChange::RemoteMarkdownImagePolicy(next) => {
+                self.set_remote_markdown_image_policy(next, cx)
+            }
+            PreferenceChange::RemoteUrlPolicy(next) => self.set_remote_url_policy(next, cx),
+            PreferenceChange::CheckForUpdatesOnStartup(next) => {
+                self.set_check_for_updates_on_startup(next, cx)
+            }
+            PreferenceChange::HistoryBranchNames(next) => self.set_history_branch_names(next, cx),
+            PreferenceChange::HistoryColumns {
+                graph,
+                author,
+                date,
+                sha,
+            } => self.set_history_column_preferences(graph, author, date, sha, cx),
+            PreferenceChange::HistoryHighlightCommitChain(enabled) => {
+                self.set_history_highlight_commit_chain(enabled, cx)
+            }
+            PreferenceChange::FilesFollowSelectedCommit(enabled) => {
+                self.set_files_follow_selected_commit_preference(enabled, cx)
+            }
+            PreferenceChange::HistoryRelativeDates(enabled) => {
+                self.set_history_relative_dates(enabled, cx)
+            }
+            PreferenceChange::HistoryTags { show, fetch_mode } => {
+                self.set_history_tag_preferences(show, fetch_mode, cx)
+            }
+            PreferenceChange::VerifyCommitSignatures(enabled) => {
+                self.set_verify_commit_signatures_preference(enabled, cx)
+            }
+            PreferenceChange::DefaultHistoryMode(mode) => {
+                self.set_default_history_mode_preference(mode, cx)
+            }
+            PreferenceChange::DefaultTagType(tag_type) => {
+                self.set_default_tag_type_preference(tag_type, cx)
+            }
+            PreferenceChange::LargeFileSettings(settings) => {
+                self.set_large_file_settings_preference(settings, cx)
+            }
+            PreferenceChange::RemotePrune(enabled) => self.set_remote_prune_preference(enabled, cx),
+            PreferenceChange::MaintenanceRecommendations(enabled) => {
+                self.set_maintenance_recommendation_preference(enabled, cx)
+            }
+            PreferenceChange::ResetHistoryColumnWidths => self.reset_history_column_widths(cx),
+            PreferenceChange::GitRuntime(runtime) => {
+                self.cancel_signing_tools_probe();
+                self.store.dispatch(Msg::SetGitRuntimeState(runtime));
+            }
+            PreferenceChange::LargeFileTools(tools) => {
+                self.store.dispatch(Msg::SetLargeFileToolsState(tools));
+            }
+        }
     }
 }

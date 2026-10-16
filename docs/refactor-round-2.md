@@ -843,3 +843,13 @@ command without a handler no longer compiles. String ids remain the edge format
 dispatcher arms for commands the palette never listed were empty TODO
 placeholders and are gone. Tests check that every command has exactly one
 palette row and that ids round-trip.
+
+### 3.5 Settings send preference changes as data
+
+The settings window updated main windows through 39 closures that each called
+a root setter. It now sends a `PreferenceChange` value
+(`view/preference_change.rs`) through `broadcast_preference`, and each main
+window applies it in `GitCometView::apply_preference_change`. The settings
+window's only remaining reads of the root are the window list and the active
+repository's terminal launch context, which is the seam a later
+`gitcomet-ui-settings` crate needs.
