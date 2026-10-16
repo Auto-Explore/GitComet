@@ -72,6 +72,8 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) reveal: crate::view::rows::MarkdownPreviewRevealRequest,
     /// The container the document scrolls in, which the reveal moves.
     pub(in crate::view) scroll: Option<gpui::ScrollHandle>,
+    /// Diagram heights already known, for sizing diagram blocks not yet drawn.
+    pub(in crate::view) diagram_heights: crate::view::diagram_preview::block::DiagramHeights,
     /// The link under the pointer.
     pub(in crate::view) hovered_link: Option<crate::view::rows::MarkdownPreviewHoveredLink>,
     /// Where changed blocks were laid out, for the diff's scrollbar markers.
@@ -408,6 +410,9 @@ fn estimated_block_height(
         (text.chars().count() as f32 / per_line).ceil().max(1.0)
     };
     let rows = RowRun::new(document, block.row_range());
+    let listing = || {
+        rows.iter().count() as f32 * line + 2.0 * f32::from(scaled(CODE_BLOCK_PAD_Y_PX, context))
+    };
     let height = match block {
         MarkdownBlock::Heading { level, row_ix } => {
             let size = match level {
@@ -435,11 +440,18 @@ fn estimated_block_height(
             .iter()
             .map(|(_, row)| lines(&row.text, 40.0 * f32::from(row.indent_level)) * line)
             .sum(),
-        MarkdownBlock::Code(_) => {
-            rows.iter().count() as f32 * line
-                + 2.0 * f32::from(scaled(CODE_BLOCK_PAD_Y_PX, context))
-        }
-        MarkdownBlock::Diagram(_) => 360.0,
+        MarkdownBlock::Code(_) => listing(),
+        MarkdownBlock::Diagram(_) => rows
+            .first()
+            .and_then(|(_, row)| row.diagram.as_ref())
+            .map_or(0.0, |diagram| {
+                context.diagram_heights.estimate_block(
+                    &diagram.key,
+                    crate::ui_scale::UiScale::from_percent(context.ui_scale_percent)
+                        .with_appearance(context.theme.metrics),
+                    listing(),
+                )
+            }),
         MarkdownBlock::Table(_) => {
             rows.iter().count() as f32
                 * (line + 2.0 * f32::from(scaled(TABLE_CELL_PAD_Y_PX, context)))
@@ -454,6 +466,60 @@ fn estimated_block_height(
         MarkdownBlock::ThematicBreak(_) => 1.0,
     };
     px(height)
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+impl MarkdownDocumentContext {
+    /// A context for a document drawn outside any pane, for tests and
+    /// benchmarks: no view to report to, nothing scrolled, nothing searched.
+    pub(in crate::view) fn detached(theme: AppTheme, ui_scale_percent: u32) -> Self {
+        Self {
+            theme,
+            ui_scale_percent,
+            editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.into(),
+            image_root: None,
+            remote_image_access: Default::default(),
+            picture_sizes: Default::default(),
+            drawn_pictures: None,
+            row_boxes: Default::default(),
+            block_scrolls: Default::default(),
+            blocks: Default::default(),
+            layout: Default::default(),
+            view: None,
+            text_region: DiffTextRegion::Inline,
+            change_bar_color: None,
+            query: None,
+            reveal: Default::default(),
+            scroll: None,
+            diagram_heights: Default::default(),
+            hovered_link: None,
+            change_extents: None,
+            tasks_editable: false,
+        }
+    }
+}
+
+/// The height the document reserves for its `block_ix`th block before drawing
+/// it, for tests that compare it with the drawn block.
+#[cfg(test)]
+pub(in crate::view) fn markdown_block_estimate_for_tests(
+    document: &MarkdownPreviewDocument,
+    block_ix: usize,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    cx: &mut App,
+) -> f32 {
+    let blocks = markdown_document_blocks(document);
+    let context = MarkdownDocumentContext {
+        diagram_heights: crate::view::diagram_preview::block::DiagramHeights::new(cx),
+        ..MarkdownDocumentContext::detached(theme, ui_scale_percent)
+    };
+    f32::from(estimated_block_height(
+        document,
+        &blocks[block_ix],
+        &context,
+        None,
+    ))
 }
 
 /// The gap a column opens above `block` when another block precedes it.
@@ -1410,12 +1476,11 @@ fn render_block(
                         range.start,
                     )
                         .into(),
-                    input: crate::view::diagram_preview::DiagramInput::Text {
-                        kind: diagram.kind,
-                        text: diagram.source.clone(),
-                    },
                     theme: context.theme,
-                    embedded: true,
+                    placement: crate::view::diagram_preview::DiagramPlacement::Block {
+                        key: diagram.key.clone(),
+                        scroll: context.scroll.clone(),
+                    },
                     source_element: Some(render_code(tab_width, rows, context)),
                     force_source: context
                         .reveal
@@ -2770,26 +2835,8 @@ mod tests {
         let document = Arc::new(parse_markdown(&source).expect("parses"));
         for (label, query) in [("idle", None), ("search", Some(query))] {
             let context = MarkdownDocumentContext {
-                theme,
-                ui_scale_percent: 100,
-                editor_font_family: "monospace".into(),
-                image_root: None,
-                remote_image_access: Default::default(),
-                picture_sizes: Default::default(),
-                drawn_pictures: None,
-                row_boxes: Default::default(),
-                block_scrolls: Default::default(),
-                blocks: Default::default(),
-                view: None,
-                text_region: DiffTextRegion::Inline,
-                change_bar_color: None,
                 query,
-                reveal: Default::default(),
-                scroll: None,
-                hovered_link: None,
-                change_extents: None,
-                layout: Default::default(),
-                tasks_editable: false,
+                ..MarkdownDocumentContext::detached(theme, 100)
             };
             let start = std::time::Instant::now();
             for _ in 0..FRAMES {

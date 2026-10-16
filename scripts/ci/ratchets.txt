@@ -1,6 +1,7 @@
 # Refactor round 2 ratchets: <metric> <max|min> <value>. See docs/refactor-round-2.md.
-ui_gpui_production_lines max 244438
-gitcomet_view_fields max 161
+# Host counts include window wheel zoom and Markdown diagram height integration.
+ui_gpui_production_lines max 244493
+gitcomet_view_fields max 162
 super_glob_imports_in_ui_production max 331
 impl_gitcomet_view_files_outside_root max 23
 set_theme_calls_in_ui max 29

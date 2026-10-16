@@ -19,20 +19,19 @@ pub struct MermaidPreviewFixture {
 }
 struct PreviewHost {
     theme: AppTheme,
-    source: Arc<str>,
+    key: DiagramKey,
 }
 impl Render for PreviewHost {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         div().size_full().child(DiagramPreview {
             id: "mermaid_benchmark".into(),
-            input: DiagramInput::Text {
-                kind: DiagramKind::Mermaid,
-                text: self.source.clone(),
-            },
             theme: self.theme,
             source_element: None,
             force_source: false,
-            embedded: true,
+            placement: DiagramPlacement::Block {
+                key: self.key.clone(),
+                scroll: None,
+            },
         })
     }
 }
@@ -51,7 +50,7 @@ impl MermaidPreviewFixture {
         app.update(|cx| cx.set_global(AppDiagramCache(cache.clone())));
         let window = app.add_window(|_, _| PreviewHost {
             theme,
-            source: source.clone(),
+            key: DiagramKey::new(DiagramKind::Mermaid, source.clone()),
         });
         Self {
             cache,
@@ -83,6 +82,7 @@ impl MermaidPreviewFixture {
         let keys = viewport.keys(
             self.scene.id,
             if step.is_multiple_of(2) { 1.0 } else { 2.0 },
+            (0.0..viewport.size.0, 0.0..viewport.size.1),
         );
         assert!(
             !keys.is_empty(),
@@ -134,7 +134,7 @@ flowchart LR;A-->B
         for row in &document.rows {
             if let Some(source) = &row.diagram {
                 self.cache
-                    .render(source.kind, source.source.clone())
+                    .render(source.key.kind(), source.key.source().clone())
                     .unwrap();
                 diagrams += 1;
             }

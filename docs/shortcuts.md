@@ -57,8 +57,9 @@ and image conflict previews.
 
 The sampling and shared zoom menus are in the file's bottom bar. When comparison
 images are unlinked, each pane has its own zoom controls beneath the image.
-Ctrl/Cmd + scroll over an image changes image zoom; outside the image it changes
-application UI scale.
+Ctrl/Cmd + scroll over an image changes image zoom, and over a Mermaid diagram
+the diagram's zoom (see [Diagram previews](file-management.md#diagram-previews));
+elsewhere it changes application UI scale.
 
 ## Text input shortcuts
 

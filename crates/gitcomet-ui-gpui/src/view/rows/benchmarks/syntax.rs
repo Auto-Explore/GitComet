@@ -1883,28 +1883,10 @@ fn render_markdown_preview_window(
         .sum();
     let (shared, blocks) = (Arc::clone(&document.document), Rc::clone(blocks));
     host.build(move || {
-        let context = super::MarkdownDocumentContext {
+        let context = super::MarkdownDocumentContext::detached(
             theme,
-            ui_scale_percent: crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-            editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.into(),
-            image_root: None,
-            remote_image_access: Default::default(),
-            picture_sizes: Default::default(),
-            drawn_pictures: None,
-            row_boxes: Default::default(),
-            block_scrolls: Default::default(),
-            blocks: Default::default(),
-            layout: Default::default(),
-            view: None,
-            text_region: DiffTextRegion::Inline,
-            change_bar_color: None,
-            query: None,
-            reveal: Default::default(),
-            scroll: None,
-            hovered_link: None,
-            change_extents: None,
-            tasks_editable: false,
-        };
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
         super::render_markdown_document_with_blocks(
             tab_width,
             &shared,

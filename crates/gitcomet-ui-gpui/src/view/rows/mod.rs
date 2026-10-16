@@ -1183,6 +1183,8 @@ pub(in crate::view) use self::history::{
     markdown_preview_styled_row_with_query, markdown_preview_task_checkbox,
     percent_decode_link_path, worktree_markdown_preview_bar_color,
 };
+#[cfg(test)]
+pub(in crate::view) use self::markdown_document::markdown_block_estimate_for_tests;
 pub(in crate::view) use self::markdown_document::{
     MarkdownChangeExtents, MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls,
     MarkdownDocumentContext, MarkdownDocumentLayoutCache, MarkdownRowBoxes,

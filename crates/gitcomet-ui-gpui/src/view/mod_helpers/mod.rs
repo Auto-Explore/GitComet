@@ -1051,6 +1051,7 @@ pub struct GitCometView {
     pub(super) update_check_in_flight: bool,
     pub(super) update_check_manual_feedback_requested: bool,
     pub(super) ui_scale_percent: u32,
+    pub(super) zoom_wheel: super::zoom_wheel::ZoomWheel,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,

@@ -2807,6 +2807,7 @@ dependencies = [
  "image",
  "lru",
  "resvg",
+ "rustc-hash 2.1.3",
  "tempfile",
 ]
 
