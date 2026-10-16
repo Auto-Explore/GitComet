@@ -793,6 +793,19 @@ fn cmake_marks_only_upper_case_arguments_constant_and_real_shebangs() {
     assert_eq!(shebang, [SyntaxTokenKind::Keyword]);
 }
 
+/// A `def` names a value; only a `defn`, or a `def` of an `fn`, names a function.
+#[test]
+fn clojure_def_names_a_value_unless_it_binds_a_function() {
+    let text = "(def limit 10)\n(def f (fn [x] x))\n(defn g [x] x)\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Clojure, text);
+    let kinds = |line: usize, fragment| {
+        token_kinds_for_line_fragment(document, line, text.lines().nth(line).unwrap(), fragment)
+    };
+    assert_eq!(kinds(0, "limit"), [SyntaxTokenKind::Variable]);
+    assert_eq!(kinds(1, " f "), [SyntaxTokenKind::Function]);
+    assert_eq!(kinds(2, " g "), [SyntaxTokenKind::Function]);
+}
+
 /// `#_` discards the form after it; its strings, keywords and brackets must not
 /// keep their own colours.
 #[test]

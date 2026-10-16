@@ -70,7 +70,8 @@
     "monitor-enter" "monitor-exit" "reify" "proxy" "extend" "extend-type"
     "extend-protocol" "deftest" "testing" "are" "is"))
 
-;; The name a `def`-like form binds.
+;; The name a `def`-like form binds. `def` and `defonce` bind a value, which is
+;; a function only when it is an `fn`.
 
 (list_lit
   .
@@ -80,9 +81,32 @@
   (sym_lit
     name: (sym_name) @function)
   (#any-of? @_def
-    "def" "defn" "defn-" "defmacro" "defmulti" "defmethod" "defprotocol"
-    "defrecord" "deftype" "definterface" "defstruct" "defonce" "declare"
-    "deftest"))
+    "defn" "defn-" "defmacro" "defmulti" "defmethod" "defprotocol"
+    "defrecord" "deftype" "definterface" "defstruct" "declare" "deftest"))
+
+(list_lit
+  .
+  (sym_lit
+    name: (sym_name) @_def)
+  .
+  (sym_lit
+    name: (sym_name) @variable)
+  (#any-of? @_def "def" "defonce"))
+
+(list_lit
+  .
+  (sym_lit
+    name: (sym_name) @_def)
+  .
+  (sym_lit
+    name: (sym_name) @function)
+  .
+  (list_lit
+    .
+    (sym_lit
+      name: (sym_name) @_fn))
+  (#any-of? @_def "def" "defonce")
+  (#any-of? @_fn "fn" "fn*"))
 
 ;; A namespaced symbol reads as `namespace/name`; the namespace half is the part
 ;; worth telling apart.
