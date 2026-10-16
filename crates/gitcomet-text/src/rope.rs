@@ -789,9 +789,8 @@ impl<'a> Iterator for ReversedChunks<'a> {
     }
 }
 
-/// Split `text` into pieces of at most [`MAX_CHUNK_BYTES`], never mid-character.
-/// Split `text` into chunks of at most [`MAX_CHUNK_BYTES`], balanced so the
-/// last one is not a sliver.
+/// Split `text` into chunks of at most [`MAX_CHUNK_BYTES`], never
+/// mid-character, balanced so the last one is not a sliver.
 ///
 /// Taking a greedy 512 bytes at a time would leave the remainder, and an edit
 /// rebuilds the straddled chunk plus the inserted text — so a one-character
