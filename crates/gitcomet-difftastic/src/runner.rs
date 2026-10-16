@@ -111,9 +111,10 @@ fn compare_with_executable(
     input: DiffInput<'_>,
     cancellation: &CancellationToken,
 ) -> Result<StructuralDiffOutcome, DifftasticError> {
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
     let mut version_command = command(executable);
     version_command.arg("--version");
-    let version = run(version_command, cancellation, PROCESS_TIMEOUT, STDERR_LIMIT)?;
+    let version = run(version_command, cancellation, deadline, STDERR_LIMIT)?;
     if !String::from_utf8_lossy(&version.stdout)
         .split_whitespace()
         .any(|part| part == VERSION)
@@ -148,7 +149,7 @@ fn compare_with_executable(
         .arg("--")
         .arg(&old_path)
         .arg(&new_path);
-    let output = run(command, cancellation, PROCESS_TIMEOUT, STDOUT_LIMIT)?;
+    let output = run(command, cancellation, deadline, STDOUT_LIMIT)?;
     decode(&output.stdout, input.old, input.new)
 }
 
@@ -198,7 +199,7 @@ impl Drop for Worker {
 fn run(
     mut command: Command,
     cancellation: &CancellationToken,
-    timeout: Duration,
+    deadline: Instant,
     stdout_limit: usize,
 ) -> Result<Output, DifftasticError> {
     if cancellation.is_cancelled() {
@@ -222,7 +223,6 @@ fn run(
     let overflow = Arc::new(AtomicBool::new(false));
     let stdout = reader(child.stdout().take(), stdout_limit, Arc::clone(&overflow));
     let stderr = reader(child.stderr().take(), STDERR_LIMIT, Arc::clone(&overflow));
-    let started = Instant::now();
     let mut status = None;
     let failure = loop {
         if cancellation.is_cancelled() {
@@ -231,7 +231,7 @@ fn run(
         if overflow.load(Ordering::Acquire) {
             break Some(DifftasticError::OutputLimit);
         }
-        if started.elapsed() >= timeout {
+        if Instant::now() >= deadline {
             break Some(DifftasticError::Timeout);
         }
         if status.is_none() {

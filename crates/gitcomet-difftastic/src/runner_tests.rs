@@ -54,7 +54,7 @@ fn cancellation_prevents_starting_the_process() {
         run(
             fixture("normal", &marker),
             &token,
-            PROCESS_TIMEOUT,
+            Instant::now() + PROCESS_TIMEOUT,
             STDOUT_LIMIT
         ),
         Err(DifftasticError::Cancelled)
@@ -63,7 +63,7 @@ fn cancellation_prevents_starting_the_process() {
     run(
         fixture("normal", &marker),
         &CancellationToken::new(),
-        PROCESS_TIMEOUT,
+        Instant::now() + PROCESS_TIMEOUT,
         STDOUT_LIMIT,
     )
     .unwrap();
@@ -76,7 +76,7 @@ fn captures_json_sized_output_without_diagnostic_truncation() {
     let output = run(
         fixture("large", &directory.path().join("marker")),
         &CancellationToken::new(),
-        PROCESS_TIMEOUT,
+        Instant::now() + PROCESS_TIMEOUT,
         STDOUT_LIMIT,
     )
     .unwrap();
@@ -90,7 +90,7 @@ fn oversized_output_is_rejected_instead_of_truncated() {
         run(
             fixture("large", &directory.path().join("marker")),
             &CancellationToken::new(),
-            PROCESS_TIMEOUT,
+            Instant::now() + PROCESS_TIMEOUT,
             1024
         ),
         Err(DifftasticError::OutputLimit)
@@ -104,7 +104,7 @@ fn expired_deadline_terminates_and_reaps_the_child() {
         run(
             fixture("normal", &directory.path().join("marker")),
             &CancellationToken::new(),
-            Duration::ZERO,
+            Instant::now(),
             STDOUT_LIMIT
         ),
         Err(DifftasticError::Timeout)
