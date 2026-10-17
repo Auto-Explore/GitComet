@@ -12,10 +12,6 @@ fn git(dir: &Path, args: &[&str]) {
     crate::test_support::git(dir, args);
 }
 
-fn git_output(dir: &Path, args: &[&str]) -> Vec<u8> {
-    crate::test_support::git(dir, args)
-}
-
 fn head(dir: &Path) -> String {
     let out = crate::test_support::git(dir, &["rev-parse", "HEAD"]);
     String::from_utf8(out).unwrap().trim().to_string()
@@ -1445,8 +1441,13 @@ fn staging_a_difftastic_line_applies_it_without_a_review(cx: &mut gpui::TestAppC
             )
         })
     });
-    let staged =
-        || String::from_utf8(git_output(dir.path(), &["diff", "--cached", "a.rs"])).unwrap();
+    let staged = || {
+        String::from_utf8(crate::test_support::git(
+            dir.path(),
+            &["diff", "--cached", "a.rs"],
+        ))
+        .unwrap()
+    };
     settle(cx, &view, &store, "the added line in the index", |_| {
         staged().contains("+    let two = 2;")
     });
