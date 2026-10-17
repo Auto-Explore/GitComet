@@ -5,6 +5,16 @@ use crate::msg::ChangedPaths;
 
 pub(super) const MAX_WORKTREE_WATCH_DIRS: usize = 4096;
 
+#[cfg(windows)]
+fn metadata_discovery_required(policy: &PolicySnapshot) -> bool {
+    // Recursive native roots already cover metadata descendants. Preserve the
+    // old cross-pass deduplication when a Git root also contains the worktree.
+    policy
+        .git_roots
+        .iter()
+        .any(|root| policy.workdir.starts_with(root))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WatchSetupOutcome {
     Watching { failed_dirs: usize },
@@ -215,7 +225,11 @@ impl MonitorState {
                     .unwrap_or_else(|e| e.into_inner())
                     .directories = 0;
             }
-            self.plan = WatchPlan::default();
+            self.plan = WatchPlan {
+                #[cfg(test)]
+                discovery_work: self.plan.discovery_work,
+                ..WatchPlan::default()
+            };
             self.publish(PolicySnapshot::new(workdir, &self.inputs));
             {
                 let _phase = SetupPhase::new(config, "before-registration", attempt);
@@ -268,6 +282,10 @@ impl MonitorState {
             {
                 let _phase = SetupPhase::new(config, "directory-discovery", attempt);
                 for (roots, worktree) in [(roots, false), (vec![workdir.to_path_buf()], true)] {
+                    #[cfg(windows)]
+                    if !worktree && !metadata_discovery_required(&snapshot) {
+                        continue;
+                    }
                     let complete = self.plan.walk_while(
                         roots,
                         worktree,
@@ -388,6 +406,10 @@ impl MonitorState {
         for (path, worktree) in &effect.dir_added {
             if !config.enabled.load(Ordering::Relaxed) {
                 return;
+            }
+            #[cfg(windows)]
+            if !worktree && !metadata_discovery_required(&snapshot) {
+                continue;
             }
             if !self.plan.walk_while(
                 [path.clone()],
