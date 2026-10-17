@@ -2,7 +2,9 @@ use super::DiffRenderer;
 use super::services::DiffCommand;
 use crate::view::{DiffTextRegion, DiffViewMode, components};
 use gitcomet_core::domain::{DiffArea, DiffTarget};
-use gitcomet_core::patch_action::{PatchOperation, PreparedDiffPatch, SourceLineSelection};
+use gitcomet_core::patch_action::{
+    PatchActionError, PatchOperation, PreparedDiffPatch, SourceLineSelection,
+};
 use gitcomet_extension_api::{HostedAction, HostedMenuItem};
 use gitcomet_state::diff_session::DiffViewId;
 use gitcomet_state::{model::RepoId, msg::Msg};
@@ -374,7 +376,7 @@ impl DiffRenderer {
         self.commands.send(
             DiffCommand::Toast(
                 components::ToastKind::Error,
-                "The comparison changed. Select lines in the current diff and try again.".into(),
+                PatchActionError::Stale.to_string().into(),
             ),
             cx,
         );

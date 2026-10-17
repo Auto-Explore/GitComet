@@ -24,7 +24,7 @@ Standalone GUI file comparisons also use full sources and support both engines. 
 
 Select whole source lines or act on a structural change block. Token-level patch actions are not supported. A side-only selection includes only that side. Structural blocks exclude display context and do not expand to enclosing Git hunks.
 
-GitComet prepares the exact Git patch for those whole lines and applies it at once, as the line engine applies its line and hunk actions. If the file, index, attributes, target, or viewer changes before it is applied, the action is rejected with a notice; select the lines again. The worker revalidates the source snapshot, and an application lock excludes other GitComet repository mutations and editor saves during validation and application. External programs do not participate in that lock.
+GitComet prepares the exact Git patch for those whole lines and applies it at once, as the line engine applies its line and hunk actions. If the file, index, attributes, target, or viewer changes before it is applied, the action is rejected with a notice; try again on the current diff. The worker revalidates the source snapshot, and an application lock excludes other GitComet repository mutations and editor saves during validation and application. External programs do not participate in that lock.
 
 These actions preserve unrelated edits, line endings, and missing final newlines. Existing restrictions on managed payloads and linked-worktree partial actions remain in place.
 

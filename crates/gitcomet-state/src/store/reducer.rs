@@ -1279,8 +1279,7 @@ fn reduce_inner(
                     inputs,
                     state,
                     crate::model::AppNotificationKind::Error,
-                    "The comparison changed. Select lines in the current diff and try again."
-                        .to_owned(),
+                    gitcomet_core::patch_action::PatchActionError::Stale.to_string(),
                 );
                 return Vec::new();
             }

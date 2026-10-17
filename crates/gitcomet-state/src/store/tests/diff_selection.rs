@@ -412,6 +412,14 @@ fn prepared_patch_admission_rejects_stale_origins_without_mutation_effects() {
                 assert!(duplicate.is_empty());
             } else {
                 assert!(effects.is_empty(), "hosted={hosted} stale={stale}");
+                assert_eq!(
+                    state
+                        .notifications
+                        .last()
+                        .map(|notice| notice.message.as_str()),
+                    Some("The comparison changed. Try again on the current diff."),
+                    "hosted={hosted} stale={stale}"
+                );
                 if let Some(repo) = state.repos.first() {
                     assert_eq!(repo.local_actions_in_flight, u32::from(stale == "busy"));
                 }

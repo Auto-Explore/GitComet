@@ -75,7 +75,7 @@ impl PreparedDiffPatch {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum PatchActionError {
-    #[error("The file changed. Refresh the diff and prepare a new patch.")]
+    #[error("The comparison changed. Try again on the current diff.")]
     Stale,
     #[error("This selection has no applicable changed lines.")]
     Empty,
