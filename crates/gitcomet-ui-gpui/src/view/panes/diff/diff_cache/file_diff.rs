@@ -1621,6 +1621,23 @@ impl PagedFileDiffInlineRows {
         self.source.inline_row_draws(inline_ix, old)
     }
 
+    /// The text of row `inline_ix`'s old line (`old`) or new line, whichever
+    /// side the row draws.
+    pub(in crate::view) fn line_text(
+        &self,
+        inline_ix: usize,
+        old: bool,
+    ) -> Option<gitcomet_core::file_diff::FileDiffLineText> {
+        let row = self.source.inline_row(inline_ix)?;
+        let line = usize::try_from(if old { row.old_line } else { row.new_line }?).ok()?;
+        let line_ix = line.checked_sub(1)?;
+        Some(if old {
+            self.source.old_line_shared_text(line_ix)
+        } else {
+            self.source.new_line_shared_text(line_ix)
+        })
+    }
+
     pub(in crate::view) fn modify_pair_texts(
         &self,
         inline_ix: usize,

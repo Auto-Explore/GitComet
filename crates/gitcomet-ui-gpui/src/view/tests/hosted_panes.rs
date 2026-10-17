@@ -106,19 +106,19 @@ fn open_repository_of(
 }
 
 /// A repository whose `a.rs` gains `pub` on line 1 and a new line 2, and
-/// whose `b.rs` changes, in Rust Difftastic parses.
+/// whose `b.rs` loses `pub` on line 1, in Rust Difftastic parses.
 fn rust_repository() -> tempfile::TempDir {
     let dir = repository_with_edits_of(1, [0, 0]);
     let root = dir.path();
     std::fs::write(root.join("a.rs"), "fn a() -> i32 {\n    1\n}\n").unwrap();
-    std::fs::write(root.join("b.rs"), "fn b() -> i32 {\n    1\n}\n").unwrap();
+    std::fs::write(root.join("b.rs"), "pub fn b() -> i32 {\n    1\n}\n").unwrap();
     git(root, &["commit", "-qam", "rust"]);
     std::fs::write(
         root.join("a.rs"),
         "pub fn a() -> i32 {\n    let two = 2;\n    1\n}\n",
     )
     .unwrap();
-    std::fs::write(root.join("b.rs"), "fn b() -> i32 {\n    2\n}\n").unwrap();
+    std::fs::write(root.join("b.rs"), "fn b() -> i32 {\n    1\n}\n").unwrap();
     dir
 }
 
@@ -1386,27 +1386,29 @@ fn a_patch_bodied_pane_leaves_its_patch_error_to_the_renderer(cx: &mut gpui::Tes
     });
 }
 
-/// `rust_repository`'s `a.rs` in a Changes pane on its unstaged diff, Inline,
-/// compared by Difftastic.
-fn difftastic_a_rs(
-    cx: &mut gpui::TestAppContext,
+/// `rust_repository`'s `path` in a Changes pane on its unstaged diff, Inline,
+/// compared by Difftastic into `rows` rows.
+fn difftastic_file<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    path: &str,
+    rows: usize,
 ) -> (
     tempfile::TempDir,
     AppStore,
     gpui::Entity<GitCometView>,
-    &mut gpui::VisualTestContext,
+    &'a mut gpui::VisualTestContext,
     gpui::Entity<crate::view::panes::diff::DiffRenderer>,
 ) {
     let (dir, store, view, cx) = open_repository_in(cx, Arc::new(TestBackend), rust_repository());
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     click_debug_selector(
         cx,
-        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+        selector(format!("hosted_file_list_{list_id}_file_{path}")),
     );
     let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
     cx.update(|_window, app| {
         pane.set_target(
-            DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+            DiffTarget::working_tree(path.into(), DiffArea::Unstaged),
             app,
         );
         pane.set_layout(gitcomet_extension_api::DiffLayout::Inline, app);
@@ -1424,10 +1426,15 @@ fn difftastic_a_rs(
             .cloned()
             .unwrap()
     });
-    settle(cx, &view, &store, "a.rs compared by Difftastic", |cx| {
+    settle(cx, &view, &store, "the file compared by Difftastic", |cx| {
         cx.update(|_window, app| {
             let renderer = renderer.read(app);
-            renderer.structural_diff_active() && renderer.diff_visible_len() == 4
+            renderer.structural_diff_active()
+                && renderer
+                    .rendered_diff_target()
+                    .and_then(DiffTarget::file_path)
+                    == Some(Path::new(path))
+                && renderer.diff_visible_len() == rows
         })
     });
     (dir, store, view, cx, renderer)
@@ -1474,7 +1481,7 @@ fn staged(dir: &tempfile::TempDir) -> String {
 /// review screen to confirm it in.
 #[gpui::test]
 fn staging_a_difftastic_line_applies_it_without_a_review(cx: &mut gpui::TestAppContext) {
-    let (dir, store, view, cx, renderer) = difftastic_a_rs(cx);
+    let (dir, store, view, cx, renderer) = difftastic_file(cx, "a.rs", 4);
     let added = row_with_lines(&renderer, (None, Some(2)), cx);
     cx.update(|_window, app| stage_row(&renderer, added, app));
     settle(cx, &view, &store, "the added line in the index", |_| {
@@ -1487,7 +1494,7 @@ fn staging_a_difftastic_line_applies_it_without_a_review(cx: &mut gpui::TestAppC
 /// staging it replaces the line in the index.
 #[gpui::test]
 fn staging_a_one_row_difftastic_pair_replaces_its_line(cx: &mut gpui::TestAppContext) {
-    let (dir, store, view, cx, renderer) = difftastic_a_rs(cx);
+    let (dir, store, view, cx, renderer) = difftastic_file(cx, "a.rs", 4);
     let pair = row_with_lines(&renderer, (Some(1), Some(1)), cx);
     cx.update(|_window, app| stage_row(&renderer, pair, app));
     settle(cx, &view, &store, "line 1 replaced in the index", |_| {
@@ -1501,11 +1508,54 @@ fn staging_a_one_row_difftastic_pair_replaces_its_line(cx: &mut gpui::TestAppCon
     assert!(!staged(&dir).contains("let two"), "{}", staged(&dir));
 }
 
+/// An extension's selected text is the side it asks for, even on a one-row
+/// pair that draws only the other side.
+#[gpui::test]
+fn hosted_selected_text_reads_the_side_asked_for_on_a_one_row_pair(cx: &mut gpui::TestAppContext) {
+    let (_dir, _store, _view, cx, renderer) = difftastic_file(cx, "a.rs", 4);
+    cx.update(|_window, app| {
+        let renderer = renderer.read(app);
+        let line_one = |side| gitcomet_extension_api::DiffLineRange {
+            side,
+            start: 1,
+            end: 1,
+        };
+        assert_eq!(
+            renderer.hosted_selected_text(line_one(DiffLineSide::Old)),
+            "fn a() -> i32 {"
+        );
+        assert_eq!(
+            renderer.hosted_selected_text(line_one(DiffLineSide::New)),
+            "pub fn a() -> i32 {"
+        );
+    });
+}
+
+/// A decor tint asked for without a side follows the side a row draws: a
+/// one-row pair drawing its old line takes the old line's tint.
+#[gpui::test]
+fn a_sideless_decor_tint_follows_the_side_a_row_draws(cx: &mut gpui::TestAppContext) {
+    let (_dir, _store, _view, cx, renderer) = difftastic_file(cx, "b.rs", 3);
+    let pair = row_with_lines(&renderer, (Some(1), Some(1)), cx);
+    cx.update(|_window, app| {
+        renderer.update(app, |pane, _| {
+            pane.hosted_decor.as_mut().unwrap().options.decor =
+                Some(std::rc::Rc::new(|side: DiffLineSide, line: u32| {
+                    (side == DiffLineSide::Old && line == 1).then(|| {
+                        DiffRowDecor::gutter("●").with_tint(gpui::hsla(0.5, 0.5, 0.5, 1.0))
+                    })
+                }));
+        });
+        // Only the old line is tinted, so a tint means the old side was read.
+        assert!(renderer.read(app).hosted_row_tint(pair, None).is_some());
+    });
+}
+
 /// A click while another action is still applying is dropped quietly, as the
 /// line engine drops it: the rows still describe the index before that action.
 #[gpui::test]
 fn a_difftastic_action_while_another_applies_is_dropped_quietly(cx: &mut gpui::TestAppContext) {
-    let (dir, store, view, cx, renderer) = difftastic_a_rs(cx);
+    let (dir, store, view, cx, renderer) = difftastic_file(cx, "a.rs", 4);
     let added = row_with_lines(&renderer, (None, Some(2)), cx);
     let mut busy = (*store.snapshot()).clone();
     busy.repos[0].local_actions_in_flight = 1;

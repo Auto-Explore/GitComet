@@ -54,10 +54,29 @@ impl DiffRenderer {
                 if !text.is_empty() {
                     text.push('\n');
                 }
-                text.push_str(crate::view::diff_utils::diff_content_line_text(&row).as_ref());
+                // A one-row Difftastic pair draws one side; read the side asked for.
+                let side_text = full
+                    .then_some(self.file_diff_inline_row_provider.as_ref())
+                    .flatten()
+                    .and_then(|rows| rows.line_text(index, range.side == DiffLineSide::Old));
+                match side_text {
+                    Some(side_text) => text.push_str(side_text.as_ref()),
+                    None => text
+                        .push_str(crate::view::diff_utils::diff_content_line_text(&row).as_ref()),
+                }
             }
         }
         text
+    }
+
+    fn inline_row_draws_old(&self, visible: usize) -> bool {
+        let file_rows =
+            self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active();
+        file_rows
+            && self
+                .diff_mapped_ix_for_visible_ix(visible)
+                .and_then(|row| self.file_diff_inline_render_data(row))
+                .is_some_and(|row| row.kind == gitcomet_core::domain::DiffLineKind::Remove)
     }
 
     pub(in crate::view) fn hosted_row_tint(
@@ -68,12 +87,14 @@ impl DiffRenderer {
         let decor = self.hosted_decor.as_ref()?;
         let provider = decor.options.decor.as_ref()?;
         let (old, new) = self.hosted_line_numbers(row);
+        let old = old.map(|line| (DiffLineSide::Old, line));
+        let new = new.map(|line| (DiffLineSide::New, line));
         let (side, line) = match side {
-            Some(DiffLineSide::Old) => (DiffLineSide::Old, old?),
-            Some(DiffLineSide::New) => (DiffLineSide::New, new?),
-            None => new
-                .map(|line| (DiffLineSide::New, line))
-                .or_else(|| old.map(|line| (DiffLineSide::Old, line)))?,
+            Some(DiffLineSide::Old) => old?,
+            Some(DiffLineSide::New) => new?,
+            // An inline row takes the tint of the side it draws.
+            None if self.inline_row_draws_old(row) => old.or(new)?,
+            None => new.or(old)?,
         };
         provider(side, line)?.tint.map(IntoColor::into_color)
     }
