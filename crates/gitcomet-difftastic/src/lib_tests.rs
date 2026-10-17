@@ -75,9 +75,11 @@ fn cancelling_mid_comparison_returns_promptly() {
     let (old, new) = (list(false), list(true));
     let cancellation = CancellationToken::new();
     let polls = std::sync::atomic::AtomicUsize::new(0);
+    // A comparison that ends before the cancel fails the test, not hangs it.
+    let returned = std::sync::atomic::AtomicBool::new(false);
     let (outcome, cancelled_at) = std::thread::scope(|scope| {
         let canceller = scope.spawn(|| {
-            while polls.load(Ordering::Relaxed) < 1000 {
+            while polls.load(Ordering::Relaxed) < 1000 && !returned.load(Ordering::Relaxed) {
                 std::thread::yield_now();
             }
             cancellation.cancel();
@@ -96,6 +98,7 @@ fn cancelling_mid_comparison_returns_promptly() {
                 api::compare(input, NESTING_LIMIT, &counted)
             },
         );
+        returned.store(true, Ordering::Relaxed);
         (outcome, canceller.join().unwrap())
     });
     assert_eq!(outcome, Err(Cancelled));
