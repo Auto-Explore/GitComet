@@ -610,11 +610,15 @@ pub(super) fn diff_row(
                 DiffLineKind::Context
             };
 
-            let (mut left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
-            let (mut right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
+            let (_, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
+            let (_, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
+            let left_bg_kind = line_background_kind(left_kind, mark_lines);
+            let right_bg_kind = line_background_kind(right_kind, mark_lines);
+            let mut left_bg = diff_line_colors(theme, left_bg_kind).0;
+            let mut right_bg = diff_line_colors(theme, right_bg_kind).0;
             if selected {
-                left_bg = focused_diff_line_bg(theme, left_kind);
-                right_bg = focused_diff_line_bg(theme, right_kind);
+                left_bg = focused_diff_line_bg(theme, left_bg_kind);
+                right_bg = focused_diff_line_bg(theme, right_bg_kind);
             }
 
             let (left_text, right_text) = match line.kind {
