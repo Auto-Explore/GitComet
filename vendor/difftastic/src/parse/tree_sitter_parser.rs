@@ -2205,8 +2205,7 @@ mod tests {
         };
     }
 
-    /// Ensure that we don't crash when loading any of the
-    /// configs. This can happen on bad highlighting/foo.scm files.
+    /// A panic while the config cache is locked leaves it usable.
     #[test]
     fn a_panic_holding_the_config_cache_leaves_it_usable() {
         let _ = std::thread::spawn(|| {
@@ -2218,6 +2217,8 @@ mod tests {
         from_language(guess::Language::Json);
     }
 
+    /// Ensure that we don't crash when loading any of the
+    /// configs. This can happen on bad highlighting/foo.scm files.
     #[test]
     fn test_configs_valid() {
         for language in guess::Language::iter() {
