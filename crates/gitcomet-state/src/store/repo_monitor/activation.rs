@@ -735,9 +735,18 @@ mod tests {
     fn check_directory_link_inputs(create_link: impl Fn(&Path, &Path) -> bool) {
         let (dir, mut backend) = fixture();
         let external = tempfile::tempdir().unwrap();
-        let first = external.path().join("target-a");
-        let second = external.path().join("target-b");
-        let link = external.path().join("linked");
+        // Recreate an ancestor alias such as macOS /var -> /private/var on
+        // every platform, independently of the host's temporary directory.
+        let external_root = normalized(&external.path().canonicalize().unwrap());
+        let physical_parent = external_root.join("real-parent");
+        fs::create_dir(&physical_parent).unwrap();
+        let parent_link = external_root.join("parent-link");
+        if !create_link(&physical_parent, &parent_link) {
+            return;
+        }
+        let first = physical_parent.join("target-a");
+        let second = physical_parent.join("target-b");
+        let link = parent_link.join("linked");
         for target in [&first, &second] {
             fs::create_dir(target).unwrap();
             fs::write(target.join("config"), "same configuration").unwrap();
@@ -768,7 +777,16 @@ mod tests {
             MetadataSnapshot::capture(dir.path(), &inputs).unwrap()
         };
         let snapshot = capture();
-        assert!(snapshot.discovery.contains_key(&normalized(&link)));
+        assert!(snapshot.discovery.contains_key(&parent_link));
+        for input in [link.join("config"), link.join("missing")] {
+            assert!(snapshot.discovery.contains_key(&input));
+        }
+        // Discovery resolves ancestor links before recording a nested link.
+        // Resolve its parent only: canonicalizing the final link would name
+        // target-a and lose the link identity whose retargeting we are testing.
+        let physical_link = normalized(&link.parent().unwrap().canonicalize().unwrap())
+            .join(link.file_name().unwrap());
+        assert!(snapshot.discovery.contains_key(&physical_link));
         assert!(
             snapshot
                 .discovery
@@ -825,11 +843,15 @@ mod tests {
             // Fixed relative fixture names keep this shell invocation independent
             // of user-profile spelling and require no symlink privilege.
             let target_name = target.file_name().unwrap().to_str().unwrap();
-            assert!(matches!(target_name, "target-a" | "target-b"));
-            assert_eq!(link.file_name().unwrap(), "linked");
+            assert!(matches!(
+                target_name,
+                "real-parent" | "target-a" | "target-b"
+            ));
+            let link_name = link.file_name().unwrap().to_str().unwrap();
+            assert!(matches!(link_name, "parent-link" | "linked"));
             let output = std::process::Command::new("cmd")
                 .current_dir(link.parent().unwrap())
-                .args(["/d", "/c", "mklink", "/J", "linked", target_name])
+                .args(["/d", "/c", "mklink", "/J", link_name, target_name])
                 .output()
                 .unwrap();
             assert!(output.status.success(), "junction fixture: {output:?}");
