@@ -216,6 +216,8 @@ struct FileStamp {
     created: Option<std::time::SystemTime>,
     directory: bool,
     contents: Option<Arc<[u8]>>,
+    link: Option<PathBuf>,
+    resolved: Option<PathBuf>,
     #[cfg(unix)]
     inode: u64,
     #[cfg(unix)]
@@ -330,6 +332,12 @@ impl MetadataSnapshot {
 
     fn add_discovery(&mut self, path: &Path) -> std::io::Result<()> {
         self.add(path, false, true)?;
+        if let Some(resolved) = self.entries[path]
+            .as_ref()
+            .and_then(|stamp| stamp.resolved.clone())
+        {
+            self.add_discovery(&resolved)?;
+        }
         self.discovery
             .insert(path.to_path_buf(), self.entries[path].clone());
         Ok(())
@@ -368,11 +376,18 @@ impl MetadataSnapshot {
                 // optional input. Validate the nearest existing ancestor.
                 for ancestor in path.ancestors().skip(1) {
                     match fs::symlink_metadata(ancestor) {
-                        Ok(metadata) if metadata.is_dir() => break,
-                        Ok(_) => {
-                            return Err(std::io::Error::other(
-                                "activation input has a non-directory ancestor",
-                            ));
+                        Ok(metadata) => {
+                            let directory = if metadata_link(ancestor, &metadata)?.is_some() {
+                                fs::metadata(ancestor)?.is_dir()
+                            } else {
+                                metadata.is_dir()
+                            };
+                            if !directory {
+                                return Err(std::io::Error::other(
+                                    "activation input has a non-directory ancestor",
+                                ));
+                            }
+                            break;
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                         Err(error) => return Err(error),
@@ -391,15 +406,42 @@ impl MetadataSnapshot {
             }
             Err(error) => return Err(error),
         };
-        // Fall back to the full refresh for unusual layouts instead of
-        // mistaking an unchanged link for an unchanged target.
-        if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+        let link = metadata_link(path, &metadata)?;
+        // The discovered ancestor/control links need only nonrecursive stamps.
+        // A link inside refs or sequencer data could lead into objects/private
+        // caches or an unrelated tree; retain the full-refresh fallback there.
+        if recursive && link.is_some() {
+            return Err(std::io::Error::other(
+                "unsupported recursive activation metadata link",
+            ));
+        }
+        if link.is_none() && !metadata.is_file() && !metadata.is_dir() {
             return Err(std::io::Error::other(
                 "unsupported activation metadata input",
             ));
         }
-        let directory = metadata.is_dir();
-        let contents = if previous.is_some_and(|coverage| coverage.contents) {
+        let resolved = link
+            .as_ref()
+            .map(|_| fs::canonicalize(path).map(|target| normalized(&target)))
+            .transpose()?;
+        let target = if let Some(resolved) = &resolved {
+            // Ancestor links such as /var are explicit discovery inputs. Their
+            // targets need identity stamps, not an unbounded directory walk.
+            // Canonicalization rejects dangling links and link-resolution loops.
+            if resolved == path {
+                return Err(std::io::Error::other("unresolved activation metadata link"));
+            }
+            self.add(resolved, false, read_contents)?;
+            Some(self.entries[resolved].as_ref().ok_or_else(|| {
+                std::io::Error::other("activation metadata link target disappeared")
+            })?)
+        } else {
+            None
+        };
+        let directory = target.map_or_else(|| metadata.is_dir(), |stamp| stamp.directory);
+        let contents = if let Some(target) = target {
+            target.contents.clone()
+        } else if previous.is_some_and(|coverage| coverage.contents) {
             self.entries
                 .get(path)
                 .and_then(|stamp| stamp.as_ref())
@@ -437,6 +479,10 @@ impl MetadataSnapshot {
         } else {
             None
         };
+        // Adding a link's target may have used the final available entry.
+        if previous.is_none() && self.entries.len() >= MAX_METADATA_ENTRIES {
+            return Err(std::io::Error::other("activation metadata limit exceeded"));
+        }
         self.entries.insert(
             path.to_path_buf(),
             Some(FileStamp {
@@ -451,6 +497,8 @@ impl MetadataSnapshot {
                 created: metadata.created().ok(),
                 directory,
                 contents,
+                link,
+                resolved,
                 #[cfg(unix)]
                 inode: std::os::unix::fs::MetadataExt::ino(&metadata),
                 #[cfg(unix)]
@@ -482,6 +530,24 @@ impl MetadataSnapshot {
             }
         }
         Ok(())
+    }
+}
+
+/// `read_link` accepts ordinary symlinks and Windows junctions. Other reparse
+/// layouts must fail closed rather than silently treating their target as a
+/// plain, unchanged input.
+fn metadata_link(path: &Path, metadata: &fs::Metadata) -> std::io::Result<Option<PathBuf>> {
+    let link = metadata.file_type().is_symlink();
+    #[cfg(windows)]
+    let link = link || {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    };
+    if link {
+        fs::read_link(path).map(Some)
+    } else {
+        Ok(None)
     }
 }
 
@@ -664,6 +730,163 @@ mod tests {
         current.add_discovery(&config).unwrap();
         current.add_discovery(&alias).unwrap();
         assert!(!previous.discovery_still_matches(&current));
+    }
+
+    fn check_directory_link_inputs(create_link: impl Fn(&Path, &Path) -> bool) {
+        let (dir, mut backend) = fixture();
+        let external = tempfile::tempdir().unwrap();
+        let first = external.path().join("target-a");
+        let second = external.path().join("target-b");
+        let link = external.path().join("linked");
+        for target in [&first, &second] {
+            fs::create_dir(target).unwrap();
+            fs::write(target.join("config"), "same configuration").unwrap();
+            // An ancestor link must not expand into unrelated directory data.
+            fs::write(
+                target.join("unrelated"),
+                vec![b'x'; MAX_CONTROL_FILE_BYTES as usize + 1],
+            )
+            .unwrap();
+        }
+        if !create_link(&first, &link) {
+            return;
+        }
+        let mut recursive = MetadataSnapshot::default();
+        assert!(recursive.add(&link, true, true).is_err());
+        assert!(
+            recursive.entries.is_empty(),
+            "recursive links must fail before walking their targets"
+        );
+        backend
+            .0
+            .as_mut()
+            .unwrap()
+            .ignore_inputs
+            .extend([link.join("config"), link.join("missing")]);
+        let capture = || {
+            let inputs = WatchInputs::load(dir.path(), &backend).unwrap();
+            MetadataSnapshot::capture(dir.path(), &inputs).unwrap()
+        };
+        let snapshot = capture();
+        assert!(snapshot.discovery.contains_key(&normalized(&link)));
+        assert!(
+            snapshot
+                .discovery
+                .contains_key(&normalized(&first.canonicalize().unwrap()))
+        );
+        assert!(!snapshot.entries.contains_key(&first.join("unrelated")));
+        assert!(!snapshot.entries.contains_key(&link.join("unrelated")));
+        let mut refresh = ActivationRefresh::default();
+        refresh.complete(Some(snapshot), ActivationContext::ready_for_test());
+        assert_working_changes_only(
+            refresh.complete(Some(capture()), ActivationContext::ready_for_test()),
+        );
+        fs::write(first.join("config"), "edited configuration").unwrap();
+        let edited = capture();
+        assert!(refresh.needs_discovery(Ok(&edited)));
+        assert!(
+            refresh
+                .complete(Some(edited), ActivationContext::ready_for_test())
+                .git_state
+        );
+        fs::write(first.join("config"), "same configuration").unwrap();
+        refresh.complete(Some(capture()), ActivationContext::ready_for_test());
+        #[cfg(windows)]
+        fs::remove_dir(&link).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(&link).unwrap();
+        assert!(create_link(&second, &link));
+        let retargeted = capture();
+        assert!(
+            refresh.needs_discovery(Ok(&retargeted)),
+            "equal file bytes must not hide link retargeting"
+        );
+        assert!(
+            refresh
+                .complete(Some(retargeted), ActivationContext::ready_for_test())
+                .git_state
+        );
+        assert_working_changes_only(
+            refresh.complete(Some(capture()), ActivationContext::ready_for_test()),
+        );
+    }
+
+    #[test]
+    fn directory_link_inputs_track_targets_and_retarget_without_recursive_scans() {
+        check_directory_link_inputs(|target, link| {
+            gitcomet_core::test_support::symlink::directory(target, link)
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn directory_junction_inputs_track_targets_and_retarget_without_recursive_scans() {
+        check_directory_link_inputs(|target, link| {
+            // Fixed relative fixture names keep this shell invocation independent
+            // of user-profile spelling and require no symlink privilege.
+            let target_name = target.file_name().unwrap().to_str().unwrap();
+            assert!(matches!(target_name, "target-a" | "target-b"));
+            assert_eq!(link.file_name().unwrap(), "linked");
+            let output = std::process::Command::new("cmd")
+                .current_dir(link.parent().unwrap())
+                .args(["/d", "/c", "mklink", "/J", "linked", target_name])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "junction fixture: {output:?}");
+            true
+        });
+    }
+
+    #[test]
+    fn file_link_inputs_track_target_contents_and_intermediate_retargeting() {
+        let (dir, mut backend) = fixture();
+        let external = tempfile::tempdir().unwrap();
+        let first = external.path().join("first");
+        let second = external.path().join("second");
+        let middle = external.path().join("middle");
+        let link = external.path().join("link");
+        fs::write(&first, "same").unwrap();
+        fs::write(&second, "same").unwrap();
+        if !gitcomet_core::test_support::symlink::file(Path::new("first"), &middle)
+            || !gitcomet_core::test_support::symlink::file(Path::new("middle"), &link)
+        {
+            return;
+        }
+        backend.0.as_mut().unwrap().ignore_inputs.push(link.clone());
+        let mut refresh = ActivationRefresh::default();
+        assert!(refresh.change(dir.path(), &backend).git_state);
+        assert_working_changes_only(refresh.change(dir.path(), &backend));
+        fs::write(&first, "edit").unwrap();
+        assert!(refresh.change(dir.path(), &backend).git_state);
+        assert_working_changes_only(refresh.change(dir.path(), &backend));
+        fs::write(&first, "same").unwrap();
+        refresh.change(dir.path(), &backend);
+        fs::remove_file(&middle).unwrap();
+        assert!(gitcomet_core::test_support::symlink::file(
+            Path::new("second"),
+            &middle
+        ));
+        let inputs = WatchInputs::load(dir.path(), &backend).unwrap();
+        let retargeted = ActivationRefresh::prepare(dir.path(), &inputs);
+        assert!(retargeted.is_ok());
+        assert!(refresh.needs_discovery(retargeted.as_ref()));
+        assert!(
+            refresh
+                .complete(retargeted.ok(), ActivationContext::ready_for_test())
+                .git_state
+        );
+        assert_working_changes_only(refresh.change(dir.path(), &backend));
+        // Canonical identity and bytes stay unchanged, but the link's spelling
+        // still changes and must invalidate discovery.
+        fs::remove_file(&middle).unwrap();
+        assert!(gitcomet_core::test_support::symlink::file(
+            Path::new("./second"),
+            &middle
+        ));
+        let inputs = WatchInputs::load(dir.path(), &backend).unwrap();
+        let retargeted = ActivationRefresh::prepare(dir.path(), &inputs);
+        assert!(retargeted.is_ok());
+        assert!(refresh.needs_discovery(retargeted.as_ref()));
     }
 
     #[test]
