@@ -1316,9 +1316,9 @@ fn a_pane_draws_a_patch_error_its_file_does_not_show(cx: &mut gpui::TestAppConte
 }
 
 /// A pane whose body is a patch has its renderer draw the patch's error, so
-/// the pane draws no second copy above it.
+/// the pane draws none of its own above it.
 #[gpui::test]
-fn a_patch_bodied_pane_draws_its_patch_error_once(cx: &mut gpui::TestAppContext) {
+fn a_patch_bodied_pane_leaves_its_patch_error_to_the_renderer(cx: &mut gpui::TestAppContext) {
     let (_dir, store, view, cx) = open_repository(cx);
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     click_debug_selector(
