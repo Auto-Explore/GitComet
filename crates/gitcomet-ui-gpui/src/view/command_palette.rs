@@ -804,10 +804,21 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
         needs: Needs::Nothing,
     },
+    CommandEntry {
+        id: Command::FileHistory.id(),
+        label: "File History",
+        shortcut: Shortcut::Platform {
+            macos: "Ctrl+H",
+            other: "Ctrl+H",
+        },
+        category: "History",
+        keywords: "file history log commits changes renames",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
     // TODO: "undo"              - Undo (Edit)
     // TODO: "redo"              - Redo (Edit)
     // TODO: "keyboard-shortcuts" - Keyboard Shortcuts (Help)
-    // TODO: "file-history"     - File History (History)
     // TODO: "search-commits"   - Search Commits (Navigation)
     // TODO: "checkout-remote-branch" - Checkout Remote Branch
     // TODO: "delete-remote-branch"   - Delete Remote Branch

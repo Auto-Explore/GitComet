@@ -1116,6 +1116,15 @@ impl PopoverHost {
                     );
                 }
             }
+            ContextMenuAction::OpenFileHistory { repo_id, path } => {
+                // The tab's filter takes the focus; the invoker must not take it back.
+                restore_invoker_focus_after_action = false;
+                let _ = self.root_view.request(
+                    RootRequest::OpenFileHistory { repo_id, path },
+                    Some(window),
+                    cx,
+                );
+            }
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self.popover_anchor_point();
                 self.open_popover_at(kind, anchor, window, cx);

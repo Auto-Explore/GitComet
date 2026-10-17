@@ -861,6 +861,18 @@ impl GitCometView {
         });
         panels::bar_items::connect(&action_bar, &bottom_status_bar, cx);
 
+        let file_history_pane = cx.new(|cx| {
+            panes::file_history::FileHistoryPaneView::new(
+                Arc::clone(&store),
+                ui_model.clone(),
+                panes::file_history::FileHistoryPaneInit {
+                    theme: initial_theme,
+                    root_view: weak_view.clone(),
+                },
+                window,
+                cx,
+            )
+        });
         let sidebar_pane = cx.new(|cx| {
             let mut pane = SidebarPaneView::new(
                 Arc::clone(&store),
@@ -870,6 +882,7 @@ impl GitCometView {
                 ui_session.repo_sidebar_pinned_branches.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
+                file_history_pane.clone(),
                 cx,
             );
             pane.set_expanded_branches_visible(!restored_sidebar_collapsed, cx);
@@ -1354,6 +1367,7 @@ impl GitCometView {
             terminal_panel_resize: None,
             next_terminal_session_seq: 1,
             reflog_pane,
+            file_history_pane,
             bottom_panel_providers: super::bottom_panel_providers::registered(cx),
             active_bottom_panel: FxHashMap::default(),
             commit_push_after_enabled,
@@ -1498,6 +1512,8 @@ impl GitCometView {
         self.details_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.reflog_pane
+            .update(cx, |pane, cx| pane.set_theme(theme, cx));
+        self.file_history_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.repo_tabs_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
@@ -1779,6 +1795,24 @@ impl GitCometView {
             },
         )
         .detach();
+    }
+
+    /// Opens the file history tab for `path`; does nothing for an inactive repository.
+    pub(in crate::view) fn open_file_history(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.state.active_repo != Some(repo_id) {
+            return;
+        }
+        self.set_sidebar_collapsed(false, cx);
+        self.file_history_pane
+            .update(cx, |pane, cx| pane.open(repo_id, path, window, cx));
+        self.sidebar_pane
+            .update(cx, |pane, cx| pane.show_file_history(window, cx));
     }
 
     pub(super) fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {

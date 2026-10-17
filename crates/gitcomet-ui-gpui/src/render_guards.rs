@@ -49,6 +49,7 @@ mod tests {
                     "view/panels/popover/mod.rs",
                     "view/panels/repo_tabs_bar.rs",
                     "view/panes/details.rs",
+                    "view/panes/file_history.rs",
                     "view/panes/history/history_panel.rs",
                     "view/rows/conflict_resolver.rs",
                     "view/rows/conflict_resolver/three_way_rows.rs",

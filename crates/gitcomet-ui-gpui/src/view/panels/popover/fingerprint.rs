@@ -18,10 +18,7 @@ pub(super) fn notify_fingerprint(
         .map(|snapshot| snapshot.revision)
         .hash(&mut hasher);
     hash_popover_kind(popover, &mut hasher);
-    if matches!(
-        popover,
-        PopoverKind::CommitMenu { .. } | PopoverKind::FileHistory { .. }
-    ) {
+    if matches!(popover, PopoverKind::CommitMenu { .. }) {
         state.git_log_settings.show_history_tags.hash(&mut hasher);
     }
 
@@ -217,6 +214,7 @@ fn repo_for_popover<'a>(
         // Popovers that carry an explicit repo id.
         PopoverKind::CommitPrompt { repo_id }
         | PopoverKind::StashPickerPrompt { repo_id, .. }
+        | PopoverKind::FileHistoryFilePicker { repo_id }
         | PopoverKind::UpstreamPicker { repo_id, .. }
         | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
         | PopoverKind::RenameBranchPrompt { repo_id, .. }
@@ -228,7 +226,6 @@ fn repo_for_popover<'a>(
         | PopoverKind::RepoTabMenu { repo_id }
         | PopoverKind::CreateTagPrompt { repo_id, .. }
         | PopoverKind::Repo { repo_id, .. }
-        | PopoverKind::FileHistory { repo_id, .. }
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
@@ -275,6 +272,7 @@ fn repo_for_popover<'a>(
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
         | PopoverKind::LocalFileLinkMenu { repo_id, .. }
         | PopoverKind::ReflogEntryMenu { repo_id, .. }
+        | PopoverKind::FileHistoryCommitMenu { repo_id, .. }
         | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
         PopoverKind::DiffEditorMenu { repo_id, .. } => *repo_id,
     }?;
@@ -395,25 +393,10 @@ fn hash_repo_for_popover<H: Hasher>(
         | PopoverKind::StashPickerPrompt { .. } => {
             repo.stashes_rev.hash(hasher);
         }
-
-        PopoverKind::FileHistory { .. } => {
-            // The row menu reuses commit actions whose availability changes as
-            // refs and repository operations change.
-            repo.head_branch_rev.hash(hasher);
-            repo.branches_rev.hash(hasher);
-            repo.remotes_rev.hash(hasher);
-            repo.history_state.log_rev.hash(hasher);
-            repo.history_rewrite_busy().hash(hasher);
-            if let Some(mark) = &repo.navigation.comparison_mark {
-                mark.commit_id.hash(hasher);
-                mark.label.hash(hasher);
-            }
-            if let Some(target) = diff.diff_target.as_ref() {
-                view_fingerprint::hash_diff_target(target, hasher);
-            }
-            super::rows_cache::date_bucket(std::time::SystemTime::now()).hash(hasher);
-            repo.history_state.file_history_path.hash(hasher);
-            view_fingerprint::hash_loadable_arc(&repo.history_state.file_history, hasher);
+        PopoverKind::FileHistoryFilePicker { .. } => {
+            repo.file_browser.file_browser_rev.hash(hasher);
+            repo.status_rev.hash(hasher);
+            diff.diff_target_rev.hash(hasher);
         }
 
         PopoverKind::DiffHunkMenu { .. }
@@ -501,6 +484,19 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.history_state.selected_commit_rev.hash(hasher);
             repo.history_state.log_rev.hash(hasher);
             repo.ops_rev.hash(hasher);
+        }
+        PopoverKind::FileHistoryCommitMenu { .. } => {
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
+            repo.remote_branches_rev.hash(hasher);
+            repo.tags_rev.hash(hasher);
+            repo.history_state.log_rev.hash(hasher);
+            repo.ops_rev.hash(hasher);
+            repo.history_rewrite_busy().hash(hasher);
+            if let Some(mark) = &repo.navigation.comparison_mark {
+                mark.commit_id.hash(hasher);
+                mark.label.hash(hasher);
+            }
         }
         PopoverKind::TagMenu { .. } => {
             repo.tags_rev.hash(hasher);
@@ -762,10 +758,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             hash_repo_popover_kind(*repo_id, kind, hasher);
         }
 
-        PopoverKind::FileHistory { repo_id, path } => {
-            repo_id.hash(hasher);
-            path.hash(hasher);
-        }
         PopoverKind::PushSetUpstreamPrompt {
             repo_id,
             remote,
@@ -1126,6 +1118,9 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::CommitPrompt { repo_id } => {
             repo_id.hash(hasher);
         }
+        PopoverKind::FileHistoryFilePicker { repo_id } => {
+            repo_id.hash(hasher);
+        }
         PopoverKind::StashPickerPrompt { repo_id, purpose } => {
             repo_id.hash(hasher);
             (*purpose as u8).hash(hasher);
@@ -1162,6 +1157,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             target.hash(hasher);
             selector.hash(hasher);
+        }
+        PopoverKind::FileHistoryCommitMenu {
+            repo_id,
+            commit_id,
+            path,
+        } => {
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
+            path.hash(hasher);
         }
         PopoverKind::HookActivity {
             repo_id,

@@ -35,13 +35,14 @@ const DATE_BUCKET_SECS: u64 = 60;
 /// Which picker a cache slot belongs to. Slots are per-picker already; this only
 /// guards against a key being compared across pickers if they ever share one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RowsCacheOwner {
+pub(in crate::view) enum RowsCacheOwner {
     BranchCheckout,
     BranchRefs,
     Upstream,
     Workspace,
     RepoPicker,
     Stash,
+    FileHistoryFilePicker,
     FileHistory,
     Submodule,
     Worktree,
@@ -49,7 +50,7 @@ pub(super) enum RowsCacheOwner {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct RowsCacheKey {
+pub(in crate::view) struct RowsCacheKey {
     owner: RowsCacheOwner,
     /// Digest of every input the picker's rows are built from, computed by the
     /// picker itself with [`signature`]. A `u64` rather than the values because
@@ -66,7 +67,7 @@ pub(super) struct RowsCacheKey {
 }
 
 impl RowsCacheKey {
-    pub(super) fn new(owner: RowsCacheOwner, signature: u64, query: &str) -> Self {
+    pub(in crate::view) fn new(owner: RowsCacheOwner, signature: u64, query: &str) -> Self {
         Self {
             owner,
             signature,
@@ -78,13 +79,16 @@ impl RowsCacheKey {
 
     /// For the one picker that folds sections away. Everything else lays its rows
     /// out with nothing folded.
-    pub(super) fn with_collapsed(mut self, collapsed: &BTreeSet<gpui::SharedString>) -> Self {
+    pub(in crate::view) fn with_collapsed(
+        mut self,
+        collapsed: &BTreeSet<gpui::SharedString>,
+    ) -> Self {
         self.collapsed = collapsed.clone();
         self
     }
 
     /// Creation rows depend on the query as well as the repository data.
-    pub(super) fn with_query_dependent_model(mut self) -> Self {
+    pub(in crate::view) fn with_query_dependent_model(mut self) -> Self {
         use std::hash::Hash;
         self.signature = signature(|hasher| {
             self.signature.hash(hasher);
@@ -93,7 +97,7 @@ impl RowsCacheKey {
         self
     }
 
-    pub(super) fn with_order(mut self, order: components::PickerPromptOrder) -> Self {
+    pub(in crate::view) fn with_order(mut self, order: components::PickerPromptOrder) -> Self {
         self.order = order;
         self
     }
@@ -112,7 +116,7 @@ impl RowsCacheKey {
 /// Every input the build closure reads has to be hashed in here — a missing one
 /// leaves the picker showing rows built from data that has since changed, with
 /// nothing on screen to say so.
-pub(super) fn signature(inputs: impl FnOnce(&mut FxHasher)) -> u64 {
+pub(in crate::view) fn signature(inputs: impl FnOnce(&mut FxHasher)) -> u64 {
     use std::hash::Hasher;
 
     let mut hasher = FxHasher::default();
@@ -122,7 +126,7 @@ pub(super) fn signature(inputs: impl FnOnce(&mut FxHasher)) -> u64 {
 
 /// Which arm of a `Loadable` is in hand, for signatures whose rows change shape
 /// between "loading" and "ready" (most builders return early on the others).
-pub(super) fn loadable_kind<T>(loadable: &Loadable<T>) -> u8 {
+pub(in crate::view) fn loadable_kind<T>(loadable: &Loadable<T>) -> u8 {
     match loadable {
         Loadable::NotLoaded => 0,
         Loadable::Loading => 1,
@@ -133,25 +137,25 @@ pub(super) fn loadable_kind<T>(loadable: &Loadable<T>) -> u8 {
 
 /// Coarsens a clock reading for signatures whose rows show relative dates, so
 /// they rebuild at most once a bucket rather than on every frame.
-pub(super) fn date_bucket(now: SystemTime) -> u64 {
+pub(in crate::view) fn date_bucket(now: SystemTime) -> u64 {
     now.duration_since(SystemTime::UNIX_EPOCH)
         .map(|since| since.as_secs() / DATE_BUCKET_SECS)
         .unwrap_or(0)
 }
 
 /// A built row model plus the layout that filtering produced for it.
-pub(super) struct CachedRows<T> {
+pub(in crate::view) struct CachedRows<T> {
     /// Rows in pre-filter order, which is the index space `PickerPrompt` reports
     /// back to `on_select` and the one `marked_index` lives in.
-    pub(super) items: Rc<[components::PickerPromptItem]>,
-    pub(super) payloads: Rc<[T]>,
-    pub(super) layout: Rc<components::PickerPromptLayout>,
-    pub(super) marked_index: Option<usize>,
+    pub(in crate::view) items: Rc<[components::PickerPromptItem]>,
+    pub(in crate::view) payloads: Rc<[T]>,
+    pub(in crate::view) layout: Rc<components::PickerPromptLayout>,
+    pub(in crate::view) marked_index: Option<usize>,
     geometry: RefCell<Option<Rc<components::PickerPromptGeometry>>>,
 }
 
 impl<T> CachedRows<T> {
-    pub(super) fn geometry(
+    pub(in crate::view) fn geometry(
         &self,
         ui_scale: crate::ui_scale::UiScale,
     ) -> Rc<components::PickerPromptGeometry> {
@@ -171,16 +175,16 @@ impl<T> CachedRows<T> {
         geometry
     }
 
-    pub(super) fn filtered_len(&self) -> usize {
+    pub(in crate::view) fn filtered_len(&self) -> usize {
         self.layout.item_indices.len()
     }
 
-    pub(super) fn filtered_payload(&self, index: usize) -> Option<&T> {
+    pub(in crate::view) fn filtered_payload(&self, index: usize) -> Option<&T> {
         self.payloads.get(*self.layout.item_indices.get(index)?)
     }
 
     /// Used when there is no repository to build rows from.
-    pub(super) fn empty() -> Rc<Self> {
+    pub(in crate::view) fn empty() -> Rc<Self> {
         Rc::new(Self {
             items: Rc::from(Vec::new()),
             payloads: Rc::from(Vec::new()),
@@ -193,7 +197,7 @@ impl<T> CachedRows<T> {
     /// Payloads of the rows that survived the filter, in the order the picker
     /// renders them — the list keyboard navigation walks, so Enter can never
     /// land on a different row than the highlighted one.
-    pub(super) fn filtered_payloads(&self) -> Vec<T>
+    pub(in crate::view) fn filtered_payloads(&self) -> Vec<T>
     where
         T: Clone,
     {
@@ -205,7 +209,7 @@ impl<T> CachedRows<T> {
     }
 }
 
-pub(super) struct RowsCache<T> {
+pub(in crate::view) struct RowsCache<T> {
     slot: RefCell<Option<(RowsCacheKey, Rc<CachedRows<T>>)>>,
 }
 
@@ -219,7 +223,7 @@ impl<T> Default for RowsCache<T> {
 
 impl<T> RowsCache<T> {
     /// Observe completed filtering without doing the work being measured.
-    pub(super) fn filtered_len_for_query(&self, query: &str) -> Option<usize> {
+    pub(in crate::view) fn filtered_len_for_query(&self, query: &str) -> Option<usize> {
         self.slot
             .borrow()
             .as_ref()
@@ -229,7 +233,7 @@ impl<T> RowsCache<T> {
 
     /// Drops the cached rows. Called when a picker opens so a stale list cannot
     /// flash before the first rebuild.
-    pub(super) fn clear(&self) {
+    pub(in crate::view) fn clear(&self) {
         self.slot.borrow_mut().take();
     }
 }
@@ -238,7 +242,7 @@ impl<T> RowsCache<T> {
 ///
 /// `build` receives the clock reading `key` was bucketed from, so the rows and
 /// the key agree on what "now" was.
-pub(super) fn get_or_build<T, F>(
+pub(in crate::view) fn get_or_build<T, F>(
     cache: &RowsCache<T>,
     key: RowsCacheKey,
     build: F,

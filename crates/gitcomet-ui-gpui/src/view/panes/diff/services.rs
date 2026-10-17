@@ -49,6 +49,10 @@ pub(in crate::view) enum DiffCommand {
         position: usize,
         range: bool,
     },
+    OpenFileHistory {
+        repo: RepoId,
+        path: PathBuf,
+    },
     OpenPopover {
         request: Box<PopoverRequest>,
         anchor: DiffPopoverAnchor,

@@ -20,21 +20,6 @@ impl<T: Clone + 'static> PickerNavRows for Vec<T> {
     }
 }
 
-pub(super) struct IndexedNavRows<T> {
-    pub len: usize,
-    pub resolve: Box<dyn Fn(usize) -> Option<T>>,
-}
-
-impl<T: Clone + 'static> PickerNavRows for IndexedNavRows<T> {
-    type Item = T;
-    fn len(&self) -> usize {
-        self.len
-    }
-    fn get(&self, index: usize) -> Option<T> {
-        (self.resolve)(index)
-    }
-}
-
 #[derive(Default, PartialEq)]
 pub(in crate::view) struct PickerNavKeys {
     pub escape: bool,

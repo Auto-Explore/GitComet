@@ -93,10 +93,6 @@ impl PaneStore {
     pub fn disable_commands(&mut self) {
         self.read_only = true;
     }
-    #[cfg(test)]
-    pub(crate) fn store_for_test(&self) -> Arc<AppStore> {
-        self.store.upgrade().expect("window store")
-    }
     pub fn bind(&mut self, binding: DiffBinding, policy: DiffPanePolicy) {
         self.binding = Some(binding);
         self.set_policy(policy);
