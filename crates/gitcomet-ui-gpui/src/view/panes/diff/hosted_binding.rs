@@ -29,8 +29,13 @@ pub(in crate::view) struct HostedDiffDecor {
 }
 
 impl DiffRenderer {
+    /// Whether the hosted rows are file-diff rows rather than patch rows.
+    fn hosted_rows_are_file_rows(&self) -> bool {
+        self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active()
+    }
+
     pub(in crate::view) fn hosted_selected_text(&self, range: DiffLineRange) -> String {
-        let full = self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active();
+        let full = self.hosted_rows_are_file_rows();
         let count = if full {
             self.file_diff_inline_row_len()
         } else {
@@ -70,9 +75,7 @@ impl DiffRenderer {
     }
 
     fn inline_row_draws_old(&self, visible: usize) -> bool {
-        let file_rows =
-            self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active();
-        file_rows
+        self.hosted_rows_are_file_rows()
             && self
                 .diff_mapped_ix_for_visible_ix(visible)
                 .and_then(|row| self.file_diff_inline_render_data(row))
