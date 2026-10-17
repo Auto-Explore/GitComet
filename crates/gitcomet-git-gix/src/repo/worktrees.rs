@@ -10,6 +10,10 @@ use gix::bstr::ByteSlice as _;
 use std::path::Path;
 use std::process::Command;
 
+mod native_config;
+#[cfg(test)]
+mod native_config_tests;
+
 impl GixRepo {
     pub(super) fn list_worktrees_impl(&self) -> Result<Vec<Worktree>> {
         self.list_worktrees_cancellable_impl(&CancellationToken::new())
@@ -26,7 +30,7 @@ impl GixRepo {
         // registrations and configuration can change while this handle is open.
         if !worktree_environment_overridden()
             && self.may_be_sole_primary_worktree()
-            && let Ok(repo) = self.reopen_repo()
+            && let Some(repo) = native_config::reopen(self)
         {
             cancellation.check_cancelled()?;
             if let Some(worktree) = sole_primary_worktree(&repo) {
