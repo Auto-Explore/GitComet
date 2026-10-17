@@ -1521,7 +1521,7 @@ impl GitRepository for GixRepo {
 
     fn list_worktrees(&self, cancellation: &CancellationToken) -> Result<Vec<Worktree>> {
         cancellation.check_cancelled()?;
-        let worktrees = self.list_worktrees_impl()?;
+        let worktrees = self.list_worktrees_cancellable_impl(cancellation)?;
         cancellation.check_cancelled()?;
         Ok(worktrees)
     }
