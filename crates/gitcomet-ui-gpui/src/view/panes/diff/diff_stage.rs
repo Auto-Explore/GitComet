@@ -75,6 +75,19 @@ impl DiffRenderer {
         .map(Into::into)
     }
 
+    /// Whether an earlier stage or discard is still applying or reloading the
+    /// diff. Its rows then still describe the index as it was, so a click is
+    /// dropped rather than built into a patch that no longer applies.
+    ///
+    /// Both halves matter: the command finishing is what clears
+    /// `local_actions_in_flight`, and the reload it asks for only starts
+    /// there, so between them the rows are at their most stale.
+    pub(in crate::view::panes::diff) fn diff_actions_busy(&self) -> bool {
+        self.active_repo().is_some_and(|repo| {
+            repo.local_actions_in_flight > 0 || self.bound_diff_state(repo).diff_reload_in_flight
+        })
+    }
+
     /// Apply the gutter button: stage the line in an unstaged diff, unstage it in
     /// a staged one. The reducer reloads the diff once the command finishes, so
     /// there is nothing to refresh here.
@@ -111,12 +124,7 @@ impl DiffRenderer {
         // it was. A patch built from them would no longer apply, so drop the
         // click and let the reload land first.
         //
-        // Both halves matter: the command finishing is what clears
-        // `local_actions_in_flight`, and the reload it asks for only starts
-        // there, so between them the rows are at their most stale.
-        if self.active_repo().is_some_and(|repo| {
-            repo.local_actions_in_flight > 0 || self.bound_diff_state(repo).diff_reload_in_flight
-        }) {
+        if self.diff_actions_busy() {
             return;
         }
         let Some(patch) = self.diff_stage_gutter_patch(visible_ix, kind) else {

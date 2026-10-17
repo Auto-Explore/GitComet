@@ -105,8 +105,8 @@ fn open_repository_of(
     open_repository_in(cx, backend, repository_with_edits_of(lines, edits))
 }
 
-/// A repository whose `a.rs` gains a line and whose `b.rs` changes, in Rust
-/// Difftastic parses.
+/// A repository whose `a.rs` gains `pub` on line 1 and a new line 2, and
+/// whose `b.rs` changes, in Rust Difftastic parses.
 fn rust_repository() -> tempfile::TempDir {
     let dir = repository_with_edits_of(1, [0, 0]);
     let root = dir.path();
@@ -115,7 +115,7 @@ fn rust_repository() -> tempfile::TempDir {
     git(root, &["commit", "-qam", "rust"]);
     std::fs::write(
         root.join("a.rs"),
-        "fn a() -> i32 {\n    let two = 2;\n    1\n}\n",
+        "pub fn a() -> i32 {\n    let two = 2;\n    1\n}\n",
     )
     .unwrap();
     std::fs::write(root.join("b.rs"), "fn b() -> i32 {\n    2\n}\n").unwrap();
@@ -1386,10 +1386,17 @@ fn a_patch_bodied_pane_leaves_its_patch_error_to_the_renderer(cx: &mut gpui::Tes
     });
 }
 
-/// Staging a line of a Difftastic diff applies its patch at once; there is no
-/// review screen to confirm it in.
-#[gpui::test]
-fn staging_a_difftastic_line_applies_it_without_a_review(cx: &mut gpui::TestAppContext) {
+/// `rust_repository`'s `a.rs` in a Changes pane on its unstaged diff, Inline,
+/// compared by Difftastic.
+fn difftastic_a_rs(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+    gpui::Entity<crate::view::panes::diff::DiffRenderer>,
+) {
     let (dir, store, view, cx) = open_repository_in(cx, Arc::new(TestBackend), rust_repository());
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     click_debug_selector(
@@ -1417,41 +1424,98 @@ fn staging_a_difftastic_line_applies_it_without_a_review(cx: &mut gpui::TestAppC
             .cloned()
             .unwrap()
     });
-    let mut added = None;
     settle(cx, &view, &store, "a.rs compared by Difftastic", |cx| {
-        added = cx.update(|_window, app| {
+        cx.update(|_window, app| {
             let renderer = renderer.read(app);
-            renderer.structural_diff_active().then(|| {
-                (0..renderer.diff_visible_len()).find(|&visible| {
-                    renderer
-                        .diff_mapped_ix_for_visible_ix(visible)
-                        .and_then(|row| renderer.file_diff_inline_row(row))
-                        .is_some_and(|row| row.new_line == Some(2) && row.old_line.is_none())
-                })
-            })?
-        });
-        added.is_some()
-    });
-    cx.update(|_window, app| {
-        renderer.update(app, |pane, cx| {
-            pane.stage_or_unstage_diff_line(
-                added.unwrap(),
-                gitcomet_core::domain::DiffLineKind::Add,
-                cx,
-            )
+            renderer.structural_diff_active() && renderer.diff_visible_len() == 4
         })
     });
-    let staged = || {
-        String::from_utf8(crate::test_support::git(
-            dir.path(),
-            &["diff", "--cached", "a.rs"],
-        ))
-        .unwrap()
-    };
+    (dir, store, view, cx, renderer)
+}
+
+/// The visible row of `renderer` whose line numbers are `(old, new)`.
+fn row_with_lines(
+    renderer: &gpui::Entity<crate::view::panes::diff::DiffRenderer>,
+    lines: (Option<u32>, Option<u32>),
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
+    cx.update(|_window, app| {
+        let renderer = renderer.read(app);
+        (0..renderer.diff_visible_len())
+            .find(|&visible| {
+                renderer
+                    .diff_mapped_ix_for_visible_ix(visible)
+                    .and_then(|row| renderer.file_diff_inline_row(row))
+                    .is_some_and(|row| (row.old_line, row.new_line) == lines)
+            })
+            .unwrap_or_else(|| panic!("a row for lines {lines:?}"))
+    })
+}
+
+fn stage_row(
+    renderer: &gpui::Entity<crate::view::panes::diff::DiffRenderer>,
+    visible: usize,
+    app: &mut App,
+) {
+    renderer.update(app, |pane, cx| {
+        pane.stage_or_unstage_diff_line(visible, gitcomet_core::domain::DiffLineKind::Add, cx)
+    })
+}
+
+fn staged(dir: &tempfile::TempDir) -> String {
+    String::from_utf8(crate::test_support::git(
+        dir.path(),
+        &["diff", "--cached", "a.rs"],
+    ))
+    .unwrap()
+}
+
+/// Staging a line of a Difftastic diff applies its patch at once; there is no
+/// review screen to confirm it in.
+#[gpui::test]
+fn staging_a_difftastic_line_applies_it_without_a_review(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx, renderer) = difftastic_a_rs(cx);
+    let added = row_with_lines(&renderer, (None, Some(2)), cx);
+    cx.update(|_window, app| stage_row(&renderer, added, app));
     settle(cx, &view, &store, "the added line in the index", |_| {
-        staged().contains("+    let two = 2;")
+        staged(&dir).contains("+    let two = 2;")
     });
-    assert!(!staged().contains("-    1"), "{}", staged());
+    assert!(!staged(&dir).contains("pub fn"), "{}", staged(&dir));
+}
+
+/// A line changed on one side is one row carrying both line numbers, so
+/// staging it replaces the line in the index.
+#[gpui::test]
+fn staging_a_one_row_difftastic_pair_replaces_its_line(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx, renderer) = difftastic_a_rs(cx);
+    let pair = row_with_lines(&renderer, (Some(1), Some(1)), cx);
+    cx.update(|_window, app| stage_row(&renderer, pair, app));
+    settle(cx, &view, &store, "line 1 replaced in the index", |_| {
+        staged(&dir).contains("+pub fn a() -> i32 {")
+    });
+    assert!(
+        staged(&dir).contains("-fn a() -> i32 {"),
+        "{}",
+        staged(&dir)
+    );
+    assert!(!staged(&dir).contains("let two"), "{}", staged(&dir));
+}
+
+/// A click while another action is still applying is dropped quietly, as the
+/// line engine drops it: the rows still describe the index before that action.
+#[gpui::test]
+fn a_difftastic_action_while_another_applies_is_dropped_quietly(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx, renderer) = difftastic_a_rs(cx);
+    let added = row_with_lines(&renderer, (None, Some(2)), cx);
+    let mut busy = (*store.snapshot()).clone();
+    busy.repos[0].local_actions_in_flight = 1;
+    publish(cx, &view, Arc::new(busy));
+    cx.update(|_window, app| stage_row(&renderer, added, app));
+    cx.run_until_parked();
+    let toasts =
+        cx.update(|_window, app| view.read(app).toast_host.read(app).toasts_for_tests(app));
+    assert!(toasts.is_empty(), "{toasts:?}");
+    assert_eq!(staged(&dir), "");
 }
 
 /// F1/F4 and Alt+Left/Right step the hosted pane the user is in, as its
