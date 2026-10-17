@@ -901,10 +901,27 @@ mod tests {
         // Canonical identity and bytes stay unchanged, but the link's spelling
         // still changes and must invalidate discovery.
         fs::remove_file(&middle).unwrap();
+        // Windows stores relative symlink targets without normalizing forward
+        // slashes. Build the alternate spelling with the native separator.
+        let alternate_target = Path::new(".").join("second");
         assert!(gitcomet_core::test_support::symlink::file(
-            Path::new("./second"),
+            &alternate_target,
             &middle
         ));
+        assert_eq!(
+            fs::read_link(&middle).unwrap().as_os_str(),
+            alternate_target.as_os_str()
+        );
+        assert_eq!(
+            middle
+                .canonicalize()
+                .expect("alternate link target resolves"),
+            second.canonicalize().unwrap()
+        );
+        assert_eq!(
+            fs::read(&link).expect("the link chain still reads the same target"),
+            b"same"
+        );
         let inputs = WatchInputs::load(dir.path(), &backend).unwrap();
         let retargeted = ActivationRefresh::prepare(dir.path(), &inputs);
         assert!(retargeted.is_ok());
