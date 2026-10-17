@@ -295,6 +295,92 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
     });
 }
 
+/// A Difftastic line changed on one side is one inline row drawing that side,
+/// so the other side's occurrences of a name must not land on it: their
+/// columns belong to text the row does not show.
+#[gpui::test]
+fn difftastic_occurrences_skip_a_row_drawing_the_other_side(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.set_diff_engine_override(
+                    Some(gitcomet_core::diff_engine::DiffEngine::Difftastic),
+                    cx,
+                );
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    // Line 2 gains `y, ` before `x` (new side only); line 3 loses `, 2` (old
+    // side only).
+    let old_text = "const x = 1;\nuse(x);\ncall(x, 2);\n".to_string();
+    let new_text = "const x = 1;\nuse(y, x);\ncall(x);\n".to_string();
+    let unified = concat!(
+        "@@ -1,3 +1,3 @@\n",
+        " const x = 1;\n",
+        "-use(x);\n",
+        "-call(x, 2);\n",
+        "+use(y, x);\n",
+        "+call(x);\n",
+    )
+    .to_string();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(932),
+        "difftastic_occurrences",
+        PathBuf::from("main.ts"),
+        unified,
+        old_text,
+        new_text,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "an inline Difftastic diff with prepared syntax on both sides",
+        |pane| {
+            pane.structural_diff_active()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.diff_view == DiffViewMode::Inline
+                && pane.diff_visible_len() == 3
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "structural={} rows={} status={:?}",
+                pane.structural_diff_active(),
+                pane.diff_visible_len(),
+                pane.diff_engine_status,
+            )
+        },
+    );
+    // Row 2 draws the old `call(x, 2);`; its `x` is at 5..6.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        2,
+        DiffTextRegion::Inline,
+        5..6,
+        "the old side's x",
+    );
+    simulate_counted_click(cx, click, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert_eq!(
+            pane.diff_text_occurrences_for_tests(),
+            vec![(0, 6..7), (2, 5..6)],
+            "row 1 draws the new `use(y, x);`; the old `use(x);` x at 4..5 is not on it"
+        );
+    });
+}
+
 /// Collapsed mode renders the same file-diff rows as Full, so a click in it must
 /// pair too. Gating on `is_file_diff_view_active()` (which demands
 /// `DiffContentMode::Full`) silently excluded this whole mode.

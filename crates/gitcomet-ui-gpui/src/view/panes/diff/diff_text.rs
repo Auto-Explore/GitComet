@@ -1612,6 +1612,14 @@ impl DiffRenderer {
             (_, false) => self.file_diff_new_line_to_row.as_ref(),
         };
         let row_ix = (*map.get(line_ix)?)?;
+        if inline
+            && self
+                .file_diff_inline_row_provider
+                .as_ref()
+                .is_some_and(|rows| !rows.draws_line(row_ix, side == DiffTextPairSide::Old))
+        {
+            return None;
+        }
         let source_visible_ix = match collapsed_rows {
             Some(index) => index.get(&row_ix).copied()?,
             None => self.diff_text_pair_source_visible_ix_for_row(row_ix)?,

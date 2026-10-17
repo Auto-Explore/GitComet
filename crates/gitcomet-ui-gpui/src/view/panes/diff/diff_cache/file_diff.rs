@@ -834,6 +834,33 @@ impl StreamedFileDiffSource {
             .unwrap_or_else(|| gitcomet_core::file_diff::FileDiffLineText::from(""))
     }
 
+    /// A context run's row draws one side's text; a Difftastic pair whose
+    /// lines differ does not also draw the other.
+    fn inline_row_draws(&self, inline_ix: usize, old: bool) -> bool {
+        let Some((run_ix, local_ix)) = Self::locate_run(
+            self.inline_run_starts(),
+            self.plan.inline_row_count,
+            inline_ix,
+        ) else {
+            return false;
+        };
+        let Some(gitcomet_core::file_diff::FileDiffPlanRun::Context {
+            old_start,
+            new_start,
+            ..
+        }) = self.plan.runs.get(run_ix)
+        else {
+            return true;
+        };
+        let old_ix = old_start.saturating_add(local_ix);
+        let new_ix = new_start.saturating_add(local_ix);
+        let draws_old = self.context_inline_side(old_ix, new_ix).0
+            == gitcomet_core::domain::DiffLineKind::Remove;
+        draws_old == old
+            || self.old_line_shared_text(old_ix).as_ref()
+                == self.new_line_shared_text(new_ix).as_ref()
+    }
+
     /// The kind and text of a context run's inline row: a Difftastic pair
     /// changed on one side shows that side.
     fn context_inline_side(
@@ -1629,6 +1656,12 @@ impl PagedFileDiffInlineRows {
         inline_ix: usize,
     ) -> Option<gitcomet_core::domain::DiffLineKind> {
         self.source.inline_visual_kind(inline_ix)
+    }
+
+    /// Whether row `inline_ix` draws the text of its old line (`old`) or of
+    /// its new one.
+    pub(in crate::view) fn draws_line(&self, inline_ix: usize, old: bool) -> bool {
+        self.source.inline_row_draws(inline_ix, old)
     }
 
     pub(in crate::view) fn modify_pair_texts(
