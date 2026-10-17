@@ -16,7 +16,7 @@ The engine is independent of presentation:
 
 Both source texts remain available, including formatting that Difftastic considers structurally unchanged. A formatting-only comparison shows a notice with **Show full text** and **Show line changes** actions. Ignore whitespace is unavailable while a structural result is displayed; the saved whitespace preference remains intact. Show line changes temporarily selects the line engine with whitespace shown.
 
-If Difftastic cannot compare a file, the viewer uses the line engine and displays the reason. Unsupported languages, parse errors, resource limits (size, complexity, nesting depth, time), and internal Difftastic failures can cause a fallback. The user's engine preference stays selected. Image/binary views and merge resolution retain their existing behavior.
+If Difftastic cannot compare a file, the viewer uses the line engine and displays the reason. Unsupported languages, parse errors, resource limits (size, complexity, nesting depth, time), and internal Difftastic failures can cause a fallback. Unlike the Difftastic command-line tool, GitComet does not compare Verilog or Fortran structurally. The user's engine preference stays selected. Image/binary views and merge resolution retain their existing behavior.
 
 Standalone GUI file comparisons also use full sources and support both engines. Regular UTF-8 file pairs up to the source limit are eligible. Directory, patch-only, non-UTF-8, binary, symlink, oversized, mode-change, and BOM-change inputs retain the patch view. Before/After labels are preserved separately from the language-detection filename.
 
