@@ -101,7 +101,9 @@ Changes against the baseline (`git log -- vendor/difftastic`):
 - Fallbacks skip difftastic's line diff (`line_parser.rs` is removed), and no
   `DFT_*` environment variable is read (`clippy.toml` disallows `std::env`
   reads). Panic messages no longer format whole syntax trees, and graph
-  vertices have no `Debug`, whose derive walked every neighbour.
+  vertices have no `Debug`, whose derive walked every neighbour. A panic
+  while building one grammar's config leaves the config cache usable for
+  every other language.
 - Speed: `display/json.rs` groups novel positions by line once instead of
   rescanning them for every line, and `display/hunks.rs` scans a hunk's
   matched lines forward from its start instead of back from the end. A 1 MB

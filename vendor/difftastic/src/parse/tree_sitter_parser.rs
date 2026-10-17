@@ -98,17 +98,21 @@ const OCAML_ATOM_NODES: [&str; 6] = [
     "attribute_id",
 ];
 
-pub(crate) fn from_language(language: guess::Language) -> &'static TreeSitterConfig {
-    // Constructing a tree sitter query is relatively expensive: it
-    // can take tens of milliseconds.
-    //
-    // This is a problem when diffing many files in the same
-    // directory, so ensure we only construct the TreeSitterConfig
-    // once per language rather than once per file.
-    static CONFIG_CACHE: LazyLock<Mutex<DftHashMap<guess::Language, &'static TreeSitterConfig>>> =
-        LazyLock::new(|| Mutex::new(DftHashMap::default()));
+// Constructing a tree sitter query is relatively expensive: it
+// can take tens of milliseconds.
+//
+// This is a problem when diffing many files in the same
+// directory, so ensure we only construct the TreeSitterConfig
+// once per language rather than once per file.
+static CONFIG_CACHE: LazyLock<Mutex<DftHashMap<guess::Language, &'static TreeSitterConfig>>> =
+    LazyLock::new(|| Mutex::new(DftHashMap::default()));
 
-    let mut cache = CONFIG_CACHE.lock().unwrap();
+pub(crate) fn from_language(language: guess::Language) -> &'static TreeSitterConfig {
+    // A config whose build panicked was never inserted, so a poisoned map is
+    // still whole.
+    let mut cache = CONFIG_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     cache
         .entry(language)
         .or_insert_with(|| Box::leak(Box::new(build_config(language))))
@@ -2203,6 +2207,17 @@ mod tests {
 
     /// Ensure that we don't crash when loading any of the
     /// configs. This can happen on bad highlighting/foo.scm files.
+    #[test]
+    fn a_panic_holding_the_config_cache_leaves_it_usable() {
+        let _ = std::thread::spawn(|| {
+            let _cache = CONFIG_CACHE.lock();
+            panic!("poison the config cache");
+        })
+        .join();
+        assert!(CONFIG_CACHE.is_poisoned());
+        from_language(guess::Language::Json);
+    }
+
     #[test]
     fn test_configs_valid() {
         for language in guess::Language::iter() {
