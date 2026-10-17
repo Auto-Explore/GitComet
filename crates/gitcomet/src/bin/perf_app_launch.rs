@@ -27,6 +27,7 @@ const DEFAULT_BENCH: &str = "app_launch/cold_empty_workspace";
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const SESSION_FILE_VERSION: u32 = 2;
 const EXPECT_READY_REPOS_ENV: &str = "GITCOMET_PERF_STARTUP_EXPECT_READY_REPOS";
+const WAIT_FOR_ACTIVE_REPO_ENV: &str = "GITCOMET_PERF_STARTUP_WAIT_FOR_ACTIVE_REPO";
 const CLI_USAGE_EXIT_CODE: i32 = 2;
 const ENVIRONMENT_BLOCKER_EXIT_CODE: i32 = 3;
 const ENVIRONMENT_BLOCKER_MARKER: &str = "This is an environment blocker, not a benchmark result.";
@@ -76,13 +77,19 @@ struct ObservedMilestone {
     alloc_metrics: Option<PerfAllocMetrics>,
 }
 
+#[derive(Debug, Default)]
+struct LaunchProgress {
+    first_paint: Option<ObservedMilestone>,
+    first_interactive: Option<ObservedMilestone>,
+    active_repo_ready: Option<ObservedMilestone>,
+    repos_loaded: u64,
+    repos_total: u64,
+}
+
 #[derive(Debug)]
 struct HarnessRunResult {
     status: ExitStatus,
-    first_paint: Option<ObservedMilestone>,
-    first_interactive: Option<ObservedMilestone>,
-    repos_loaded: u64,
-    repos_total: u64,
+    progress: LaunchProgress,
     stderr_tail: Vec<String>,
 }
 
@@ -333,6 +340,15 @@ fn run_harness(args: &CliArgs) -> Result<(), String> {
         .arg("--child")
         .env("GITCOMET_PERF_STARTUP_PROBE", "1")
         .env("GITCOMET_PERF_STARTUP_AUTO_EXIT", "1")
+        .env("GITCOMET_PERF_STARTUP_WAIT_FOR_HOME_READY", "0")
+        .env(
+            WAIT_FOR_ACTIVE_REPO_ENV,
+            if fixture.expected_ready_repos > 0 {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .env(
             EXPECT_READY_REPOS_ENV,
             fixture.expected_ready_repos.to_string(),
@@ -377,23 +393,12 @@ fn run_harness(args: &CliArgs) -> Result<(), String> {
     let timeout = Duration::from_millis(args.timeout_ms.max(1));
     let rss_limit_kib = benchmark_ram_limit_kib();
     let started_at = Instant::now();
-    let mut first_paint = None;
-    let mut first_interactive = None;
-    let mut repos_loaded = 0u64;
-    let mut repos_total = 0u64;
+    let mut progress = LaunchProgress::default();
     let mut stderr_tail = VecDeque::with_capacity(12);
 
     while started_at.elapsed() <= timeout {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Ok(line)) => process_probe_line(
-                line,
-                started_at,
-                &mut first_paint,
-                &mut first_interactive,
-                &mut repos_loaded,
-                &mut repos_total,
-                &mut stderr_tail,
-            ),
+            Ok(Ok(line)) => process_probe_line(line, started_at, &mut progress, &mut stderr_tail),
             Ok(Err(err)) => {
                 let _ = terminate_child(&mut child);
                 let _ = reader.join();
@@ -414,24 +419,13 @@ fn run_harness(args: &CliArgs) -> Result<(), String> {
             .map_err(|err| format!("failed to poll child process: {err}"))?
         {
             let _ = reader.join();
-            drain_probe_channel(
-                &rx,
-                started_at,
-                &mut first_paint,
-                &mut first_interactive,
-                &mut repos_loaded,
-                &mut repos_total,
-                &mut stderr_tail,
-            )?;
+            drain_probe_channel(&rx, started_at, &mut progress, &mut stderr_tail)?;
             return finish_harness(
                 args,
                 fixture.expected_ready_repos,
                 HarnessRunResult {
                     status,
-                    first_paint,
-                    first_interactive,
-                    repos_loaded,
-                    repos_total,
+                    progress,
                     stderr_tail: stderr_tail_to_vec(stderr_tail),
                 },
             );
@@ -440,24 +434,13 @@ fn run_harness(args: &CliArgs) -> Result<(), String> {
 
     let status = terminate_child(&mut child)?;
     let _ = reader.join();
-    drain_probe_channel(
-        &rx,
-        started_at,
-        &mut first_paint,
-        &mut first_interactive,
-        &mut repos_loaded,
-        &mut repos_total,
-        &mut stderr_tail,
-    )?;
+    drain_probe_channel(&rx, started_at, &mut progress, &mut stderr_tail)?;
     finish_harness(
         args,
         fixture.expected_ready_repos,
         HarnessRunResult {
             status,
-            first_paint,
-            first_interactive,
-            repos_loaded,
-            repos_total,
+            progress,
             stderr_tail: stderr_tail_to_vec(stderr_tail),
         },
     )
@@ -492,6 +475,15 @@ fn run_first_interactive_probe(
         .arg("--child")
         .env("GITCOMET_PERF_STARTUP_PROBE", "1")
         .env("GITCOMET_PERF_STARTUP_AUTO_EXIT", "1")
+        .env("GITCOMET_PERF_STARTUP_WAIT_FOR_HOME_READY", "0")
+        .env(
+            WAIT_FOR_ACTIVE_REPO_ENV,
+            if fixture.expected_ready_repos > 0 {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .env(
             EXPECT_READY_REPOS_ENV,
             fixture.expected_ready_repos.to_string(),
@@ -538,24 +530,13 @@ fn run_first_interactive_probe(
     let timeout = Duration::from_millis(timeout_ms.max(1));
     let rss_limit_kib = benchmark_ram_limit_kib();
     let started_at = Instant::now();
-    let mut first_paint = None;
-    let mut first_interactive = None;
-    let mut repos_loaded = 0u64;
-    let mut repos_total = 0u64;
+    let mut progress = LaunchProgress::default();
     let mut stderr_tail = VecDeque::with_capacity(12);
     let mut child_status = None;
 
     while started_at.elapsed() <= timeout {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Ok(line)) => process_probe_line(
-                line,
-                started_at,
-                &mut first_paint,
-                &mut first_interactive,
-                &mut repos_loaded,
-                &mut repos_total,
-                &mut stderr_tail,
-            ),
+            Ok(Ok(line)) => process_probe_line(line, started_at, &mut progress, &mut stderr_tail),
             Ok(Err(err)) => {
                 let _ = terminate_child(&mut child);
                 let _ = reader.join();
@@ -577,7 +558,10 @@ fn run_first_interactive_probe(
             break;
         }
 
-        if first_interactive.is_some() {
+        if progress.first_interactive.is_some()
+            && (fixture.expected_ready_repos == 0 || progress.active_repo_ready.is_some())
+            && progress.repos_loaded >= fixture.expected_ready_repos as u64
+        {
             break;
         }
     }
@@ -585,15 +569,7 @@ fn run_first_interactive_probe(
     // Even a successful leader exit can leave inherited pipes in descendants.
     let _ = terminate_child(&mut child);
     let _ = reader.join();
-    drain_probe_channel(
-        &rx,
-        started_at,
-        &mut first_paint,
-        &mut first_interactive,
-        &mut repos_loaded,
-        &mut repos_total,
-        &mut stderr_tail,
-    )?;
+    drain_probe_channel(&rx, started_at, &mut progress, &mut stderr_tail)?;
     let stderr_tail = stderr_tail_to_vec(stderr_tail);
 
     if let Some(status) = child_status
@@ -609,7 +585,7 @@ fn run_first_interactive_probe(
         ));
     }
 
-    if first_interactive.is_none() {
+    if progress.first_interactive.is_none() {
         if let Some(blocker) = detect_linux_display_environment_blocker(bench, stage, &stderr_tail)
         {
             return Err(blocker);
@@ -618,7 +594,24 @@ fn run_first_interactive_probe(
             "{stage} did not reach first_interactive before timeout"
         ));
     }
-    require_launch_milestones(bench, stage, first_paint, first_interactive)?;
+    require_launch_milestones(
+        bench,
+        stage,
+        progress.first_paint,
+        progress.first_interactive,
+    )?;
+    require_active_repo_ready(
+        bench,
+        stage,
+        fixture.expected_ready_repos,
+        progress.active_repo_ready,
+    )?;
+    if progress.repos_loaded < fixture.expected_ready_repos as u64 {
+        return Err(format!(
+            "{stage} opened only {} of {} expected repos for {bench}",
+            progress.repos_loaded, fixture.expected_ready_repos,
+        ));
+    }
     Ok(())
 }
 
@@ -641,6 +634,21 @@ fn require_launch_milestones(
     Ok((first_paint, first_interactive))
 }
 
+fn require_active_repo_ready(
+    bench: &str,
+    stage: &str,
+    expected_ready_repos: usize,
+    active_repo_ready: Option<ObservedMilestone>,
+) -> Result<(), String> {
+    if expected_ready_repos == 0 {
+        return Ok(());
+    }
+    let milestone = active_repo_ready.ok_or_else(|| {
+        format!("{stage} did not finish loading active repository contents for {bench}")
+    })?;
+    require_launch_alloc_metrics(bench, stage, "active_repo_ready", milestone)
+}
+
 fn require_launch_alloc_metrics(
     bench: &str,
     stage: &str,
@@ -652,7 +660,7 @@ fn require_launch_alloc_metrics(
     }
 
     Err(format!(
-        "{stage} emitted {milestone_name} for {bench} without allocation metrics; app_launch requires first_paint and first_interactive allocation snapshots before preflight succeeds or a sidecar is written"
+        "{stage} emitted {milestone_name} for {bench} without allocation metrics; app_launch requires allocation snapshots for its startup milestones before preflight succeeds or a sidecar is written"
     ))
 }
 
@@ -663,12 +671,16 @@ fn finish_harness(
 ) -> Result<(), String> {
     let HarnessRunResult {
         status,
-        first_paint,
-        first_interactive,
-        repos_loaded,
-        repos_total,
+        progress,
         stderr_tail,
     } = result;
+    let LaunchProgress {
+        first_paint,
+        first_interactive,
+        active_repo_ready,
+        repos_loaded,
+        repos_total,
+    } = progress;
 
     if !status.success() {
         if let Some(blocker) = detect_linux_display_environment_blocker(
@@ -705,16 +717,28 @@ fn finish_harness(
         ));
     }
 
-    let metrics = build_launch_sidecar_metrics(first_paint, first_interactive, repos_loaded);
+    require_active_repo_ready(
+        &args.bench,
+        "launch probe child",
+        expected_ready_repos,
+        active_repo_ready,
+    )?;
+    let metrics = build_launch_sidecar_metrics(
+        first_paint,
+        first_interactive,
+        active_repo_ready,
+        repos_loaded,
+    );
     let report = PerfSidecarReport::new(&args.bench, metrics);
     let sidecar_path = write_criterion_sidecar(&report)
         .map_err(|err| format!("failed to write sidecar report for {}: {err}", args.bench))?;
 
     println!(
-        "{} first_paint_ms={} first_interactive_ms={} repos_loaded={} sidecar={}",
+        "{} first_paint_ms={} first_interactive_ms={} active_repo_ready_ms={:?} repos_loaded={} sidecar={}",
         args.bench,
         first_paint.elapsed_ms,
         first_interactive.elapsed_ms,
+        active_repo_ready.map(|milestone| milestone.elapsed_ms),
         repos_loaded,
         sidecar_path.display()
     );
@@ -724,6 +748,7 @@ fn finish_harness(
 fn build_launch_sidecar_metrics(
     first_paint: ObservedMilestone,
     first_interactive: ObservedMilestone,
+    active_repo_ready: Option<ObservedMilestone>,
     repos_loaded: u64,
 ) -> Map<String, serde_json::Value> {
     let mut metrics = Map::new();
@@ -743,6 +768,15 @@ fn build_launch_sidecar_metrics(
     }
     if let Some(alloc_metrics) = first_interactive.alloc_metrics {
         alloc_metrics.append_to_payload_with_prefix(&mut metrics, "first_interactive_");
+    }
+    if let Some(ready) = active_repo_ready {
+        metrics.insert("active_repo_ready_ms".to_string(), json!(ready.elapsed_ms));
+        if let Some(rss_kib) = ready.rss_kib {
+            metrics.insert("rss_at_active_repo_ready_kib".to_string(), json!(rss_kib));
+        }
+        if let Some(alloc_metrics) = ready.alloc_metrics {
+            alloc_metrics.append_to_payload_with_prefix(&mut metrics, "active_repo_ready_");
+        }
     }
     metrics.insert("repos_loaded".to_string(), json!(repos_loaded));
     metrics
@@ -808,10 +842,7 @@ fn duration_to_millis_u64(duration: Duration) -> u64 {
 fn process_probe_line(
     line: String,
     started_at: Instant,
-    first_paint: &mut Option<ObservedMilestone>,
-    first_interactive: &mut Option<ObservedMilestone>,
-    repos_loaded: &mut u64,
-    repos_total: &mut u64,
+    progress: &mut LaunchProgress,
     stderr_tail: &mut VecDeque<String>,
 ) {
     if let Some(event) = parse_probe_event_line(&line) {
@@ -821,13 +852,18 @@ fn process_probe_line(
             alloc_metrics: alloc_metrics_from_event(&event),
         };
         match event.name.as_str() {
-            "first_paint" if first_paint.is_none() => *first_paint = Some(milestone),
-            "first_interactive" if first_interactive.is_none() => {
-                *first_interactive = Some(milestone)
+            "first_paint" if progress.first_paint.is_none() => {
+                progress.first_paint = Some(milestone)
+            }
+            "first_interactive" if progress.first_interactive.is_none() => {
+                progress.first_interactive = Some(milestone)
+            }
+            "active_repo_ready" if progress.active_repo_ready.is_none() => {
+                progress.active_repo_ready = Some(milestone)
             }
             "repos_loaded" => {
-                *repos_loaded = (*repos_loaded).max(event.repos_loaded.unwrap_or(0));
-                *repos_total = (*repos_total).max(event.repos_total.unwrap_or(0));
+                progress.repos_loaded = progress.repos_loaded.max(event.repos_loaded.unwrap_or(0));
+                progress.repos_total = progress.repos_total.max(event.repos_total.unwrap_or(0));
             }
             _ => {}
         }
@@ -851,23 +887,12 @@ fn alloc_metrics_from_event(event: &StartupProbeEvent) -> Option<PerfAllocMetric
 fn drain_probe_channel(
     rx: &mpsc::Receiver<Result<String, String>>,
     started_at: Instant,
-    first_paint: &mut Option<ObservedMilestone>,
-    first_interactive: &mut Option<ObservedMilestone>,
-    repos_loaded: &mut u64,
-    repos_total: &mut u64,
+    progress: &mut LaunchProgress,
     stderr_tail: &mut VecDeque<String>,
 ) -> Result<(), String> {
     loop {
         match rx.try_recv() {
-            Ok(Ok(line)) => process_probe_line(
-                line,
-                started_at,
-                first_paint,
-                first_interactive,
-                repos_loaded,
-                repos_total,
-                stderr_tail,
-            ),
+            Ok(Ok(line)) => process_probe_line(line, started_at, progress, stderr_tail),
             Ok(Err(err)) => return Err(format!("failed while reading child stderr: {err}")),
             Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return Ok(()),
         }
@@ -1638,6 +1663,40 @@ mod tests {
     }
 
     #[test]
+    fn active_repo_milestone_is_distinct_from_open_handles_and_first_interactive() {
+        let mut progress = LaunchProgress::default();
+        let mut stderr = VecDeque::new();
+        let start = Instant::now();
+        for payload in [
+            r#"{"name":"first_interactive"}"#,
+            r#"{"name":"repos_loaded","repos_loaded":5,"repos_total":5}"#,
+        ] {
+            process_probe_line(
+                format!("{EVENT_PREFIX}{payload}"),
+                start,
+                &mut progress,
+                &mut stderr,
+            );
+        }
+        assert!(progress.first_interactive.is_some());
+        assert_eq!(progress.repos_loaded, 5);
+        assert!(progress.active_repo_ready.is_none());
+        assert!(require_active_repo_ready("fixture", "child", 5, None).is_err());
+        assert!(require_active_repo_ready("empty", "child", 0, None).is_ok());
+        process_probe_line(
+            format!(
+                "{EVENT_PREFIX}{}",
+                r#"{"name":"active_repo_ready","rss_kib":123}"#
+            ),
+            start,
+            &mut progress,
+            &mut stderr,
+        );
+        assert_eq!(progress.active_repo_ready.unwrap().rss_kib, Some(123));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn parse_probe_event_line_reads_allocation_payload() {
         let event = parse_probe_event_line(
             "GITCOMET_PERF_STARTUP_EVENT {\"name\":\"first_paint\",\"alloc_ops\":12,\"dealloc_ops\":4,\"realloc_ops\":1,\"alloc_bytes\":4096,\"dealloc_bytes\":1024,\"realloc_bytes_delta\":512,\"net_alloc_bytes\":3072}",
@@ -1682,7 +1741,12 @@ mod tests {
             }),
         };
 
-        let metrics = build_launch_sidecar_metrics(first_paint, first_interactive, 5);
+        let metrics = build_launch_sidecar_metrics(
+            first_paint,
+            first_interactive,
+            Some(first_interactive),
+            5,
+        );
 
         assert_eq!(metrics.get("first_paint_ms"), Some(&Value::from(111)));
         assert_eq!(metrics.get("first_interactive_ms"), Some(&Value::from(222)));
@@ -1708,6 +1772,15 @@ mod tests {
             Some(&Value::from(6_144))
         );
         assert_eq!(metrics.get("repos_loaded"), Some(&Value::from(5)));
+        assert_eq!(metrics.get("active_repo_ready_ms"), Some(&Value::from(222)));
+        assert_eq!(
+            metrics.get("active_repo_ready_alloc_bytes"),
+            Some(&Value::from(8_192))
+        );
+        assert_eq!(
+            metrics.get("rss_at_active_repo_ready_kib"),
+            Some(&Value::from(33_333))
+        );
     }
 
     #[test]

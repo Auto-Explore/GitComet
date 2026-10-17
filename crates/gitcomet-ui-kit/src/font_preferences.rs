@@ -219,6 +219,7 @@ fn system_font_catalog(text_system: &TextSystem) -> &'static SystemFontCatalog {
 }
 
 fn collect_system_font_catalog(text_system: &TextSystem) -> SystemFontCatalog {
+    let _stage = gitcomet_base::startup_trace::span("system_font_catalog");
     let all_families = normalize_font_names(text_system.all_font_names());
     let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
 
@@ -349,13 +350,18 @@ fn resolve_with_catalog(
     use_font_ligatures: Option<bool>,
     catalog: impl FnOnce() -> &'static FontOptionCatalog,
 ) -> AppFontPreferences {
-    // Bundled families are registered before windows open. Only a custom
-    // selection or the font picker needs the complete installed-font catalog.
+    // Bundled families are registered before windows open. Native system-font
+    // aliases are also always valid and need no installed-font catalog. Linux
+    // resolves that alias to a concrete installed family, so keeps its catalog.
     let ui = ui_font_family.unwrap_or(DEFAULT_UI_FONT_FAMILY);
     let editor = editor_font_family
         .filter(|family| *family != LEGACY_EDITOR_MONOSPACE_FONT_FAMILY)
         .unwrap_or(EDITOR_MONOSPACE_FONT_FAMILY);
-    if is_bundled_font_family(ui) && is_bundled_font_family(editor) {
+    let known_family = |family: &str| {
+        is_bundled_font_family(family)
+            || (family == UI_SYSTEM_FONT_FAMILY && !should_resolve_system_ui_font(family))
+    };
+    if known_family(ui) && known_family(editor) {
         return AppFontPreferences {
             ui_font_family: ui.to_string(),
             editor_font_family: editor.to_string(),
@@ -390,6 +396,35 @@ fn font_option_catalog(window: &Window) -> &'static FontOptionCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    #[test]
+    fn native_system_font_startup_does_not_enumerate_installed_fonts() {
+        for (ui, editor) in [
+            (Some(UI_SYSTEM_FONT_FAMILY), None),
+            (None, Some(UI_SYSTEM_FONT_FAMILY)),
+            (Some(UI_SYSTEM_FONT_FAMILY), Some(UI_SYSTEM_FONT_FAMILY)),
+        ] {
+            let resolved = resolve_with_catalog(ui, editor, Some(true), || {
+                panic!("the native system alias is always an available selection")
+            });
+            assert_eq!(
+                resolved.ui_font_family,
+                ui.unwrap_or(DEFAULT_UI_FONT_FAMILY)
+            );
+            assert_eq!(
+                resolved.editor_font_family,
+                editor.unwrap_or(EDITOR_MONOSPACE_FONT_FAMILY)
+            );
+            assert!(resolved.use_font_ligatures);
+            for family in [&resolved.ui_font_family, &resolved.editor_font_family] {
+                assert_eq!(
+                    applied_font_family(family, || panic!("native aliases need no catalog")),
+                    *family
+                );
+            }
+        }
+    }
 
     #[test]
     fn bundled_font_startup_and_application_do_not_enumerate_system_fonts() {

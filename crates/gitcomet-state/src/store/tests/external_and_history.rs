@@ -1185,30 +1185,12 @@ fn external_worktree_refresh_replays_coalesced_change_then_settles() {
             .all(|e| !matches!(e, Effect::Status(StatusEffect::LoadWorktreeStatus { repo_id: rid }) if *rid == repo_id)),
         "with no pending change the lane should stop replaying, got {effects:?}"
     );
-    let generation = effects
-        .iter()
-        .find_map(|effect| match effect {
-            Effect::Status(StatusEffect::LoadUncommittedLineStats { generation, .. }) => {
-                Some(*generation)
-            }
-            _ => None,
-        })
-        .expect("settled worktree status should schedule counts");
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
-            repo_id,
-            generation,
-            result: Ok(Default::default()),
-            large_files: None,
-        }),
-    );
     assert!(
         effects.is_empty(),
-        "counting must not start another status scan"
+        "clean status must settle counts without another backend task"
     );
+    assert!(matches!(&state.repos[0].uncommitted_line_stats,
+        Loadable::Ready(counts) if counts.staged.is_empty() && counts.unstaged.is_empty()));
     assert!(
         !state.repos[0].loads_in_flight.any_in_flight(),
         "in-flight flags should settle once no refresh is pending"
@@ -4503,7 +4485,14 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
-    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus {
+        staged: Arc::default(),
+        unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+            path: PathBuf::from("changed.txt"),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+            conflict: None,
+        }]),
+    })));
     state.repos[0].loads_in_flight.invalidate_line_stats();
     let mut generation = state.repos[0]
         .loads_in_flight

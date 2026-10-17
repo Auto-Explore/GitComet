@@ -3,8 +3,20 @@ use super::native_watcher::WatchMode;
 use super::*;
 use std::collections::VecDeque;
 
+/// Actual planner work, retained across setup retries for operation deltas.
+#[cfg(test)]
+#[derive(Clone, Copy, Default, Debug, Eq, PartialEq)]
+pub(super) struct DiscoveryWork {
+    pub metadata_visits: usize,
+    pub metadata_reads: usize,
+    pub worktree_visits: usize,
+    pub worktree_reads: usize,
+}
+
 #[derive(Default, Debug)]
 pub(super) struct WatchPlan {
+    #[cfg(test)]
+    pub discovery_work: DiscoveryWork,
     pub dirs: FxHashSet<PathBuf>,
     pub worktree_dirs: FxHashSet<PathBuf>,
     pub boundaries: Vec<PathBuf>,
@@ -90,6 +102,12 @@ impl WatchPlan {
             }
             // This ordering closes the creation gap: an earlier child is found
             // below; a later one generates an event from the registered parent.
+            #[cfg(test)]
+            if worktree {
+                self.discovery_work.worktree_visits += 1;
+            } else {
+                self.discovery_work.metadata_visits += 1;
+            }
             if visit(&dir).is_err() {
                 self.failures += 1;
             }
@@ -99,6 +117,12 @@ impl WatchPlan {
             }
             if !keep_going() {
                 return false;
+            }
+            #[cfg(test)]
+            if worktree {
+                self.discovery_work.worktree_reads += 1;
+            } else {
+                self.discovery_work.metadata_reads += 1;
             }
             match fs::read_dir(&dir) {
                 Ok(entries) => {

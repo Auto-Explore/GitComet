@@ -5,6 +5,16 @@ use crate::msg::ChangedPaths;
 
 pub(super) const MAX_WORKTREE_WATCH_DIRS: usize = 4096;
 
+#[cfg(windows)]
+fn metadata_discovery_required(policy: &PolicySnapshot) -> bool {
+    // Recursive native roots already cover metadata descendants. Preserve the
+    // old cross-pass deduplication when a Git root also contains the worktree.
+    policy
+        .git_roots
+        .iter()
+        .any(|root| policy.workdir.starts_with(root))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WatchSetupOutcome {
     Watching { failed_dirs: usize },
@@ -215,7 +225,11 @@ impl MonitorState {
                     .unwrap_or_else(|e| e.into_inner())
                     .directories = 0;
             }
-            self.plan = WatchPlan::default();
+            self.plan = WatchPlan {
+                #[cfg(test)]
+                discovery_work: self.plan.discovery_work,
+                ..WatchPlan::default()
+            };
             self.publish(PolicySnapshot::new(workdir, &self.inputs));
             {
                 let _phase = SetupPhase::new(config, "before-registration", attempt);
@@ -268,6 +282,10 @@ impl MonitorState {
             {
                 let _phase = SetupPhase::new(config, "directory-discovery", attempt);
                 for (roots, worktree) in [(roots, false), (vec![workdir.to_path_buf()], true)] {
+                    #[cfg(windows)]
+                    if !worktree && !metadata_discovery_required(&snapshot) {
+                        continue;
+                    }
                     let complete = self.plan.walk_while(
                         roots,
                         worktree,
@@ -388,6 +406,10 @@ impl MonitorState {
         for (path, worktree) in &effect.dir_added {
             if !config.enabled.load(Ordering::Relaxed) {
                 return;
+            }
+            #[cfg(windows)]
+            if !worktree && !metadata_discovery_required(&snapshot) {
+                continue;
             }
             if !self.plan.walk_while(
                 [path.clone()],
@@ -686,13 +708,24 @@ pub(super) fn repo_monitor_thread(
     let mut index_dirty = false;
     let mut rebuild = None;
     let mut idle_at = Instant::now() + config.idle_tick;
+    let mut activation_refresh = super::activation::ActivationRefresh::default();
     let leased = Arc::clone(&config.leased);
     let worktree_owner = config.worktree_owner.clone();
-    let flush = |change| {
+    let flush = |change, activation_context: Option<ActivationContext>| {
         change_generation.fetch_add(1, Ordering::SeqCst);
         let active = active_repo_id.load(Ordering::SeqCst);
         if active == repo_id.0 || leased.load(Ordering::Relaxed) {
             trace_repo_monitor_flush("flush", repo_id, &change, active);
+            if let Some(context) = activation_context
+                && worktree_owner.is_none()
+            {
+                msg_tx.send_activation_refresh_or_log(CheckedActivation {
+                    repo_id,
+                    context,
+                    change,
+                });
+                return;
+            }
             msg_tx.send_repo_monitor_or_log(
                 match &worktree_owner {
                     Some((lifetime, path)) => Msg::WorktreeExternallyChanged {
@@ -718,6 +751,7 @@ pub(super) fn repo_monitor_thread(
             .min(idle_at.saturating_duration_since(now));
         let mut due_change = None;
         let mut revalidate = false;
+        let mut refresh_on_activation = None;
         match monitor_rx.recv_timeout(timeout) {
             Ok(MonitorMsg::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             #[cfg(test)]
@@ -740,7 +774,12 @@ pub(super) fn repo_monitor_thread(
                 };
                 let _ = reply.send(result);
             }
+            #[cfg(test)]
             Ok(MonitorMsg::Revalidate) => revalidate = true,
+            Ok(MonitorMsg::RefreshOnActivation(context)) => {
+                revalidate = true;
+                refresh_on_activation = Some(context);
+            }
             Ok(MonitorMsg::Event(result)) => {
                 if !monitor_enabled.load(Ordering::Relaxed) {
                     break;
@@ -839,6 +878,17 @@ pub(super) fn repo_monitor_thread(
         #[cfg(not(test))]
         let drain_work = false;
         if due_change.is_some() || revalidate || idle || drain_work {
+            // Reuse the monitor's discovered inputs. Exact control contents
+            // complement its cheap metadata stamps when timestamps were kept.
+            let activation_probe = refresh_on_activation
+                .as_ref()
+                .map(|_| super::activation::ActivationRefresh::prepare(&workdir, &state.inputs));
+            if let Some(probe) = &activation_probe
+                && activation_refresh.needs_discovery(probe.as_ref())
+            {
+                policy_dirty = true;
+            }
+            let mut activation_snapshot = activation_probe.and_then(Result::ok);
             if state.inputs.stamps.changed() {
                 policy_dirty = true;
             }
@@ -904,6 +954,7 @@ pub(super) fn repo_monitor_thread(
                     }
                     WatchSetup::Cancelled => break,
                 }
+                loaded = true;
                 note_watch_outcome(&msg_tx, repo_id, &mut degraded, &degraded_flag, outcome);
                 debouncer.take();
                 due_change = Some(RepoExternalChange {
@@ -913,8 +964,47 @@ pub(super) fn repo_monitor_thread(
             }
             policy_dirty = false;
             index_dirty = false;
+            if let Some(context) = &refresh_on_activation {
+                if loaded
+                    && !activation_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.covers(&state.inputs))
+                {
+                    let current =
+                        super::activation::ActivationRefresh::prepare(&workdir, &state.inputs).ok();
+                    // Newly discovered paths need a snapshot too. Do not cache
+                    // a configuration that changed during that discovery as
+                    // though its new include/topology inputs were inspected.
+                    activation_snapshot = match (activation_snapshot, current) {
+                        (Some(previous), Some(current))
+                            if !previous.discovery_still_matches(&current) =>
+                        {
+                            None
+                        }
+                        (_, current) => current,
+                    };
+                }
+                if state.rules.failed {
+                    activation_snapshot = None;
+                }
+                let change = activation_refresh.complete(activation_snapshot, context.clone());
+                if !monitor_enabled.load(Ordering::Relaxed) {
+                    break;
+                }
+                repo_load_trace::trace!(
+                    "repo_activated_refresh repo_id={:?} git_state={} tags={}",
+                    repo_id,
+                    change.git_state,
+                    change.tags,
+                );
+                // The store validates this reply against current state before
+                // deciding whether linked checkouts need a dirty scan.
+                due_change = Some(
+                    due_change.map_or(change.clone(), |pending| merge_change(pending, change)),
+                );
+            }
             if let Some(change) = due_change {
-                flush(change);
+                flush(change, refresh_on_activation);
             }
         }
         #[cfg(test)]

@@ -1495,6 +1495,36 @@ fn refreshes_shorter_than_the_spinner_delay_leave_the_chrome_alone(cx: &mut gpui
     publish(&idle, cx);
     assert!(!spinner(cx));
     assert_eq!((tabs_notified.get(), actions_notified.get()), (2, 0));
+
+    // A focus refresh can take seconds while the usable view remains Ready.
+    // It must stay quiet even after the spinner delay has elapsed.
+    let mut cached = (*idle).clone();
+    cached.repos[0].head_branch = Loadable::Ready("main".into());
+    cached.repos[0].status = Loadable::Ready(Arc::new(RepoStatus {
+        staged: Default::default(),
+        unstaged: Default::default(),
+    }));
+    cached.repos[0].log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+        commits: Vec::new(),
+        next_cursor: None,
+    }));
+    let cached = Arc::new(cached);
+    publish(&cached, cx);
+    test_support::redraw(cx);
+    let before = tabs_notified.get();
+    let mut refreshing = (*cached).clone();
+    refreshing.repos[0]
+        .loads_in_flight
+        .request(LoadKind::WorktreeStatus);
+    refreshing.repos[0].loads_in_flight.request(LoadKind::Tags);
+    publish(&Arc::new(refreshing), cx);
+    cx.executor().advance_clock(Duration::from_secs(10));
+    cx.run_until_parked();
+    assert!(!spinner(cx));
+    assert_eq!(tabs_notified.get(), before);
+    publish(&cached, cx);
+    assert!(!spinner(cx));
+    assert_eq!(tabs_notified.get(), before);
 }
 
 #[gpui::test]

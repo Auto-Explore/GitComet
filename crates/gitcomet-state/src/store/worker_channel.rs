@@ -37,6 +37,7 @@ pub(super) enum StoreWorkerCommand {
     /// A message sent while operation tracing is on, carrying the sender's
     /// operation and enqueue time. Handled exactly like [`Self::Msg`].
     Traced(Box<Msg>, op_trace::Stamp),
+    ActivationRefresh(Box<super::repo_monitor::CheckedActivation>),
     Shutdown,
     Repository {
         repo_id: RepoId,
@@ -238,6 +239,33 @@ impl StoreWorkerSender {
 
     pub(super) fn send_repo_monitor_or_log(&self, msg: Msg, context: &'static str) {
         self.send_or_log(msg, SendFailureKind::RepoMonitorMessage, context, true);
+    }
+
+    pub(super) fn send_activation_refresh_or_log(
+        &self,
+        refresh: super::repo_monitor::CheckedActivation,
+    ) {
+        if !self.is_alive() {
+            return;
+        }
+        match &self.inner {
+            StoreWorkerSenderInner::Command(tx) => {
+                send_diagnostics::send_or_log(
+                    tx,
+                    StoreWorkerCommand::ActivationRefresh(Box::new(refresh)),
+                    SendFailureKind::RepoMonitorMessage,
+                    "checked repository activation",
+                );
+            }
+            #[cfg(test)]
+            StoreWorkerSenderInner::MsgForTest(_) => self.send_repo_monitor_or_log(
+                Msg::RepoExternallyChanged {
+                    repo_id: refresh.repo_id,
+                    change: refresh.change,
+                },
+                "checked repository activation test",
+            ),
+        }
     }
 
     fn wrap_effect_message(&self, msg: Msg) -> Msg {

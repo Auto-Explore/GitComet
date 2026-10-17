@@ -275,6 +275,7 @@ impl Stamps {
 #[derive(Default)]
 pub(super) struct WatchInputs {
     pub info: RepositoryWatchInfo,
+    pub backend_discovered: bool,
     pub inputs: Vec<PathBuf>,
     pub stamps: Stamps,
     pub indexes: Stamps,
@@ -297,7 +298,9 @@ impl WatchInputs {
             stamps.add(root.join("config"));
             indexes.add(root.join("index"));
         }
-        let info = backend.repository_watch_info(workdir)?.unwrap_or_else(|| {
+        let discovered = backend.repository_watch_info(workdir)?;
+        let backend_discovered = discovered.is_some();
+        let info = discovered.unwrap_or_else(|| {
             let mut info = RepositoryWatchInfo::default();
             if let Some(root) = root_git {
                 info.cache_dirs.extend(
@@ -314,6 +317,7 @@ impl WatchInputs {
         });
         let mut inputs = Self {
             info,
+            backend_discovered,
             stamps,
             indexes,
             index_file,

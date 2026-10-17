@@ -21,6 +21,8 @@ use super::repo_load_trace;
 use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
 use super::worker_channel::StoreWorkerSender;
 
+mod activation;
+pub(super) use activation::{ActivationContext, CheckedActivation};
 mod ignore_rules;
 mod monitor;
 mod native_watcher;
@@ -45,7 +47,9 @@ use test_sync::{DrainRequest, NativeCheckpoint, NativeObservations, NativeTestSt
 
 enum MonitorMsg {
     Event(notify::Result<notify::Event>),
+    #[cfg(test)]
     Revalidate,
+    RefreshOnActivation(ActivationContext),
     Stop,
     #[cfg(test)]
     Barrier(mpsc::Sender<()>),
@@ -369,10 +373,21 @@ impl RepoMonitorManager {
         self.stop_all();
     }
 
-    pub(super) fn revalidate(&self, repo_id: RepoId) {
-        if let Some(handle) = self.handles.get(&repo_id) {
-            let _ = handle.msg_tx.send(MonitorMsg::Revalidate);
-        }
+    /// The metadata walk belongs on the monitor thread, never the store
+    /// worker: repositories on slow filesystems must not block UI commands.
+    pub(super) fn refresh_on_activation(
+        &self,
+        repo_id: RepoId,
+        context: ActivationContext,
+    ) -> bool {
+        self.handles.get(&repo_id).is_some_and(|handle| {
+            handle.monitor_enabled.load(Ordering::Relaxed)
+                && !handle.join.is_finished()
+                && handle
+                    .msg_tx
+                    .send(MonitorMsg::RefreshOnActivation(context))
+                    .is_ok()
+        })
     }
 
     pub(super) fn stop_all(&mut self) {

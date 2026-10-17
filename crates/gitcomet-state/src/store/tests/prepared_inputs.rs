@@ -302,6 +302,232 @@ fn selected_status(kind: FileStatusKind) -> Vec<FileStatus> {
     }]
 }
 
+fn prepare_retained_selection(state: &mut AppState, target: &DiffTarget) {
+    let repo = &mut state.repos[0];
+    repo.head_branch = Loadable::Ready("main".into());
+    repo.upstream_divergence = Loadable::Ready(None);
+    repo.branches = Loadable::Ready(Arc::default());
+    repo.tags = Loadable::Ready(Arc::default());
+    repo.remotes = Loadable::Ready(Arc::default());
+    repo.remote_branches = Loadable::Ready(Arc::default());
+    repo.stashes = Loadable::Ready(Arc::default());
+    repo.rebase_in_progress = Loadable::Ready(false);
+    repo.merge_commit_message = Loadable::Ready(None);
+    repo.worktrees = Loadable::Ready(Arc::default());
+    repo.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: Vec::new(),
+        next_cursor: None,
+    })));
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+        target: target.clone(),
+        lines: Vec::new(),
+    }));
+    repo.diff_state.diff_file = Loadable::Ready(None);
+    let mut other = RepoState::new_opening(RepoId(2), repo.spec.clone());
+    other.set_open(Loadable::Ready(()));
+    state.repos.push(other);
+    state.active_repo = Some(RepoId(2));
+}
+
+#[test]
+fn unchanged_tab_switch_skips_retained_selection_inputs() {
+    use crate::msg::{PersistenceEffect, RepoCommandEffect};
+    use crate::store::reducer::prepared::PreparedReduction;
+
+    let directory = tempfile::tempdir().unwrap();
+    for kind in [FileStatusKind::Deleted, FileStatusKind::Modified] {
+        let (mut state, repos, target, queries) =
+            selected_fixture(directory.path(), Some(selected_status(kind)), Ok(true));
+        prepare_retained_selection(&mut state, &target);
+        state.maintenance_settings.recommend = true;
+        state.repos[0].common_dir = Some(Arc::from(directory.path().join(".git")));
+        let retained = state.repos[0].diff_state.diff.clone();
+        let shared = std::sync::RwLock::new(Arc::new(state));
+
+        let prepared = PreparedReduction::for_repo_switch(RepoId(1), &shared, &repos, true);
+        assert_eq!(prepared.selected_input_counts(), (0, 0));
+        assert!(queries.try_iter().next().is_none());
+        let (_, inputs) = prepared.into_parts();
+        let mut state = shared.into_inner().unwrap();
+        let state = Arc::make_mut(&mut state);
+        let mut effects = reducer::SetActiveRepoEffects::new();
+        reducer::fill_set_active_repo_inline(&inputs, state, RepoId(1), true, &mut effects);
+
+        assert_eq!(state.active_repo, Some(RepoId(1)));
+        assert_eq!(
+            state.repos[0].diff_state.diff_target.as_ref(),
+            Some(&target)
+        );
+        assert_eq!(state.repos[0].diff_state.diff, retained);
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadSelectedDiff { .. }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorktreeDirty { .. }))
+        );
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Persistence(PersistenceEffect::PersistSession { .. })
+        )));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RepoCommand(RepoCommandEffect::CheckRepoMaintenance { repo_id: RepoId(1) })
+        )));
+    }
+}
+
+#[test]
+fn changed_or_incomplete_tab_switch_prepares_retained_selection_inputs() {
+    use crate::model::LoadKind;
+    use crate::store::reducer::prepared::PreparedReduction;
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::create_dir_all(directory.path().join("vendor/submodule")).unwrap();
+    fs::write(
+        directory.path().join("vendor/submodule/.git"),
+        b"gitdir: ../../.git/modules/submodule\n",
+    )
+    .unwrap();
+    type Invalidate = fn(&mut RepoState);
+    let cases: [(&str, bool, Invalidate); 8] = [
+        ("changed", false, |_| {}),
+        ("missing status", true, |repo| {
+            repo.set_status(Loadable::NotLoaded)
+        }),
+        ("loading history", true, |repo| {
+            repo.set_log(Loadable::Loading)
+        }),
+        ("missing diff", true, |repo| {
+            repo.diff_state.diff = Loadable::NotLoaded
+        }),
+        ("loading file", true, |repo| {
+            repo.diff_state.diff_file = Loadable::Loading
+        }),
+        ("cancelled refresh", true, |repo| {
+            repo.left_mid_refresh = true
+        }),
+        ("refresh in flight", true, |repo| {
+            repo.loads_in_flight.request(LoadKind::WorktreeStatus);
+        }),
+        ("conflict", true, |repo| {
+            repo.conflict_state.conflict_file_path = Some(PathBuf::from("vendor/submodule"));
+        }),
+    ];
+    for (case, unchanged, invalidate) in cases {
+        for kind in [FileStatusKind::Deleted, FileStatusKind::Modified] {
+            let (mut state, repos, target, queries) =
+                selected_fixture(directory.path(), Some(selected_status(kind)), Ok(true));
+            prepare_retained_selection(&mut state, &target);
+            invalidate(&mut state.repos[0]);
+            let expected_head =
+                usize::from(kind == FileStatusKind::Deleted || case == "missing status");
+            let shared = std::sync::RwLock::new(Arc::new(state));
+            let prepared =
+                PreparedReduction::for_repo_switch(RepoId(1), &shared, &repos, unchanged);
+            assert_eq!(
+                prepared.selected_input_counts(),
+                (
+                    expected_head,
+                    usize::from(
+                        kind == FileStatusKind::Modified
+                            && case != "missing status"
+                            && case != "conflict"
+                    )
+                ),
+                "{case}"
+            );
+            assert_eq!(queries.try_iter().count(), expected_head, "{case}");
+            let (_, inputs) = prepared.into_parts();
+            let mut state = shared.into_inner().unwrap();
+            let state = Arc::make_mut(&mut state);
+            let mut effects = reducer::SetActiveRepoEffects::new();
+            reducer::fill_set_active_repo_inline(
+                &inputs,
+                state,
+                RepoId(1),
+                unchanged,
+                &mut effects,
+            );
+
+            assert_eq!(state.active_repo, Some(RepoId(1)));
+            if case == "conflict" {
+                assert!(
+                    effects.iter().any(|effect| matches!(
+                        effect,
+                        Effect::LoadSelectedConflictFile {
+                            repo_id: RepoId(1),
+                            ..
+                        }
+                    )),
+                    "{case}: {effects:?}"
+                );
+            } else {
+                assert!(
+                    effects.iter().any(|effect| matches!(effect,
+                    Effect::LoadSelectedDiff { load_submodule_summary, .. }
+                        if *load_submodule_summary == (case != "missing status"))),
+                    "{case}: {effects:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn checked_activation_refresh_keeps_selected_path_inputs() {
+    use crate::msg::RepoExternalChange;
+    use crate::store::reducer::prepared::PreparedReduction;
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::create_dir_all(directory.path().join("vendor/submodule")).unwrap();
+    fs::write(
+        directory.path().join("vendor/submodule/.git"),
+        b"gitdir: ../../.git/modules/submodule\n",
+    )
+    .unwrap();
+    for (change, kind, expected_head_queries) in [
+        (RepoExternalChange::all(), FileStatusKind::Deleted, 1),
+        (RepoExternalChange::all(), FileStatusKind::Modified, 0),
+        (RepoExternalChange::Index, FileStatusKind::Modified, 0),
+        (RepoExternalChange::Worktree, FileStatusKind::Modified, 0),
+    ] {
+        let (mut state, mut repos, target, queries) =
+            selected_fixture(directory.path(), Some(selected_status(kind)), Ok(true));
+        state.repos[0].diff_state.diff_target = Some(target.clone());
+        let shared = std::sync::RwLock::new(Arc::new(state));
+        // The checked monitor reply reaches preparation as an external change.
+        let (message, inputs) = PreparedReduction::for_worker(
+            Msg::RepoExternallyChanged {
+                repo_id: RepoId(1),
+                change,
+            },
+            &shared,
+            &repos,
+        )
+        .into_parts();
+        let mut state = shared.into_inner().unwrap();
+        let state = Arc::make_mut(&mut state);
+        let effects =
+            reducer::reduce_prepared(&inputs, &mut repos, &AtomicU64::new(2), state, message);
+
+        assert_eq!(
+            queries.try_iter().collect::<Vec<_>>(),
+            vec![target.file_path().unwrap().to_path_buf(); expected_head_queries]
+        );
+        assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmoduleSummary { repo_id: RepoId(1), target: requested }
+                if *requested == target
+        )));
+    }
+}
+
 #[test]
 fn selected_head_lookup_queries_only_deleted_and_unknown_status() {
     let directory = tempfile::tempdir().unwrap();

@@ -1,5 +1,7 @@
 // Shared foundations, kept at their established paths.
-pub use gitcomet_base::{environment, fs_utils, history_perf, identity, op_trace, platform};
+pub use gitcomet_base::{
+    environment, fs_utils, history_perf, identity, op_trace, platform, startup_trace,
+};
 
 pub mod annex;
 pub mod auth;

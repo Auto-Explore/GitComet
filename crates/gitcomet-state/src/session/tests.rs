@@ -165,9 +165,11 @@ fn assert_session_writer_waits_for_shared_lock(
     );
     drop(guard);
 
+    // Parallel session tests also use this process-wide lock. This wait detects
+    // deadlocks, not write latency; the assertion above checks the lock contract.
     done_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("writer finished after lock release")
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap_or_else(|err| panic!("{label} writer did not finish after lock release: {err}"))
         .expect("writer persist succeeds");
     handle.join().expect("writer thread joins");
 }

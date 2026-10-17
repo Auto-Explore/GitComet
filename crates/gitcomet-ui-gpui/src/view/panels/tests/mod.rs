@@ -1551,5 +1551,6 @@ mod folder_menus;
 mod large_file_diff;
 mod markdown;
 mod shortcuts;
+mod status_footer;
 mod status_staging;
 mod text_encoding;
