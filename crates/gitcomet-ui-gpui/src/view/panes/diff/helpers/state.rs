@@ -387,7 +387,6 @@ pub(in crate::view::panes::diff) struct RemoteMarkdownImageSummaryCache {
 }
 
 pub(crate) struct DiffRenderer {
-    pub(in crate::view::panes::diff) window_handle: gpui::AnyWindowHandle,
     // Store, theme, and window wiring.
     pub(in crate::view) store: crate::view::pane_store::PaneStore,
     pub(in crate::view::panes::diff) input: DiffPaneInput,
@@ -475,9 +474,8 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) diff_engine_default: DiffEngine,
     pub(in crate::view) diff_engine_override: Option<DiffEngine>,
     pub(in crate::view) diff_engine_status: DiffEngineStatus,
-    pub(in crate::view) exact_patch_preview: bool,
-    pub(in crate::view::panes::diff) patch_review: Option<super::super::diff_patch::PatchReview>,
-    pub(in crate::view::panes::diff) patch_review_seq: u64,
+    /// Cancels patches still being prepared when the renderer goes away.
+    pub(in crate::view::panes::diff) patch_cancellation: gitcomet_core::services::CancellationToken,
     pub(in crate::view) diff_engine_anchor: Option<gitcomet_extension_api::DiffScrollAnchor>,
     /// A scroll to a source row, waiting for word-wrapped rows to be built.
     pub(in crate::view) diff_wrap_pending_scroll: Option<(usize, gpui::ScrollStrategy)>,

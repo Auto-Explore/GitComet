@@ -1279,7 +1279,8 @@ fn reduce_inner(
                     inputs,
                     state,
                     crate::model::AppNotificationKind::Error,
-                    "The comparison changed. Review a new patch before applying it.".to_owned(),
+                    "The comparison changed. Select lines in the current diff and try again."
+                        .to_owned(),
                 );
                 return Vec::new();
             }

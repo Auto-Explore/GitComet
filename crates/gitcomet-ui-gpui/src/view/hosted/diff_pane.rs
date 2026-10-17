@@ -22,34 +22,13 @@ enum PaneSource {
     Snapshot(DiffSnapshot),
 }
 
-enum PaneHost {
-    Window(WindowHost),
-    Native(Box<AppTheme>),
-}
-
-impl PaneHost {
-    fn state(&self, cx: &App) -> Option<Arc<AppState>> {
-        match self {
-            Self::Window(host) => host.state(cx).ok(),
-            Self::Native(_) => None,
-        }
-    }
-
-    fn theme(&self, cx: &App) -> AppTheme {
-        match self {
-            Self::Window(host) => host.theme(cx),
-            Self::Native(theme) => **theme,
-        }
-    }
-}
-
 static ENGAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 fn next_engaged() -> u64 {
     ENGAGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
 pub(crate) struct DiffPaneView {
-    host: PaneHost,
+    host: WindowHost,
     environment: DiffPaneEnvironment,
     engaged: u64,
     _focus_in: Option<gpui::Subscription>,
@@ -57,7 +36,6 @@ pub(crate) struct DiffPaneView {
     renderer: Option<Entity<DiffRenderer>>,
     renderer_subscription: Option<gpui::Subscription>,
     preferences_subscription: Option<gpui::Subscription>,
-    exact_patch_preview: bool,
     #[cfg(test)]
     rendered_statuses: Vec<Option<SharedString>>,
     source: PaneSource,
@@ -88,7 +66,7 @@ pub(crate) struct DiffPaneView {
 
 impl DiffPaneView {
     fn with_source(
-        host: PaneHost,
+        host: WindowHost,
         environment: DiffPaneEnvironment,
         source: PaneSource,
         mut options: DiffPaneOptions,
@@ -116,7 +94,6 @@ impl DiffPaneView {
             renderer: None,
             renderer_subscription: None,
             preferences_subscription: None,
-            exact_patch_preview: false,
             #[cfg(test)]
             rendered_statuses: Vec::new(),
             file_cache: None,
@@ -157,7 +134,7 @@ impl DiffPaneView {
             })
             .ok();
         let mut pane = Self::with_source(
-            PaneHost::Window(host),
+            host,
             environment,
             PaneSource::Session {
                 store,
@@ -180,7 +157,7 @@ impl DiffPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let mut pane = Self::with_source(
-            PaneHost::Window(host),
+            host,
             environment,
             PaneSource::Snapshot(snapshot.clone()),
             options,
@@ -201,51 +178,10 @@ impl DiffPaneView {
     }
 
     fn whitespace_mode(&self, cx: &App) -> DiffWhitespaceMode {
-        if self.exact_patch_preview {
-            return DiffWhitespaceMode::Show;
-        }
         self.renderer
             .as_ref()
             .map(|pane| pane.read(cx).diff_whitespace_mode)
             .unwrap_or_else(|| self.environment.preferences.read(cx).diff.whitespace_mode)
-    }
-
-    pub(in crate::view) fn exact_patch(
-        snapshot: DiffSnapshot,
-        environment: DiffPaneEnvironment,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> Self {
-        let mut policy = DiffPanePolicy::read_only();
-        policy.select_lines = true;
-        policy.search = true;
-        let mut pane = Self::with_source(
-            PaneHost::Native(Box::new(theme)),
-            environment,
-            PaneSource::Snapshot(snapshot.clone()),
-            DiffPaneOptions {
-                engine_override: Some(DiffEngine::LineByLine),
-                layout: DiffLayout::Inline,
-                policy,
-                ..Default::default()
-            },
-            cx,
-        );
-        pane.exact_patch_preview = true;
-        pane.set_snapshot(snapshot, cx);
-        pane
-    }
-
-    pub(in crate::view) fn exact_patch_ready(&self, cx: &App) -> bool {
-        self.exact_patch_preview
-            && !self.loading
-            && self.error.is_none()
-            && self.renderer.as_ref().is_some_and(|pane| {
-                let pane = pane.read(cx);
-                pane.diff_surface().body == crate::view::panes::diff::DiffBody::Patch
-                    && pane.rendered_patch_diff_cache_is_current()
-                    && pane.patch_diff_row_len() > 0
-            })
     }
 
     fn binding(&self) -> Option<crate::view::pane_store::DiffBinding> {
@@ -262,7 +198,7 @@ impl DiffPaneView {
     fn input(&self, cx: &App) -> Option<DiffPaneInput> {
         match &self.source {
             PaneSource::Session { .. } => Some(DiffPaneInput::session(
-                self.host.state(cx)?,
+                self.host.state(cx).ok()?,
                 self.binding()?,
             )),
             PaneSource::Snapshot(snapshot) => {
@@ -315,9 +251,6 @@ impl DiffPaneView {
             }
             let mut preferences = self.environment.preferences.read(cx);
             preferences.diff.content_mode = DiffContentMode::Full;
-            if self.exact_patch_preview {
-                preferences.diff.whitespace_mode = DiffWhitespaceMode::Show;
-            }
             let preferred = preferences.diff.view_mode;
             let theme = self.host.theme(cx);
             let renderer = cx.new(|cx| {
@@ -344,7 +277,6 @@ impl DiffPaneView {
                 pane.annotate_enabled = self.options.policy.blame;
                 pane.diff_view = diff_view_mode(self.options.layout, preferred);
                 pane.diff_engine_override = self.options.engine_override;
-                pane.exact_patch_preview = self.exact_patch_preview;
                 pane.hosted_content_width = Some(
                     self.options
                         .content_width
@@ -544,7 +476,7 @@ impl DiffPaneView {
     }
 
     fn sync(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(state) = self.host.state(cx) else {
+        let Ok(state) = self.host.state(cx) else {
             return;
         };
         let Some(session) = self.session(&state) else {
@@ -1085,7 +1017,7 @@ impl DiffPaneImpl for HostedDiffPane {
         if let Some(target) = &pane.pending_target {
             return Some(target.clone());
         }
-        let state = pane.host.state(cx)?;
+        let state = pane.host.state(cx).ok()?;
         pane.session(&state)?.diff_target.clone()
     }
 

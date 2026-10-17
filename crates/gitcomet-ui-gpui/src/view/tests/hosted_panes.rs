@@ -12,6 +12,10 @@ fn git(dir: &Path, args: &[&str]) {
     crate::test_support::git(dir, args);
 }
 
+fn git_output(dir: &Path, args: &[&str]) -> Vec<u8> {
+    crate::test_support::git(dir, args)
+}
+
 fn head(dir: &Path) -> String {
     let out = crate::test_support::git(dir, &["rev-parse", "HEAD"]);
     String::from_utf8(out).unwrap().trim().to_string()
@@ -102,7 +106,37 @@ fn open_repository_of(
     gpui::Entity<GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
-    let dir = repository_with_edits_of(lines, edits);
+    open_repository_in(cx, backend, repository_with_edits_of(lines, edits))
+}
+
+/// A repository whose `a.rs` gains a line and whose `b.rs` changes, in Rust
+/// Difftastic parses.
+fn rust_repository() -> tempfile::TempDir {
+    let dir = repository_with_edits_of(1, [0, 0]);
+    let root = dir.path();
+    std::fs::write(root.join("a.rs"), "fn a() -> i32 {\n    1\n}\n").unwrap();
+    std::fs::write(root.join("b.rs"), "fn b() -> i32 {\n    1\n}\n").unwrap();
+    git(root, &["commit", "-qam", "rust"]);
+    std::fs::write(
+        root.join("a.rs"),
+        "fn a() -> i32 {\n    let two = 2;\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("b.rs"), "fn b() -> i32 {\n    2\n}\n").unwrap();
+    dir
+}
+
+/// `dir`'s repository, open in a window through the real backend.
+fn open_repository_in(
+    cx: &mut gpui::TestAppContext,
+    backend: Arc<dyn gitcomet_core::services::GitBackend>,
+    dir: tempfile::TempDir,
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
     let root = dir.path();
 
     install_example(cx);
@@ -1354,6 +1388,69 @@ fn a_patch_bodied_pane_leaves_its_patch_error_to_the_renderer(cx: &mut gpui::Tes
         let statuses = pane_view.rendered_statuses();
         assert_eq!(statuses.last(), Some(&None), "{statuses:?}");
     });
+}
+
+/// Staging a line of a Difftastic diff applies its patch at once; there is no
+/// review screen to confirm it in.
+#[gpui::test]
+fn staging_a_difftastic_line_applies_it_without_a_review(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx) = open_repository_in(cx, Arc::new(TestBackend), rust_repository());
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
+    cx.update(|_window, app| {
+        pane.set_target(
+            DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+            app,
+        );
+        pane.set_layout(gitcomet_extension_api::DiffLayout::Inline, app);
+        pane.set_engine_override(
+            Some(gitcomet_core::diff_engine::DiffEngine::Difftastic),
+            app,
+        );
+    });
+    let renderer = cx.update(|_window, app| {
+        pane.view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+            .read(app)
+            .renderer()
+            .cloned()
+            .unwrap()
+    });
+    let mut added = None;
+    settle(cx, &view, &store, "a.rs compared by Difftastic", |cx| {
+        added = cx.update(|_window, app| {
+            let renderer = renderer.read(app);
+            renderer.structural_diff_active().then(|| {
+                (0..renderer.diff_visible_len()).find(|&visible| {
+                    renderer
+                        .diff_mapped_ix_for_visible_ix(visible)
+                        .and_then(|row| renderer.file_diff_inline_row(row))
+                        .is_some_and(|row| row.new_line == Some(2) && row.old_line.is_none())
+                })
+            })?
+        });
+        added.is_some()
+    });
+    cx.update(|_window, app| {
+        renderer.update(app, |pane, cx| {
+            pane.stage_or_unstage_diff_line(
+                added.unwrap(),
+                gitcomet_core::domain::DiffLineKind::Add,
+                cx,
+            )
+        })
+    });
+    let staged =
+        || String::from_utf8(git_output(dir.path(), &["diff", "--cached", "a.rs"])).unwrap();
+    settle(cx, &view, &store, "the added line in the index", |_| {
+        staged().contains("+    let two = 2;")
+    });
+    assert!(!staged().contains("-    1"), "{}", staged());
 }
 
 /// F1/F4 and Alt+Left/Right step the hosted pane the user is in, as its

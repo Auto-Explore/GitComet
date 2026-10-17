@@ -1,14 +1,12 @@
 use super::DiffRenderer;
-use super::services::{DiffCommand, DiffServices};
-use crate::view::hosted::diff_pane::DiffPaneView;
+use super::services::DiffCommand;
 use crate::view::{DiffTextRegion, DiffViewMode, components};
 use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_core::patch_action::{PatchOperation, PreparedDiffPatch, SourceLineSelection};
-use gitcomet_core::services::CancellationToken;
-use gitcomet_extension_api::{DiffSnapshot, HostedAction, HostedMenuItem};
+use gitcomet_extension_api::{HostedAction, HostedMenuItem};
 use gitcomet_state::diff_session::DiffViewId;
 use gitcomet_state::{model::RepoId, msg::Msg};
-use gpui::{Entity, FocusHandle, Pixels, Point, SharedString, Window, div, prelude::*};
+use gpui::{Pixels, Point, Window};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -25,31 +23,6 @@ struct PatchOrigin {
     cache_seq: u64,
     target: DiffTarget,
     operation: PatchOperation,
-}
-
-enum ReviewState {
-    Preparing,
-    Ready {
-        prepared: Arc<PreparedDiffPatch>,
-        pane: Entity<DiffPaneView>,
-        _subscription: gpui::Subscription,
-    },
-    Error(SharedString),
-}
-
-pub(super) struct PatchReview {
-    sequence: u64,
-    origin: PatchOrigin,
-    cancellation: CancellationToken,
-    state: ReviewState,
-    focus: FocusHandle,
-    focus_pending: bool,
-}
-
-impl PatchReview {
-    pub(super) fn cancel(&self) {
-        self.cancellation.cancel();
-    }
 }
 
 impl DiffRenderer {
@@ -236,7 +209,7 @@ impl DiffRenderer {
                     let selection = selection.clone();
                     let origin = self.patch_origin(operation);
                     let item = HostedMenuItem::action(HostedAction::new(
-                        format!("{} {label}…", operation.label()),
+                        format!("{} {label}", operation.label()),
                         move |cx| {
                             if let Some(origin) = &origin {
                                 let _ = weak.update(cx, |pane, cx| {
@@ -325,6 +298,8 @@ impl DiffRenderer {
         })
     }
 
+    /// Prepares the exact Git patch for `selection` off the UI thread, then
+    /// applies it, as the line engine applies its line and hunk patches.
     fn prepare_structural_patch_from_origin(
         &mut self,
         selection: SourceLineSelection,
@@ -332,44 +307,24 @@ impl DiffRenderer {
         cx: &mut gpui::Context<Self>,
     ) {
         if !self.patch_origin_current(&origin) {
-            self.commands.send(
-                DiffCommand::Toast(
-                    components::ToastKind::Error,
-                    "The comparison changed. Select lines in the current diff and try again."
-                        .into(),
-                ),
-                cx,
-            );
+            self.toast_stale_patch(cx);
             return;
         }
-        let operation = origin.operation;
         let store = self.store.clone();
-        if let Some(review) = self.patch_review.take() {
-            review.cancel();
-        }
-        self.patch_review_seq = self.patch_review_seq.wrapping_add(1);
-        let sequence = self.patch_review_seq;
-        let cancellation = CancellationToken::new();
-        self.patch_review = Some(PatchReview {
-            sequence,
-            origin: origin.clone(),
-            cancellation: cancellation.clone(),
-            state: ReviewState::Preparing,
-            focus: cx.focus_handle(),
-            focus_pending: true,
-        });
+        let cancellation = self.patch_cancellation.clone();
         let old = self.file_diff_old_text.clone();
         let new = self.file_diff_new_text.clone();
         cx.spawn(async move |weak, cx| {
-            let result = smol::unblock(move || {
+            let prepare_origin = origin.clone();
+            let result = crate::ui_runtime::background_compute(move || {
                 let repo = store
-                    .repository(origin.repo_id, origin.lifetime)
+                    .repository(prepare_origin.repo_id, prepare_origin.lifetime)
                     .ok_or_else(|| {
                         "The repository was closed. Open a new comparison.".to_owned()
                     })?;
                 repo.prepare_diff_patch(
-                    &origin.target,
-                    operation,
+                    &prepare_origin.target,
+                    prepare_origin.operation,
                     &selection,
                     &old,
                     &new,
@@ -379,169 +334,49 @@ impl DiffRenderer {
             })
             .await;
             let _ = weak.update(cx, |this, cx| {
-                this.complete_structural_patch(sequence, result, cx);
+                this.apply_structural_patch(origin, result, cx)
             });
         })
         .detach();
-        cx.notify();
     }
 
-    fn complete_structural_patch(
+    fn apply_structural_patch(
         &mut self,
-        sequence: u64,
+        origin: PatchOrigin,
         result: Result<PreparedDiffPatch, String>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(review) = &self.patch_review else {
-            return;
+        let prepared = match result {
+            Ok(prepared) => prepared,
+            Err(message) => {
+                self.commands.send(
+                    DiffCommand::Toast(components::ToastKind::Error, message.into()),
+                    cx,
+                );
+                return;
+            }
         };
-        if review.sequence != sequence {
+        if !self.patch_origin_current(&origin) {
+            self.toast_stale_patch(cx);
             return;
         }
-        if !self.patch_origin_current(&review.origin) {
-            self.patch_review.as_mut().unwrap().state = ReviewState::Error(
-                "The comparison changed. Close this preview and review a new patch.".into(),
-            );
-            cx.notify();
-            return;
-        }
-        let state = result
-            .and_then(|prepared| {
-                let path = match prepared.target() {
-                    DiffTarget::WorkingTree { path, .. } => path.clone(),
-                    _ => unreachable!(),
-                };
-                let diff = gitcomet_core::patch_action::parse_exact_diff(
-                    prepared.target().clone(),
-                    prepared.patch().to_vec(),
-                )
-                .map_err(|error| error.to_string())?;
-                let mut preferences = crate::view::preferences::UiPreferences::default();
-                preferences.diff.word_wrap = self.diff_word_wrap;
-                preferences.diff.tab_size = self.default_tab_size;
-                preferences.diff.reveal_whitespace_chars = self.reveal_whitespace_chars;
-                let environment = crate::view::hosted::environment::DiffPaneEnvironment {
-                    services: DiffServices {
-                        store: crate::view::pane_store::PaneStore::read_only(),
-                        commands: self.commands.clone(),
-                        documents: self.editor_documents.owner(),
-                        tooltip: self.tooltip_host.clone(),
-                    },
-                    preferences: crate::view::hosted::environment::DiffPreferences::Fixed(
-                        preferences,
-                    ),
-                    window: self.window_handle,
-                };
-                let pane = cx.new(|cx| {
-                    DiffPaneView::exact_patch(
-                        DiffSnapshot::from_patch(path, diff),
-                        environment,
-                        self.theme,
-                        cx,
-                    )
-                });
-                let subscription = cx.observe(&pane, |_, _, cx| cx.notify());
-                Ok(ReviewState::Ready {
-                    prepared: Arc::new(prepared),
-                    pane,
-                    _subscription: subscription,
-                })
-            })
-            .unwrap_or_else(|error| ReviewState::Error(error.into()));
-        self.patch_review.as_mut().unwrap().state = state;
-        cx.notify();
-    }
-
-    fn close_patch_review(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if let Some(review) = self.patch_review.take() {
-            review.cancel();
-        }
-        self.restore_diff_panel_focus_after_toolbar_action(window, cx);
-        cx.notify();
-    }
-
-    fn apply_patch_review(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        let Some(review) = &self.patch_review else {
-            return;
-        };
-        if !self.patch_origin_current(&review.origin) {
-            self.patch_review.as_mut().unwrap().state = ReviewState::Error(
-                "The comparison changed. Close this preview and review a new patch.".into(),
-            );
-            cx.notify();
-            return;
-        }
-        let ReviewState::Ready { prepared, pane, .. } = &review.state else {
-            return;
-        };
-        if !pane.read(cx).exact_patch_ready(cx) {
-            return;
-        }
-        let origin = &review.origin;
         self.store.dispatch(Msg::ApplyPreparedDiffPatch {
             repo_id: origin.repo_id,
             lifetime: origin.lifetime,
             view: origin.view,
             file_rev: origin.file_rev,
             generation: origin.generation,
-            prepared: prepared.clone(),
+            prepared: Arc::new(prepared),
         });
-        self.close_patch_review(window, cx);
     }
 
-    pub(super) fn render_patch_review(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Option<gpui::AnyElement> {
-        let review = self.patch_review.as_ref()?;
-        let current = self.patch_origin_current(&review.origin);
-        let review = self.patch_review.as_mut().unwrap();
-        if review.focus_pending {
-            review.focus.focus(window, cx);
-            review.focus_pending = false;
-        }
-        let theme = self.theme;
-        let ready = current
-            && match &review.state {
-                ReviewState::Ready { pane, .. } => pane.read(cx).exact_patch_ready(cx),
-                _ => false,
-            };
-        let body = if !current {
-            div()
-                .p_4()
-                .child("The comparison changed. Close this preview and review a new patch.")
-                .into_any_element()
-        } else {
-            match &review.state {
-                ReviewState::Preparing => div()
-                    .p_4()
-                    .child("Preparing exact Git patch…")
-                    .into_any_element(),
-                ReviewState::Error(message) => {
-                    div().p_4().child(message.clone()).into_any_element()
-                }
-                ReviewState::Ready { pane, .. } => pane.clone().into_any_element(),
-            }
-        };
-        let operation = review.origin.operation;
-        Some(div().id("structural_patch_review").debug_selector(|| "structural_patch_review".into())
-            .absolute().inset_0().size_full().flex().flex_col().bg(theme.colors.surface.canvas).occlude()
-            .track_focus(&review.focus)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" { this.close_patch_review(window, cx); cx.stop_propagation(); }
-            }))
-            .child(div().p_3().flex_none().child(format!("Review {} · exact Git patch", operation.label().to_lowercase())))
-            .child(div().px_3().pb_2().flex_none().text_color(theme.colors.foreground.secondary).child(if operation == PatchOperation::Stage {
-                "Whole lines will be applied to the index. All whitespace changes are shown."
-            } else if operation == PatchOperation::Unstage {
-                "This patch will be reversed in the index. All whitespace changes are shown."
-            } else { "This patch will be reversed in the working file. All whitespace changes are shown." }))
-            .child(div().flex_1().min_h_0().child(body))
-            .child(div().p_3().flex().gap_2().justify_end().flex_none()
-                .child(components::Button::new("structural_patch_cancel", "Cancel").on_click(theme, cx, |this, _, window, cx| this.close_patch_review(window, cx)))
-                .child(components::Button::new("structural_patch_apply", format!("{} reviewed patch", operation.label())).disabled(!ready)
-                    .on_click(theme, cx, |this, _, window, cx| this.apply_patch_review(window, cx))))
-            .into_any_element())
+    fn toast_stale_patch(&self, cx: &mut gpui::Context<Self>) {
+        self.commands.send(
+            DiffCommand::Toast(
+                components::ToastKind::Error,
+                "The comparison changed. Select lines in the current diff and try again.".into(),
+            ),
+            cx,
+        );
     }
 }

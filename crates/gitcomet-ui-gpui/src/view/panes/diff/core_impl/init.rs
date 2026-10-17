@@ -265,7 +265,6 @@ impl DiffRenderer {
         let editor_documents =
             crate::view::documents::repository::RepositoryDocuments::new(services.documents);
         let mut pane = Self {
-            window_handle: window.window_handle(),
             store: services.store,
             commands: services.commands,
             tooltip_host: services.tooltip,
@@ -453,9 +452,7 @@ impl DiffRenderer {
             diff_engine_default: preferences.diff.engine,
             diff_engine_override: None,
             diff_engine_status: DiffEngineStatus::LineByLine,
-            exact_patch_preview: false,
-            patch_review: None,
-            patch_review_seq: 0,
+            patch_cancellation: gitcomet_core::services::CancellationToken::new(),
             diff_engine_anchor: None,
             diff_wrap_pending_scroll: None,
             file_diff_cache_engine: DiffEngine::LineByLine,

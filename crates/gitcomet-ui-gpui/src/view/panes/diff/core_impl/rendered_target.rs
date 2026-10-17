@@ -80,8 +80,7 @@ impl DiffRenderer {
     }
 
     pub(in crate::view) fn supports_diff_content_mode_toggle(&self, is_file_preview: bool) -> bool {
-        !self.exact_patch_preview
-            && !is_file_preview
+        !is_file_preview
             && !self.is_worktree_target_directory()
             && Self::is_file_diff_target(self.rendered_diff_target())
     }

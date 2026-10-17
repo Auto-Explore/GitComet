@@ -2135,7 +2135,7 @@ impl DiffRenderer {
             );
         }
 
-        if !self.exact_patch_preview {
+        {
             // The full text resolver gets its own settings menu under the cog
             // (section 30); everything else keeps the diff actions menu.
             let resolver_settings_active = is_conflict_resolver && !is_simple_conflict_strategy;

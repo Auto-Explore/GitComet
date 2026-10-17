@@ -14,10 +14,6 @@ pub(in crate::view) struct RepositoryDocuments {
 }
 
 impl RepositoryDocuments {
-    pub fn owner(&self) -> DocumentOwner {
-        self.owner.clone()
-    }
-
     pub fn new(owner: DocumentOwner) -> Self {
         Self {
             owner,

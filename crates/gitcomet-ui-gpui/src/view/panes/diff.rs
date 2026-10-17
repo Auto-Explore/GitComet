@@ -111,8 +111,7 @@ impl Render for DiffRenderer {
                 "revision":self.diff_search_debounce_seq, "matches":self.diff_search_matches.len()
             })
         });
-        let review = self.render_patch_review(window, cx);
-        div().size_full().relative().child(inner).children(review)
+        div().size_full().relative().child(inner)
     }
 }
 
@@ -126,9 +125,7 @@ impl Drop for DiffRenderer {
         {
             cache.cancel();
         }
-        if let Some(review) = &self.patch_review {
-            review.cancel();
-        }
+        self.patch_cancellation.cancel();
         if let Some(token) = &self.diff_search_cancellation {
             token.cancel();
         }
