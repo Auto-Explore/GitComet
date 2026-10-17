@@ -52,6 +52,180 @@ fn no_stats(effects: &[Effect]) {
     )));
 }
 
+fn previous_counts() -> Arc<gitcomet_core::domain::UncommittedLineStats> {
+    let mut counts = gitcomet_core::domain::UncommittedLineStats::default();
+    counts.staged.insert(
+        PathBuf::from("staged.txt"),
+        gitcomet_core::domain::LineStats::UNKNOWN,
+    );
+    counts.unstaged.insert(
+        PathBuf::from("changed.txt"),
+        gitcomet_core::domain::LineStats::UNKNOWN,
+    );
+    Arc::new(counts)
+}
+
+fn assert_empty_counts_settled(repo: &RepoState) {
+    assert!(matches!(&repo.uncommitted_line_stats,
+        Loadable::Ready(counts) if counts.staged.is_empty() && counts.unstaged.is_empty()));
+    assert!(repo.uncommitted_large_files.is_empty());
+    assert!(!repo.loads_in_flight.line_stats_in_flight());
+}
+
+#[test]
+fn clean_status_settles_counts_and_large_file_rows_without_a_backend_job() {
+    for large_files in [false, true] {
+        let (mut state, id) = fixture();
+        if large_files {
+            effects::large_file_support_loaded(
+                &crate::store::reducer::test_inputs::clock(),
+                &mut state,
+                id,
+                Ok(lfs_support()),
+            );
+        }
+        // Initial clean loading and subsequent dirty-to-clean refreshes both
+        // settle immediately, including stale LFS rows from the earlier view.
+        for after_dirty in [false, true] {
+            if after_dirty {
+                state.repos[0].set_uncommitted_line_stats(Loadable::Ready(previous_counts()));
+                if large_files {
+                    state.repos[0]
+                        .set_uncommitted_large_files(Arc::new(large_files_for("changed.txt")));
+                }
+            }
+            let mut requested = Vec::new();
+            util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
+            no_stats(&effects::status_loaded(
+                &crate::store::reducer::test_inputs::clock(),
+                &mut state,
+                id,
+                Ok(RepoStatus::default()),
+            ));
+            assert_empty_counts_settled(&state.repos[0]);
+            assert!(!state.repos[0].loads_in_flight.any_in_flight());
+        }
+    }
+}
+
+#[test]
+fn clean_counts_wait_for_both_status_replays_and_failed_lane_recovery() {
+    let (mut state, id) = fixture();
+    let previous = previous_counts();
+    state.repos[0].set_uncommitted_line_stats(Loadable::Ready(Arc::clone(&previous)));
+    let mut requested = Vec::new();
+    util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
+    util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
+    let replay = effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(RepoStatus::default()),
+    );
+    no_stats(&replay);
+    assert_eq!(replay.len(), 2);
+    assert!(matches!(&state.repos[0].uncommitted_line_stats,
+        Loadable::Ready(counts) if Arc::ptr_eq(counts, &previous)));
+    no_stats(&effects::worktree_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(vec![]),
+    ));
+    assert!(matches!(&state.repos[0].uncommitted_line_stats,
+        Loadable::Ready(counts) if Arc::ptr_eq(counts, &previous)));
+    no_stats(&effects::staged_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Err(Error::new(ErrorKind::Backend("index unavailable".into()))),
+    ));
+    assert!(matches!(&state.repos[0].uncommitted_line_stats,
+        Loadable::Ready(counts) if Arc::ptr_eq(counts, &previous)));
+
+    util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
+    no_stats(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(RepoStatus::default()),
+    ));
+    assert_empty_counts_settled(&state.repos[0]);
+    assert!(!state.repos[0].loads_in_flight.any_in_flight());
+}
+
+#[test]
+fn clean_counts_after_an_obsolete_job_reject_late_results_and_allow_new_dirty_counts() {
+    let (mut state, id) = fixture();
+    effects::large_file_support_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(lfs_support()),
+    );
+    let mut requested = Vec::new();
+    util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
+    let (obsolete, _) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    ));
+    util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
+    no_stats(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(RepoStatus::default()),
+    ));
+    assert!(state.repos[0].loads_in_flight.line_stats_in_flight());
+    no_stats(&effects::uncommitted_line_stats_loaded(
+        &mut state,
+        id,
+        obsolete,
+        Ok(previous_counts().as_ref().clone()),
+        Some(Ok(large_files_for("obsolete.bin"))),
+    ));
+    assert_empty_counts_settled(&state.repos[0]);
+
+    // The empty generation must not leave the lane busy or let an old reply
+    // release the new dirty job. A staged-only snapshot still needs that job.
+    util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
+    let staged = RepoStatus {
+        staged: snapshot().unstaged,
+        unstaged: Arc::default(),
+    };
+    let (current, supplied) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(staged.clone()),
+    ));
+    assert_ne!(current, obsolete);
+    assert_eq!(*supplied, staged);
+    no_stats(&effects::uncommitted_line_stats_loaded(
+        &mut state,
+        id,
+        obsolete,
+        Ok(previous_counts().as_ref().clone()),
+        Some(Ok(large_files_for("obsolete.bin"))),
+    ));
+    assert!(state.repos[0].loads_in_flight.line_stats_in_flight());
+    assert!(state.repos[0].uncommitted_large_files.is_empty());
+    let next = previous_counts();
+    no_stats(&effects::uncommitted_line_stats_loaded(
+        &mut state,
+        id,
+        current,
+        Ok(next.as_ref().clone()),
+        Some(Ok(large_files_for("current.bin"))),
+    ));
+    assert!(matches!(&state.repos[0].uncommitted_line_stats,
+        Loadable::Ready(counts) if **counts == *next));
+    assert!(!state.repos[0].uncommitted_large_files.is_empty());
+    assert!(!state.repos[0].loads_in_flight.any_in_flight());
+}
+
 #[test]
 fn initial_refresh_publishes_status_before_counts_and_reuses_its_arcs() {
     for full in [false, true] {
@@ -330,20 +504,13 @@ fn already_up_to_date_pull_still_refreshes_once_and_counts_settle_after_status()
             .count(),
         1
     );
-    let (generation, supplied) = stats_job(&effects::status_loaded(
+    no_stats(&effects::status_loaded(
         &crate::store::reducer::test_inputs::clock(),
         &mut state,
         id,
         Ok(RepoStatus::default()),
     ));
-    assert!(supplied.unstaged.is_empty());
-    effects::uncommitted_line_stats_loaded(
-        &mut state,
-        id,
-        generation,
-        Ok(Default::default()),
-        None,
-    );
+    assert_empty_counts_settled(&state.repos[0]);
     let loads = &state.repos[0].loads_in_flight;
     assert!(!loads.is_in_flight(LoadKind::WorktreeStatus));
     assert!(!loads.is_in_flight(LoadKind::StagedStatus));
