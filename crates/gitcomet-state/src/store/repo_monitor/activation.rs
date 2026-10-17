@@ -234,6 +234,7 @@ pub(super) struct MetadataSnapshot {
     entries: BTreeMap<PathBuf, Option<FileStamp>>,
     discovery: BTreeMap<PathBuf, Option<FileStamp>>,
     coverage: BTreeMap<PathBuf, Coverage>,
+    file_contents: BTreeMap<PathBuf, Arc<[u8]>>,
     git_dirs: Vec<PathBuf>,
     inputs: Vec<PathBuf>,
     bytes: u64,
@@ -404,25 +405,35 @@ impl MetadataSnapshot {
                 .and_then(|stamp| stamp.as_ref())
                 .and_then(|stamp| stamp.contents.clone())
         } else if read_contents && !directory {
-            if metadata.len().saturating_add(self.bytes) > MAX_CONTROL_FILE_BYTES {
-                return Err(std::io::Error::other(
-                    "activation control file limit exceeded",
-                ));
+            // Watch inputs intentionally retain lexical and resolved aliases.
+            // Keep their discovery entries, but read and budget the existing
+            // file only once within this snapshot.
+            let identity = normalized(&fs::canonicalize(path)?);
+            if let Some(contents) = self.file_contents.get(&identity) {
+                Some(contents.clone())
+            } else {
+                if metadata.len().saturating_add(self.bytes) > MAX_CONTROL_FILE_BYTES {
+                    return Err(std::io::Error::other(
+                        "activation control file limit exceeded",
+                    ));
+                }
+                // HEAD, refs and configuration can be rewritten in place while
+                // preserving timestamps. Their bytes are the actual input.
+                use std::io::Read;
+                let mut contents = Vec::new();
+                fs::File::open(&identity)?
+                    .take(MAX_CONTROL_FILE_BYTES - self.bytes + 1)
+                    .read_to_end(&mut contents)?;
+                self.bytes += contents.len() as u64;
+                if self.bytes > MAX_CONTROL_FILE_BYTES {
+                    return Err(std::io::Error::other(
+                        "activation control file limit exceeded",
+                    ));
+                }
+                let contents: Arc<[u8]> = contents.into();
+                self.file_contents.insert(identity, contents.clone());
+                Some(contents)
             }
-            // HEAD, refs and configuration can be rewritten in place while
-            // preserving timestamps. Their bytes are the actual input.
-            use std::io::Read;
-            let mut contents = Vec::new();
-            fs::File::open(path)?
-                .take(MAX_CONTROL_FILE_BYTES - self.bytes + 1)
-                .read_to_end(&mut contents)?;
-            self.bytes += contents.len() as u64;
-            if self.bytes > MAX_CONTROL_FILE_BYTES {
-                return Err(std::io::Error::other(
-                    "activation control file limit exceeded",
-                ));
-            }
-            Some(contents.into())
         } else {
             None
         };
@@ -615,6 +626,44 @@ mod tests {
                 .len(),
             3 * 1024 * 1024
         );
+    }
+
+    #[test]
+    fn aliased_control_inputs_share_the_content_budget_and_keep_discovery_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        let config = dir.path().join("config");
+        let alias = dir.path().join("nested/../config");
+        fs::write(&config, vec![b'#'; 3 * 1024 * 1024]).unwrap();
+        assert_ne!(config, alias);
+        assert_eq!(
+            config.canonicalize().unwrap(),
+            alias.canonicalize().unwrap()
+        );
+
+        let mut snapshot = MetadataSnapshot::default();
+        snapshot.add_discovery(&config).unwrap();
+        snapshot.add_discovery(&alias).unwrap();
+        assert_eq!(snapshot.bytes, 3 * 1024 * 1024);
+        for path in [&config, &alias] {
+            assert!(snapshot.discovery.contains_key(path));
+            assert_eq!(
+                snapshot.entries[path]
+                    .as_ref()
+                    .unwrap()
+                    .contents
+                    .as_ref()
+                    .unwrap()
+                    .len(),
+                3 * 1024 * 1024
+            );
+        }
+        let previous = snapshot;
+        fs::write(&config, "changed").unwrap();
+        let mut current = MetadataSnapshot::default();
+        current.add_discovery(&config).unwrap();
+        current.add_discovery(&alias).unwrap();
+        assert!(!previous.discovery_still_matches(&current));
     }
 
     #[test]
