@@ -76,8 +76,9 @@ impl DiffRenderer {
     }
 
     /// Whether an earlier stage or discard is still applying or reloading the
-    /// diff. Its rows then still describe the index as it was, so a click is
-    /// dropped rather than built into a patch that no longer applies.
+    /// diff. The rows stay on screen meanwhile (so the pane does not flash) and
+    /// still describe the index as it was, so a gutter click is dropped rather
+    /// than built into a patch that no longer applies.
     ///
     /// Both halves matter: the command finishing is what clears
     /// `local_actions_in_flight`, and the reload it asks for only starts
@@ -100,6 +101,9 @@ impl DiffRenderer {
         let Some(area) = self.diff_stage_gutter_area() else {
             return;
         };
+        if self.diff_actions_busy() {
+            return;
+        }
         if self.structural_diff_active() {
             let region = match (self.diff_view, kind) {
                 (DiffViewMode::Inline, _) => DiffTextRegion::Inline,
@@ -119,14 +123,6 @@ impl DiffRenderer {
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };
-        // The rows stay on screen while the previous stage reloads the diff (so
-        // the pane does not flash), which means they still describe the index as
-        // it was. A patch built from them would no longer apply, so drop the
-        // click and let the reload land first.
-        //
-        if self.diff_actions_busy() {
-            return;
-        }
         let Some(patch) = self.diff_stage_gutter_patch(visible_ix, kind) else {
             let message = match area {
                 DiffArea::Unstaged => "Couldn't build patch to stage this line",

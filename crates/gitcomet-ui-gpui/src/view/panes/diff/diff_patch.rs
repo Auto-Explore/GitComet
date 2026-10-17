@@ -308,9 +308,6 @@ impl DiffRenderer {
         origin: PatchOrigin,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.diff_actions_busy() {
-            return;
-        }
         if !self.patch_origin_current(&origin) {
             self.toast_stale_patch(cx);
             return;
