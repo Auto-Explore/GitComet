@@ -328,7 +328,6 @@ impl gpui::Element for ScrollPinnedHunkShell {
     }
 }
 
-/// Which diff palette a line's word highlights come from.
 /// The kind a row's background follows: its own, or plain context when only
 /// its changed tokens are marked.
 fn line_background_kind(kind: DiffLineKind, mark_lines: bool) -> DiffLineKind {
@@ -339,6 +338,7 @@ fn line_background_kind(kind: DiffLineKind, mark_lines: bool) -> DiffLineKind {
     }
 }
 
+/// Which diff palette a line's word highlights come from.
 pub(super) fn diff_line_word_kind(kind: DiffLineKind) -> Option<crate::theme::DiffColorKind> {
     match kind {
         DiffLineKind::Add => Some(crate::theme::DiffColorKind::Added),
