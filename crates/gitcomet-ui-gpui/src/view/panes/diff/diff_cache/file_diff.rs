@@ -837,6 +837,10 @@ impl StreamedFileDiffSource {
     /// A context run's row draws one side's text; a Difftastic pair whose
     /// lines differ does not also draw the other.
     fn inline_row_draws(&self, inline_ix: usize, old: bool) -> bool {
+        // A line-engine context run's two lines are the same text.
+        if self.structural.is_none() {
+            return true;
+        }
         let Some((run_ix, local_ix)) = Self::locate_run(
             self.inline_run_starts(),
             self.plan.inline_row_count,
