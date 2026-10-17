@@ -869,6 +869,7 @@ mod gitcomet_view;
 mod gitcomet_view_commands;
 mod gitcomet_view_render;
 mod gitcomet_view_requests;
+mod large_file_tools_probe;
 mod runtime_probe;
 
 #[cfg(test)]

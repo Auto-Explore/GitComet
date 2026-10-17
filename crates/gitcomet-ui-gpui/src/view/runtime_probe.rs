@@ -42,6 +42,9 @@ fn reports_to_store(refresh_all: bool, store: &GitRuntimeState, runtime: &GitRun
 }
 
 pub(super) fn request(cx: &mut gpui::App, force: bool) {
+    if force {
+        super::large_file_tools_probe::supersede_settings_tool_probe(cx);
+    }
     if cfg!(test) {
         return;
     }
@@ -94,6 +97,7 @@ pub(super) fn request(cx: &mut gpui::App, force: bool) {
                         ) {
                             return;
                         }
+                        view.invalidate_large_file_tools_probe_for_runtime(&runtime);
                         view.store
                             .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
                         view.refresh_signing_tools(true, cx);

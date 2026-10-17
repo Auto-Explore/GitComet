@@ -1277,6 +1277,14 @@ impl GitCometView {
                 .update(cx, |host, cx| host.error_notices_changed(errors, cx));
         });
 
+        let closing_view = cx.weak_entity();
+        let probe_window = window.window_handle().window_id();
+        let large_file_tools_window_closed = cx.on_window_closed(move |cx, closed| {
+            if closed == probe_window {
+                let _ = closing_view.update(cx, |view, _| view.close_large_file_tools_probe());
+            }
+        });
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
@@ -1358,7 +1366,10 @@ impl GitCometView {
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,
             signing_tools_probe_cancellation: Default::default(),
-            large_file_tools_probe_in_flight: false,
+            large_file_tools_probe: Default::default(),
+            _large_file_tools_window_closed: large_file_tools_window_closed,
+            #[cfg(test)]
+            large_file_tools_detector_for_test: None,
             date_time_format,
             timezone,
             show_timezone,
@@ -2667,35 +2678,6 @@ impl GitCometView {
         self.signing_tools_probe_cancellation.cancel();
         self.signing_tools_probe_seq = self.signing_tools_probe_seq.wrapping_add(1);
         self.signing_tools_probe_in_flight = false;
-    }
-
-    /// Probe `git lfs` / `git annex` once per Git runtime. Not gated by any
-    /// preference: the answer decides whether their commands are offered.
-    pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
-        if cfg!(test)
-            || self.large_file_tools_probe_in_flight
-            || !current_git_runtime().is_available()
-        {
-            return;
-        }
-        self.large_file_tools_probe_in_flight = true;
-        let runtime = current_git_runtime();
-        let detection =
-            cx.background_spawn(async move {
-                gitcomet_core::large_file_tools::detect_large_file_tools_cancellable(
-                    &Default::default(),
-                )
-            });
-        cx.spawn(async move |view, cx| {
-            let tools = detection.await;
-            let _ = view.update(cx, |this, _cx| {
-                this.large_file_tools_probe_in_flight = false;
-                if current_git_runtime() == runtime {
-                    this.store.dispatch(Msg::SetLargeFileToolsState(tools));
-                }
-            });
-        })
-        .detach();
     }
 
     /// Discover signing tools after opt-in, on opted-in startup, or diagnostics.
