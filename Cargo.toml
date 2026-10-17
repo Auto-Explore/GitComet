@@ -94,7 +94,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.99.0"
+rust-version = "1.100.0"
 
 [patch.crates-io]
 # block 0.1.6 has no released fix for its uninhabited extern class static.
