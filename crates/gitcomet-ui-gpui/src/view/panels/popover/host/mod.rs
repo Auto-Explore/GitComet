@@ -835,9 +835,9 @@ impl PopoverHost {
             _worktree_picker_search_input_subscription: None,
             _worktree_badge_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
-            _file_history_search_input_subscription: None,
             _history_author_filter_search_input_subscription: None,
             _stash_picker_search_input_subscription: None,
+            _file_history_file_picker_search_input_subscription: None,
             _squash_message_input_subscription: squash_message_input_subscription,
             _squash_description_input_subscription: squash_description_input_subscription,
             _prompt_input_subscriptions: prompt_input_subscriptions,
@@ -915,7 +915,6 @@ impl PopoverHost {
             worktree_badge_picker_selected_index: None,
             pending_worktree_add_prefill: None,
             submodule_picker_selected_index: None,
-            file_history_selected_index: None,
             history_author_filter_selected_index: None,
             history_author_suggestions: None,
             branch_picker_rows_cache: rows_cache::RowsCache::default(),
@@ -923,7 +922,7 @@ impl PopoverHost {
             worktree_badge_picker_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_rows_cache: rows_cache::RowsCache::default(),
             stash_picker_rows_cache: rows_cache::RowsCache::default(),
-            file_history_rows_cache: rows_cache::RowsCache::default(),
+            file_history_file_picker_rows_cache: rows_cache::RowsCache::default(),
             submodule_picker_rows_cache: rows_cache::RowsCache::default(),
             worktree_picker_rows_cache: rows_cache::RowsCache::default(),
             branch_ref_rows_cache: rows_cache::RowsCache::default(),
@@ -931,7 +930,6 @@ impl PopoverHost {
             repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
-            file_history_search_input: None,
             history_author_filter_search_input: None,
             worktree_picker_search_input: None,
             worktree_badge_picker_search_input: None,
@@ -971,6 +969,11 @@ impl PopoverHost {
             stash_message_input,
             stash_focus,
             stash_picker_prompt_selected_index: None,
+            file_history_file_picker_selected_index: None,
+            file_history_file_picker_query: String::new(),
+            #[cfg(test)]
+            file_browser_loads_for_tests: 0,
+            file_history_file_picker_search_input: None,
             stash_picker_search_input: None,
             commit_prompt_message_drafts: FxHashMap::default(),
             commit_prompt_message_input,
@@ -1170,6 +1173,31 @@ impl PopoverHost {
             reference: commit_id,
             purpose: gitcomet_state::model::CommitLookupPurpose::MainlineParents,
         });
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_browser_loads_for_tests(&self) -> usize {
+        self.file_browser_loads_for_tests
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_history_picker_input_for_tests(
+        &self,
+    ) -> Option<Entity<components::TextInput>> {
+        self.file_history_file_picker_search_input.clone()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_history_picker_selected_for_tests(&self) -> Option<usize> {
+        self.file_history_file_picker_selected_index
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn file_history_picker_rows_for_tests(
+        &self,
+        query: &str,
+    ) -> Vec<std::path::PathBuf> {
+        file_history_file_picker::nav_targets(self, query)
     }
 
     #[cfg(test)]
@@ -1526,6 +1554,7 @@ impl PopoverHost {
             | Some(PopoverKind::StashPrompt)
             | Some(PopoverKind::CommitPrompt { .. })
             | Some(PopoverKind::StashPickerPrompt { .. })
+            | Some(PopoverKind::FileHistoryFilePicker { .. })
             | Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
                 ..
@@ -1787,6 +1816,7 @@ impl PopoverHost {
                     | PopoverKind::StashPrompt
                     | PopoverKind::CommitPrompt { .. }
                     | PopoverKind::StashPickerPrompt { .. }
+                    | PopoverKind::FileHistoryFilePicker { .. }
                     // Opened from the AUTHOR column header, which stays
                     // highlighted while its dropdown is up.
                     | PopoverKind::HistoryAuthorFilter { .. }
@@ -1830,7 +1860,6 @@ impl PopoverHost {
         self.worktree_picker_selected_index = None;
         self.worktree_badge_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
-        self.file_history_selected_index = None;
         self.history_author_filter_selected_index = None;
         // Rows are keyed by the data they were built from, so a stale slot can
         // only be reused when that data is unchanged. Dropping them on open still
@@ -1840,7 +1869,7 @@ impl PopoverHost {
         self.worktree_badge_picker_rows_cache.clear();
         self.repo_picker_rows_cache.clear();
         self.stash_picker_rows_cache.clear();
-        self.file_history_rows_cache.clear();
+        self.file_history_file_picker_rows_cache.clear();
         self.submodule_picker_rows_cache.clear();
         self.worktree_picker_rows_cache.clear();
         self.branch_ref_rows_cache.clear();
@@ -1994,6 +2023,25 @@ impl PopoverHost {
                 PopoverKind::StashPickerPrompt { .. } => {
                     let _ = self.ensure_stash_picker_search_input(window, cx);
                     self.stash_picker_prompt_selected_index = Some(0);
+                }
+                PopoverKind::FileHistoryFilePicker { repo_id } => {
+                    let _ = self.ensure_file_history_file_picker_search_input(window, cx);
+                    self.file_history_file_picker_selected_index = Some(0);
+                    self.file_history_file_picker_query.clear();
+                    // Load with the Files tab's current browse point; do not move it.
+                    if let Some(repo) = self.active_repo()
+                        && repo.file_browser.needs_load()
+                    {
+                        let source = repo.file_browser.source.clone();
+                        self.store.dispatch(Msg::LoadFileBrowser {
+                            repo_id: *repo_id,
+                            source,
+                        });
+                        #[cfg(test)]
+                        {
+                            self.file_browser_loads_for_tests += 1;
+                        }
+                    }
                 }
                 PopoverKind::CloneRepo => {
                     let url_text = self
@@ -2216,14 +2264,6 @@ impl PopoverHost {
                     self.store
                         .dispatch(Msg::LoadSubmodules { repo_id: *repo_id });
                 }
-                PopoverKind::FileHistory { repo_id, path } => {
-                    self.ensure_file_history_search_input(window, cx);
-                    self.store.dispatch(Msg::LoadFileHistory {
-                        repo_id: *repo_id,
-                        path: path.clone(),
-                        limit: 200,
-                    });
-                }
                 PopoverKind::HistoryAuthorFilter { repo_id } => {
                     self.ensure_history_author_filter_search_input(window, cx);
                     self.store.dispatch(Msg::HistoryAuthors(
@@ -2359,7 +2399,6 @@ impl PopoverHost {
     pub(super) fn open_picker_search_input(&self) -> Option<&Entity<components::TextInput>> {
         match &self.popover {
             Some(PopoverKind::RepoPicker { .. }) => self.repo_picker_search_input.as_ref(),
-            Some(PopoverKind::FileHistory { .. }) => self.file_history_search_input.as_ref(),
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_search_input.as_ref(),
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
@@ -2377,7 +2416,6 @@ impl PopoverHost {
     pub(super) fn open_picker_selected_index(&mut self) -> Option<&mut Option<usize>> {
         match &self.popover {
             Some(PopoverKind::RepoPicker { .. }) => Some(&mut self.repo_picker_selected_index),
-            Some(PopoverKind::FileHistory { .. }) => Some(&mut self.file_history_selected_index),
             Some(PopoverKind::BranchPicker { .. }) => Some(&mut self.branch_picker_selected_index),
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
@@ -2390,7 +2428,6 @@ impl PopoverHost {
     pub(super) fn open_picker_selected_index_value(&self) -> Option<usize> {
         match &self.popover {
             Some(PopoverKind::RepoPicker { .. }) => self.repo_picker_selected_index,
-            Some(PopoverKind::FileHistory { .. }) => self.file_history_selected_index,
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_selected_index,
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),

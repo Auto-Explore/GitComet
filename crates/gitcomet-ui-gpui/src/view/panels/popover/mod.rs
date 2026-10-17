@@ -28,7 +28,7 @@ mod discard_changes_confirm;
 mod discard_folder_changes_confirm;
 mod error_details;
 mod extension_dialog;
-mod file_history;
+mod file_history_file_picker;
 mod filesystem_conflict_prompt;
 mod filesystem_unsaved_edits_confirm;
 mod fingerprint;
@@ -52,7 +52,7 @@ mod rename_branch_prompt;
 mod repo_picker;
 mod reset_prompt;
 mod revert_commit_confirm;
-mod rows_cache;
+pub(in crate::view) mod rows_cache;
 mod search_inputs;
 mod squash_prompt;
 mod stage_conflict_markers_confirm;
@@ -200,7 +200,6 @@ pub(in super::super) struct PopoverHost {
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_badge_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
-    _file_history_search_input_subscription: Option<gpui::Subscription>,
     _history_author_filter_search_input_subscription: Option<gpui::Subscription>,
     _squash_message_input_subscription: gpui::Subscription,
     _squash_description_input_subscription: gpui::Subscription,
@@ -321,7 +320,6 @@ pub(in super::super) struct PopoverHost {
     /// open from elsewhere still starts blank.
     pending_worktree_add_prefill: Option<(String, String)>,
     submodule_picker_selected_index: Option<usize>,
-    file_history_selected_index: Option<usize>,
     history_author_filter_selected_index: Option<usize>,
     /// Collected author names survive frames and active author filters.
     history_author_suggestions: Option<author_filter::SuggestionCache>,
@@ -335,7 +333,7 @@ pub(in super::super) struct PopoverHost {
         rows_cache::RowsCache<worktree_badge_picker::WorktreeBadgeRow>,
     repo_picker_rows_cache: rows_cache::RowsCache<repo_picker::RepoPickerEntry>,
     stash_picker_rows_cache: rows_cache::RowsCache<stash_picker_prompt::StashRow>,
-    file_history_rows_cache: rows_cache::RowsCache<CommitId>,
+    file_history_file_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     submodule_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     worktree_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     branch_ref_rows_cache: rows_cache::RowsCache<String>,
@@ -344,7 +342,6 @@ pub(in super::super) struct PopoverHost {
     repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
-    file_history_search_input: Option<Entity<components::TextInput>>,
     history_author_filter_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
     worktree_badge_picker_search_input: Option<Entity<components::TextInput>>,
@@ -404,6 +401,12 @@ pub(in super::super) struct PopoverHost {
     stash_message_input: Entity<components::TextInput>,
     stash_focus: DialogFocus,
     stash_picker_prompt_selected_index: Option<usize>,
+    file_history_file_picker_selected_index: Option<usize>,
+    file_history_file_picker_query: String,
+    #[cfg(test)]
+    file_browser_loads_for_tests: usize,
+    file_history_file_picker_search_input: Option<Entity<components::TextInput>>,
+    _file_history_file_picker_search_input_subscription: Option<gpui::Subscription>,
     stash_picker_search_input: Option<Entity<components::TextInput>>,
     _stash_picker_search_input_subscription: Option<gpui::Subscription>,
     commit_prompt_message_drafts: FxHashMap<RepoId, SharedString>,
@@ -616,6 +619,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::ConflictResolverOutputMenu { .. }
             | PopoverKind::CommitMenu { .. }
             | PopoverKind::ReflogEntryMenu { .. }
+            | PopoverKind::FileHistoryCommitMenu { .. }
             | PopoverKind::TagMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::StatusConflictMenu { .. }
@@ -1059,6 +1063,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::StashPrompt
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }
+        | PopoverKind::FileHistoryFilePicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
@@ -1149,8 +1154,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
                     SubmodulePopoverKind::OpenPicker | SubmodulePopoverKind::RemovePicker,
                 ),
             ..
-        }
-        | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
+        } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::TerminalShutdownConfirm(_)
@@ -1216,6 +1220,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::SidebarPinnedOverflow { .. }
         | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ReflogEntryMenu { .. }
+        | PopoverKind::FileHistoryCommitMenu { .. }
         | PopoverKind::FileListFolderMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
@@ -1332,11 +1337,3 @@ mod prompt_actions;
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn benchmark_file_history_rows(
-    page: &gitcomet_core::domain::LogPage,
-    now: std::time::SystemTime,
-) -> Vec<components::PickerPromptItem> {
-    file_history::benchmark_rows(page, now)
-}

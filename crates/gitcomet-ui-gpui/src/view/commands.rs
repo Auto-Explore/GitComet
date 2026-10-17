@@ -103,6 +103,7 @@ commands! {
     AddWorktree => "add-worktree",
     Blame => "blame",
     ShowReflog => "show-reflog",
+    FileHistory => "file-history",
     LfsDownloadAll => "lfs-download-all",
     LfsFetchAll => "lfs-fetch-all",
     LfsPrune => "lfs-prune",

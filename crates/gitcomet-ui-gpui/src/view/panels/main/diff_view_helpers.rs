@@ -260,8 +260,6 @@ impl DiffRenderer {
                 _ => return None,
             };
 
-        let history_invoker: SharedString = "viewer_revision_badge".into();
-        let history_open = self.active_context_menu_invoker.as_ref() == Some(&history_invoker);
         // Monospace label so the badge keeps a constant width as the SHA changes.
         let badge = div()
             .id("viewer_revision_badge")
@@ -275,7 +273,7 @@ impl DiffRenderer {
             .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 controls::InteractionStyle::header(theme),
-                controls::InteractionState::default().open(history_open),
+                controls::InteractionState::default(),
             )
             .child(svg_icon(
                 "icons/history.svg",
@@ -292,15 +290,12 @@ impl DiffRenderer {
             .on_activate(
                 false,
                 controls::ControlActivation::Action,
-                cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    this.open_popover_at(
-                        (PopoverKind::FileHistory {
-                            repo_id,
+                cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.commands.defer(
+                        crate::view::panes::diff::services::DiffCommand::OpenFileHistory {
+                            repo: repo_id,
                             path: path.clone(),
-                        })
-                        .invoked_by(history_invoker.clone()),
-                        e.position(),
-                        window,
+                        },
                         cx,
                     );
                 }),

@@ -587,6 +587,17 @@ impl GitCometView {
             Command::ShowReflog => {
                 self.open_reflog_panel_for_active_repo(cx);
             }
+            Command::FileHistory => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::FileHistoryFilePicker { repo_id },
+                        window,
+                        cx,
+                    );
+                }
+            }
             Command::AddRemote => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window

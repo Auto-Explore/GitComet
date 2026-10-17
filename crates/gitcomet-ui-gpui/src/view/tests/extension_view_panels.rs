@@ -8,7 +8,7 @@ use gitcomet_extension_api::*;
 
 const EXTENSION: &str = "com.example.panels";
 
-fn id(local: &'static str) -> ContributionId {
+pub(super) fn id(local: &'static str) -> ContributionId {
     ExtensionId::new(EXTENSION)
         .unwrap()
         .contribution(local)
@@ -107,7 +107,7 @@ impl gpui::Render for Labelled {
     }
 }
 
-fn open_view(
+pub(super) fn open_view(
     cx: &mut gpui::TestAppContext,
 ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let registry = Registry::build(vec![Box::new(Panels)]).unwrap();
@@ -138,11 +138,11 @@ fn open_view(
     (view, cx)
 }
 
-fn shows(cx: &mut gpui::VisualTestContext, selector: &'static str) -> bool {
+pub(super) fn shows(cx: &mut gpui::VisualTestContext, selector: &'static str) -> bool {
     cx.debug_bounds(selector).is_some()
 }
 
-fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+pub(super) fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
     click_debug_selector(cx, selector);
     cx.run_until_parked();
     test_support::redraw(cx);

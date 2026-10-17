@@ -239,6 +239,9 @@ impl GitCometView {
         self.reflog_pane.update(cx, |pane, cx| {
             pane.set_date_settings(format, timezone, show_timezone, cx)
         });
+        self.file_history_pane.update(cx, |pane, cx| {
+            pane.set_date_settings(format, timezone, show_timezone, cx)
+        });
         self.popover_host.update(cx, |host, cx| {
             host.set_date_time_format(format, cx);
             host.set_timezone(timezone, cx);
@@ -785,6 +788,8 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_relative_dates(enabled, cx);
         });
+        self.file_history_pane
+            .update(cx, |pane, cx| pane.set_relative_dates(enabled, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_history_relative_dates(enabled, cx));
         self.schedule_ui_settings_persist(cx);

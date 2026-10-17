@@ -815,7 +815,7 @@ fn ctrl_d_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
+fn ctrl_h_opens_file_history_tab(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -843,17 +843,21 @@ fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
     cx.simulate_keystrokes("ctrl-h");
     draw_and_drain_test_window(cx);
 
-    let is_file_history = cx.update(|_window, app| {
-        let host = view.read(app).popover_host.read(app);
-        matches!(
-            host.popover_kind_for_tests(),
-            Some(PopoverKind::FileHistory { .. })
+    let (selected, target) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (
+            view.sidebar_pane.read(app).file_history_selected,
+            view.file_history_pane.read(app).target.clone(),
         )
     });
-    assert!(
-        is_file_history,
-        "expected Ctrl+H to open the FileHistory popover"
-    );
+    assert!(selected, "expected Ctrl+H to select the History tab");
+    assert_eq!(target, Some((repo_id, path.clone())));
+    let focus = cx.update(|_w, app| {
+        let pane = view.read(app).file_history_pane.clone();
+        let input = pane.read(app).filter_input();
+        input.read(app).focus_handle()
+    });
+    cx.update(|window, _| assert!(focus.is_focused(window), "the filter takes the keys"));
 }
 
 #[gpui::test]
@@ -886,17 +890,236 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
     cx.simulate_keystrokes("ctrl-h");
     draw_and_drain_test_window(cx);
 
-    let is_file_history = cx.update(|_window, app| {
-        let host = view.read(app).popover_host.read(app);
-        matches!(
-            host.popover_kind_for_tests(),
-            Some(PopoverKind::FileHistory { .. })
+    let (selected, target) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (
+            view.sidebar_pane.read(app).file_history_selected,
+            view.file_history_pane.read(app).target.clone(),
         )
     });
-    assert!(
-        is_file_history,
-        "expected Ctrl+H to open the FileHistory popover"
+    assert!(selected, "expected Ctrl+H to select the History tab");
+    assert_eq!(target, Some((repo_id, path.clone())));
+}
+
+fn file_history_picker_view<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    id: u64,
+    open_file: Option<&str>,
+    tweak: impl FnOnce(&mut RepoState),
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    RepoId,
+) {
+    use gitcomet_core::domain::{FileEntry, FileEntryKind, FileStatus, FileStatusKind};
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = RepoId(id);
+    let commit_id = CommitId("abcdef00112233ff".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_palette_history_{id}",
+        std::process::id()
+    ));
+    let p = |s: &str| std::path::PathBuf::from(s);
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[p("src/lib.rs")],
+        &p("src/lib.rs"),
     );
+    let entry = |path: &str, kind| FileEntry {
+        name: path.rsplit('/').next().unwrap().to_string(),
+        path: Arc::new(p(path)),
+        kind,
+        depth: 0,
+        ignored: false,
+    };
+    repo.file_browser.entries = Loadable::Ready(Arc::new(vec![
+        entry("src", FileEntryKind::Directory),
+        entry("README.md", FileEntryKind::File),
+        entry("src/lib.rs", FileEntryKind::File),
+        entry("src/main.rs", FileEntryKind::File),
+        entry("new.txt", FileEntryKind::File),
+    ]));
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![]),
+            unstaged: Arc::new(vec![FileStatus {
+                path: p("new.txt"),
+                kind: FileStatusKind::Untracked,
+                conflict: None,
+            }]),
+        }
+        .into(),
+    );
+    repo.diff_state.diff_target = open_file.map(|f| DiffTarget::commit(commit_id, p(f)));
+    tweak(&mut repo);
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    (view, cx, repo_id)
+}
+
+fn picker_rows(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    query: &str,
+) -> Vec<String> {
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.read(app)
+            .file_history_picker_rows_for_tests(query)
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect()
+    })
+}
+
+fn open_file_picker(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+) {
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("file-history", Some(window), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        assert!(matches!(
+            host.read(app).popover_kind_for_tests(),
+            Some(PopoverKind::FileHistoryFilePicker { repo_id: id }) if id == repo_id
+        ));
+    });
+}
+
+fn picked_history_target(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<(RepoId, std::path::PathBuf)> {
+    cx.update(|_window, app| view.read(app).file_history_pane.read(app).target.clone())
+}
+
+fn type_in_picker(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    text: &str,
+) {
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        let input = host
+            .read(app)
+            .file_history_picker_input_for_tests()
+            .expect("input");
+        input.update(app, |input, cx| input.set_text(text, cx));
+    });
+}
+
+fn picker_selected(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<usize> {
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.read(app).file_history_picker_selected_for_tests()
+    })
+}
+
+#[gpui::test]
+fn palette_file_history_picker_lists_open_file_first_without_untracked_or_dirs(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, repo_id) = file_history_picker_view(cx, 70604, Some("src/main.rs"), |_| {});
+    open_file_picker(cx, &view, repo_id);
+    assert_eq!(
+        picker_rows(cx, &view, ""),
+        ["src/main.rs", "README.md", "src/lib.rs"]
+    );
+    assert_eq!(picker_rows(cx, &view, "lib"), ["src/lib.rs"]);
+    assert_eq!(picker_selected(cx, &view), Some(0));
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        picked_history_target(cx, &view),
+        Some((repo_id, "src/main.rs".into()))
+    );
+    let selected = cx.update(|_w, app| view.read(app).sidebar_pane.read(app).file_history_selected);
+    assert!(selected);
+}
+
+#[gpui::test]
+fn palette_file_history_picker_opens_without_open_file_and_picks_filtered_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, repo_id) = file_history_picker_view(cx, 70606, None, |_| {});
+    open_file_picker(cx, &view, repo_id);
+    assert_eq!(picker_rows(cx, &view, "").len(), 3);
+    type_in_picker(cx, &view, "main");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        picked_history_target(cx, &view),
+        Some((repo_id, "src/main.rs".into()))
+    );
+}
+
+#[gpui::test]
+fn palette_file_history_picker_typing_marks_the_first_match(cx: &mut gpui::TestAppContext) {
+    let (view, cx, repo_id) = file_history_picker_view(cx, 70607, None, |_| {});
+    open_file_picker(cx, &view, repo_id);
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(picker_selected(cx, &view), Some(1));
+    type_in_picker(cx, &view, "src");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(picker_selected(cx, &view), Some(0));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        picked_history_target(cx, &view),
+        Some((repo_id, "src/lib.rs".into()))
+    );
+}
+
+fn file_browser_loads_after_opening(
+    cx: &mut gpui::TestAppContext,
+    id: u64,
+    tweak: impl FnOnce(&mut RepoState),
+) -> usize {
+    let (view, cx, repo_id) = file_history_picker_view(cx, id, None, tweak);
+    open_file_picker(cx, &view, repo_id);
+    cx.update(|_w, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .file_browser_loads_for_tests()
+    })
+}
+
+#[gpui::test]
+fn palette_file_history_picker_loads_files_when_needed(cx: &mut gpui::TestAppContext) {
+    let not_loaded = file_browser_loads_after_opening(cx, 70608, |repo| {
+        repo.file_browser.entries = Loadable::NotLoaded;
+    });
+    assert_eq!(not_loaded, 1);
+    let stale = file_browser_loads_after_opening(cx, 70609, |repo| {
+        repo.file_browser.stale = true;
+    });
+    assert_eq!(stale, 1);
+    let fresh = file_browser_loads_after_opening(cx, 70610, |_| {});
+    assert_eq!(fresh, 0);
 }
 
 #[gpui::test]
@@ -1085,4 +1308,75 @@ fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext)
         Some(second),
         "expected Ctrl+U to unstage the active file and advance the diff target"
     );
+}
+
+#[gpui::test]
+fn file_history_context_menu_action_opens_the_tab(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70605);
+    let commit_id = CommitId("abcdef00112233ff".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_menu_history",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+
+    let action_path = path.clone();
+    let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            // A real menu records the diff as its invoker.
+            host.open_popover_at(
+                PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area: DiffArea::Unstaged,
+                    path: action_path.clone(),
+                },
+                point(px(10.0), px(10.0)),
+                window,
+                cx,
+            );
+            host.context_menu_activate_action(
+                ContextMenuAction::OpenFileHistory {
+                    repo_id,
+                    path: action_path,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (selected, target) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (
+            view.sidebar_pane.read(app).file_history_selected,
+            view.file_history_pane.read(app).target.clone(),
+        )
+    });
+    assert!(
+        selected,
+        "expected the menu action to select the History tab"
+    );
+    assert_eq!(target, Some((repo_id, path)));
+    let focus = cx.update(|_w, app| {
+        let pane = view.read(app).file_history_pane.clone();
+        let input = pane.read(app).filter_input();
+        input.read(app).focus_handle()
+    });
+    cx.update(|window, _| assert!(focus.is_focused(window), "the filter keeps the keys"));
 }

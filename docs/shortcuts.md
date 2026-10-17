@@ -8,6 +8,7 @@ Source of truth:
 - `crates/gitcomet-ui-gpui/src/view/terminal_panel.rs`
 - `crates/gitcomet-ui-gpui/src/view/panels/main/diff_view.rs`
 - `crates/gitcomet-ui-gpui/src/view/panes/history/find.rs`
+- `crates/gitcomet-ui-gpui/src/view/panes/file_history.rs`
 - `crates/gitcomet-ui-gpui/src/view/panes/diff/conflict_actions/`
 
 Notes:
@@ -128,17 +129,30 @@ These shortcuts apply while the commit history list is showing.
 
 ## Picker shortcuts
 
-These shortcuts apply while a picker's search input has focus, including file history.
+These shortcuts apply while a picker's search input has focus.
 
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Previous / next result | `Up`, `Down` | `Up`, `Down` | `Shift-Tab` / `Tab` also navigate. |
 | First / last result | `Cmd-Home`, `Cmd-End` | `Ctrl-Home`, `Ctrl-End` | `Ctrl-Home` / `Ctrl-End` also work on macOS. |
 | Previous / next page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | Moves by one visible page and stops at the first / last result. |
-| Activate selected result | `Enter` | `Enter` | In file history, opens the file at that commit, following renames. |
+| Activate selected result | `Enter` | `Enter` | |
 | Close menu or picker | `Escape` | `Escape` | Closes a row's context menu first, keeping the picker open. |
 
-File history filters by SHA, summary, and author while preserving history order. Right-click a row to open a revision or its parent, show the file's changes, reveal the commit in history, copy its SHA, or use the standard commit actions. Copying keeps the history picker open.
+## File history tab
+
+"File history" opens a History tab in the left sidebar, next to Branches and Files. It opens from `Ctrl-H` in the diff, the "Working tree" revision badge in the diff, the "File history" entry in file context menus, and the command palette. The command palette entry opens a file picker: the file open in the diff is the first row, and Enter opens its history. Untracked files are not listed. The tab stays open and lists the commits of one file, following renames. The Diff / File switch in the tab header chooses between the changes of a commit and the whole file at that commit.
+
+These shortcuts apply while the tab's filter input has focus.
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Previous / next commit | `Up`, `Down` | `Up`, `Down` | Selects the commit and shows it in the main diff at once. |
+| Previous / next page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | Moves by one visible page and shows the commit. |
+| First / last commit | `Cmd-Home`, `Cmd-End` | `Ctrl-Home`, `Ctrl-End` | Shows the commit. `Ctrl-Home` / `Ctrl-End` also work on macOS. |
+| Clear the filter | `Escape` | `Escape` | The tab stays open. |
+
+The filter matches SHA, summary, and author while preserving history order. Right-click a row to open a revision or its parent, show the file's changes, reveal the commit in history, copy its SHA, or use the standard commit actions. The × button in the tab header closes the tab.
 
 ## Embedded terminal shortcuts
 
@@ -166,7 +180,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 
 | Action | macOS | Windows / Linux | Scope / notes |
 | --- | --- | --- | --- |
-| Open file history | `Ctrl-H` | `Ctrl-H` | Working-tree files and files viewed at a commit; not while a text field has focus. |
+| Open the file history tab | `Ctrl-H` | `Ctrl-H` | Working-tree files and files viewed at a commit; not while a text field has focus. |
 | Search the current diff | `Cmd-F` | `Ctrl-F` | If rendered markdown preview is open, GitComet switches back to source mode before opening search. |
 | Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
 | Previous search match | `F2` | `F2` | While diff search is open. The ↑ button in the search box does the same. |

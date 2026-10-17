@@ -49,7 +49,7 @@ mod commit;
 mod context_shortcuts;
 mod dialog;
 mod file_actions;
-mod file_history;
+mod file_history_file_picker;
 mod interaction;
 mod layout;
 mod menu_placement;

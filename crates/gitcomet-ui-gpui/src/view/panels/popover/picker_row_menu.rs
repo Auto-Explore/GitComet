@@ -34,11 +34,6 @@ pub(super) struct PickerRowMenu {
 #[derive(Clone)]
 pub(super) enum PickerRowMenuTarget {
     Repo(repo_picker::RepoPickerEntry),
-    FileHistoryCommit {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        path: std::path::PathBuf,
-    },
     /// A row of the branch badge's checkout picker. Reuses the menu the branch's
     /// sidebar row opens, so the two offer the same actions by construction.
     Branch {
@@ -59,11 +54,6 @@ impl PickerRowMenuTarget {
     fn model(&self, this: &PopoverHost, cx: &gpui::Context<PopoverHost>) -> ContextMenuModel {
         match self {
             Self::Repo(entry) => this.repo_picker_row_menu_model(entry),
-            Self::FileHistoryCommit {
-                repo_id,
-                commit_id,
-                path,
-            } => context_menu::file_history_commit::model(this, *repo_id, commit_id, path),
             Self::Branch { .. } | Self::Worktree { .. } => self
                 .popover_kind(this)
                 .and_then(|kind| this.context_menu_model(&kind, cx))
@@ -74,7 +64,7 @@ impl PickerRowMenuTarget {
     /// The popover whose menu this row borrows, for the targets that borrow one.
     fn popover_kind(&self, this: &PopoverHost) -> Option<PopoverKind> {
         match self {
-            Self::Repo(_) | Self::FileHistoryCommit { .. } => None,
+            Self::Repo(_) => None,
             Self::Branch { repo_id, row } => match row {
                 branch_picker::BranchPickerNavTarget::Ref(name) => Some(PopoverKind::BranchMenu {
                     repo_id: *repo_id,
@@ -128,7 +118,6 @@ impl PickerRowMenuTarget {
     pub(super) fn has_menu(&self, this: &PopoverHost) -> bool {
         match self {
             Self::Repo(entry) => !this.repo_picker_row_menu_model(entry).items.is_empty(),
-            Self::FileHistoryCommit { .. } => true,
             Self::Branch { .. } | Self::Worktree { .. } => self.popover_kind(this).is_some(),
         }
     }
@@ -142,13 +131,6 @@ impl PickerRowMenuTarget {
                 .0
                 .iter()
                 .position(|candidate| candidate == entry),
-            Self::FileHistoryCommit { commit_id, .. } => {
-                let rows = file_history::cached(this, query);
-                rows.layout
-                    .item_indices
-                    .iter()
-                    .position(|ix| rows.payloads.get(*ix) == Some(commit_id))
-            }
             Self::Branch { row, .. } => branch_picker::nav_targets(this, query)
                 .iter()
                 .position(|candidate| candidate == row),
@@ -165,7 +147,6 @@ impl PickerRowMenuTarget {
     /// entries that take you somewhere else are the exceptions.
     fn keeps_picker_open(&self, action: &ContextMenuAction) -> bool {
         match self {
-            Self::FileHistoryCommit { .. } => matches!(action, ContextMenuAction::CopyText { .. }),
             Self::Repo(_) => matches!(
                 action,
                 ContextMenuAction::PinRepository { .. }

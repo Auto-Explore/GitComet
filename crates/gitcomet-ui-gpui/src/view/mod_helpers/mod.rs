@@ -1029,6 +1029,7 @@ pub struct GitCometView {
     /// scroll, selection) — a separate entity so that hovering one of its rows
     /// repaints the panel instead of the whole application window.
     pub(super) reflog_pane: Entity<ReflogPaneView>,
+    pub(super) file_history_pane: Entity<panes::file_history::FileHistoryPaneView>,
     /// Which of the bottom panel's contents is currently visible for a repo,
     /// when more than one is open. Absent (and single-panel repos) fall back
     /// to whichever panel is actually open.

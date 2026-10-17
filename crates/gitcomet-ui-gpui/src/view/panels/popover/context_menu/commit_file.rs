@@ -220,11 +220,9 @@ pub(super) fn model(
         icon: Some("icons/refresh.svg".into()),
         shortcut: Some("H".into()),
         disabled: false,
-        action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory {
-                repo_id,
-                path: path.to_path_buf(),
-            },
+        action: Box::new(ContextMenuAction::OpenFileHistory {
+            repo_id,
+            path: path.to_path_buf(),
         }),
     });
     if let Some(apply_source) = source.apply_source() {
