@@ -27,6 +27,11 @@ fn tools(version: &str) -> LargeFileToolsState {
 fn fixture(cx: &mut gpui::TestAppContext) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     store.dispatch(Msg::SetGitRuntimeState(runtime("A")));
+    // A repository keeps these request-lifecycle fixtures eligible for automatic
+    // discovery; the separate Home tests cover deferred startup.
+    store.dispatch(Msg::OpenRepo(
+        std::env::temp_dir().join("tool-probe-lifecycle"),
+    ));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     test_support::drain_store_worker(&view, cx);
@@ -244,6 +249,11 @@ fn large_file_probe_drop_cancels_the_owned_request(cx: &mut gpui::TestAppContext
     // Keep only a WindowHandle so no test-owned Entity survives window close.
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     store.dispatch(Msg::SetGitRuntimeState(runtime("A")));
+    // A repository keeps these request-lifecycle fixtures eligible for automatic
+    // discovery; the separate Home tests cover deferred startup.
+    store.dispatch(Msg::OpenRepo(
+        std::env::temp_dir().join("tool-probe-lifecycle"),
+    ));
     store
         .barrier_for_test()
         .recv_timeout(Duration::from_secs(2))
@@ -309,12 +319,12 @@ fn large_file_probe_delayed_settings_result_cannot_settle_another_runtime(
 }
 
 #[gpui::test]
-fn large_file_probe_empty_home_and_repeated_snapshots_keep_one_request(
+fn large_file_probe_repository_and_repeated_snapshots_keep_one_request(
     cx: &mut gpui::TestAppContext,
 ) {
     let (view, cx) = fixture(cx);
     view.update(cx, |view, cx| {
-        assert!(view.state.repos.is_empty());
+        assert!(!view.state.repos.is_empty());
         for _ in 0..3 {
             view.apply_state_snapshot(view.state.clone(), cx);
         }

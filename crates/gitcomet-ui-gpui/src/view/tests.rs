@@ -365,4 +365,5 @@ mod sidebar_file_history_tab;
 mod sidebar_layout;
 mod window_lifecycle;
 
+mod large_file_tools_home;
 mod large_file_tools_probe;

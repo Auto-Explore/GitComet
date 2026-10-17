@@ -114,6 +114,16 @@ pub(super) struct LargeFileToolsProbeRequest {
     sequence: u64,
 }
 
+/// Opt-in native command factory for resource-count tests. Ordinary lifecycle
+/// tests keep holding requests without scheduling work.
+#[cfg(test)]
+pub(super) struct NativeLargeFileToolsDetectorForTest(
+    pub(super) std::sync::Arc<dyn Fn() -> std::process::Command + Send + Sync>,
+);
+
+#[cfg(test)]
+impl gpui::Global for NativeLargeFileToolsDetectorForTest {}
+
 #[cfg(test)]
 pub(super) struct HeldLargeFileToolsDetector {
     pub(super) runtime: GitRuntimeState,
@@ -189,13 +199,26 @@ impl GitCometView {
         // The test driver holds the same request and releases it through the
         // production completion method. Ordinary tests never enable discovery.
         #[cfg(test)]
+        let native_factory = cx
+            .try_global::<NativeLargeFileToolsDetectorForTest>()
+            .map(|factory| std::sync::Arc::clone(&factory.0));
+        #[cfg(test)]
         if let Some(driver) = &mut self.large_file_tools_detector_for_test {
-            driver.requests.push(request);
-            return;
+            driver.requests.push(request.clone());
+            if native_factory.is_none() {
+                return;
+            }
         }
         let cancellation = request.cancellation.clone();
         let runtime = request.runtime.clone();
         let detection = cx.background_spawn(async move {
+            #[cfg(test)]
+            if let Some(factory) = native_factory {
+                return gitcomet_core::large_file_tools::detect_large_file_tools_with(
+                    factory.as_ref(),
+                    &cancellation,
+                );
+            }
             gitcomet_core::large_file_tools::detect_large_file_tools_for_runtime_cancellable(
                 &runtime,
                 &cancellation,

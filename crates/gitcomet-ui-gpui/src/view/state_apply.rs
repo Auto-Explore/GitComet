@@ -635,10 +635,12 @@ impl GitCometView {
             self.refresh_signing_tools(false, cx);
         }
         self.reconcile_large_file_tools_runtime();
-        if matches!(
-            self.state.large_file_tools.git_lfs,
-            gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
-        ) {
+        if !self.state.repos.is_empty()
+            && matches!(
+                self.state.large_file_tools.git_lfs,
+                gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
+            )
+        {
             self.refresh_large_file_tools(cx);
         }
         // Only an open palette shows enablement; `open` takes a fresh context.
