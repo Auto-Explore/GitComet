@@ -1,8 +1,8 @@
 use super::*;
 use crate::view::hosted::environment::{DiffPaneEnvironment, DiffPreferences};
-use crate::view::panes::diff::DiffRendererInit;
 use crate::view::panes::diff::diff_cache::SharedFileDiffCache;
 use crate::view::panes::diff::input::DiffPaneInput;
+use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
@@ -73,8 +73,8 @@ pub(crate) struct DiffPaneView {
     loading: bool,
     pending_target: Option<DiffTarget>,
     error: Option<SharedString>,
-    /// A patch that failed while its file loaded: the one error the renderer,
-    /// which draws the file, does not show.
+    /// A patch that failed while its file loaded. The renderer shows it only
+    /// when its body is the patch.
     patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
     annotations: Arc<DiffAnnotations>,
@@ -900,7 +900,11 @@ impl Render for DiffPaneView {
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
         // The renderer shows its own loading, empty and file error states.
-        let status = self.patch_error.clone();
+        let status = self.patch_error.clone().filter(|_| {
+            self.renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.read(cx).diff_surface().body != DiffBody::Patch)
+        });
         #[cfg(test)]
         self.rendered_statuses.push(status.clone());
         let legend = (!self.legend.is_empty()).then(|| {

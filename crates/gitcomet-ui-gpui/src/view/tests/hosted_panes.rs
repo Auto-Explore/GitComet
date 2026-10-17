@@ -1315,6 +1315,47 @@ fn a_pane_draws_a_patch_error_its_file_does_not_show(cx: &mut gpui::TestAppConte
     );
 }
 
+/// A pane whose body is a patch has its renderer draw the patch's error, so
+/// the pane draws no second copy above it.
+#[gpui::test]
+fn a_patch_bodied_pane_draws_its_patch_error_once(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    let pane = cx.update(|_window, app| changes.read(app).current().cloned().unwrap());
+    let range = DiffTarget::commit_range(
+        gitcomet_core::domain::CommitId("a".repeat(40).into()),
+        Some(gitcomet_core::domain::CommitId("b".repeat(40).into())),
+        None,
+    );
+    cx.update(|_window, app| pane.set_target(range.clone(), app));
+    // The commits do not exist, so the patch fails to load.
+    settle(cx, &view, &store, "the range's patch failed", |_| {
+        store.snapshot().repos[0]
+            .diff_sessions
+            .values()
+            .any(|session| {
+                session.target == range && matches!(session.diff_state.diff, Loadable::Error(_))
+            })
+    });
+    cx.update(|_window, app| {
+        let pane_view = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap();
+        let pane_view = pane_view.read(app);
+        assert_eq!(
+            pane_view.renderer().unwrap().read(app).diff_surface().body,
+            crate::view::panes::diff::DiffBody::Patch
+        );
+        let statuses = pane_view.rendered_statuses();
+        assert_eq!(statuses.last(), Some(&None), "{statuses:?}");
+    });
+}
+
 /// F1/F4 and Alt+Left/Right step the hosted pane the user is in, as its
 /// own arrows do, and never move History's diff behind the view.
 #[gpui::test]
