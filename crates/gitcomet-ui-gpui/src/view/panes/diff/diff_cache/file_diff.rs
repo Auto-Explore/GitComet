@@ -834,6 +834,30 @@ impl StreamedFileDiffSource {
             .unwrap_or_else(|| gitcomet_core::file_diff::FileDiffLineText::from(""))
     }
 
+    /// The kind and text of a context run's inline row: a Difftastic pair
+    /// changed on one side shows that side.
+    fn context_inline_side(
+        &self,
+        old_ix: usize,
+        new_ix: usize,
+    ) -> (
+        gitcomet_core::domain::DiffLineKind,
+        gitcomet_core::file_diff::FileDiffLineText,
+    ) {
+        let kind = self
+            .structural
+            .as_ref()
+            .map_or(gitcomet_core::domain::DiffLineKind::Context, |structural| {
+                structural.changed_side(old_ix, new_ix)
+            });
+        let text = if kind == gitcomet_core::domain::DiffLineKind::Remove {
+            self.old_line_shared_text(old_ix)
+        } else {
+            self.new_line_shared_text(new_ix)
+        };
+        (kind, text)
+    }
+
     fn locate_run(starts: &[usize], total_len: usize, row_ix: usize) -> Option<(usize, usize)> {
         if row_ix >= total_len || starts.is_empty() {
             return None;
@@ -927,10 +951,15 @@ impl StreamedFileDiffSource {
             } => {
                 let old_ix = old_start.saturating_add(local_ix);
                 let new_ix = new_start.saturating_add(local_ix);
-                let text = self.new_line_shared_text(new_ix);
+                let (kind, text) = self.context_inline_side(old_ix, new_ix);
+                let prefix = match kind {
+                    gitcomet_core::domain::DiffLineKind::Remove => '-',
+                    gitcomet_core::domain::DiffLineKind::Add => '+',
+                    _ => ' ',
+                };
                 Some(AnnotatedDiffLine {
-                    kind: gitcomet_core::domain::DiffLineKind::Context,
-                    text: prefixed_inline_text(' ', text.as_ref()),
+                    kind,
+                    text: prefixed_inline_text(prefix, text.as_ref()),
                     old_line: line_number(old_ix),
                     new_line: line_number(new_ix),
                 })
@@ -999,11 +1028,12 @@ impl StreamedFileDiffSource {
             } => {
                 let old_ix = old_start.saturating_add(local_ix);
                 let new_ix = new_start.saturating_add(local_ix);
+                let (kind, text) = self.context_inline_side(old_ix, new_ix);
                 Some(InlineFileDiffRowRenderData {
-                    kind: gitcomet_core::domain::DiffLineKind::Context,
+                    kind,
                     old_line: line_number(old_ix),
                     new_line: line_number(new_ix),
-                    text: self.new_line_shared_text(new_ix),
+                    text,
                 })
             }
             gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, .. } => {

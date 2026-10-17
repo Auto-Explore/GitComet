@@ -143,16 +143,19 @@ fn identical_text_with_structural_novelty_has_two_inline_sides() {
     assert_eq!(source.inline_visual_kind(1), Some(DiffLineKind::Add));
 }
 
+/// A line changed on one side only is one row showing that side, with both
+/// line numbers; a line changed on both sides keeps a row per side.
 #[test]
-fn structural_rows_preserve_neutral_text_and_highlight_only_novel_tokens() {
-    let old = "same\nf(1);\nclose\n";
-    let new = "same\nwrap(f(1));\nclose\n";
+#[allow(clippy::single_range_in_vec_init)]
+fn a_line_changed_on_one_side_is_one_row_showing_that_side() {
+    let old = "same\nf(1);\ng(a?);\nh(1);\nclose\n";
+    let new = "same\nwrap(f(1));\ng(a);\nh(2);\nclose\n";
     let diff = StructuralDiff {
         language: "JavaScript".into(),
-        aligned_lines: vec![(Some(0), Some(0)), (Some(1), Some(1)), (Some(2), Some(2))],
-        old_changes: BTreeMap::new(),
-        new_changes: BTreeMap::from([(1, vec![0..5, 9..10])]),
-        blocks: std::iter::once(1..2).collect(),
+        aligned_lines: (0..5).map(|line| (Some(line), Some(line))).collect(),
+        old_changes: BTreeMap::from([(2, vec![3..4]), (3, vec![2..3])]),
+        new_changes: BTreeMap::from([(1, vec![0..5, 9..10]), (3, vec![2..3])]),
+        blocks: std::iter::once(1..4).collect(),
     };
     let plan = Arc::new(gitcomet_core::file_diff::structural::plan(&diff, old, new));
     let mut source = StreamedFileDiffSource::new(
@@ -165,28 +168,52 @@ fn structural_rows_preserve_neutral_text_and_highlight_only_novel_tokens() {
     let source = Arc::new(source);
     let split = PagedFileDiffRows::new(source.clone(), 10);
     let inline = PagedFileDiffInlineRows::new(source, 10);
+    let rows: Vec<_> = (0..6)
+        .map(|row| {
+            let line = inline.source.inline_row(row).unwrap();
+            let data = inline.source.inline_row_render_data(row).unwrap();
+            assert_eq!(
+                (data.kind, data.old_line, data.new_line),
+                (line.kind, line.old_line, line.new_line)
+            );
+            assert_eq!(data.text.as_ref(), &line.text[1..]);
+            (
+                line.text.to_string(),
+                line.old_line,
+                line.new_line,
+                inline.visual_kind(row),
+            )
+        })
+        .collect();
+    let row = |text: &str, old, new, kind| (text.to_owned(), old, new, Some(kind));
+    assert_eq!(
+        rows,
+        [
+            row(" same", Some(1), Some(1), DiffLineKind::Context),
+            row("+wrap(f(1));", Some(2), Some(2), DiffLineKind::Add),
+            row("-g(a?);", Some(3), Some(3), DiffLineKind::Remove),
+            row("-h(1);", Some(4), None, DiffLineKind::Remove),
+            row("+h(2);", None, Some(4), DiffLineKind::Add),
+            row(" close", Some(5), Some(5), DiffLineKind::Context),
+        ]
+    );
+    assert!(inline.source.inline_row(6).is_none());
+    assert_eq!(
+        inline.structural_ranges(1).unwrap().as_ref(),
+        &[0..5, 9..10]
+    );
+    assert_eq!(inline.structural_ranges(2).unwrap().as_ref(), &[3..4]);
     assert_eq!(
         split.source.split_row(1).unwrap().old.unwrap().as_ref(),
         "f(1);"
     );
-    assert_eq!(inline.source.inline_row(1).unwrap().text.as_ref(), "-f(1);");
-    assert_eq!(
-        inline.source.inline_row(2).unwrap().text.as_ref(),
-        "+wrap(f(1));"
-    );
-    assert_eq!(inline.visual_kind(1), Some(DiffLineKind::Context));
-    assert_eq!(inline.visual_kind(2), Some(DiffLineKind::Add));
     assert!(split.structural_ranges(1, true).unwrap().is_empty());
     assert_eq!(
         split.structural_ranges(1, false).unwrap().as_ref(),
         &[0..5, 9..10]
     );
-    assert_eq!(
-        inline.structural_ranges(2).unwrap().as_ref(),
-        &[0..5, 9..10]
-    );
-    assert_eq!(split.change_blocks(), vec![1..2]);
-    assert_eq!(inline.change_blocks(), vec![1..3]);
+    assert_eq!(split.change_blocks(), vec![1..4]);
+    assert_eq!(inline.change_blocks(), vec![1..5]);
 }
 
 #[test]

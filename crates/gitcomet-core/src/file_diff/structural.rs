@@ -2,24 +2,23 @@ use super::plan::{apply_eof_newline_to_plan, push_plan_run};
 use super::{FileDiffPlan, FileDiffPlanRun, eof_newline_delta};
 use crate::diff_engine::StructuralDiff;
 
+/// An aligned pair is one row unless both of its lines changed: a line with
+/// no changed tokens is not shown as removed or added.
 pub fn plan(diff: &StructuralDiff, old: &str, new: &str) -> FileDiffPlan {
-    let old_lines: Vec<_> = old.split_terminator('\n').collect();
-    let new_lines: Vec<_> = new.split_terminator('\n').collect();
     let mut runs = Vec::new();
     for &(old_line, new_line) in &diff.aligned_lines {
         let run = match (old_line, new_line) {
             (Some(old_start), Some(new_start))
-                if old_lines[old_start] == new_lines[new_start]
-                    && !diff.old_changes.contains_key(&old_start)
-                    && !diff.new_changes.contains_key(&new_start) =>
+                if diff.old_changes.contains_key(&old_start)
+                    && diff.new_changes.contains_key(&new_start) =>
             {
-                FileDiffPlanRun::Context {
+                FileDiffPlanRun::Modify {
                     old_start,
                     new_start,
                     len: 1,
                 }
             }
-            (Some(old_start), Some(new_start)) => FileDiffPlanRun::Modify {
+            (Some(old_start), Some(new_start)) => FileDiffPlanRun::Context {
                 old_start,
                 new_start,
                 len: 1,
@@ -44,8 +43,40 @@ pub fn plan(diff: &StructuralDiff, old: &str, new: &str) -> FileDiffPlan {
 mod tests {
     use super::*;
 
+    /// A pair changed on both sides is a row per side; one changed on one
+    /// side, or on neither (formatting only), is a single row.
     #[test]
-    fn unequal_neutral_lines_keep_both_sources_and_eof_delta() {
+    #[allow(clippy::single_range_in_vec_init)]
+    fn only_a_pair_changed_on_both_sides_takes_two_inline_rows() {
+        let diff = StructuralDiff {
+            language: "Rust".into(),
+            aligned_lines: (0..4).map(|line| (Some(line), Some(line))).collect(),
+            old_changes: [(1, vec![0..1]), (3, vec![0..1])].into(),
+            new_changes: [(2, vec![0..1]), (3, vec![0..1])].into(),
+            blocks: Vec::new(),
+        };
+        let result = plan(&diff, "f( a );\nx\ny\nz\n", "f(a);\nx2\ny2\nz2\n");
+        assert_eq!(
+            result.runs,
+            [
+                FileDiffPlanRun::Context {
+                    old_start: 0,
+                    new_start: 0,
+                    len: 3,
+                },
+                FileDiffPlanRun::Modify {
+                    old_start: 3,
+                    new_start: 3,
+                    len: 1,
+                },
+            ]
+        );
+        assert_eq!(result.row_count, 4);
+        assert_eq!(result.inline_row_count, 5);
+    }
+
+    #[test]
+    fn the_final_newline_delta_survives() {
         let diff = StructuralDiff {
             language: "Rust".into(),
             aligned_lines: vec![(Some(0), Some(0)), (Some(1), Some(1))],
@@ -54,17 +85,9 @@ mod tests {
             blocks: Vec::new(),
         };
         let result = plan(&diff, "f( a );\nend", "f(a);\nend\n");
-        assert_eq!(result.row_count, 2);
-        assert_eq!(result.inline_row_count, 4);
         assert_eq!(
             result.eof_newline,
             Some(super::super::FileDiffEofNewline::MissingInOld)
-        );
-        assert!(
-            result
-                .runs
-                .iter()
-                .all(|run| matches!(run, FileDiffPlanRun::Modify { .. }))
         );
     }
 }

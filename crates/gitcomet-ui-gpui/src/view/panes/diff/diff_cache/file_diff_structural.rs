@@ -100,6 +100,21 @@ pub(super) struct Presentation {
     pub(super) inline_blocks: Vec<Range<usize>>,
 }
 
+impl Presentation {
+    /// Which side of an aligned pair holds its changed tokens: `Remove` for
+    /// the old line, `Add` for the new, `Context` for neither.
+    pub(super) fn changed_side(&self, old_ix: usize, new_ix: usize) -> DiffLineKind {
+        match (
+            self.diff.old_changes.contains_key(&old_ix),
+            self.diff.new_changes.contains_key(&new_ix),
+        ) {
+            (true, false) => DiffLineKind::Remove,
+            (false, true) => DiffLineKind::Add,
+            _ => DiffLineKind::Context,
+        }
+    }
+}
+
 impl StreamedFileDiffSource {
     pub(super) fn apply_structural(&mut self, diff: StructuralDiff) {
         let (old_inline, new_inline) = plan_line_to_inline_row_maps(

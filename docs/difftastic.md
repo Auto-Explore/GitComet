@@ -14,7 +14,7 @@ The engine is independent of presentation:
 | Layout | Split / Inline | How the two sides are arranged |
 | Content | Collapsed / Full | Whether unchanged regions are folded |
 
-Both source texts remain available, including formatting that Difftastic considers structurally unchanged. A formatting-only comparison shows a notice with **Show full text** and **Show line changes** actions. Ignore whitespace is unavailable while a structural result is displayed; the saved whitespace preference remains intact. Show line changes temporarily selects the line engine with whitespace shown.
+A line whose own side has no changed tokens is not shown as removed or added: Inline shows such a pair once, from the side that changed, with both line numbers. Split keeps both source texts side by side, including formatting that Difftastic considers structurally unchanged. A formatting-only comparison shows a notice with **Show full text** and **Show line changes** actions. Ignore whitespace is unavailable while a structural result is displayed; the saved whitespace preference remains intact. Show line changes temporarily selects the line engine with whitespace shown.
 
 If Difftastic cannot compare a file, the viewer uses the line engine and displays the reason. Unsupported languages, parse errors, resource limits (size, complexity, nesting depth, time), and internal Difftastic failures can cause a fallback. Unlike the Difftastic command-line tool, GitComet does not compare Verilog or Fortran structurally. The user's engine preference stays selected. Image/binary views and merge resolution retain their existing behavior.
 
