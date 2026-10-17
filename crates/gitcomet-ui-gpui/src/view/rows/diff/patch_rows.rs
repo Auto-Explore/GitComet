@@ -329,6 +329,16 @@ impl gpui::Element for ScrollPinnedHunkShell {
 }
 
 /// Which diff palette a line's word highlights come from.
+/// The kind a row's background follows: its own, or plain context when only
+/// its changed tokens are marked.
+fn line_background_kind(kind: DiffLineKind, mark_lines: bool) -> DiffLineKind {
+    if mark_lines {
+        kind
+    } else {
+        DiffLineKind::Context
+    }
+}
+
 pub(super) fn diff_line_word_kind(kind: DiffLineKind) -> Option<crate::theme::DiffColorKind> {
     match kind {
         DiffLineKind::Add => Some(crate::theme::DiffColorKind::Added),
@@ -367,6 +377,8 @@ pub(super) struct DiffRowDecor<'a> {
     pub(super) tint: Option<gpui::Rgba>,
     pub(super) selected: bool,
     pub(super) visual_kind: DiffLineKind,
+    /// Whether a change tints its whole line; Difftastic marks only tokens.
+    pub(super) mark_lines: bool,
     pub(super) file_stat: Option<(usize, usize)>,
     pub(super) header_display: Option<SharedString>,
     pub(super) styled: Option<&'a CachedDiffStyledText>,
@@ -402,6 +414,7 @@ pub(super) fn diff_row(
         tint,
         selected,
         visual_kind,
+        mark_lines,
         file_stat,
         header_display,
         styled,
@@ -529,10 +542,11 @@ pub(super) fn diff_row(
         return row.into_any_element();
     }
 
-    let (mut bg, fg, gutter_fg) = diff_line_colors(theme, visual_kind);
-    bg = tint.unwrap_or(bg);
+    let (_, fg, gutter_fg) = diff_line_colors(theme, visual_kind);
+    let line_kind = line_background_kind(visual_kind, mark_lines);
+    let mut bg = tint.unwrap_or(diff_line_colors(theme, line_kind).0);
     if selected {
-        bg = focused_diff_line_bg(theme, visual_kind);
+        bg = focused_diff_line_bg(theme, line_kind);
     }
 
     let show_row_numbers = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
@@ -964,6 +978,7 @@ pub(super) fn patch_split_column_row(
     min_width: Pixels,
     row: &gitcomet_core::file_diff::FileDiffRow,
     visual_kind: FileDiffRowKind,
+    mark_lines: bool,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
     reveal_whitespace_chars: bool,
@@ -986,10 +1001,11 @@ pub(super) fn patch_split_column_row(
         }
         _ => DiffLineKind::Context,
     };
-    let (mut bg, fg, gutter_fg) = diff_line_colors(theme, line_kind);
-    bg = tint.unwrap_or(bg);
+    let (_, fg, gutter_fg) = diff_line_colors(theme, line_kind);
+    let background_kind = line_background_kind(line_kind, mark_lines);
+    let mut bg = tint.unwrap_or(diff_line_colors(theme, background_kind).0);
     if selected {
-        bg = focused_diff_line_bg(theme, line_kind);
+        bg = focused_diff_line_bg(theme, background_kind);
     }
 
     let show_row_number = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
@@ -1744,6 +1760,7 @@ pub(super) fn render_patch_diff_rows(
                     tint: row_tint,
                     selected,
                     visual_kind,
+                    mark_lines: true,
                     file_stat,
                     header_display,
                     styled,
@@ -1934,6 +1951,7 @@ pub(super) fn render_patch_diff_split_rows(
                         min_width,
                         &row,
                         visual_kind,
+                        true,
                         styled,
                         streamed_spec,
                         reveal_whitespace_chars,

@@ -381,6 +381,80 @@ fn difftastic_occurrences_skip_a_row_drawing_the_other_side(cx: &mut gpui::TestA
     });
 }
 
+/// Difftastic marks changed tokens, not lines: a changed row paints the same
+/// background as an unchanged one in both layouts, and its changed token keeps
+/// its highlight.
+#[gpui::test]
+fn difftastic_rows_mark_their_tokens_not_their_lines(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.set_diff_engine_override(
+                    Some(gitcomet_core::diff_engine::DiffEngine::Difftastic),
+                    cx,
+                );
+            });
+        });
+    });
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(933),
+        "difftastic_token_marks",
+        PathBuf::from("main.ts"),
+        "@@ -1,2 +1,2 @@\n const x = 1;\n-use(x);\n+use(y, x);\n".to_string(),
+        "const x = 1;\nuse(x);\n".to_string(),
+        "const x = 1;\nuse(y, x);\n".to_string(),
+    );
+    for (layout, region) in [
+        (DiffViewMode::Split, DiffTextRegion::SplitRight),
+        (DiffViewMode::Inline, DiffTextRegion::Inline),
+    ] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
+                    pane.diff_view = layout;
+                    pane.clear_diff_text_style_caches();
+                    cx.notify();
+                });
+            });
+        });
+        wait_for_main_pane_condition(
+            cx,
+            &view,
+            "a Difftastic diff of two rows",
+            |pane| {
+                pane.structural_diff_active()
+                    && pane.file_diff_cache_target == Some(target.clone())
+                    && pane.diff_view == layout
+                    && pane.diff_visible_len() == 2
+            },
+            |pane| {
+                format!(
+                    "structural={} rows={}",
+                    pane.structural_diff_active(),
+                    pane.diff_visible_len()
+                )
+            },
+        );
+        let unchanged = draw_paint_record_for_visible_ix(cx, &view, 0, region);
+        let changed = draw_paint_record_for_visible_ix(cx, &view, 1, region);
+        assert_eq!(changed.row_bg, unchanged.row_bg, "{layout:?}");
+        assert!(
+            changed
+                .highlights
+                .iter()
+                .any(|(range, _, background)| background.is_some() && range.contains(&4)),
+            "{layout:?}: the added `y` keeps its highlight: {:?}",
+            changed.highlights
+        );
+    }
+}
+
 /// Collapsed mode renders the same file-diff rows as Full, so a click in it must
 /// pair too. Gating on `is_file_diff_view_active()` (which demands
 /// `DiffContentMode::Full`) silently excluded this whole mode.
