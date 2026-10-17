@@ -718,6 +718,30 @@ fn run_command_with_timeout_returns_structured_timeout_failure() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_chatty_output_extends_silence_deadline_and_preserves_final_bytes() {
+    let command = shell_command(
+        "for ($i=0; $i -lt 8; $i++) { [Console]::Out.Write('out;'); [Console]::Error.Write('err;'); Start-Sleep -Milliseconds 500 }; [Console]::Out.Write('final-out'); [Console]::Error.Write('final-err')",
+    );
+    let output = run_command_with_timeout(
+        command,
+        "chatty Windows command",
+        Duration::from_secs(3),
+        None,
+    )
+    .expect("continued stdout/stderr must keep the command alive");
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        format!("{}final-out", "out;".repeat(8)).as_bytes()
+    );
+    assert_eq!(
+        output.stderr,
+        format!("{}final-err", "err;".repeat(8)).as_bytes()
+    );
+}
+
 #[test]
 fn git_command_wait_poll_is_short_for_fast_commands_and_capped_for_slow_ones() {
     assert_eq!(

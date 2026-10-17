@@ -376,7 +376,7 @@ pub(super) fn wait_for_child_with_timeout(
                 if let Some(poll) =
                     git_command_wait_poll(start.elapsed(), timeout.saturating_sub(idle))
                 {
-                    thread::sleep(poll);
+                    wait_for_next_child_poll(child, poll);
                 }
             }
             Err(e) => return Err(Error::from(e)),
@@ -387,6 +387,21 @@ pub(super) fn wait_for_child_with_timeout(
         cancelled,
         timed_out,
     })
+}
+
+fn wait_for_next_child_poll(child: &std::process::Child, poll: Duration) {
+    // Windows can wake when the child exits instead of waiting for the next
+    // poll. Keep sub-millisecond sleeps and fall back on a wait error so this
+    // optimization cannot add a new path that abandons the child or its pipes.
+    #[cfg(windows)]
+    if poll >= Duration::from_millis(1)
+        && gitcomet_win32_window_utils::wait_for_process_exit(child, poll).is_ok()
+    {
+        return;
+    }
+    #[cfg(not(windows))]
+    let _ = child;
+    thread::sleep(poll);
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
