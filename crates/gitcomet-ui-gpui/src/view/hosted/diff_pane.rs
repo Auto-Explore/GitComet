@@ -73,6 +73,9 @@ pub(crate) struct DiffPaneView {
     loading: bool,
     pending_target: Option<DiffTarget>,
     error: Option<SharedString>,
+    /// A patch that failed while its file loaded: the one error the renderer,
+    /// which draws the file, does not show.
+    patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
     annotations: Arc<DiffAnnotations>,
     legend: Vec<DiffLegendItem>,
@@ -126,6 +129,7 @@ impl DiffPaneView {
             loading: true,
             pending_target: None,
             error: None,
+            patch_error: None,
             insets: Arc::from([]),
             annotations: Arc::default(),
             legend: Vec::new(),
@@ -458,6 +462,7 @@ impl DiffPaneView {
         self.raw_task = None;
         self.loading = true;
         self.error = None;
+        self.patch_error = None;
         self.selection = None;
         self.pending_reveal = None;
     }
@@ -611,6 +616,12 @@ impl DiffPaneView {
             self.emit(DiffPaneEvent::Error(error.clone()), cx);
         }
         self.error = error;
+        self.patch_error = match (&session.diff, &session.diff_file) {
+            (Loadable::Error(error), file) if !matches!(file, Loadable::Error(_)) => {
+                Some(SharedString::from(error.clone()))
+            }
+            _ => None,
+        };
         self.loading = session.is_loading();
         if session.diff_target.is_none() {
             self.emit(DiffPaneEvent::TargetChanged(None), cx);
@@ -888,8 +899,8 @@ impl Render for DiffPaneView {
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
-        // The renderer shows its own loading and empty states.
-        let status = self.error.clone();
+        // The renderer shows its own loading, empty and file error states.
+        let status = self.patch_error.clone();
         #[cfg(test)]
         self.rendered_statuses.push(status.clone());
         let legend = (!self.legend.is_empty()).then(|| {

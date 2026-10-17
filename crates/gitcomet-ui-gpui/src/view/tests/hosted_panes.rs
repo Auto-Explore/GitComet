@@ -1235,6 +1235,86 @@ fn a_pane_shows_the_first_change_of_each_file_it_is_given(cx: &mut gpui::TestApp
     );
 }
 
+/// A file that is not text shows the renderer's "Binary file" body; the pane
+/// adds no line with the file diff's own error above it.
+#[gpui::test]
+fn a_pane_over_a_file_that_is_not_text_draws_no_error_line(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, cx) = open_repository(cx);
+    std::fs::write(
+        dir.path().join("a.rs"),
+        b"\x00\x01\x02\xff\xfe\x00 binary \x80\x81\n",
+    )
+    .unwrap();
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    let pane_view = |app: &App| {
+        changes
+            .read(app)
+            .current()
+            .unwrap()
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+    };
+    settle(cx, &view, &store, "a.rs found not to be text", |cx| {
+        cx.update(|_window, app| {
+            pane_view(app).read(app).renderer().is_some_and(|renderer| {
+                matches!(
+                    renderer.read(app).file_diff_cache_error,
+                    Some(crate::view::panes::diff::diff_cache::FileDiffCacheError::NotText { .. })
+                )
+            })
+        })
+    });
+    let statuses = cx.update(|_window, app| pane_view(app).read(app).rendered_statuses().to_vec());
+    assert_eq!(statuses.last(), Some(&None), "{statuses:?}");
+}
+
+/// A patch that fails while its file loads is the one error the renderer,
+/// drawing the file, does not show, so the pane draws it.
+#[gpui::test]
+fn a_pane_draws_a_patch_error_its_file_does_not_show(cx: &mut gpui::TestAppContext) {
+    let (_dir, store, view, cx) = open_repository(cx);
+    let (list_id, changes) = open_changes_view(cx, &view, &store);
+    click_debug_selector(
+        cx,
+        selector(format!("hosted_file_list_{list_id}_file_a.rs")),
+    );
+    settle(cx, &view, &store, "a.rs loaded", |_| {
+        store.snapshot().repos[0]
+            .diff_sessions
+            .values()
+            .any(|session| matches!(session.diff_state.diff_file, Loadable::Ready(Some(_))))
+    });
+    let mut state = (*store.snapshot()).clone();
+    let sessions = Arc::make_mut(&mut state.repos[0].diff_sessions);
+    for session in sessions.values_mut() {
+        session.diff_state.diff = Loadable::Error("patch failed".into());
+        session.rev += 1;
+    }
+    publish(cx, &view, Arc::new(state));
+    let statuses = cx.update(|_window, app| {
+        changes
+            .read(app)
+            .current()
+            .unwrap()
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap()
+            .read(app)
+            .rendered_statuses()
+            .to_vec()
+    });
+    assert_eq!(
+        statuses.last(),
+        Some(&Some(SharedString::from("patch failed"))),
+        "{statuses:?}"
+    );
+}
+
 /// F1/F4 and Alt+Left/Right step the hosted pane the user is in, as its
 /// own arrows do, and never move History's diff behind the view.
 #[gpui::test]
