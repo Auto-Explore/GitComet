@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 mod process;
-pub use process::{terminate_process_tree, wait_for_process_exit};
+pub use process::terminate_process_tree;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, FALSE, FILETIME, HANDLE, HWND, LPARAM, POINT, TRUE, WPARAM,
