@@ -1621,8 +1621,8 @@ impl PagedFileDiffInlineRows {
         self.source.inline_row_draws(inline_ix, old)
     }
 
-    /// The text of row `inline_ix`'s old line (`old`) or new line, whichever
-    /// side the row draws.
+    /// The text of row `inline_ix`'s old line (`old`) or new line, read from
+    /// that side even when the row draws the other.
     pub(in crate::view) fn line_text(
         &self,
         inline_ix: usize,
