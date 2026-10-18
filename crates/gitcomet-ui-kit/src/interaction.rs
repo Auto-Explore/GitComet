@@ -267,9 +267,12 @@ impl InteractionStyle {
             .or(self.resting.map(|fill| self.color(fill, state)))
     }
 
+    pub fn dims(&self, state: InteractionState) -> bool {
+        state.disabled && self.dim_when_disabled
+    }
+
     pub fn color(&self, color: Rgba, state: InteractionState) -> Rgba {
-        self.theme
-            .disabled_color_if(state.disabled && self.dim_when_disabled, color)
+        self.theme.disabled_color_if(self.dims(state), color)
     }
 
     pub fn apply(self, mut control: Stateful<Div>, state: InteractionState) -> Stateful<Div> {

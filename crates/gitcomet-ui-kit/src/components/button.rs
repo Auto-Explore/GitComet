@@ -70,15 +70,16 @@ impl ButtonSlot {
         Self::Custom(Box::new(move |disabled| build(disabled).into_any_element()))
     }
 
-    fn dimmed(self, theme: AppTheme, disabled: bool) -> Self {
-        if !disabled {
+    fn dimmed(self, interaction: &InteractionStyle, state: InteractionState) -> Self {
+        if !interaction.dims(state) {
             return self;
         }
+        let dim = |color| interaction.color(color, state);
         match self {
-            Self::Icon(icon) => Self::Icon(Box::new(dimmed_icon(*icon, theme))),
+            Self::Icon(icon) => Self::Icon(Box::new(dimmed_icon(*icon, dim))),
             Self::Spinner { id, color, size } => Self::Spinner {
                 id,
-                color: theme.disabled_color(color),
+                color: dim(color),
                 size,
             },
             Self::Keys {
@@ -88,16 +89,16 @@ impl ButtonSlot {
                 scale,
             } => Self::Keys {
                 label,
-                fg: theme.disabled_color(fg),
-                bg: theme.disabled_color(bg),
+                fg: dim(fg),
+                bg: dim(bg),
                 scale,
             },
             Self::Custom(build) => Self::Custom(build),
         }
     }
 
-    fn into_element(self, theme: AppTheme, disabled: bool) -> AnyElement {
-        match self.dimmed(theme, disabled) {
+    fn into_element(self, interaction: &InteractionStyle, state: InteractionState) -> AnyElement {
+        match self.dimmed(interaction, state) {
             Self::Icon(icon) => (*icon).into_any_element(),
             Self::Spinner { id, color, size } => svg_spinner(id, color, size).into_any_element(),
             Self::Keys {
@@ -106,7 +107,7 @@ impl ButtonSlot {
                 bg,
                 scale,
             } => compact_keycaps(&label, fg, bg, scale).into_any_element(),
-            Self::Custom(build) => build(disabled),
+            Self::Custom(build) => build(interaction.dims(state)),
         }
     }
 }
@@ -117,11 +118,9 @@ impl From<Svg> for ButtonSlot {
     }
 }
 
-fn dimmed_icon(mut icon: Svg, theme: AppTheme) -> Svg {
+fn dimmed_icon(mut icon: Svg, dim: impl Fn(Rgba) -> Rgba) -> Svg {
     let text = icon.text_style();
-    text.color = text
-        .color
-        .map(|color| theme.disabled_color(color.into_color()).into_color());
+    text.color = text.color.map(|color| dim(color.into_color()).into_color());
     icon
 }
 
@@ -540,8 +539,8 @@ impl Button {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.34 } else { 0.26 },
         ));
-        let start_slot = start_slot.map(|slot| slot.into_element(theme, disabled));
-        let end_slot = end_slot.map(|slot| slot.into_element(theme, disabled));
+        let start_slot = start_slot.map(|slot| slot.into_element(&interaction, state));
+        let end_slot = end_slot.map(|slot| slot.into_element(&interaction, state));
         let icon_only = looks_like_icon_button(label.as_ref());
         let control_height = control_height(ui_scale);
         let control_pad_x = control_pad_x(ui_scale);
@@ -678,7 +677,8 @@ fn mix(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
 mod tests {
     use super::*;
     use crate::test_support::{
-        assert_colour_close, painted_control_quads, redraw, solid_background, solid_colour,
+        assert_colour_close, colour_close, painted_control_quads, redraw, solid_background,
+        solid_colour,
     };
     use gpui::{Context, Render, TestAppContext, Window};
     use std::cell::RefCell;
@@ -752,8 +752,9 @@ mod tests {
         let theme = themes()[0];
         let colour = gpui::rgb(0x3388cc);
         let plate = with_alpha(colour, 0.14);
+        let interaction = InteractionStyle::new(theme).dim_when_disabled(true);
         let colours = |slot: ButtonSlot, disabled: bool| -> Vec<Rgba> {
-            match slot.dimmed(theme, disabled) {
+            match slot.dimmed(&interaction, InteractionState::default().disabled(disabled)) {
                 ButtonSlot::Icon(mut icon) => icon
                     .text_style()
                     .color
@@ -781,16 +782,12 @@ mod tests {
                 ),
             ]
         };
-        for (disabled, dim) in [(false, false), (true, true)] {
+        for disabled in [false, true] {
             for (slot, expected) in slots() {
                 let actual = colours(slot, disabled);
                 assert_eq!(actual.len(), expected.len());
                 for (actual, expected) in actual.into_iter().zip(expected) {
-                    let expected = if dim {
-                        theme.disabled_color(expected)
-                    } else {
-                        expected
-                    };
+                    let expected = theme.disabled_color_if(disabled, expected);
                     assert_colour_close(Some(actual), Some(expected));
                 }
             }
@@ -863,18 +860,8 @@ mod tests {
         );
 
         let plate = with_alpha(colour, 0.14);
-        let has = |fills: &[Rgba], expected: Rgba| {
-            fills.iter().any(|fill| {
-                [
-                    fill.red - expected.red,
-                    fill.green - expected.green,
-                    fill.blue - expected.blue,
-                ]
-                .iter()
-                .chain([fill.alpha - expected.alpha].iter())
-                .all(|delta| delta.abs() < 1e-5)
-            })
-        };
+        let has =
+            |fills: &[Rgba], expected: Rgba| fills.iter().any(|fill| colour_close(*fill, expected));
         let enabled = fills_inside(cx, "on");
         let disabled = fills_inside(cx, "off");
         assert!(has(&enabled, plate), "{enabled:?}");
