@@ -1,8 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 pub(super) use super::main::{
-    conflict_side_output_bytes, next_conflict_diff_split_ratio, show_conflict_save_stage_action,
-    show_external_mergetool_actions,
+    conflict_side_output_bytes, next_conflict_diff_split_ratio, show_external_mergetool_actions,
 };
 pub(super) use super::*;
 pub(super) use crate::view::panes::diff::helpers::state::PreparedSyntaxViewMode;
@@ -192,14 +191,6 @@ const _: () = {
 fn shows_external_mergetool_actions_only_in_normal_mode() {
     assert!(show_external_mergetool_actions(GitCometViewMode::Normal));
     assert!(!show_external_mergetool_actions(
-        GitCometViewMode::FocusedMergetool
-    ));
-}
-
-#[test]
-fn shows_save_stage_action_only_in_normal_mode() {
-    assert!(show_conflict_save_stage_action(GitCometViewMode::Normal));
-    assert!(!show_conflict_save_stage_action(
         GitCometViewMode::FocusedMergetool
     ));
 }
