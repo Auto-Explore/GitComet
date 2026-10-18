@@ -9,7 +9,7 @@ use crate::interaction::{ControlInteractionExt, InteractionState, InteractionSty
 use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
-use gpui::{AnyElement, CursorStyle, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
+use gpui::{AnyElement, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
 
 const TOGGLE_TRACK_WIDTH_PX: f32 = 28.0;
 const TOGGLE_TRACK_COMFORTABLE_WIDTH_PX: f32 = 36.0;
@@ -64,7 +64,6 @@ pub fn settings_option_row(
         .items_start()
         .gap_2()
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(
             InteractionStyle::new(theme),
             InteractionState::default().selected(selected, selected_bg),
@@ -307,7 +306,6 @@ pub fn settings_summary_row_with_value_prefix(
     let id = id.into();
     row_shell(&id, theme)
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(InteractionStyle::new(theme), InteractionState::default())
         .child(row_label(&id, label.into(), theme))
         .child(
@@ -499,7 +497,6 @@ pub fn settings_link_row(
         .rounded(px(theme.radii.row))
         .border_b_1()
         .border_color(settings_row_separator_color(theme))
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(InteractionStyle::new(theme), InteractionState::default())
         .child(
             div()
@@ -553,7 +550,6 @@ pub fn settings_nav_item(
         .items_center()
         .gap_2()
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .overflow_hidden()
         .control_interaction(
             InteractionStyle::new(theme),
