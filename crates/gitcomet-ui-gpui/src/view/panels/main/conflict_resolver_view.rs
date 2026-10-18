@@ -67,12 +67,10 @@ impl ConflictSave {
         }
     }
 
-    /// Whether the pane lets this save run: every save edits, and Save &
-    /// stage stages too.
-    fn allowed(self, policy: &gitcomet_extension_api::DiffPanePolicy) -> bool {
+    fn stages(self) -> bool {
         match self {
-            Self::Save | Self::SaveAndClose => policy.allow_edit,
-            Self::SaveAndStage => policy.allow_edit && policy.allow_stage,
+            Self::SaveAndStage => true,
+            Self::Save | Self::SaveAndClose => false,
         }
     }
 
@@ -411,7 +409,7 @@ impl DiffRenderer {
         let pane = cx.entity().downgrade();
         ConflictSave::for_view_mode(self.view_mode)
             .iter()
-            .filter(|save| save.allowed(&self.store.policy))
+            .filter(|save| self.store.admits_save(save.stages()))
             .map(|&save| {
                 let pane = pane.clone();
                 let button =
@@ -493,8 +491,7 @@ impl DiffRenderer {
                 self.focused_mergetool_save_and_exit(repo_id, path, cx);
                 return;
             }
-            ConflictSave::Save => false,
-            ConflictSave::SaveAndStage => true,
+            ConflictSave::Save | ConflictSave::SaveAndStage => save.stages(),
         };
         let text = self.current_conflict_resolved_output_text(cx);
         let text = self.conflict_resolver_save_contents_from_text(text);
@@ -2757,24 +2754,13 @@ mod conflict_save_tests {
     }
 
     #[test]
-    fn staging_saves_need_both_permissions() {
-        let policy = |allow_edit, allow_stage| {
-            let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
-            policy.allow_edit = allow_edit;
-            policy.allow_stage = allow_stage;
-            policy
-        };
-        let allowed = |policy| {
-            [
-                ConflictSave::Save,
-                ConflictSave::SaveAndStage,
-                ConflictSave::SaveAndClose,
-            ]
-            .map(|save| save.allowed(&policy))
-        };
-        assert_eq!(allowed(policy(true, true)), [true, true, true]);
-        assert_eq!(allowed(policy(true, false)), [true, false, true]);
-        assert_eq!(allowed(policy(false, true)), [false, false, false]);
+    fn only_save_and_stage_stages() {
+        let saves = [
+            ConflictSave::Save,
+            ConflictSave::SaveAndStage,
+            ConflictSave::SaveAndClose,
+        ];
+        assert_eq!(saves.map(ConflictSave::stages), [false, true, false]);
     }
 }
 

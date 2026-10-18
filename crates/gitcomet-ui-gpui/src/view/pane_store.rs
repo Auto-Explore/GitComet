@@ -98,6 +98,12 @@ impl PaneStore {
         self.set_policy(policy);
     }
 
+    /// Whether the pane admits a worktree save: every save edits, and one
+    /// that stages is staging too.
+    pub(in crate::view) fn admits_save(&self, stage: bool) -> bool {
+        self.policy.allow_edit && (!stage || self.policy.allow_stage)
+    }
+
     pub fn set_policy(&mut self, policy: DiffPanePolicy) {
         self.owner_policy = policy;
         self.apply_policy();
@@ -277,14 +283,9 @@ impl PaneStore {
                 store.dispatch(msg);
                 return;
             }
-            // A save that stages is staging too.
             msg @ Msg::SaveWorktreeFile {
                 repo_id: id, stage, ..
-            } if id == repo_id
-                && self.policy.allow_edit
-                && (!stage || self.policy.allow_stage)
-                && !linked =>
-            {
+            } if id == repo_id && self.admits_save(stage) && !linked => {
                 store.dispatch(msg);
                 return;
             }
@@ -292,5 +293,26 @@ impl PaneStore {
             _ => return,
         };
         store.dispatch(Msg::DiffSession(session));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_save_that_stages_needs_both_permissions() {
+        let store = |allow_edit, allow_stage| {
+            let mut policy = DiffPanePolicy::default();
+            policy.allow_edit = allow_edit;
+            policy.allow_stage = allow_stage;
+            let mut store = PaneStore::read_only();
+            store.set_policy(policy);
+            store
+        };
+        let admits = |store: PaneStore| [false, true].map(|stage| store.admits_save(stage));
+        assert_eq!(admits(store(true, true)), [true, true]);
+        assert_eq!(admits(store(true, false)), [true, false]);
+        assert_eq!(admits(store(false, true)), [false, false]);
     }
 }
