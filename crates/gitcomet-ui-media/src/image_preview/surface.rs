@@ -228,6 +228,7 @@ impl Group {
                                 bounds,
                                 bounds,
                                 gpui::Corners::default(),
+                                0.0,
                                 image,
                                 frame,
                                 false,

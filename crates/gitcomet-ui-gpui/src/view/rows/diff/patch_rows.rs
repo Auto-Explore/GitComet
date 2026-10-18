@@ -319,10 +319,9 @@ impl gpui::Element for ScrollPinnedHunkShell {
         cx: &mut gpui::App,
     ) {
         if let Some(background) = self.background {
-            window.paint_quad(gpui::fill(
-                collapsed_hunk_bg_fill_bounds(bounds),
-                background,
-            ));
+            window.paint_quad(
+                gpui::PaintQuad::new(collapsed_hunk_bg_fill_bounds(bounds)).background(background),
+            );
         }
         self.child.paint(window, cx);
     }

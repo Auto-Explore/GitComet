@@ -159,7 +159,7 @@ impl MarkdownFlowText {
         #[cfg(test)]
         record_markdown_flow_paint_phase_for_tests(self.row_ix, MarkdownFlowPaintPhase::Selection);
         for rect in rects {
-            window.paint_quad(fill(rect, color));
+            window.paint_quad(PaintQuad::new(rect).background(color));
         }
     }
 
@@ -172,7 +172,7 @@ impl MarkdownFlowText {
         );
         for (range, color) in self.run_backgrounds.iter() {
             for rect in markdown_flow_range_rects(layout, range.start, range.end) {
-                window.paint_quad(fill(rect, *color));
+                window.paint_quad(PaintQuad::new(rect).background(*color));
             }
         }
     }

@@ -135,6 +135,7 @@ impl DiagramState {
                             image_bounds,
                             image_bounds,
                             gpui::Corners::default(),
+                            0.0,
                             image,
                             0,
                             false,

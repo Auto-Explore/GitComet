@@ -8,8 +8,8 @@ use super::canvas_text::{
 use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
 use super::*;
 use gpui::{
-    App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, Pixels, Styled, TextStyle,
-    Window, fill, point, px, size,
+    App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, PaintQuad, Pixels, Styled,
+    TextStyle, Window, point, px, size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
@@ -176,18 +176,18 @@ pub(super) fn split_conflict_row_canvas(
             let right_gutter =
                 sticky_gutter_bounds(prepaint.right_col, clip_bounds, pad, gap, line_no_w);
 
-            window.paint_quad(fill(prepaint.left_col, left_bg));
-            window.paint_quad(fill(prepaint.right_col, right_bg));
+            window.paint_quad(PaintQuad::new(prepaint.left_col).background(left_bg));
+            window.paint_quad(PaintQuad::new(prepaint.right_col).background(right_bg));
 
             let divider_x = prepaint.handle_bounds.left()
                 + ((prepaint.handle_bounds.size.width - px(1.0)).max(px(0.0)) * 0.5).floor();
-            window.paint_quad(fill(
-                Bounds::new(
+            window.paint_quad(
+                PaintQuad::new(Bounds::new(
                     point(divider_x, prepaint.handle_bounds.top()),
                     size(px(1.0), prepaint.handle_bounds.size.height),
-                ),
-                theme.colors.stroke.default,
-            ));
+                ))
+                .background(theme.colors.stroke.default),
+            );
 
             if show_line_numbers {
                 window.with_content_mask(
@@ -397,30 +397,24 @@ pub(super) fn single_column_conflict_canvas(
             let clip_bounds = window.content_mask().bounds;
             let gutter_bounds = sticky_gutter_bounds(bounds, clip_bounds, pad, gap, line_no_w);
 
-            window.paint_quad(fill(bounds, bg));
+            window.paint_quad(PaintQuad::new(bounds).background(bg));
 
             // section 30 split: highlight rows in the drag selection.
             if row_selected {
-                window.paint_quad(fill(
-                    bounds,
-                    with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.20 } else { 0.14 },
-                    ),
-                ));
+                window.paint_quad(PaintQuad::new(bounds).background(with_alpha(
+                    theme.colors.accent.foreground,
+                    if theme.is_dark { 0.20 } else { 0.14 },
+                )));
             }
 
             // kdiff3 manual diff help: marked lines use the warning hue so they
             // stay distinguishable from an accent-tinted split selection, which
             // can be active in the same columns at the same time.
             if alignment_marked {
-                window.paint_quad(fill(
-                    bounds,
-                    with_alpha(
-                        theme.colors.status.warning.foreground,
-                        if theme.is_dark { 0.22 } else { 0.16 },
-                    ),
-                ));
+                window.paint_quad(PaintQuad::new(bounds).background(with_alpha(
+                    theme.colors.status.warning.foreground,
+                    if theme.is_dark { 0.22 } else { 0.16 },
+                )));
             }
 
             // section 30: mark the active conflict's rows with an accent bar so a
@@ -440,7 +434,7 @@ pub(super) fn single_column_conflict_canvas(
                         bounds.size.height,
                     ),
                 );
-                window.paint_quad(fill(bar, theme.colors.accent.foreground));
+                window.paint_quad(PaintQuad::new(bar).background(theme.colors.accent.foreground));
             }
 
             if show_line_numbers {

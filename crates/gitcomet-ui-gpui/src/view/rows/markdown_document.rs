@@ -2524,9 +2524,13 @@ fn render_table_image(
                                 row_ix,
                                 &[bounds],
                             );
-                            window.paint_quad(fill(bounds, pane.diff_text_selection_color()));
+                            window.paint_quad(
+                                PaintQuad::new(bounds).background(pane.diff_text_selection_color()),
+                            );
                         } else if searched {
-                            window.paint_quad(fill(bounds, with_alpha(search_color, 0.35)));
+                            window.paint_quad(
+                                PaintQuad::new(bounds).background(with_alpha(search_color, 0.35)),
+                            );
                         }
                     });
                 },

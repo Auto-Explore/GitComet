@@ -1140,3 +1140,70 @@ fn inputs_restyle_when_their_window_theme_changes(cx: &mut gpui::TestAppContext)
         assert_eq!(color, TextInputStyle::from_theme(theme).text);
     }
 }
+
+/// Selection-quad capacity painted by a caret-only frame, then by a frame
+/// with everything selected.
+fn selection_capacity_painted(
+    cx: &mut gpui::TestAppContext,
+    options: TextInputOptions,
+    text: &str,
+    truncate: bool,
+) -> (usize, usize) {
+    use crate::text_input::element::take_selection_quad_capacity_for_tests;
+
+    let (input, cx) = cx.add_window_view(|window, cx| TextInput::new(options, window, cx));
+    cx.update(|_, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text, cx);
+            if truncate {
+                input.set_display_truncation(Some(TextTruncationProfile::End), cx);
+            }
+            input.set_caret(0, cx);
+        });
+    });
+    take_selection_quad_capacity_for_tests();
+    crate::test_support::refresh_and_draw(cx);
+    let caret = take_selection_quad_capacity_for_tests();
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_selected_range(0..text.len(), false, window, cx);
+        });
+    });
+    crate::test_support::refresh_and_draw(cx);
+    let selection = take_selection_quad_capacity_for_tests();
+    (caret, selection)
+}
+
+/// A caret-only frame used to reserve a 208-byte `PaintQuad` per visible line
+/// for a selection it never painted, on every prepaint of the file editor.
+#[gpui::test]
+fn caret_frame_reserves_no_selection_quads_in_a_plain_input(cx: &mut gpui::TestAppContext) {
+    let options = TextInputOptions {
+        multiline: true,
+        ..Default::default()
+    };
+    let (caret, selection) = selection_capacity_painted(cx, options, "one\ntwo\nthree", false);
+    assert_eq!(caret, 0);
+    assert!(selection > 0, "the probe must see a selection's quads");
+}
+
+#[gpui::test]
+fn caret_frame_reserves_no_selection_quads_in_a_soft_wrapped_input(cx: &mut gpui::TestAppContext) {
+    let options = TextInputOptions {
+        multiline: true,
+        soft_wrap: true,
+        ..Default::default()
+    };
+    let (caret, selection) = selection_capacity_painted(cx, options, "one\ntwo\nthree", false);
+    assert_eq!(caret, 0);
+    assert!(selection > 0, "the probe must see a selection's quads");
+}
+
+#[gpui::test]
+fn caret_frame_reserves_no_selection_quads_in_a_truncated_line(cx: &mut gpui::TestAppContext) {
+    let (caret, selection) =
+        selection_capacity_painted(cx, TextInputOptions::selectable(), "truncated", true);
+    assert_eq!(caret, 0);
+    assert!(selection > 0, "the probe must see a selection's quads");
+}

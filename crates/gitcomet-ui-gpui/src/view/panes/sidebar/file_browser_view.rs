@@ -837,17 +837,14 @@ impl SidebarPaneView {
                                     |_, _, _| {},
                                     move |bounds, _, window, _| {
                                         window.paint_quad(
-                                            gpui::outline(
-                                                bounds,
-                                                with_alpha(color, 0.7),
-                                                gpui::BorderStyle::default(),
-                                            )
-                                            .border_widths(gpui::Edges {
-                                                top: px(if first { 1.0 } else { 0.0 }),
-                                                bottom: px(if last { 1.0 } else { 0.0 }),
-                                                left: px(1.0),
-                                                right: px(1.0),
-                                            }),
+                                            gpui::PaintQuad::new(bounds)
+                                                .border_color(with_alpha(color, 0.7))
+                                                .border_widths(gpui::Edges {
+                                                    top: px(if first { 1.0 } else { 0.0 }),
+                                                    bottom: px(if last { 1.0 } else { 0.0 }),
+                                                    left: px(1.0),
+                                                    right: px(1.0),
+                                                }),
                                         );
                                     },
                                 )

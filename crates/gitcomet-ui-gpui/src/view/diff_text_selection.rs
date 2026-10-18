@@ -424,13 +424,13 @@ impl Element for DiffTextSelectionOverlay {
             && x1 > x0
         {
             let color = self.view.read(cx).diff_text_selection_color();
-            window.paint_quad(fill(
-                Bounds::from_corners(
+            window.paint_quad(
+                PaintQuad::new(Bounds::from_corners(
                     point(bounds.left() + x0, bounds.top()),
                     point(bounds.left() + x1, bounds.bottom()),
-                ),
-                color,
-            ));
+                ))
+                .background(color),
+            );
         }
 
         let (source_visible_ix, visual_range) = self

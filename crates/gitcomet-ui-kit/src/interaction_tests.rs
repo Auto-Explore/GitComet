@@ -137,8 +137,7 @@ impl Render for Fixture {
                                 gpui::canvas(
                                     |_, _, _| (),
                                     move |bounds, _, window, _| {
-                                        window.paint_quad(gpui::fill(
-                                            bounds,
+                                        window.paint_quad(gpui::PaintQuad::new(bounds).background(
                                             paint.background(theme.colors.surface.chrome, window),
                                         ));
                                     },

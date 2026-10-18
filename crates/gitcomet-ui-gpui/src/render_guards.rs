@@ -227,8 +227,7 @@ mod tests {
                 relative.starts_with("history")
                     || relative.to_string_lossy().starts_with("history_")
             });
-            let round = line.contains("corner_radii(") || line.contains("gpui::quad(");
-            if history && !path.ends_with("history_shapes.rs") && round {
+            if history && !path.ends_with("history_shapes.rs") && line.contains("corner_radii(") {
                 offenders.push(format!("{}:{line_no}", path.display()));
             }
         });

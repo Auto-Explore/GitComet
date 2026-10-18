@@ -10,8 +10,8 @@ use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Window, canvas, div, fill, point, px,
-    size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Window, canvas, div, point,
+    px, size,
 };
 use std::sync::Arc;
 
@@ -133,16 +133,16 @@ impl<B: Copy + PartialEq + 'static> MinimapColumn<B> {
                     |_window, _cx| MinimapInteractionState::default(),
                 );
 
-                window.paint_quad(fill(bounds, theme.colors.surface.panel));
+                window.paint_quad(PaintQuad::new(bounds).background(theme.colors.surface.panel));
                 // kdiff3 rules each column off with a line; keep the width at
                 // exactly 20px by painting the edge instead of using a border.
-                window.paint_quad(fill(
-                    Bounds::new(
+                window.paint_quad(
+                    PaintQuad::new(Bounds::new(
                         point(bounds.right() - px(1.0), bounds.top()),
                         size(px(1.0), bounds.size.height),
-                    ),
-                    theme.colors.stroke.default,
-                ));
+                    ))
+                    .background(theme.colors.stroke.default),
+                );
 
                 paint_bands(
                     window,
@@ -257,7 +257,9 @@ fn paint_bands<B: Copy + PartialEq>(
         let y0 = bounds.top() + band_height * start as f32;
         // Keep a single changed line visible on tall columns.
         let h = (band_height * (ix - start) as f32).max(px(1.0));
-        window.paint_quad(fill(Bounds::new(point(x, y0), size(width, h)), color));
+        window.paint_quad(
+            PaintQuad::new(Bounds::new(point(x, y0), size(width, h))).background(color),
+        );
     }
 }
 
@@ -284,10 +286,10 @@ fn paint_viewport_frame(
     // faint wash so a page that is only a few pixels tall still reads.
     let mut shade = theme.colors.foreground.primary;
     shade.alpha = if theme.is_dark { 0.14 } else { 0.09 };
-    window.paint_quad(fill(
-        Bounds::new(point(bounds.left(), y0), size(width, y1 - y0)),
-        shade,
-    ));
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(point(bounds.left(), y0), size(width, y1 - y0)))
+            .background(shade),
+    );
     for edge_bounds in [
         Bounds::new(point(bounds.left(), y0), size(width, thickness)),
         Bounds::new(point(bounds.left(), y1 - thickness), size(width, thickness)),
@@ -297,7 +299,7 @@ fn paint_viewport_frame(
             size(thickness, y1 - y0),
         ),
     ] {
-        window.paint_quad(fill(edge_bounds, edge));
+        window.paint_quad(PaintQuad::new(edge_bounds).background(edge));
     }
 }
 

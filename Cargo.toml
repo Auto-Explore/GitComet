@@ -151,12 +151,12 @@ futures = "0.3.34"
 gix = { version = "0.89.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
 gix-quote = "0.10.0"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216", default-features = false }
-gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
-gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "020fb167b57bfd743e4b86208c42490d0dbdd216" }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "0665fb07d59cf7af185e58f44b9f890590abe204" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "0665fb07d59cf7af185e58f44b9f890590abe204", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "0665fb07d59cf7af185e58f44b9f890590abe204" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "0665fb07d59cf7af185e58f44b9f890590abe204", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "0665fb07d59cf7af185e58f44b9f890590abe204" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "0665fb07d59cf7af185e58f44b9f890590abe204" }
 image = "0.25.10"
 fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
@@ -171,7 +171,7 @@ roxmltree = "0.21"
 md-5 = "0.11"
 memchr = "2.8.3"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
-notify = "9.0.0-rc.5"
+notify = "9.0.0-rc.6"
 palette = "0.7.7"
 percent-encoding = "2.3.2"
 process-wrap = { version = "10.0.1", default-features = false, features = ["std", "creation-flags", "job-object", "process-group"] }
@@ -180,8 +180,8 @@ regex = "1.13.1"
 resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 strum = { version = "0.28", default-features = false, features = ["derive"] }
 rustc-hash = "2.1.3"
-rustfs-mimalloc = "0.5.6"
-rustfs-mimalloc-sys = "0.5.6"
+rustfs-mimalloc = "0.7.0"
+rustfs-mimalloc-sys = "0.7.0"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "process"] }
 same-file = "1.0.6"
 semver = "1.0.28"
@@ -335,7 +335,7 @@ tree-sitter-wat = { path = "vendor/tree-sitter-wat" }
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
-unicode-normalization = "0.1.25"
+unicode-normalization = "0.1.26"
 unicode-segmentation = "1.13.3"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
