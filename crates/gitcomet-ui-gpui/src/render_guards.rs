@@ -4,7 +4,7 @@
 mod tests {
     use gitcomet_ui_kit::test_support::source_guards::{
         DiscreteControlAllowlist, direct_clipboard_access, discrete_control_violations,
-        opacity_calls, unresolved_menu_icons, unscaled_icon_sizes,
+        opacity_calls, production_text, unresolved_menu_icons, unscaled_icon_sizes,
     };
 
     fn src_dir() -> std::path::PathBuf {
@@ -127,18 +127,7 @@ mod tests {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("read source");
-            // Stop at the inline test module. Any other `#[cfg(test)]` marks a
-            // single item (a test-only field, helper or `mod tests;`), and
-            // production code continues after it.
-            let lines: Vec<&str> = source.lines().collect();
-            for (ix, line) in lines.iter().enumerate() {
-                let opens_test_module = line.starts_with("#[cfg(test)]")
-                    && lines.get(ix + 1).is_some_and(|next| {
-                        next.starts_with("mod ") && next.trim_end().ends_with('{')
-                    });
-                if opens_test_module {
-                    break;
-                }
+            for (ix, line) in production_text(&source).lines().enumerate() {
                 visit(&path, ix + 1, line);
             }
         }

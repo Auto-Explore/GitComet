@@ -123,8 +123,27 @@ pub fn rust_sources_under(dir: &std::path::Path, sources: &mut Vec<std::path::Pa
 pub mod source_guards {
     use std::path::Path;
 
+    /// `source` up to its inline test module. Any other `#[cfg(test)]` marks
+    /// one item, such as a test-only helper or `mod tests;`, and production
+    /// code continues after it.
+    pub fn production_text(source: &str) -> &str {
+        let mut offset = 0;
+        let mut lines = source.split_inclusive('\n').peekable();
+        while let Some(line) = lines.next() {
+            let opens_test_module = line.starts_with("#[cfg(test)]")
+                && lines
+                    .peek()
+                    .is_some_and(|next| next.starts_with("mod ") && next.trim_end().ends_with('{'));
+            if opens_test_module {
+                return &source[..offset];
+            }
+            offset += line.len();
+        }
+        source
+    }
+
     /// Production sources below `src_dir` as `(relative path, text before the
-    /// first inline test module)`, skipping test files and directories.
+    /// inline test module)`, skipping test files and directories.
     fn production_sources(src_dir: &Path) -> Vec<(String, String)> {
         let mut paths = Vec::new();
         super::rust_sources_under(src_dir, &mut paths);
@@ -140,12 +159,7 @@ pub mod source_guards {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("read Rust source");
-            let production = source
-                .split("#[cfg(test)]\nmod tests")
-                .next()
-                .unwrap_or("")
-                .to_string();
-            out.push((relative_str, production));
+            out.push((relative_str, production_text(&source).to_string()));
         }
         out
     }
@@ -406,6 +420,16 @@ pub mod source_guards {
                     "moved.rs: allowlisted but missing",
                 ]
             );
+        }
+
+        #[test]
+        fn production_text_ends_at_the_inline_test_module_only() {
+            let source = "fn a() {}\n#[cfg(test)]\nmod tests;\nfn b() {}\n#[cfg(test)]\nfn helper() {}\nfn c() {}\n#[cfg(test)]\nmod checks {\n    fn t() {}\n}\n";
+            assert_eq!(
+                super::production_text(source),
+                "fn a() {}\n#[cfg(test)]\nmod tests;\nfn b() {}\n#[cfg(test)]\nfn helper() {}\nfn c() {}\n"
+            );
+            assert_eq!(super::production_text("fn a() {}"), "fn a() {}");
         }
 
         #[test]
