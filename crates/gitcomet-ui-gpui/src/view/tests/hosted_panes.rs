@@ -3287,7 +3287,7 @@ fn a_pane_without_staging_drops_a_save_that_stages(cx: &mut gpui::TestAppContext
         .downcast::<DiffPaneView>()
         .unwrap_or_else(|_| panic!("a hosted diff pane"));
     let shown = pane.view();
-    let (_holder, cx) = cx.add_window_view(move |_, _| TwoPanes(shown.clone(), shown));
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(shown));
     for _ in 0..3 {
         cx.update(|window, app| {
             let _ = window.draw(app);
