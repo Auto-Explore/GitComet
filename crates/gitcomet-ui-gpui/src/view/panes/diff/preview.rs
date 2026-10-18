@@ -781,10 +781,8 @@ impl DiffRenderer {
         self.conflict_rendered_preview_kind().is_some()
     }
 
-    /// The rendered preview the merge tool on screen shows. The merge tool
-    /// keeps its file and Preview mode under that file's preview or editor,
-    /// and while the next conflict loads, so it counts only when loaded for
-    /// the conflict shown.
+    /// The rendered preview the merge tool shows, only while it is loaded for
+    /// the conflict on screen.
     fn conflict_rendered_preview_kind(&self) -> Option<RenderedPreviewKind> {
         let (path, _) = self.active_conflict_target()?;
         let repo_id = self.active_repo_id()?;
