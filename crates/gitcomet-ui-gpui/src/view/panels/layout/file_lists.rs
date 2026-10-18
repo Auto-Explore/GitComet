@@ -131,11 +131,17 @@ impl DetailsPaneView {
                 CommitFileFilterLabels::Full => full_label.clone(),
                 CommitFileFilterLabels::Compact => count.to_string(),
             };
-            let icon_color = commit_file_filter_color(filter, theme);
+            let interaction = InteractionStyle::new(theme)
+                .selection_outline(false)
+                .dim_when_disabled(true);
+            let state = InteractionState::default()
+                .selected(selected, theme.colors.interaction.selected_background)
+                .disabled(disabled);
+            let icon_color = interaction.color(commit_file_filter_color(filter, theme), state);
             let selected_border = if theme.is_dark {
                 gpui::rgba(0x00000000)
             } else {
-                theme.colors.interaction.selected_indicator
+                interaction.color(theme.colors.interaction.selected_indicator, state)
             };
             let tab = div()
                 .id((SharedString::from(format!("{id_prefix}_filter_tab")), ix))
@@ -156,20 +162,16 @@ impl DetailsPaneView {
                 })
                 .text_size(theme.ui_text(12.0))
                 .whitespace_nowrap()
-                .text_color(if selected {
-                    theme.colors.interaction.selected_foreground
-                } else {
-                    theme.colors.foreground.secondary
-                })
+                .text_color(interaction.color(
+                    if selected {
+                        theme.colors.interaction.selected_foreground
+                    } else {
+                        theme.colors.foreground.secondary
+                    },
+                    state,
+                ))
                 .tab_index(0)
-                .control_interaction(
-                    InteractionStyle::new(theme)
-                        .selection_outline(false)
-                        .disabled_opacity(0.5),
-                    InteractionState::default()
-                        .selected(selected, theme.colors.interaction.selected_background)
-                        .disabled(disabled),
-                )
+                .control_interaction(interaction, state)
                 .child(svg_icon(
                     filter.icon(),
                     icon_color,

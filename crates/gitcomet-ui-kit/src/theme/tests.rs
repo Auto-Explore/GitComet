@@ -40,6 +40,33 @@ fn layer_over_matches_painting_both_layers_in_turn() {
 }
 
 #[test]
+fn disabled_colors_halve_translucent_alpha_and_mix_opaque_toward_the_panel() {
+    for key in [DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY] {
+        let theme = AppTheme::from_key(key).unwrap();
+        let panel = theme.colors.surface.panel;
+
+        let border = Rgba::new(0.4, 0.5, 0.6, 0.38);
+        assert_eq!(theme.disabled_color(border), Rgba::new(0.4, 0.5, 0.6, 0.19));
+
+        let text = Rgba::new(0.9, 0.8, 0.7, 1.0);
+        let mid = |a: f32, b: f32| a * 0.5 + b * 0.5;
+        assert_eq!(
+            theme.disabled_color(text),
+            Rgba::new(
+                mid(text.red, panel.red),
+                mid(text.green, panel.green),
+                mid(text.blue, panel.blue),
+                1.0,
+            ),
+            "{key}"
+        );
+
+        let clear = Rgba::new(0.0, 0.0, 0.0, 0.0);
+        assert_eq!(theme.disabled_color(clear), clear);
+    }
+}
+
+#[test]
 fn theme_hex_colors_keep_all_four_spellings_and_strict_validation() {
     for (input, expected) in [
         ("#aBc", [0xaa_u8, 0xbb, 0xcc, 0xff]),

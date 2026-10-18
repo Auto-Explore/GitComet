@@ -117,7 +117,9 @@ impl DetailsPaneView {
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
         let icon_color = theme.colors.accent.foreground;
         let icon = |path: &'static str| svg_icon(path, icon_color, scaled_px(14.0));
-        let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, scaled_px(14.0));
+        let spinner = |id: (&'static str, u64)| {
+            components::ButtonSlot::spinner(id, icon_color, scaled_px(14.0))
+        };
         let commit_label = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
             (false, false) => "Commit",
             (false, true) => "Commit changes and Push",
@@ -163,11 +165,11 @@ impl DetailsPaneView {
         .render(theme, self.commit_message_input.clone());
         let commit_main = components::Button::new("commit", commit_label)
             .start_slot(if commit_in_flight {
-                spinner(("commit_spinner", repo_key)).into_any_element()
+                spinner(("commit_spinner", repo_key))
             } else {
                 icon("icons/check.svg")
                     .debug_selector(|| "commit_button_icon".to_string())
-                    .into_any_element()
+                    .into()
             })
             .style(components::ButtonStyle::Subtle)
             .disabled(!can_submit_commit);

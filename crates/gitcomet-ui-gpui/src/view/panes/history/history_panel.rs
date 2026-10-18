@@ -797,6 +797,13 @@ impl HistoryView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == author_invoker.as_ref());
+        let header_chip = InteractionStyle::header(theme).dim_when_disabled(true);
+        let scope_chip_state = InteractionState::default()
+            .open(scope_active)
+            .disabled(scope_repo_id.is_none());
+        let author_chip_state = InteractionState::default()
+            .open(author_active)
+            .disabled(scope_repo_id.is_none());
         let author_tooltip: SharedString = self
             .active_repo()
             .and_then(|r| r.history_state.history_author_filter.clone())
@@ -925,13 +932,11 @@ impl HistoryView {
                     ))
                     .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
                     .rounded(px(theme.radii.row))
-                    .tab_index(0)
-                    .control_interaction(
-                        InteractionStyle::header(theme).disabled_opacity(0.6),
-                        InteractionState::default()
-                            .open(scope_active)
-                            .disabled(scope_repo_id.is_none()),
+                    .text_color(
+                        header_chip.color(theme.colors.foreground.secondary, scope_chip_state),
                     )
+                    .tab_index(0)
+                    .control_interaction(header_chip.clone(), scope_chip_state)
                     .when(scope_label_visible, |d| {
                         d.child(
                             div()
@@ -943,7 +948,7 @@ impl HistoryView {
                     })
                     .child(svg_icon(
                         "icons/chevron_down.svg",
-                        icon_muted,
+                        header_chip.color(icon_muted, scope_chip_state),
                         scaled_px(12.0),
                     ))
                     .when_some(scope_repo_id, |this, repo_id| {
@@ -1074,8 +1079,8 @@ impl HistoryView {
                                         .rounded(px(theme.radii.row))
                                         .tab_index(0)
                                         .control_interaction(
-                                            InteractionStyle::header(theme).disabled_opacity(0.6),
-                                            InteractionState::default().open(author_active).disabled(scope_repo_id.is_none()),
+                                            header_chip.clone(),
+                                            author_chip_state,
                                         )
                                         .child(
                                             div()
@@ -1083,16 +1088,19 @@ impl HistoryView {
                                                 .line_clamp(1)
                                                 .whitespace_nowrap()
                                                 .when(author_filter_active, |d| {
-                                                    d.text_color(theme.colors.accent.foreground)
+                                                    d.text_color(header_chip.color(theme.colors.accent.foreground, author_chip_state))
                                                 })
                                                 .when(!author_filter_active, |d| {
-                                                    d.text_color(theme.colors.foreground.secondary)
+                                                    d.text_color(header_chip.color(
+                                                        theme.colors.foreground.secondary,
+                                                        author_chip_state,
+                                                    ))
                                                 })
                                                 .child(author_label.clone()),
                                         )
                                         .child(svg_icon(
                                             "icons/chevron_down.svg",
-                                            icon_muted,
+                                            header_chip.color(icon_muted, author_chip_state),
                                             scaled_px(12.0),
                                         ))
                                         .when_some(scope_repo_id, |this, repo_id| {

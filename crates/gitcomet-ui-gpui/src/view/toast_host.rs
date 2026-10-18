@@ -901,7 +901,7 @@ impl ToastHost {
         .borderless()
         .disabled(aborting);
         if aborting {
-            abort_button = abort_button.start_slot(svg_spinner(
+            abort_button = abort_button.start_slot(components::ButtonSlot::spinner(
                 "clone_progress_abort_spinner",
                 spinner_color,
                 ui_scale.px(10.0),

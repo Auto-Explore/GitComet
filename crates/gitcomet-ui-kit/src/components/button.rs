@@ -1,10 +1,13 @@
+use super::shortcut_keys::{compact_keycap_plate, compact_keycaps};
+use crate::icons::svg_spinner;
 use crate::theme::{AppTheme, composite_over};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Div, FocusHandle, IntoElement, Pixels, SharedString, Stateful,
-    StyleRefinement, Window, div, px,
+    AnyElement, Bounds, ClickEvent, Div, ElementId, FocusHandle, IntoElement, Pixels, Rgba,
+    SharedString, Stateful, StyleRefinement, Svg, Window, div, px,
 };
+use palette::IntoColor;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -25,6 +28,101 @@ pub enum ButtonStyle {
     Subtle,
     Transparent,
     Danger,
+}
+
+/// Slot content, dimmed with the button when it is disabled. `Custom` is built
+/// at render time from that state and dims its own colours.
+pub enum ButtonSlot {
+    Icon(Box<Svg>),
+    Spinner {
+        id: ElementId,
+        color: Rgba,
+        size: Pixels,
+    },
+    Keys {
+        label: SharedString,
+        fg: Rgba,
+        bg: Rgba,
+        scale: UiScale,
+    },
+    Custom(Box<dyn FnOnce(bool) -> AnyElement>),
+}
+
+impl ButtonSlot {
+    pub fn spinner(id: impl Into<ElementId>, color: Rgba, size: Pixels) -> Self {
+        Self::Spinner {
+            id: id.into(),
+            color,
+            size,
+        }
+    }
+
+    pub fn keys(label: impl Into<SharedString>, fg: Rgba, scale: UiScale) -> Self {
+        Self::Keys {
+            label: label.into(),
+            fg,
+            bg: compact_keycap_plate(fg),
+            scale,
+        }
+    }
+
+    pub fn custom<E: IntoElement>(build: impl FnOnce(bool) -> E + 'static) -> Self {
+        Self::Custom(Box::new(move |disabled| build(disabled).into_any_element()))
+    }
+
+    fn dimmed(self, theme: AppTheme, disabled: bool) -> Self {
+        if !disabled {
+            return self;
+        }
+        match self {
+            Self::Icon(icon) => Self::Icon(Box::new(dimmed_icon(*icon, theme))),
+            Self::Spinner { id, color, size } => Self::Spinner {
+                id,
+                color: theme.disabled_color(color),
+                size,
+            },
+            Self::Keys {
+                label,
+                fg,
+                bg,
+                scale,
+            } => Self::Keys {
+                label,
+                fg: theme.disabled_color(fg),
+                bg: theme.disabled_color(bg),
+                scale,
+            },
+            Self::Custom(build) => Self::Custom(build),
+        }
+    }
+
+    fn into_element(self, theme: AppTheme, disabled: bool) -> AnyElement {
+        match self.dimmed(theme, disabled) {
+            Self::Icon(icon) => (*icon).into_any_element(),
+            Self::Spinner { id, color, size } => svg_spinner(id, color, size).into_any_element(),
+            Self::Keys {
+                label,
+                fg,
+                bg,
+                scale,
+            } => compact_keycaps(&label, fg, bg, scale).into_any_element(),
+            Self::Custom(build) => build(disabled),
+        }
+    }
+}
+
+impl From<Svg> for ButtonSlot {
+    fn from(icon: Svg) -> Self {
+        Self::Icon(Box::new(icon))
+    }
+}
+
+fn dimmed_icon(mut icon: Svg, theme: AppTheme) -> Svg {
+    let text = icon.text_style();
+    text.color = text
+        .color
+        .map(|color| theme.disabled_color(color.into_color()).into_color());
+    icon
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -52,8 +150,8 @@ pub struct Button {
     suppress_hover_border: bool,
     no_focus: bool,
     focus_handle: Option<FocusHandle>,
-    start_slot: Option<AnyElement>,
-    end_slot: Option<AnyElement>,
+    start_slot: Option<ButtonSlot>,
+    end_slot: Option<ButtonSlot>,
     separate_end_slot: bool,
     truncate_label: bool,
     /// Set when the caller pins the button's geometry instead of taking the
@@ -169,19 +267,19 @@ impl Button {
         self
     }
 
-    pub fn start_slot(mut self, slot: impl IntoElement) -> Self {
-        self.start_slot = Some(slot.into_any_element());
+    pub fn start_slot(mut self, slot: impl Into<ButtonSlot>) -> Self {
+        self.start_slot = Some(slot.into());
         self
     }
 
-    pub fn end_slot(mut self, slot: impl IntoElement) -> Self {
-        self.end_slot = Some(slot.into_any_element());
+    pub fn end_slot(mut self, slot: impl Into<ButtonSlot>) -> Self {
+        self.end_slot = Some(slot.into());
         self.separate_end_slot = false;
         self
     }
 
-    pub fn separated_end_slot(mut self, slot: impl IntoElement) -> Self {
-        self.end_slot = Some(slot.into_any_element());
+    pub fn separated_end_slot(mut self, slot: impl Into<ButtonSlot>) -> Self {
+        self.end_slot = Some(slot.into());
         self.separate_end_slot = true;
         self
     }
@@ -413,18 +511,38 @@ impl Button {
             }
         };
 
-        let bg = bg_override.unwrap_or(bg);
         let hover_bg = hover_bg_override.unwrap_or(hover_bg);
         let active_bg = hover_bg_override.unwrap_or(active_bg);
-        let text = text_color_override.unwrap_or(text);
-
-        let separator_color = with_alpha(
+        let mut hover = StyleRefinement::default().bg(hover_bg);
+        let mut pressed = StyleRefinement::default().bg(active_bg);
+        if !(suppress_hover_border || borderless) {
+            hover = hover.border_color(hover_border);
+            pressed = pressed.border_color(active_border);
+        }
+        let interaction = InteractionStyle::accent(theme)
+            .persistent_background(selected_bg.unwrap_or(super::control_open_background(theme)))
+            .hover(hover)
+            .pressed(pressed)
+            .dim_when_disabled(true);
+        let state = InteractionState::default()
+            .selected(
+                selected,
+                selected_bg.unwrap_or(theme.colors.interaction.pressed_background),
+            )
+            .open(open)
+            .busy(busy)
+            .disabled(disabled);
+        let state_color = |color: Rgba| interaction.color(color, state);
+        let bg = state_color(bg_override.unwrap_or(bg));
+        let text = state_color(text_color_override.unwrap_or(text));
+        let border = state_color(border);
+        let separator_color = state_color(with_alpha(
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.34 } else { 0.26 },
-        );
+        ));
+        let start_slot = start_slot.map(|slot| slot.into_element(theme, disabled));
+        let end_slot = end_slot.map(|slot| slot.into_element(theme, disabled));
         let icon_only = looks_like_icon_button(label.as_ref());
-        let selected_bg_override = selected_bg;
-        let suppress_hover_border = suppress_hover_border || borderless;
         let control_height = control_height(ui_scale);
         let control_pad_x = control_pad_x(ui_scale);
         let control_pad_y = control_pad_y(ui_scale);
@@ -509,31 +627,7 @@ impl Button {
         if !borderless {
             base = base.border_1().border_color(border);
         }
-        let selected_bg =
-            selected_bg_override.unwrap_or(theme.colors.interaction.pressed_background);
-        let mut hover = StyleRefinement::default().bg(hover_bg);
-        let mut pressed = StyleRefinement::default().bg(active_bg);
-        if !suppress_hover_border {
-            hover = hover.border_color(hover_border);
-            pressed = pressed.border_color(active_border);
-        }
-        base = InteractionStyle::accent(theme)
-            .persistent_background(
-                selected_bg_override.unwrap_or(super::control_open_background(theme)),
-            )
-            .hover(hover)
-            .pressed(pressed)
-            .disabled_opacity(0.5)
-            .apply(
-                base,
-                InteractionState::default()
-                    .selected(selected, selected_bg)
-                    .open(open)
-                    .busy(busy)
-                    .disabled(disabled),
-            );
-
-        base
+        interaction.apply(base, state)
     }
 }
 
@@ -578,4 +672,225 @@ fn mix(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
         a.blue + (b.blue - a.blue) * t,
         a.alpha + (b.alpha - a.alpha) * t,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{
+        assert_colour_close, painted_control_quads, redraw, solid_background, solid_colour,
+    };
+    use gpui::{Context, Render, TestAppContext, Window};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const STYLES: [ButtonStyle; 6] = [
+        ButtonStyle::Filled,
+        ButtonStyle::Outlined,
+        ButtonStyle::Solid,
+        ButtonStyle::Subtle,
+        ButtonStyle::Transparent,
+        ButtonStyle::Danger,
+    ];
+
+    fn themes() -> [AppTheme; 2] {
+        [
+            AppTheme::from_key(crate::theme::DEFAULT_DARK_THEME_KEY).unwrap(),
+            AppTheme::gitcomet_light(),
+        ]
+    }
+
+    fn scale() -> UiScale {
+        UiScale::from_percent(100)
+    }
+
+    fn root_colours(button: &mut Stateful<Div>) -> [Option<Rgba>; 3] {
+        let border = button.style().border_color.as_ref().and_then(solid_colour);
+        let text = button.style().text.color.map(|color| color.into_color());
+        [solid_background(button), border, text]
+    }
+
+    #[test]
+    fn disabled_buttons_dim_their_colours_without_element_opacity() {
+        for theme in themes() {
+            for style in STYLES {
+                let button = || Button::new("subject", "Action").style(style);
+                let mut enabled = button().render(theme, scale());
+                let mut disabled = button().disabled(true).render(theme, scale());
+
+                assert_eq!(disabled.style().opacity, None, "{style:?}");
+                for (enabled, disabled) in root_colours(&mut enabled)
+                    .into_iter()
+                    .zip(root_colours(&mut disabled))
+                {
+                    assert_colour_close(disabled, enabled.map(|color| theme.disabled_color(color)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_buttons_dim_their_selected_and_open_fills() {
+        for theme in themes() {
+            let button = || Button::new("subject", "Action").disabled(true);
+            let mut selected = button().selected(true).render(theme, scale());
+            let mut open = button().open(true).render(theme, scale());
+
+            assert_colour_close(
+                solid_background(&mut selected),
+                Some(theme.disabled_color(theme.colors.interaction.pressed_background)),
+            );
+            assert_colour_close(
+                solid_background(&mut open),
+                Some(theme.disabled_color(super::super::control_open_background(theme))),
+            );
+        }
+    }
+
+    #[test]
+    fn dimming_a_slot_dims_each_of_its_colours() {
+        let theme = themes()[0];
+        let colour = gpui::rgb(0x3388cc);
+        let plate = with_alpha(colour, 0.14);
+        let colours = |slot: ButtonSlot, disabled: bool| -> Vec<Rgba> {
+            match slot.dimmed(theme, disabled) {
+                ButtonSlot::Icon(mut icon) => icon
+                    .text_style()
+                    .color
+                    .map(|c| c.into_color())
+                    .into_iter()
+                    .collect(),
+                ButtonSlot::Spinner { color, .. } => vec![color],
+                ButtonSlot::Keys { fg, bg, .. } => vec![fg, bg],
+                ButtonSlot::Custom(_) => Vec::new(),
+            }
+        };
+        let slots = || {
+            [
+                (
+                    ButtonSlot::from(crate::icons::svg_icon("icons/check.svg", colour, px(14.0))),
+                    vec![colour],
+                ),
+                (
+                    ButtonSlot::spinner("spinner", colour, px(14.0)),
+                    vec![colour],
+                ),
+                (
+                    ButtonSlot::keys("Ctrl+S", colour, scale()),
+                    vec![colour, plate],
+                ),
+            ]
+        };
+        for (disabled, dim) in [(false, false), (true, true)] {
+            for (slot, expected) in slots() {
+                let actual = colours(slot, disabled);
+                assert_eq!(actual.len(), expected.len());
+                for (actual, expected) in actual.into_iter().zip(expected) {
+                    let expected = if dim {
+                        theme.disabled_color(expected)
+                    } else {
+                        expected
+                    };
+                    assert_colour_close(Some(actual), Some(expected));
+                }
+            }
+        }
+    }
+
+    struct EnabledAndDisabled {
+        theme: AppTheme,
+        colour: Rgba,
+        custom_states: Rc<RefCell<Vec<bool>>>,
+    }
+
+    impl Render for EnabledAndDisabled {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let button = |id: &'static str, disabled: bool| {
+                let custom_states = Rc::clone(&self.custom_states);
+                Button::new(id, "Go")
+                    .start_slot(ButtonSlot::custom(move |disabled| {
+                        custom_states.borrow_mut().push(disabled);
+                        div()
+                    }))
+                    .separated_end_slot(ButtonSlot::keys("Enter", self.colour, scale()))
+                    .disabled(disabled)
+                    .render(self.theme, scale())
+            };
+            div()
+                .flex()
+                .child(button("on", false))
+                .child(button("off", true))
+        }
+    }
+
+    fn fills_inside(cx: &mut gpui::VisualTestContext, selector: &'static str) -> Vec<Rgba> {
+        let bounds = cx.debug_bounds(selector).expect("button must be drawn");
+        cx.update(|window, _| {
+            let scale = window.scale_factor();
+            let inside = |value: f32, start: gpui::Pixels, length: gpui::Pixels| {
+                value >= f32::from(start) * scale - 1.0
+                    && value <= f32::from(start + length) * scale + 1.0
+            };
+            window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| {
+                    inside(quad.bounds.origin.x.0, bounds.origin.x, bounds.size.width)
+                        && inside(quad.bounds.origin.y.0, bounds.origin.y, bounds.size.height)
+                })
+                .filter_map(|quad| solid_colour(&quad.background))
+                .collect()
+        })
+    }
+
+    #[gpui::test]
+    fn disabled_buttons_paint_dimmed_slots_and_separator(cx: &mut TestAppContext) {
+        let theme = themes()[0];
+        let colour = gpui::rgb(0x3388cc);
+        let custom_states = Rc::new(RefCell::new(Vec::new()));
+        let (_view, cx) = cx.add_window_view(|_, _| EnabledAndDisabled {
+            theme,
+            colour,
+            custom_states: Rc::clone(&custom_states),
+        });
+        redraw(cx);
+
+        let states = custom_states.borrow().clone();
+        assert!(!states.is_empty());
+        assert!(
+            states.chunks(2).all(|pair| pair == [false, true]),
+            "{states:?}"
+        );
+
+        let plate = with_alpha(colour, 0.14);
+        let has = |fills: &[Rgba], expected: Rgba| {
+            fills.iter().any(|fill| {
+                [
+                    fill.red - expected.red,
+                    fill.green - expected.green,
+                    fill.blue - expected.blue,
+                ]
+                .iter()
+                .chain([fill.alpha - expected.alpha].iter())
+                .all(|delta| delta.abs() < 1e-5)
+            })
+        };
+        let enabled = fills_inside(cx, "on");
+        let disabled = fills_inside(cx, "off");
+        assert!(has(&enabled, plate), "{enabled:?}");
+        assert!(has(&disabled, theme.disabled_color(plate)), "{disabled:?}");
+        assert!(!has(&disabled, plate), "{disabled:?}");
+
+        let separator = |cx: &mut gpui::VisualTestContext, selector| {
+            painted_control_quads(cx, selector)
+                .first()
+                .and_then(|(_, border)| solid_colour(border))
+        };
+        let enabled_separator = separator(cx, "on_end_slot_separator");
+        assert!(enabled_separator.is_some());
+        assert_colour_close(
+            separator(cx, "off_end_slot_separator"),
+            enabled_separator.map(|color| theme.disabled_color(color)),
+        );
+    }
 }

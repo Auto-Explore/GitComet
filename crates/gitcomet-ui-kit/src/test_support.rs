@@ -73,6 +73,32 @@ pub fn painted_control_quads(
     })
 }
 
+/// Colours compared within the Rgba→Hsla→Rgba round trip a style applies.
+pub fn assert_colour_close(actual: Option<gpui::Rgba>, expected: Option<gpui::Rgba>) {
+    let channels = |color: Option<gpui::Rgba>| color.map(|c| [c.red, c.green, c.blue, c.alpha]);
+    match (channels(actual), channels(expected)) {
+        (Some(a), Some(e)) => assert!(
+            a.iter().zip(e).all(|(a, e)| (a - e).abs() < 1e-5),
+            "{actual:?} vs {expected:?}"
+        ),
+        (a, e) => assert_eq!(a.is_some(), e.is_some(), "{actual:?} vs {expected:?}"),
+    }
+}
+
+pub fn solid_colour(background: &gpui::Background) -> Option<gpui::Rgba> {
+    use palette::IntoColor;
+    background.as_solid().map(|color| color.into_color())
+}
+
+pub fn solid_background(element: &mut impl gpui::Styled) -> Option<gpui::Rgba> {
+    element
+        .style()
+        .background
+        .as_ref()
+        .and_then(|fill| fill.color())
+        .and_then(|background| solid_colour(&background))
+}
+
 /// Every `.rs` file below `dir`, for guards that scan a crate's own source.
 pub fn rust_sources_under(dir: &std::path::Path, sources: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("read source directory") {
