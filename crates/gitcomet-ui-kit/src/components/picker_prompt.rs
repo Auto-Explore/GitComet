@@ -9,7 +9,7 @@ use crate::ui_scale::UiScale;
 use crate::{Scrollbar, ScrollbarAxis, TextInput};
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
+    ClickEvent, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, Rgba, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
 use palette::IntoColor;
@@ -1453,7 +1453,6 @@ pub fn picker_row<V: 'static>(
         .gap(scaled_px(ROW_ICON_GAP_PX))
         .px(scaled_px(ROW_PAD_X_PX))
         .rounded(scaled_px(ROW_CORNER_PX))
-        .cursor(CursorStyle::PointingHand)
         .when_some(row_icon, |row, icon| {
             row.child(
                 crate::icons::svg_icon(
@@ -1624,7 +1623,6 @@ fn section_header_row(
             .debug_selector(move || format!("picker_prompt_section_{debug_label}"))
             .w_full()
             .rounded(scaled_px(ROW_CORNER_PX))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(label_row)
             .on_activate(
@@ -1841,7 +1839,6 @@ pub fn remove_row_button<V: 'static>(
                 .row_height(super::REMOVE_BUTTON_SIZE_PX, 32.0),
         )
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .when(!always_visible, |button| {
             button
                 .invisible()

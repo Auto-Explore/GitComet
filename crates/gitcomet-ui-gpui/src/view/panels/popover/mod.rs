@@ -523,7 +523,6 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .border_1()
         .border_color(gpui::transparent_black())
         .track_focus(&focus_handle)
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(
             components::InteractionStyle::new(theme),
             components::InteractionState::default(),

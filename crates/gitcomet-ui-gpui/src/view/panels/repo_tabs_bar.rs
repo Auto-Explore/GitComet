@@ -875,7 +875,6 @@ impl Render for RepoTabsBarView {
                 // Fully cover any label ink beneath the button; the sibling
                 // ramp transitions into this exact background.
                 .bg(label_bg)
-                .cursor_pointer()
                 .control_interaction(
                     controls::InteractionStyle::destructive(theme).on_surface(label_bg),
                     controls::InteractionState::default(),

@@ -1013,7 +1013,6 @@ impl GitCometView {
                     .justify_center()
                     .size(control_height)
                     .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
                     .control_interaction(
                         InteractionStyle::new(theme),
                         InteractionState::default().disabled(disabled),
@@ -1078,7 +1077,6 @@ impl GitCometView {
             .justify_center()
             .size(control_height)
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(svg_icon(
                 "icons/plus.svg",

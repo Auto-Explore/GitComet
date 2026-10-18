@@ -78,7 +78,6 @@ fn status_bar_chip(
         .flex()
         .items_center()
         .justify_center()
-        .cursor(CursorStyle::PointingHand)
         .tab_index(0)
         .control_interaction(
             InteractionStyle::link(theme)
@@ -550,7 +549,6 @@ impl BarItemOwner for BottomStatusBarView {
             .flex()
             .items_center()
             .gap(scaled_px(4.0))
-            .cursor(CursorStyle::PointingHand)
             .text_color(theme.colors.foreground.secondary)
             .tab_index(0)
             .control_interaction(InteractionStyle::link(theme), InteractionState::default())
@@ -585,7 +583,6 @@ impl BarItemOwner for BottomStatusBarView {
             .debug_selector(|| "bottom_status_bar_version".to_string())
             .flex()
             .items_center()
-            .cursor(CursorStyle::PointingHand)
             .text_size(theme.ui_text(11.0))
             .line_height(scaled_px(theme.metrics.ui_text(12.0)))
             .text_color(theme.colors.foreground.secondary)

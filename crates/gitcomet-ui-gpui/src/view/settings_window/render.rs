@@ -607,7 +607,6 @@ impl SettingsWindowView {
                     .px_2()
                     .py_1()
                     .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
                     .control_interaction(
                         controls::InteractionStyle::new(theme),
                         controls::InteractionState::default(),

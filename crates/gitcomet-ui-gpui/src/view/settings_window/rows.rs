@@ -73,7 +73,6 @@ impl SettingsWindowView {
             .items_center()
             .gap_2()
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 InteractionStyle::new(theme),
                 InteractionState::default().selected(selected, selected_bg),

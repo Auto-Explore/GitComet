@@ -270,7 +270,6 @@ impl DiffRenderer {
             .px_1()
             .h(components::control_height(scale))
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 controls::InteractionStyle::header(theme),
                 controls::InteractionState::default(),

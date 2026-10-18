@@ -2087,7 +2087,6 @@ fn render_task_checkbox(
     // start a selection, and it toggles on a completed click — a press dragged
     // off the box writes nothing.
     checkbox
-        .cursor_pointer()
         .control_interaction(
             crate::kit::interaction::InteractionStyle::new(theme).hover(
                 gpui::StyleRefinement::default().border_color(theme.colors.accent.foreground),

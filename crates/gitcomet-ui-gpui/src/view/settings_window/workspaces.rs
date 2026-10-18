@@ -128,7 +128,6 @@ impl SettingsWindowView {
                             gpui::rgba(0x00000000)
                         })
                         .p(px(2.0))
-                        .cursor(CursorStyle::PointingHand)
                         .child(
                             div()
                                 .size_full()

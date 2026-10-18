@@ -297,7 +297,6 @@ impl Tab {
             .border_r_1()
             .border_color(gpui::transparent_black())
             .text_color(text_color)
-            .cursor_pointer()
             .block_mouse_except_scroll()
             .children(selected_shape)
             .children(self.children)
