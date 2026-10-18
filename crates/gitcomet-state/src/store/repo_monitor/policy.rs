@@ -141,8 +141,36 @@ impl PolicySnapshot {
     }
 
     pub fn is_git_directory_modify(&self, path: &Path, event: &notify::Event) -> bool {
-        matches!(event.kind, notify::EventKind::Modify(kind) if !matches!(kind, notify::event::ModifyKind::Name(_)))
-            && self.git_roots.contains(path)
+        if !matches!(event.kind, notify::EventKind::Modify(kind) if !matches!(kind, notify::event::ModifyKind::Name(_)))
+        {
+            return false;
+        }
+        if self.git_roots.contains(path) {
+            return true;
+        }
+        // Git/LFS can touch the hooks directory while reading status. Match
+        // only the immediate hooks boundary of a discovered Git directory;
+        // names elsewhere and structural events must retain their coverage.
+        if path.file_name().is_none_or(|name| name != "hooks")
+            || !path
+                .parent()
+                .is_some_and(|parent| self.git_roots.contains(parent))
+        {
+            return false;
+        }
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            // Junctions and other reparse entries can also report directories.
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return false;
+            }
+        }
+        metadata.is_dir() && !metadata.file_type().is_symlink()
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::model::LoadKind;
 mod efficiency;
+mod hooks_directory_noise;
 mod native_lifecycle;
 mod path_identities;
 mod policy_lifecycle;
