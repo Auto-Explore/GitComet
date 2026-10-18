@@ -150,6 +150,21 @@ pub mod source_guards {
         out
     }
 
+    /// Production files calling `.opacity(`, with their call counts. gpui-ce
+    /// paints element opacity below 1.0 as an offscreen group that defeats
+    /// partial redraw; colour alpha costs nothing.
+    pub fn opacity_calls(src_dir: &Path) -> Vec<(String, usize)> {
+        let mut calls: Vec<(String, usize)> = production_sources(src_dir)
+            .into_iter()
+            .filter_map(|(path, source)| {
+                let count = source.matches(".opacity(").count();
+                (count > 0).then_some((path, count))
+            })
+            .collect();
+        calls.sort();
+        calls
+    }
+
     /// The size argument of every `svg_icon(`/`svg_spinner(` call in `source`.
     pub fn icon_size_args(source: &str) -> Vec<(usize, String)> {
         let mut sizes = Vec::new();

@@ -4,7 +4,7 @@
 mod tests {
     use gitcomet_ui_kit::test_support::source_guards::{
         DiscreteControlAllowlist, direct_clipboard_access, discrete_control_violations,
-        unresolved_menu_icons, unscaled_icon_sizes,
+        opacity_calls, unresolved_menu_icons, unscaled_icon_sizes,
     };
 
     fn src_dir() -> std::path::PathBuf {
@@ -265,6 +265,29 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "use crate::kit::window_chrome::window_surface_bounds instead: {offenders:#?}"
+        );
+    }
+
+    /// Each element opacity below 1.0 becomes a viewport-sized offscreen group
+    /// in gpui-ce, defeating partial redraw. The remaining uses are listed so a
+    /// new one, or a list entry nothing needs any more, fails here.
+    #[test]
+    fn element_opacity_stays_on_its_allowlist() {
+        let allowed: Vec<(String, usize)> = [
+            ("view/panels/main/diff_view.rs", 1),
+            ("view/panes/history/find.rs", 1),
+            ("view/panes/main/interactive_rebase.rs", 3),
+            ("view/rows/history/mod.rs", 3),
+            ("view/splash.rs", 1),
+            ("view/toast_host.rs", 1),
+        ]
+        .into_iter()
+        .map(|(path, count): (&str, usize)| (path.to_string(), count))
+        .collect();
+        assert_eq!(
+            opacity_calls(&src_dir()),
+            allowed,
+            "element opacity becomes an offscreen group in gpui-ce; use with_alpha or AppTheme::disabled_color"
         );
     }
 }
