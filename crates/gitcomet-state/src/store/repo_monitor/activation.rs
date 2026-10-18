@@ -463,8 +463,11 @@ impl MetadataSnapshot {
                 // preserving timestamps. Their bytes are the actual input.
                 use std::io::Read;
                 let mut contents = Vec::new();
-                fs::File::open(&identity)?
-                    .take(MAX_CONTROL_FILE_BYTES - self.bytes + 1)
+                let file = fs::File::open(&identity)?;
+                // Take does not inherit File's read_to_end capacity hint. Keep
+                // this hint optional: the actual bytes still enforce the limit.
+                let _ = contents.try_reserve_exact(metadata.len() as usize);
+                file.take(MAX_CONTROL_FILE_BYTES - self.bytes + 1)
                     .read_to_end(&mut contents)?;
                 self.bytes += contents.len() as u64;
                 if self.bytes > MAX_CONTROL_FILE_BYTES {
