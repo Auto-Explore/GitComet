@@ -948,33 +948,39 @@ fn the_bar_stage_button_takes_the_selected_files(cx: &mut gpui::TestAppContext) 
 }
 
 /// A mergetool window's resolver saves from the bottom bar too, with Save &
-/// close as its only save: git stages the result itself.
+/// close as its only save: it writes the merge for git and exits.
 #[gpui::test]
 fn a_mergetool_resolver_closes_from_the_bottom_bar(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let repo_id = RepoId(70570);
-    let commit_id = CommitId("abcdef001122338e".into());
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_mergetool_bar_save",
-        std::process::id()
-    ));
-    let path = std::path::PathBuf::from("src/conflicted.rs");
-    let repo = simple_conflict_repo(repo_id, &workdir, &commit_id, path.as_path());
+    let repo_id = RepoId(70577);
+    let commit_id = CommitId("abcdef0011223394".into());
+    let workdir = tempfile::tempdir().unwrap();
+    let path = std::path::PathBuf::from("conflicted.rs");
+    let repo = simple_conflict_repo(repo_id, workdir.path(), &commit_id, path.as_path());
+    let Loadable::Ready(Some(file)) = &repo.conflict_state.conflict_file else {
+        panic!("the fixture holds a conflict file");
+    };
+    std::fs::write(workdir.path().join(&path), file.current.as_deref().unwrap()).unwrap();
     apply_state(cx, &view, app_state_with_active_repo(repo));
     wait_for_main_pane_condition(
         cx,
         &view,
         "conflict resolver for the mergetool bar",
-        |pane| pane.conflict_resolver.path.as_deref() == Some(path.as_path()),
+        |pane| {
+            pane.conflict_resolver.path.as_deref() == Some(path.as_path())
+                && pane.conflict_resolver_conflict_count() == 2
+        },
         |pane| format!("path={:?}", pane.conflict_resolver.path),
     );
+    let exit_code = Arc::new(std::sync::atomic::AtomicI32::new(-1));
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
     cx.update(|_window, app| {
-        let diff_renderer = view.read(app).diff_renderer.clone();
         diff_renderer.update(app, |pane, cx| {
             pane.view_mode = GitCometViewMode::FocusedMergetool;
+            pane.focused_mergetool_exit_code = Some(Arc::clone(&exit_code));
             cx.notify();
         });
     });
@@ -989,6 +995,33 @@ fn a_mergetool_resolver_closes_from_the_bottom_bar(cx: &mut gpui::TestAppContext
     assert!(bar.contains(&close.center()), "{close:?} {bar:?}");
     assert!(cx.debug_bounds("conflict_save").is_none());
     assert!(cx.debug_bounds("conflict_save_stage").is_none());
+
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            for ix in 0..2 {
+                pane.conflict_resolver_pick_at(
+                    ix,
+                    crate::view::conflict_resolver::ConflictChoice::Ours,
+                    cx,
+                );
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let close = cx
+        .debug_bounds("conflict_save_close")
+        .expect("Save & close");
+    cx.simulate_click(close.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        exit_code.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "Save & close exits as a resolved merge"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workdir.path().join(&path)).unwrap(),
+        "context before\nours one\nmiddle context\nours two\n"
+    );
 }
 
 /// While the conflict file loads the resolver output is empty, so the bar

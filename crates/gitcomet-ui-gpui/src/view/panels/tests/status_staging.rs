@@ -1193,11 +1193,17 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     crate::view::test_support::drain_store_worker(&view, cx);
 }
 
-/// The text resolver saves from the bottom bar's right end, Save & stage
-/// rightmost, and keeps both whole in a narrow pane. Both stay off while a
-/// conflict is open; once it is picked, Save & stage writes and stages it.
-#[gpui::test]
-fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppContext) {
+/// `conflicted_merge` open in the text resolver on `a.txt`, through the
+/// real backend.
+fn open_text_resolver(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    View,
+    Entity<DiffRenderer>,
+    &mut gpui::VisualTestContext,
+) {
     let dir = tempfile::tempdir().unwrap();
     conflicted_merge(dir.path());
     let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
@@ -1229,6 +1235,16 @@ fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppConte
             diff_renderer.read(app).conflict_resolver.path.as_deref() == Some(Path::new("a.txt"))
         })
     });
+
+    (dir, store, view, diff_renderer, cx)
+}
+
+/// The text resolver saves from the bottom bar's right end, Save & stage
+/// rightmost, and keeps both whole in a narrow pane. Both stay off while a
+/// conflict is open; once it is picked, Save & stage writes and stages it.
+#[gpui::test]
+fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
 
     let bar = cx.debug_bounds("diff_bottom_bar").expect("the bottom bar");
     let save = cx.debug_bounds("conflict_save").expect("Save");
@@ -1319,6 +1335,37 @@ fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppConte
         git_output(dir.path(), &["ls-files", "--unmerged"]),
         b"",
         "the resolution is staged"
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+/// The bar's plain Save writes the resolution and leaves the file unmerged.
+#[gpui::test]
+fn the_resolver_bar_save_writes_without_staging(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    click(cx, "conflict_save");
+    wait_for(cx, &view, &store, "save the resolution", |repo| {
+        repo.local_actions_in_flight == 0
+    });
+
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "ours\n"
+    );
+    assert!(
+        !git_output(dir.path(), &["ls-files", "--unmerged"]).is_empty(),
+        "Save leaves the file unmerged"
     );
     store.dispatch(Msg::CloseRepo { repo_id: REPO });
     crate::view::test_support::drain_store_worker(&view, cx);
