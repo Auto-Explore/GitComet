@@ -774,23 +774,31 @@ impl DiffRenderer {
     /// which is a picture with no text to search; search has to tell the two
     /// apart or it would report no matches over a file it could have searched.
     pub(in crate::view) fn is_conflict_rendered_markdown_preview_active(&self) -> bool {
-        self.is_conflict_rendered_preview_active()
-            && self.conflict_resolver.path.as_ref().is_some_and(|path| {
-                crate::view::preview_path_rendered_kind(path) == Some(RenderedPreviewKind::Markdown)
-            })
+        self.conflict_rendered_preview_kind() == Some(RenderedPreviewKind::Markdown)
     }
 
-    /// Whether the merge tool on screen shows its rendered preview. It stays
-    /// loaded, Preview mode and all, under a preview or editor of its file.
     pub(in crate::view) fn is_conflict_rendered_preview_active(&self) -> bool {
-        self.active_conflict_target().is_some()
-            && self.conflict_resolver.path.as_ref().is_some_and(|path| {
-                matches!(
-                    crate::view::preview_path_rendered_kind(path),
-                    Some(RenderedPreviewKind::Svg | RenderedPreviewKind::Markdown)
-                ) && self.conflict_resolver.resolver_preview_mode
-                    == ConflictResolverPreviewMode::Preview
-            })
+        self.conflict_rendered_preview_kind().is_some()
+    }
+
+    /// The rendered preview the merge tool on screen shows. The merge tool
+    /// keeps its file and Preview mode under that file's preview or editor,
+    /// and while the next conflict loads, so it counts only when loaded for
+    /// the conflict shown.
+    fn conflict_rendered_preview_kind(&self) -> Option<RenderedPreviewKind> {
+        let (path, _) = self.active_conflict_target()?;
+        let repo_id = self.active_repo_id()?;
+        if !self.conflict_resolver.matches_target(repo_id, &path)
+            || self.conflict_resolver.resolver_preview_mode != ConflictResolverPreviewMode::Preview
+        {
+            return None;
+        }
+        crate::view::preview_path_rendered_kind(&path).filter(|kind| {
+            matches!(
+                kind,
+                RenderedPreviewKind::Svg | RenderedPreviewKind::Markdown
+            )
+        })
     }
 
     /// Parse the three sides of a conflicted markdown file for its rendered
