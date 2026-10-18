@@ -837,44 +837,62 @@ mod tests {
         })
     }
 
-    #[gpui::test]
-    fn disabled_buttons_paint_dimmed_slots_and_separator(cx: &mut TestAppContext) {
-        let theme = themes()[0];
-        let color = gpui::rgb(0x3388cc);
+    const SLOT_COLOR: u32 = 0x3388cc;
+
+    fn draw_enabled_and_disabled(
+        cx: &mut TestAppContext,
+    ) -> (&mut gpui::VisualTestContext, Rc<RefCell<Vec<bool>>>) {
         let custom_states = Rc::new(RefCell::new(Vec::new()));
-        let (_view, cx) = cx.add_window_view(|_, _| EnabledAndDisabled {
-            theme,
-            color,
-            custom_states: Rc::clone(&custom_states),
+        let states = Rc::clone(&custom_states);
+        let (_view, cx) = cx.add_window_view(move |_, _| EnabledAndDisabled {
+            theme: themes()[0],
+            color: gpui::rgb(SLOT_COLOR),
+            custom_states: states,
         });
         redraw(cx);
+        (cx, custom_states)
+    }
 
+    #[gpui::test]
+    fn custom_slots_are_built_with_the_buttons_disabled_state(cx: &mut TestAppContext) {
+        let (_cx, custom_states) = draw_enabled_and_disabled(cx);
         let states = custom_states.borrow().clone();
         assert!(!states.is_empty());
         assert!(
             states.chunks(2).all(|pair| pair == [false, true]),
             "{states:?}"
         );
+    }
 
-        let plate = with_alpha(color, 0.14);
+    #[gpui::test]
+    fn disabled_buttons_paint_dimmed_keycap_plates(cx: &mut TestAppContext) {
+        let (cx, _) = draw_enabled_and_disabled(cx);
+        let plate = with_alpha(gpui::rgb(SLOT_COLOR), 0.14);
         let has =
             |fills: &[Rgba], expected: Rgba| fills.iter().any(|fill| color_close(*fill, expected));
         let enabled = fills_inside(cx, "on");
         let disabled = fills_inside(cx, "off");
         assert!(has(&enabled, plate), "{enabled:?}");
-        assert!(has(&disabled, theme.disabled_color(plate)), "{disabled:?}");
+        assert!(
+            has(&disabled, themes()[0].disabled_color(plate)),
+            "{disabled:?}"
+        );
         assert!(!has(&disabled, plate), "{disabled:?}");
+    }
 
+    #[gpui::test]
+    fn disabled_buttons_paint_a_dimmed_slot_separator(cx: &mut TestAppContext) {
+        let (cx, _) = draw_enabled_and_disabled(cx);
         let separator = |cx: &mut gpui::VisualTestContext, selector| {
             painted_control_quads(cx, selector)
                 .first()
                 .and_then(|(_, border)| solid_color(border))
         };
-        let enabled_separator = separator(cx, "on_end_slot_separator");
-        assert!(enabled_separator.is_some());
+        let enabled = separator(cx, "on_end_slot_separator");
+        assert!(enabled.is_some());
         assert_color_close(
             separator(cx, "off_end_slot_separator"),
-            enabled_separator.map(|color| theme.disabled_color(color)),
+            enabled.map(|color| themes()[0].disabled_color(color)),
         );
     }
 }
