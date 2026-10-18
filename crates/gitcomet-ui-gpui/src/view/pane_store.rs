@@ -98,10 +98,10 @@ impl PaneStore {
         self.set_policy(policy);
     }
 
-    /// Whether the pane admits a worktree save: every save edits, and one
-    /// that stages is staging too.
+    /// Whether the pane admits a worktree save: none with its commands off,
+    /// every save edits, and one that stages is staging too.
     pub(in crate::view) fn admits_save(&self, stage: bool) -> bool {
-        self.policy.allow_edit && (!stage || self.policy.allow_stage)
+        !self.read_only && self.policy.allow_edit && (!stage || self.policy.allow_stage)
     }
 
     pub fn set_policy(&mut self, policy: DiffPanePolicy) {
@@ -135,7 +135,7 @@ impl PaneStore {
         repo_id: RepoId,
         lifetime: u64,
     ) -> Option<SaveOrigin> {
-        if self.read_only || !self.policy.allow_edit {
+        if !self.admits_save(false) {
             return None;
         }
         let session = if let Some(binding) = self.binding {
@@ -300,13 +300,18 @@ impl PaneStore {
 mod tests {
     use super::*;
 
+    fn live_store() -> PaneStore {
+        let (store, _events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
+        PaneStore::from(Arc::new(store))
+    }
+
     #[test]
     fn a_save_that_stages_needs_both_permissions() {
         let store = |allow_edit, allow_stage| {
             let mut policy = DiffPanePolicy::default();
             policy.allow_edit = allow_edit;
             policy.allow_stage = allow_stage;
-            let mut store = PaneStore::read_only();
+            let mut store = live_store();
             store.set_policy(policy);
             store
         };
@@ -314,5 +319,20 @@ mod tests {
         assert_eq!(admits(store(true, true)), [true, true]);
         assert_eq!(admits(store(true, false)), [true, false]);
         assert_eq!(admits(store(false, true)), [false, false]);
+    }
+
+    /// A pane whose commands are off drops every save, whatever its policy.
+    #[test]
+    fn a_pane_without_commands_admits_no_save() {
+        let mut read_only = PaneStore::read_only();
+        read_only.set_policy(DiffPanePolicy::default());
+        let mut disabled = live_store();
+        disabled.disable_commands();
+        for store in [read_only, disabled] {
+            assert_eq!(
+                [false, true].map(|stage| store.admits_save(stage)),
+                [false, false]
+            );
+        }
     }
 }
