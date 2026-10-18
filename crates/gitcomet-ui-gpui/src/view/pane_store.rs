@@ -277,8 +277,13 @@ impl PaneStore {
                 store.dispatch(msg);
                 return;
             }
-            msg @ Msg::SaveWorktreeFile { repo_id: id, .. }
-                if id == repo_id && self.policy.allow_edit && !linked =>
+            // A save that stages is staging too.
+            msg @ Msg::SaveWorktreeFile {
+                repo_id: id, stage, ..
+            } if id == repo_id
+                && self.policy.allow_edit
+                && (!stage || self.policy.allow_stage)
+                && !linked =>
             {
                 store.dispatch(msg);
                 return;

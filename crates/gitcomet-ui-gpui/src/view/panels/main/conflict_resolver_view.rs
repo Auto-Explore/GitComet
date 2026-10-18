@@ -67,6 +67,15 @@ impl ConflictSave {
         }
     }
 
+    /// Whether the pane lets this save run: every save edits, and Save &
+    /// stage stages too.
+    fn allowed(self, policy: &gitcomet_extension_api::DiffPanePolicy) -> bool {
+        match self {
+            Self::Save | Self::SaveAndClose => policy.allow_edit,
+            Self::SaveAndStage => policy.allow_edit && policy.allow_stage,
+        }
+    }
+
     /// The primary save is framed with an icon, like Stage.
     fn primary_icon(self) -> Option<&'static str> {
         match self {
@@ -402,6 +411,7 @@ impl DiffRenderer {
         let pane = cx.entity().downgrade();
         ConflictSave::for_view_mode(self.view_mode)
             .iter()
+            .filter(|save| save.allowed(&self.store.policy))
             .map(|&save| {
                 let pane = pane.clone();
                 let button =
@@ -2745,6 +2755,27 @@ mod conflict_save_tests {
         assert_eq!(labels(GitCometViewMode::Normal), ["Save", "Save & stage"]);
         assert_eq!(labels(GitCometViewMode::FocusedMergetool), ["Save & close"]);
         assert!(labels(GitCometViewMode::FocusedDiff).is_empty());
+    }
+
+    #[test]
+    fn staging_saves_need_both_permissions() {
+        let policy = |allow_edit, allow_stage| {
+            let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
+            policy.allow_edit = allow_edit;
+            policy.allow_stage = allow_stage;
+            policy
+        };
+        let allowed = |policy| {
+            [
+                ConflictSave::Save,
+                ConflictSave::SaveAndStage,
+                ConflictSave::SaveAndClose,
+            ]
+            .map(|save| save.allowed(&policy))
+        };
+        assert_eq!(allowed(policy(true, true)), [true, true, true]);
+        assert_eq!(allowed(policy(true, false)), [true, false, true]);
+        assert_eq!(allowed(policy(false, true)), [false, false, false]);
     }
 }
 
