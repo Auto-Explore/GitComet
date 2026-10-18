@@ -1,5 +1,6 @@
 //! Data-driven actions shared by built-in and contributed toolbars.
 
+use super::split_button::filled_action_frame_border;
 use super::{BarButton, ButtonStyle, filled_action_frame, keystrokes_display};
 use crate::{theme::AppTheme, tooltip::GitCometTooltipExt, ui_scale::UiScale};
 use gpui::prelude::*;
@@ -147,7 +148,10 @@ impl<C: Clone + 'static> ActionButton<C> {
             )
             .into_any_element();
         if self.style == ActionButtonStyle::Framed {
+            // The frame dims with the button, or a disabled action still reads as live.
+            let disabled = !enabled;
             filled_action_frame(theme, scale)
+                .border_color(theme.disabled_color_if(disabled, filled_action_frame_border(theme)))
                 .debug_selector(move || frame_selector)
                 .child(
                     div()
@@ -155,7 +159,7 @@ impl<C: Clone + 'static> ActionButton<C> {
                         .items_center()
                         .h_full()
                         .rounded(px(theme.radii.control))
-                        .bg(theme.colors.surface.raised)
+                        .bg(theme.disabled_color_if(disabled, theme.colors.surface.raised))
                         .overflow_hidden()
                         .child(button),
                 )
@@ -177,5 +181,63 @@ impl<C> std::fmt::Debug for ActionButton<C> {
             .field("style", &self.style)
             .field("enabled", &self.enabled)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{
+        assert_color_close, color_close, painted_control_quads, painted_fills_inside, redraw,
+        solid_color,
+    };
+    use gpui::{Context, Render, TestAppContext, Window};
+
+    struct FramedPair(AppTheme);
+
+    impl Render for FramedPair {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let action = |enabled| {
+                ActionButton::new("save", "Save", |(), _| {})
+                    .framed()
+                    .enabled(enabled)
+            };
+            let scale = UiScale::from_percent(100);
+            div()
+                .flex()
+                .child(action(true).render("on", (), self.0, scale))
+                .child(action(false).render("off", (), self.0, scale))
+        }
+    }
+
+    #[gpui::test]
+    fn a_disabled_framed_action_dims_its_frame_and_fill(cx: &mut TestAppContext) {
+        for theme in [
+            AppTheme::from_key(crate::theme::DEFAULT_DARK_THEME_KEY).unwrap(),
+            AppTheme::gitcomet_light(),
+        ] {
+            let (_view, cx) = cx.add_window_view(move |_, _| FramedPair(theme));
+            redraw(cx);
+            let border = |cx: &mut gpui::VisualTestContext, selector| {
+                painted_control_quads(cx, selector)
+                    .first()
+                    .and_then(|(_, border)| solid_color(border))
+            };
+            let enabled = border(cx, "on_frame");
+            assert!(enabled.is_some());
+            assert_color_close(
+                border(cx, "off_frame"),
+                enabled.map(|color| theme.disabled_color(color)),
+            );
+
+            let raised = theme.colors.surface.raised;
+            let has =
+                |fills: &[gpui::Rgba], color| fills.iter().any(|fill| color_close(*fill, color));
+            let enabled = painted_fills_inside(cx, "on_frame");
+            let disabled = painted_fills_inside(cx, "off_frame");
+            assert!(has(&enabled, raised), "{enabled:?}");
+            assert!(has(&disabled, theme.disabled_color(raised)), "{disabled:?}");
+            assert!(!has(&disabled, raised), "{disabled:?}");
+        }
     }
 }
