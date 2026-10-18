@@ -780,14 +780,17 @@ impl DiffRenderer {
             })
     }
 
+    /// Whether the merge tool on screen shows its rendered preview. It stays
+    /// loaded, Preview mode and all, under a preview or editor of its file.
     pub(in crate::view) fn is_conflict_rendered_preview_active(&self) -> bool {
-        self.conflict_resolver.path.as_ref().is_some_and(|path| {
-            matches!(
-                crate::view::preview_path_rendered_kind(path),
-                Some(RenderedPreviewKind::Svg | RenderedPreviewKind::Markdown)
-            ) && self.conflict_resolver.resolver_preview_mode
-                == ConflictResolverPreviewMode::Preview
-        })
+        self.active_conflict_target().is_some()
+            && self.conflict_resolver.path.as_ref().is_some_and(|path| {
+                matches!(
+                    crate::view::preview_path_rendered_kind(path),
+                    Some(RenderedPreviewKind::Svg | RenderedPreviewKind::Markdown)
+                ) && self.conflict_resolver.resolver_preview_mode
+                    == ConflictResolverPreviewMode::Preview
+            })
     }
 
     /// Parse the three sides of a conflicted markdown file for its rendered
