@@ -73,7 +73,6 @@ impl SettingsWindowView {
             .items_center()
             .gap_2()
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 InteractionStyle::new(theme),
                 InteractionState::default().selected(selected, selected_bg),
@@ -237,6 +236,16 @@ impl SettingsWindowView {
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
         components::settings_toggle_row(id, label, enabled, theme, self.row_scale(theme))
+    }
+
+    pub(super) fn disabled_toggle_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        enabled: bool,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        components::settings_disabled_toggle_row(id, label, enabled, theme, self.row_scale(theme))
     }
 
     pub(super) fn info_row(

@@ -31,14 +31,14 @@ pub(super) fn paint_rounded_rect(
     } else {
         radius.max(px(0.0)).min(half)
     };
-    window.paint_quad(gpui::quad(
-        snapped,
-        radius,
-        background,
-        border_width,
-        border_color,
-        BorderStyle::Solid,
-    ));
+    window.paint_quad(
+        gpui::PaintQuad::new(snapped)
+            .corner_radii(radius)
+            .background(background)
+            .border_widths(border_width)
+            .border_color(border_color)
+            .border_style(BorderStyle::Solid),
+    );
 }
 
 /// A circle takes a whole device-pixel diameter before its position snaps, so

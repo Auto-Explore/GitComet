@@ -836,11 +836,11 @@ impl SidebarPaneView {
                     move |area, _, _| bounds.set(Some(area)),
                     move |bounds, _, window, _| {
                         if highlighted {
-                            window.paint_quad(gpui::outline(
-                                bounds,
-                                with_alpha(theme.colors.accent.foreground, 0.7),
-                                gpui::BorderStyle::default(),
-                            ));
+                            window.paint_quad(
+                                gpui::PaintQuad::new(bounds)
+                                    .border_widths(1f32)
+                                    .border_color(with_alpha(theme.colors.accent.foreground, 0.7)),
+                            );
                         }
                     },
                 )

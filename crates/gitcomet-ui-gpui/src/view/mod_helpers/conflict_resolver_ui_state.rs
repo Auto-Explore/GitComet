@@ -61,6 +61,7 @@ pub(crate) fn preview_render_image_element(
                 bounds,
                 image_bounds,
                 gpui::Corners::default(),
+                0.0,
                 image,
                 frame_index,
                 false,

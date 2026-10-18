@@ -11,9 +11,9 @@ use gpui::Bounds;
 use gpui::CursorStyle;
 use gpui::Hitbox;
 use gpui::HitboxBehavior;
+use gpui::PaintQuad;
 use gpui::Pixels;
 use gpui::Window;
-use gpui::fill;
 use gpui::point;
 use gpui::px;
 use gpui::size;
@@ -179,7 +179,11 @@ pub(super) fn paint_stage_gutter(
         } else {
             with_alpha(color, 0.75)
         };
-        window.paint_quad(fill(prepaint.cell, chip).corner_radii(px(theme.radii.control)));
+        window.paint_quad(
+            PaintQuad::new(prepaint.cell)
+                .background(chip)
+                .corner_radii(px(theme.radii.control)),
+        );
         paint_centered_svg_icon(
             spec.icon(),
             prepaint.cell,

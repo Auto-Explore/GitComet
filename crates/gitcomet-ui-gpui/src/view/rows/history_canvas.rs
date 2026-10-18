@@ -4,8 +4,8 @@ use crate::view::panes::HistoryRowHoverArea;
 use gitcomet_state::msg::CommitSelectMode;
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use gpui::{
-    Bounds, ContentMask, CursorStyle, DispatchPhase, MouseButton, TruncateFrom, fill, point, px,
-    size,
+    Bounds, ContentMask, CursorStyle, DispatchPhase, MouseButton, PaintQuad, TruncateFrom, point,
+    px, size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
@@ -1441,7 +1441,7 @@ pub(super) fn history_commit_row_canvas(
             }) {
                 let tint =
                     crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22);
-                window.paint_quad(fill(bounds, tint));
+                window.paint_quad(PaintQuad::new(bounds).background(tint));
                 row_background = crate::theme::composite_over(row_background, tint);
             }
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
@@ -1506,13 +1506,13 @@ pub(super) fn history_commit_row_canvas(
                 } else {
                     bounds.size.height
                 };
-                window.paint_quad(fill(
-                    Bounds::new(
+                window.paint_quad(
+                    PaintQuad::new(Bounds::new(
                         point(bounds.left(), bounds.top() + start),
                         size(px(3.0), (end - start).max(px(2.0))),
-                    ),
-                    color,
-                ));
+                    ))
+                    .background(color),
+                );
             }
 
             let column_layout = history_canvas_column_layout(
@@ -1697,13 +1697,13 @@ pub(super) fn history_commit_row_canvas(
                 // where the graph column's fade lands. Full row height, so it
                 // changes colour row by row like the graph line beside it.
                 let border_w = scaled_px(HISTORY_MESSAGE_BORDER_W_PX);
-                window.paint_quad(fill(
-                    Bounds::new(
+                window.paint_quad(
+                    PaintQuad::new(Bounds::new(
                         point(summary_bounds.left(), bounds.top()),
                         size(border_w, bounds.size.height),
-                    ),
-                    node_color,
-                ));
+                    ))
+                    .background(node_color),
+                );
                 summary_text_left =
                     summary_bounds.left() + scaled_px(history_message_text_left_px(true));
             }

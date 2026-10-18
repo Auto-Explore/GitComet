@@ -48,7 +48,9 @@ fn builds_pure_components_without_panics() {
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z5", "Create")
                 .style(components::ButtonStyle::Filled)
-                .separated_end_slot(div().text_size(theme.ui_text(12.0)).child("Enter"))
+                .separated_end_slot(components::ButtonSlot::custom(move |_| {
+                    div().text_size(theme.ui_text(12.0)).child("Enter")
+                }))
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 

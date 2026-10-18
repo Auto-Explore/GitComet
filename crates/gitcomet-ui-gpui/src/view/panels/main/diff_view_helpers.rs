@@ -270,7 +270,6 @@ impl DiffRenderer {
             .px_1()
             .h(components::control_height(scale))
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 controls::InteractionStyle::header(theme),
                 controls::InteractionState::default(),
@@ -344,12 +343,17 @@ impl DiffRenderer {
         )
     }
 
-    pub(super) fn diff_nav_hotkey_hint(theme: AppTheme, label: &'static str) -> gpui::Div {
-        div()
-            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-            .text_size(theme.ui_text(12.0))
-            .text_color(theme.colors.foreground.secondary)
-            .child(label)
+    pub(super) fn diff_nav_hotkey_hint(
+        theme: AppTheme,
+        label: &'static str,
+    ) -> components::ButtonSlot {
+        components::ButtonSlot::custom(move |disabled| {
+            div()
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.disabled_color_if(disabled, theme.colors.foreground.secondary))
+                .child(label)
+        })
     }
 
     pub(in crate::view) fn collapsed_diff_total_file_stat(&self) -> Option<(usize, usize)> {

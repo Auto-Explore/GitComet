@@ -8,8 +8,7 @@ use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Background, CursorStyle, Div, FontWeight, SharedString, Stateful, StyleRefinement,
-    div, px,
+    AnyElement, Background, Div, FontWeight, SharedString, Stateful, StyleRefinement, div, px,
 };
 
 /// The card's widest extent, before scaling.
@@ -54,7 +53,6 @@ pub fn interstitial_cta_button(
         .text_size(theme.ui_text(13.0))
         .font_weight(FontWeight::BOLD)
         .text_color(colors.text)
-        .cursor(CursorStyle::PointingHand)
         .whitespace_nowrap()
         .child(svg_icon(icon, colors.text, ui_scale.px(14.0)))
         .child(label.into())

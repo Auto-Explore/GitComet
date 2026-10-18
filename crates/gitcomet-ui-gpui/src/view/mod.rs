@@ -31,10 +31,10 @@ use gpui::{
     Anchor, Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, CursorStyle,
     Decorations, DispatchPhase, Element, ElementId, Entity, FocusHandle, FontWeight,
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Render, ResizeEdge, ScrollHandle,
     ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, Styled, TextRun,
-    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, fill,
-    point, px, relative, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, point,
+    px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(test)]

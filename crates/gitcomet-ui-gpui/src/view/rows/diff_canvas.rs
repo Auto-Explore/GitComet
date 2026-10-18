@@ -28,12 +28,12 @@ use gpui::DispatchPhase;
 use gpui::HighlightStyle;
 use gpui::Hitbox;
 use gpui::HitboxBehavior;
+use gpui::PaintQuad;
 use gpui::Pixels;
 use gpui::Styled;
 use gpui::TextStyle;
 use gpui::TransformationMatrix;
 use gpui::Window;
-use gpui::fill;
 use gpui::point;
 use gpui::px;
 use gpui::size;
@@ -326,13 +326,13 @@ fn paint_annotation_sidebar(
     annot_w: Pixels,
     sidebar_bg: gpui::Rgba,
 ) {
-    window.paint_quad(fill(
-        row_bg_fill_bounds(Bounds::new(
+    window.paint_quad(
+        PaintQuad::new(row_bg_fill_bounds(Bounds::new(
             bounds.origin,
             size(annot_w, bounds.size.height),
-        )),
-        sidebar_bg,
-    ));
+        )))
+        .background(sidebar_bg),
+    );
 }
 
 /// Fill a single-content-area row background, reserving a neutral annotation
@@ -347,9 +347,11 @@ fn paint_row_bg_with_annotation(
 ) {
     if annot_w > px(0.0) {
         paint_annotation_sidebar(window, bounds, annot_w, sidebar_bg);
-        window.paint_quad(fill(row_bg_fill_bounds(inset_left(bounds, annot_w)), bg));
+        window.paint_quad(
+            PaintQuad::new(row_bg_fill_bounds(inset_left(bounds, annot_w))).background(bg),
+        );
     } else {
-        window.paint_quad(fill(row_bg_fill_bounds(bounds), bg));
+        window.paint_quad(PaintQuad::new(row_bg_fill_bounds(bounds)).background(bg));
     }
 }
 
@@ -478,35 +480,41 @@ fn paint_focused_change_block_marks(
         };
         let line_w = diff_scaled_px(FOCUSED_CHANGE_BLOCK_OUTLINE_WIDTH_PX, ui_scale_percent);
         let width = right - left;
-        window.paint_quad(fill(
-            Bounds::new(point(right - line_w, top), size(line_w, run_height)),
-            color,
-        ));
+        window.paint_quad(
+            PaintQuad::new(Bounds::new(
+                point(right - line_w, top),
+                size(line_w, run_height),
+            ))
+            .background(color),
+        );
         if row.top {
-            window.paint_quad(fill(
-                Bounds::new(point(left, top), size(width, line_w)),
-                color,
-            ));
+            window.paint_quad(
+                PaintQuad::new(Bounds::new(point(left, top), size(width, line_w)))
+                    .background(color),
+            );
         }
         if row.bottom {
-            window.paint_quad(fill(
-                Bounds::new(point(left, top + height - line_w), size(width, line_w)),
-                color,
-            ));
+            window.paint_quad(
+                PaintQuad::new(Bounds::new(
+                    point(left, top + height - line_w),
+                    size(width, line_w),
+                ))
+                .background(color),
+            );
         }
     }
 
     // The bar is the outline's left edge, painted last so it caps the corners.
-    window.paint_quad(fill(
-        Bounds::new(
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(
             point(left, top),
             size(
                 diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent),
                 run_height,
             ),
-        ),
-        theme.colors.accent.foreground,
-    ));
+        ))
+        .background(theme.colors.accent.foreground),
+    );
 }
 
 /// One column of one row painting the focused change block's marks.
@@ -948,11 +956,11 @@ pub(super) fn inline_diff_line_row_canvas(
             );
 
             if selected {
-                window.paint_quad(gpui::outline(
-                    inset_left(bounds, prepaint.annot_w),
-                    focused_row_outline_color(theme, bg),
-                    gpui::BorderStyle::default(),
-                ));
+                window.paint_quad(
+                    gpui::PaintQuad::new(inset_left(bounds, prepaint.annot_w))
+                        .border_widths(1f32)
+                        .border_color(focused_row_outline_color(theme, bg)),
+                );
             }
         },
     )
@@ -1127,12 +1135,16 @@ pub(super) fn split_diff_line_row_canvas(
                     theme.colors.surface.panel,
                 );
             }
-            window.paint_quad(fill(row_bg_fill_bounds(prepaint.left_col), left_bg));
-            window.paint_quad(fill(
-                row_bg_fill_bounds(prepaint.sep_bounds),
-                theme.colors.stroke.default,
-            ));
-            window.paint_quad(fill(row_bg_fill_bounds(prepaint.right_col), right_bg));
+            window.paint_quad(
+                PaintQuad::new(row_bg_fill_bounds(prepaint.left_col)).background(left_bg),
+            );
+            window.paint_quad(
+                PaintQuad::new(row_bg_fill_bounds(prepaint.sep_bounds))
+                    .background(theme.colors.stroke.default),
+            );
+            window.paint_quad(
+                PaintQuad::new(row_bg_fill_bounds(prepaint.right_col)).background(right_bg),
+            );
 
             if let Some(blame) = &blame {
                 render_blame_column(
@@ -1312,11 +1324,11 @@ pub(super) fn split_diff_line_row_canvas(
             );
 
             if selected {
-                window.paint_quad(gpui::outline(
-                    inset_left(bounds, prepaint.annot_w),
-                    focused_row_outline_color(theme, left_bg),
-                    gpui::BorderStyle::default(),
-                ));
+                window.paint_quad(
+                    gpui::PaintQuad::new(inset_left(bounds, prepaint.annot_w))
+                        .border_widths(1f32)
+                        .border_color(focused_row_outline_color(theme, left_bg)),
+                );
             }
         },
     )
@@ -1562,11 +1574,11 @@ pub(super) fn patch_split_column_row_canvas(
             );
 
             if selected {
-                window.paint_quad(gpui::outline(
-                    inset_left(bounds, prepaint.annot_w),
-                    focused_row_outline_color(theme, bg),
-                    gpui::BorderStyle::default(),
-                ));
+                window.paint_quad(
+                    gpui::PaintQuad::new(inset_left(bounds, prepaint.annot_w))
+                        .border_widths(1f32)
+                        .border_color(focused_row_outline_color(theme, bg)),
+                );
             }
         },
     )
@@ -1619,7 +1631,7 @@ pub(in crate::view) fn blame_gutter_row_canvas(
             // The whole canvas *is* the annotation column, so it takes the
             // sidebar colour the diff and preview rows give theirs — not the
             // editor canvas, which left the strip with no edge at all.
-            window.paint_quad(fill(bounds, theme.colors.surface.panel));
+            window.paint_quad(PaintQuad::new(bounds).background(theme.colors.surface.panel));
 
             if let Some(blame) = &blame {
                 let when_metrics = line_metrics_annot_when(window, theme);
@@ -1735,13 +1747,13 @@ pub(super) fn worktree_preview_row_canvas(
             if let Some(color) = bar_color
                 && prepaint.bar_w > px(0.0)
             {
-                window.paint_quad(fill(
-                    Bounds::new(
+                window.paint_quad(
+                    PaintQuad::new(Bounds::new(
                         point(bounds.left() + prepaint.annot_w, bounds.top()),
                         size(prepaint.bar_w, bounds.size.height),
-                    ),
-                    color,
-                ));
+                    ))
+                    .background(color),
+                );
             }
 
             if let Some(blame) = &blame {
@@ -2315,13 +2327,13 @@ fn paint_selectable_diff_text(
     };
     let paint_row_quad = |x0: Pixels, x1: Pixels, color: gpui::Rgba, window: &mut Window| {
         if x1 > x0 {
-            window.paint_quad(fill(
-                Bounds::from_corners(
+            window.paint_quad(
+                PaintQuad::new(Bounds::from_corners(
                     point(bounds.left() + x0, bounds.top()),
                     point(bounds.left() + x1, bounds.bottom()),
-                ),
-                color,
-            ));
+                ))
+                .background(color),
+            );
         }
     };
 

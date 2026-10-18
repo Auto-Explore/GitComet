@@ -708,7 +708,6 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         .h(scaled_px(24.0))
         .px(scaled_px(8.0))
         .rounded(px(theme.radii.control))
-        .cursor(CursorStyle::PointingHand)
         .text_size(theme.ui_text(12.0))
         .text_color(if menu_open {
             theme.colors.foreground.primary

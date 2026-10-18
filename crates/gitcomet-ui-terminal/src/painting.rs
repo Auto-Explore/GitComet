@@ -1,7 +1,8 @@
 use super::*;
 use gitcomet_ui_kit::theme::{AppTheme, with_alpha};
 use gpui::{
-    App, Bounds, Pixels, Point, ShapedLine, SharedString, TextRun, Window, fill, point, px, size,
+    App, Bounds, PaintQuad, Pixels, Point, ShapedLine, SharedString, TextRun, Window, point, px,
+    size,
 };
 use rustc_hash::FxHasher;
 use std::hash::Hash;
@@ -336,15 +337,15 @@ pub(super) fn paint_terminal_canvas_state(
     window: &mut Window,
     cx: &mut App,
 ) {
-    window.paint_quad(fill(paint_state.bounds, paint_state.terminal_bg));
+    window.paint_quad(PaintQuad::new(paint_state.bounds).background(paint_state.terminal_bg));
     for (origin, rect_size, color) in paint_state.background_rects {
-        window.paint_quad(fill(Bounds::new(origin, rect_size), color));
+        window.paint_quad(PaintQuad::new(Bounds::new(origin, rect_size)).background(color));
     }
     for rect in paint_state.selection_rects {
-        window.paint_quad(fill(
-            rect,
-            with_alpha(theme.colors.accent.foreground, TERMINAL_SELECTION_ALPHA),
-        ));
+        window.paint_quad(PaintQuad::new(rect).background(with_alpha(
+            theme.colors.accent.foreground,
+            TERMINAL_SELECTION_ALPHA,
+        )));
     }
     for (line, origin, line_height) in paint_state.lines {
         let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
@@ -379,7 +380,7 @@ pub(super) fn paint_terminal_canvas_state(
             ime_bounds.origin,
             size(shaped.width, ime_bounds.size.height),
         );
-        window.paint_quad(fill(ime_bg, paint_state.terminal_bg));
+        window.paint_quad(PaintQuad::new(ime_bg).background(paint_state.terminal_bg));
         let _ = shaped.paint(
             ime_bounds.origin,
             ime_bounds.size.height,
@@ -415,7 +416,11 @@ pub(super) fn paint_terminal_cursor(
     match cursor.shape {
         TerminalCursorShape::Beam => {
             let caret = terminal_caret_bounds(cursor.bounds);
-            window.paint_quad(fill(caret, cursor_color).corner_radii(px(TERMINAL_CARET_RADIUS_PX)));
+            window.paint_quad(
+                PaintQuad::new(caret)
+                    .background(cursor_color)
+                    .corner_radii(px(TERMINAL_CARET_RADIUS_PX)),
+            );
         }
         TerminalCursorShape::Underline => {
             let height = (cursor.bounds.size.height * 0.12).max(px(1.0));
@@ -423,10 +428,10 @@ pub(super) fn paint_terminal_cursor(
                 point(cursor.bounds.left(), cursor.bounds.bottom() - height),
                 size(cursor.bounds.size.width.max(px(1.0)), height),
             );
-            window.paint_quad(fill(underline, cursor_color));
+            window.paint_quad(PaintQuad::new(underline).background(cursor_color));
         }
         TerminalCursorShape::Block => {
-            window.paint_quad(fill(cursor.bounds, cursor_color));
+            window.paint_quad(PaintQuad::new(cursor.bounds).background(cursor_color));
         }
         TerminalCursorShape::Hollow => {
             let thickness = px(1.0)
@@ -450,7 +455,7 @@ pub(super) fn paint_terminal_cursor(
                 size(thickness, cursor.bounds.size.height),
             );
             for edge in [top, bottom, left, right] {
-                window.paint_quad(fill(edge, cursor_color));
+                window.paint_quad(PaintQuad::new(edge).background(cursor_color));
             }
         }
         TerminalCursorShape::Hidden => {}

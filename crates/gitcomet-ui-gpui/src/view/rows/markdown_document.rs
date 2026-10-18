@@ -2087,7 +2087,6 @@ fn render_task_checkbox(
     // start a selection, and it toggles on a completed click — a press dragged
     // off the box writes nothing.
     checkbox
-        .cursor_pointer()
         .control_interaction(
             crate::kit::interaction::InteractionStyle::new(theme).hover(
                 gpui::StyleRefinement::default().border_color(theme.colors.accent.foreground),
@@ -2525,9 +2524,13 @@ fn render_table_image(
                                 row_ix,
                                 &[bounds],
                             );
-                            window.paint_quad(fill(bounds, pane.diff_text_selection_color()));
+                            window.paint_quad(
+                                PaintQuad::new(bounds).background(pane.diff_text_selection_color()),
+                            );
                         } else if searched {
-                            window.paint_quad(fill(bounds, with_alpha(search_color, 0.35)));
+                            window.paint_quad(
+                                PaintQuad::new(bounds).background(with_alpha(search_color, 0.35)),
+                            );
                         }
                     });
                 },

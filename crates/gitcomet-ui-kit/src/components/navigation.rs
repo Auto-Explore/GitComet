@@ -3,8 +3,8 @@
 //! the action bar), and read-only selectable fields.
 
 use super::{
-    Button, ControlInteractionExt, InteractionState, InteractionStyle, content_header_height,
-    control_height,
+    Button, ButtonSlot, ControlInteractionExt, InteractionState, InteractionStyle,
+    content_header_height, control_height,
 };
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
@@ -137,7 +137,7 @@ impl NavTab {
         }
         if let Some(badge) = self.badge {
             let selector = format!("{id}_badge");
-            button = button.end_slot(
+            button = button.end_slot(ButtonSlot::custom(move |_| {
                 div()
                     .debug_selector(move || selector)
                     .flex_none()
@@ -146,8 +146,8 @@ impl NavTab {
                     .bg(theme.colors.surface.raised)
                     .text_size(theme.ui_text(11.0))
                     .text_color(theme.colors.foreground.secondary)
-                    .child(badge),
-            );
+                    .child(badge)
+            }));
         }
         navigation_tab_metrics(button.render(theme, scale), theme, scale)
             .border_b_2()

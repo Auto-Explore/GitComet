@@ -685,15 +685,17 @@ impl BarItemOwner for ActionBarView {
             if theme.is_dark { 0.72 } else { 0.82 },
         );
         let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));
-        let spinner =
-            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(14.0));
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
+            components::ButtonSlot::spinner(id, color, scaled_px(14.0))
+        };
         let count_badge = |count: usize, color: gpui::Rgba| {
-            div()
-                .text_size(theme.ui_text(12.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(color)
-                .child(count.to_string())
-                .into_any_element()
+            components::ButtonSlot::custom(move |disabled| {
+                div()
+                    .text_size(theme.ui_text(12.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.disabled_color_if(disabled, color))
+                    .child(count.to_string())
+            })
         };
 
         // Workspace, branch and historical badges all light up while their own
@@ -1021,9 +1023,9 @@ impl BarItemOwner for ActionBarView {
         let mut pull_main = components::Button::new("pull_main", if tight { "" } else { "Pull" })
             .busy(pull_loading)
             .start_slot(if pull_loading {
-                spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
+                spinner(("pull_spinner", active_repo_key), pull_color)
             } else {
-                icon("icons/arrow_down.svg", pull_color).into_any_element()
+                icon("icons/arrow_down.svg", pull_color).into()
             })
             .style(components::ButtonStyle::Subtle);
         if pull_count > 0 {
@@ -1102,9 +1104,9 @@ impl BarItemOwner for ActionBarView {
         let mut push_main = components::Button::new("push_main", if tight { "" } else { "Push" })
             .busy(push_loading)
             .start_slot(if push_loading {
-                spinner(("push_spinner", active_repo_key), push_color).into_any_element()
+                spinner(("push_spinner", active_repo_key), push_color)
             } else {
-                icon("icons/arrow_up.svg", push_color).into_any_element()
+                icon("icons/arrow_up.svg", push_color).into()
             })
             .style(components::ButtonStyle::Subtle);
         if push_count > 0 {

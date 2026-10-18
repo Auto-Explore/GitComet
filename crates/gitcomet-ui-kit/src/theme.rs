@@ -19,6 +19,7 @@ pub const DEFAULT_LIGHT_THEME_KEY: &str = "gitcomet_light";
 pub const AMBER_DARK_THEME_KEY: &str = "amber_dark";
 pub const GRAPH_LANE_PALETTE_SIZE: usize = 64;
 pub const THEME_SCHEMA_VERSION: u32 = 2;
+const DISABLED_STRENGTH: f32 = 0.5;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThemeOption {
@@ -456,6 +457,26 @@ impl AppTheme {
     /// Canonical translucent background for pressed standard controls.
     pub fn active_overlay(&self) -> Rgba {
         self.colors.interaction.pressed_overlay
+    }
+
+    /// How a disabled control paints `color`, without element opacity: a
+    /// translucent colour keeps its hue at reduced alpha, an opaque one mixes
+    /// toward the panel surface and stays opaque.
+    pub fn disabled_color(&self, color: Rgba) -> Rgba {
+        if color.alpha < 1.0 {
+            return with_alpha(color, color.alpha * DISABLED_STRENGTH);
+        }
+        composite_over(
+            self.colors.surface.panel,
+            with_alpha(color, DISABLED_STRENGTH),
+        )
+    }
+
+    pub fn disabled_color_if(&self, disabled: bool, color: Rgba) -> Rgba {
+        if !disabled {
+            return color;
+        }
+        self.disabled_color(color)
     }
 
     /// Stronger hover overlay used by title-bar controls.

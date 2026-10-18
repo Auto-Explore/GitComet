@@ -40,7 +40,7 @@ pub use avatar::{
     initials_paint_origin_y,
 };
 pub use bottom_bar::{BarButton, bottom_bar, nav_arrow_button};
-pub use button::{Button, ButtonStyle, inline_icon_button};
+pub use button::{Button, ButtonSlot, ButtonStyle, inline_icon_button};
 pub use containers::{
     ScrollContainer, content_header_bar, empty_state, empty_state_message, progress_bar,
     progress_bar_border_color, progress_bar_track_color, split_columns_header,
@@ -84,10 +84,10 @@ pub use resize_grip::{ResizeGripAxis, resize_grip, resize_grip_hover_tint};
 pub use segmented_control::{Segment, SegmentedControl};
 pub use settings_rows::{
     SETTINGS_NAV_COLUMN_WIDTH_PX, settings_card, settings_card_with_action,
-    settings_detail_container, settings_dropdown_background, settings_dropdown_border_color,
-    settings_info_row, settings_link_row, settings_nav_item, settings_option_row,
-    settings_row_separator_color, settings_subsection_heading, settings_summary_row,
-    settings_summary_row_with_value_prefix, settings_toggle_row,
+    settings_detail_container, settings_disabled_toggle_row, settings_dropdown_background,
+    settings_dropdown_border_color, settings_info_row, settings_link_row, settings_nav_item,
+    settings_option_row, settings_row_separator_color, settings_subsection_heading,
+    settings_summary_row, settings_summary_row_with_value_prefix, settings_toggle_row,
 };
 pub use shortcut_keys::{
     Shortcut, alt_shortcut, keystrokes_display, keystrokes_label_for, secondary_shortcut,

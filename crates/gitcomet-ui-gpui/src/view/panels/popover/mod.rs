@@ -523,7 +523,6 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .border_1()
         .border_color(gpui::transparent_black())
         .track_focus(&focus_handle)
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(
             components::InteractionStyle::new(theme),
             components::InteractionState::default(),
@@ -728,13 +727,16 @@ pub(super) fn hotkey_hint(
     theme: AppTheme,
     debug_selector: &'static str,
     label: impl Into<SharedString>,
-) -> gpui::Div {
-    div()
-        .debug_selector(move || debug_selector.to_string())
-        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-        .text_size(theme.ui_text(12.0))
-        .text_color(theme.colors.foreground.secondary)
-        .child(label.into())
+) -> components::ButtonSlot {
+    let label = label.into();
+    components::ButtonSlot::custom(move |disabled| {
+        div()
+            .debug_selector(move || debug_selector.to_string())
+            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.disabled_color_if(disabled, theme.colors.foreground.secondary))
+            .child(label)
+    })
 }
 
 /// Shared Cancel button for confirm dialogs and prompt popovers: consistent

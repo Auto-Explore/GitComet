@@ -17,10 +17,10 @@ use gpui::Bounds;
 use gpui::CursorStyle;
 use gpui::Hitbox;
 use gpui::HitboxBehavior;
+use gpui::PaintQuad;
 use gpui::Pixels;
 use gpui::TextStyle;
 use gpui::Window;
-use gpui::fill;
 use gpui::point;
 use gpui::px;
 use gpui::size;
@@ -208,7 +208,7 @@ fn paint_blame_annotation(
     window: &mut Window,
     cx: &mut App,
 ) {
-    window.paint_quad(fill(layout.border, blame.border));
+    window.paint_quad(PaintQuad::new(layout.border).background(blame.border));
 
     if !blame.show_text {
         return;
@@ -253,13 +253,13 @@ fn paint_blame_annotation(
         );
         if hovered == Some(AnnotArea::Message) {
             let underline_y = y + metrics.line_height + px(0.5);
-            window.paint_quad(fill(
-                Bounds::new(
+            window.paint_quad(
+                PaintQuad::new(Bounds::new(
                     point(layout.message.left(), underline_y),
                     size(layout.message.size.width, px(1.0)),
-                ),
-                theme.colors.accent.foreground,
-            ));
+                ))
+                .background(theme.colors.accent.foreground),
+            );
         }
     });
 
@@ -341,7 +341,11 @@ fn paint_blame_dot(
     let ox = cell.left() + (cell.size.width - diameter) * 0.5;
     let oy = cell.top() + (cell.size.height - diameter) * 0.5;
     let bounds = Bounds::new(point(ox, oy), size(diameter, diameter));
-    window.paint_quad(fill(bounds, color).corner_radii(diameter * 0.5));
+    window.paint_quad(
+        PaintQuad::new(bounds)
+            .background(color)
+            .corner_radii(diameter * 0.5),
+    );
 }
 
 /// Hitboxes for annotation sub-column interactive areas.

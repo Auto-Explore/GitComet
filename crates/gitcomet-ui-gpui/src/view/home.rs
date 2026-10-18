@@ -488,7 +488,6 @@ impl HomeView {
             .items_center()
             .gap(px(10.0))
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 components::InteractionStyle::new(theme).selection_outline(false),
                 components::InteractionState::default().selected(selected, theme.active_overlay()),

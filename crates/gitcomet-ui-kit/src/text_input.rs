@@ -10,7 +10,7 @@ use gpui::{
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ScrollHandle,
     SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, actions, anchored, deferred,
-    div, fill, point, px, relative, size,
+    div, point, px, relative, size,
 };
 use rustc_hash::FxHashMap;
 #[cfg(any(test, feature = "benchmarks"))]
