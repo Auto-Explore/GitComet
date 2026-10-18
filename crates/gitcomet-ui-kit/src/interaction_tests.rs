@@ -4,7 +4,7 @@ use crate::components::{
     on_nested_control_click, panel_tab, panel_tab_close,
 };
 use crate::test_support::{
-    assert_colour_close, painted_control_quads as paint, solid_background, solid_colour,
+    assert_color_close, painted_control_quads as paint, solid_background, solid_color,
 };
 use gpui::{
     Context, FocusHandle, IntoElement, Modifiers, MouseButton, MouseDownEvent, Pixels, Point,
@@ -572,15 +572,15 @@ fn dimmed_disabled_controls_dim_their_fill_without_element_opacity() {
 
         assert_eq!(dimmed.style().opacity, None);
         assert_eq!(plain.style().opacity, None);
-        assert_colour_close(
+        assert_color_close(
             solid_background(&mut dimmed),
             Some(theme.disabled_color(selected)),
         );
-        assert_colour_close(solid_background(&mut plain), Some(selected));
+        assert_color_close(solid_background(&mut plain), Some(selected));
         if !theme.is_dark {
             let outline = dimmed.style().box_shadow.clone().unwrap()[0].color;
-            assert_colour_close(
-                solid_colour(&outline),
+            assert_color_close(
+                solid_color(&outline),
                 Some(theme.disabled_color(theme.colors.interaction.selected_indicator)),
             );
         }
@@ -590,13 +590,13 @@ fn dimmed_disabled_controls_dim_their_fill_without_element_opacity() {
 #[test]
 fn interaction_colour_dims_only_disabled_states_of_a_dimming_style() {
     let theme = themes()[0];
-    let colour = gpui::rgb(0x3388cc);
+    let color = gpui::rgb(0x3388cc);
     let disabled = InteractionState::default().disabled(true);
     let dimmed = InteractionStyle::new(theme).dim_when_disabled(true);
 
-    assert_eq!(dimmed.color(colour, disabled), theme.disabled_color(colour));
-    assert_eq!(dimmed.color(colour, InteractionState::default()), colour);
-    assert_eq!(InteractionStyle::new(theme).color(colour, disabled), colour);
+    assert_eq!(dimmed.color(color, disabled), theme.disabled_color(color));
+    assert_eq!(dimmed.color(color, InteractionState::default()), color);
+    assert_eq!(InteractionStyle::new(theme).color(color, disabled), color);
 }
 
 #[test]

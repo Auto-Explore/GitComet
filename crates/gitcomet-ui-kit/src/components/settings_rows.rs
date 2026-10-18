@@ -636,7 +636,7 @@ mod option_row_tests {
 #[cfg(test)]
 mod toggle_row_tests {
     use super::*;
-    use crate::test_support::{assert_colour_close, painted_control_quads, redraw, solid_colour};
+    use crate::test_support::{assert_color_close, painted_control_quads, redraw, solid_color};
     use palette::IntoColor;
 
     struct Toggles {
@@ -680,7 +680,7 @@ mod toggle_row_tests {
         let fill = |cx: &mut gpui::VisualTestContext, selector| {
             painted_control_quads(cx, selector)
                 .first()
-                .and_then(|(fill, _)| solid_colour(fill))
+                .and_then(|(fill, _)| solid_color(fill))
         };
         for (live_selector, disabled_selector) in [
             ("live_on_track", "disabled_on_track"),
@@ -690,7 +690,7 @@ mod toggle_row_tests {
         ] {
             let live = fill(cx, live_selector);
             assert!(live.is_some(), "{live_selector}");
-            assert_colour_close(
+            assert_color_close(
                 fill(cx, disabled_selector),
                 live.map(|color| theme.disabled_color(color)),
             );
@@ -706,8 +706,8 @@ mod toggle_row_tests {
         let text = |row: &mut Stateful<Div>| row.style().text.color.map(|c| c.into_color());
 
         assert_eq!(disabled.style().opacity, None);
-        assert_colour_close(text(&mut live), Some(theme.colors.foreground.primary));
-        assert_colour_close(
+        assert_color_close(text(&mut live), Some(theme.colors.foreground.primary));
+        assert_color_close(
             text(&mut disabled),
             Some(theme.disabled_color(theme.colors.foreground.primary)),
         );

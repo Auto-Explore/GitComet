@@ -74,7 +74,7 @@ pub fn painted_control_quads(
 }
 
 /// Colours compared within the Rgba→Hsla→Rgba round trip a style applies.
-pub fn colour_close(a: gpui::Rgba, b: gpui::Rgba) -> bool {
+pub fn color_close(a: gpui::Rgba, b: gpui::Rgba) -> bool {
     [
         a.red - b.red,
         a.green - b.green,
@@ -85,14 +85,14 @@ pub fn colour_close(a: gpui::Rgba, b: gpui::Rgba) -> bool {
     .all(|delta| delta.abs() < 1e-5)
 }
 
-pub fn assert_colour_close(actual: Option<gpui::Rgba>, expected: Option<gpui::Rgba>) {
+pub fn assert_color_close(actual: Option<gpui::Rgba>, expected: Option<gpui::Rgba>) {
     match (actual, expected) {
-        (Some(a), Some(e)) => assert!(colour_close(a, e), "{actual:?} vs {expected:?}"),
+        (Some(a), Some(e)) => assert!(color_close(a, e), "{actual:?} vs {expected:?}"),
         (a, e) => assert_eq!(a.is_some(), e.is_some(), "{actual:?} vs {expected:?}"),
     }
 }
 
-pub fn solid_colour(background: &gpui::Background) -> Option<gpui::Rgba> {
+pub fn solid_color(background: &gpui::Background) -> Option<gpui::Rgba> {
     use palette::IntoColor;
     background.as_solid().map(|color| color.into_color())
 }
@@ -103,7 +103,7 @@ pub fn solid_background(element: &mut impl gpui::Styled) -> Option<gpui::Rgba> {
         .background
         .as_ref()
         .and_then(|fill| fill.color())
-        .and_then(|background| solid_colour(&background))
+        .and_then(|background| solid_color(&background))
 }
 
 /// Every `.rs` file below `dir`, for guards that scan a crate's own source.

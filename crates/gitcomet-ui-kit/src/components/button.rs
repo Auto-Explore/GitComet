@@ -677,8 +677,8 @@ fn mix(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
 mod tests {
     use super::*;
     use crate::test_support::{
-        assert_colour_close, colour_close, painted_control_quads, redraw, solid_background,
-        solid_colour,
+        assert_color_close, color_close, painted_control_quads, redraw, solid_background,
+        solid_color,
     };
     use gpui::{Context, Render, TestAppContext, Window};
     use std::cell::RefCell;
@@ -704,8 +704,8 @@ mod tests {
         UiScale::from_percent(100)
     }
 
-    fn root_colours(button: &mut Stateful<Div>) -> [Option<Rgba>; 3] {
-        let border = button.style().border_color.as_ref().and_then(solid_colour);
+    fn root_colors(button: &mut Stateful<Div>) -> [Option<Rgba>; 3] {
+        let border = button.style().border_color.as_ref().and_then(solid_color);
         let text = button.style().text.color.map(|color| color.into_color());
         [solid_background(button), border, text]
     }
@@ -719,11 +719,11 @@ mod tests {
                 let mut disabled = button().disabled(true).render(theme, scale());
 
                 assert_eq!(disabled.style().opacity, None, "{style:?}");
-                for (enabled, disabled) in root_colours(&mut enabled)
+                for (enabled, disabled) in root_colors(&mut enabled)
                     .into_iter()
-                    .zip(root_colours(&mut disabled))
+                    .zip(root_colors(&mut disabled))
                 {
-                    assert_colour_close(disabled, enabled.map(|color| theme.disabled_color(color)));
+                    assert_color_close(disabled, enabled.map(|color| theme.disabled_color(color)));
                 }
             }
         }
@@ -736,11 +736,11 @@ mod tests {
             let mut selected = button().selected(true).render(theme, scale());
             let mut open = button().open(true).render(theme, scale());
 
-            assert_colour_close(
+            assert_color_close(
                 solid_background(&mut selected),
                 Some(theme.disabled_color(theme.colors.interaction.pressed_background)),
             );
-            assert_colour_close(
+            assert_color_close(
                 solid_background(&mut open),
                 Some(theme.disabled_color(super::super::control_open_background(theme))),
             );
@@ -750,10 +750,10 @@ mod tests {
     #[test]
     fn dimming_a_slot_dims_each_of_its_colours() {
         let theme = themes()[0];
-        let colour = gpui::rgb(0x3388cc);
-        let plate = with_alpha(colour, 0.14);
+        let color = gpui::rgb(0x3388cc);
+        let plate = with_alpha(color, 0.14);
         let interaction = InteractionStyle::new(theme).dim_when_disabled(true);
-        let colours = |slot: ButtonSlot, disabled: bool| -> Vec<Rgba> {
+        let colors = |slot: ButtonSlot, disabled: bool| -> Vec<Rgba> {
             match slot.dimmed(&interaction, InteractionState::default().disabled(disabled)) {
                 ButtonSlot::Icon(mut icon) => icon
                     .text_style()
@@ -769,26 +769,23 @@ mod tests {
         let slots = || {
             [
                 (
-                    ButtonSlot::from(crate::icons::svg_icon("icons/check.svg", colour, px(14.0))),
-                    vec![colour],
+                    ButtonSlot::from(crate::icons::svg_icon("icons/check.svg", color, px(14.0))),
+                    vec![color],
                 ),
+                (ButtonSlot::spinner("spinner", color, px(14.0)), vec![color]),
                 (
-                    ButtonSlot::spinner("spinner", colour, px(14.0)),
-                    vec![colour],
-                ),
-                (
-                    ButtonSlot::keys("Ctrl+S", colour, scale()),
-                    vec![colour, plate],
+                    ButtonSlot::keys("Ctrl+S", color, scale()),
+                    vec![color, plate],
                 ),
             ]
         };
         for disabled in [false, true] {
             for (slot, expected) in slots() {
-                let actual = colours(slot, disabled);
+                let actual = colors(slot, disabled);
                 assert_eq!(actual.len(), expected.len());
                 for (actual, expected) in actual.into_iter().zip(expected) {
                     let expected = theme.disabled_color_if(disabled, expected);
-                    assert_colour_close(Some(actual), Some(expected));
+                    assert_color_close(Some(actual), Some(expected));
                 }
             }
         }
@@ -796,7 +793,7 @@ mod tests {
 
     struct EnabledAndDisabled {
         theme: AppTheme,
-        colour: Rgba,
+        color: Rgba,
         custom_states: Rc<RefCell<Vec<bool>>>,
     }
 
@@ -809,7 +806,7 @@ mod tests {
                         custom_states.borrow_mut().push(disabled);
                         div()
                     }))
-                    .separated_end_slot(ButtonSlot::keys("Enter", self.colour, scale()))
+                    .separated_end_slot(ButtonSlot::keys("Enter", self.color, scale()))
                     .disabled(disabled)
                     .render(self.theme, scale())
             };
@@ -835,7 +832,7 @@ mod tests {
                     inside(quad.bounds.origin.x.0, bounds.origin.x, bounds.size.width)
                         && inside(quad.bounds.origin.y.0, bounds.origin.y, bounds.size.height)
                 })
-                .filter_map(|quad| solid_colour(&quad.background))
+                .filter_map(|quad| solid_color(&quad.background))
                 .collect()
         })
     }
@@ -843,11 +840,11 @@ mod tests {
     #[gpui::test]
     fn disabled_buttons_paint_dimmed_slots_and_separator(cx: &mut TestAppContext) {
         let theme = themes()[0];
-        let colour = gpui::rgb(0x3388cc);
+        let color = gpui::rgb(0x3388cc);
         let custom_states = Rc::new(RefCell::new(Vec::new()));
         let (_view, cx) = cx.add_window_view(|_, _| EnabledAndDisabled {
             theme,
-            colour,
+            color,
             custom_states: Rc::clone(&custom_states),
         });
         redraw(cx);
@@ -859,9 +856,9 @@ mod tests {
             "{states:?}"
         );
 
-        let plate = with_alpha(colour, 0.14);
+        let plate = with_alpha(color, 0.14);
         let has =
-            |fills: &[Rgba], expected: Rgba| fills.iter().any(|fill| colour_close(*fill, expected));
+            |fills: &[Rgba], expected: Rgba| fills.iter().any(|fill| color_close(*fill, expected));
         let enabled = fills_inside(cx, "on");
         let disabled = fills_inside(cx, "off");
         assert!(has(&enabled, plate), "{enabled:?}");
@@ -871,11 +868,11 @@ mod tests {
         let separator = |cx: &mut gpui::VisualTestContext, selector| {
             painted_control_quads(cx, selector)
                 .first()
-                .and_then(|(_, border)| solid_colour(border))
+                .and_then(|(_, border)| solid_color(border))
         };
         let enabled_separator = separator(cx, "on_end_slot_separator");
         assert!(enabled_separator.is_some());
-        assert_colour_close(
+        assert_color_close(
             separator(cx, "off_end_slot_separator"),
             enabled_separator.map(|color| theme.disabled_color(color)),
         );
