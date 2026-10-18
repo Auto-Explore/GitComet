@@ -1765,9 +1765,7 @@ impl DiffRenderer {
             self.ensure_conflict_markdown_preview_cache(cx);
         }
         let repo = self.active_repo();
-        let conflict_target = (!inline_submodule_diff_active)
-            .then(|| self.conflicted_worktree_target())
-            .flatten();
+        let conflict_target = self.active_conflict_target();
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));

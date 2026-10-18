@@ -1155,30 +1155,17 @@ pub(in crate::view) fn file_editor_search_ranges(
 }
 
 impl DiffRenderer {
+    /// The conflicted file the merge tool shows: only while the pane's body is
+    /// the conflict view, not a preview or the editor of that file.
     pub(in crate::view) fn active_conflict_target(
         &self,
     ) -> Option<(
         std::path::PathBuf,
         Option<gitcomet_core::domain::FileConflictKind>,
     )> {
-        if self.is_inline_submodule_diff_active() {
-            return None;
-        }
-        let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area, .. } =
-            self.bound_diff_state(repo).diff_target.as_ref()?
-        else {
-            return None;
-        };
-        if *area != DiffArea::Unstaged {
-            return None;
-        }
-        let conflict = self
-            .input
-            .status_entry_for_path(DiffArea::Unstaged, path.as_path())
-            .filter(|entry| entry.kind == FileStatusKind::Conflicted)?;
-
-        Some((path.clone(), conflict.conflict))
+        (self.diff_surface().body == DiffBody::Conflict)
+            .then(|| self.conflicted_worktree_target())
+            .flatten()
     }
 
     pub(in crate::view) fn diff_search_options_or_default(&self) -> DiffSearchOptions {

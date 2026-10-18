@@ -761,10 +761,10 @@ impl DiffRenderer {
         self.diff_surface().markdown_preview
     }
 
-    /// Returns `true` when the current diff target is a conflicted file and
-    /// there is an applicable conflict resolver strategy.
+    /// Whether the merge tool is on screen with a resolver strategy, rather
+    /// than its compare view.
     pub(in crate::view) fn is_conflict_resolver_active(&self) -> bool {
-        self.conflicted_worktree_target()
+        self.active_conflict_target()
             .is_some_and(|(_, kind)| Self::conflict_resolver_strategy(kind, false).is_some())
     }
 

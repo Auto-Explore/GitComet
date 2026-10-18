@@ -434,15 +434,14 @@ impl DiffRenderer {
     /// Where the text resolver's output saves to: only while the pane shows
     /// the full text resolver, loaded for the conflict on screen.
     fn text_conflict_save_target(&self) -> Option<(RepoId, std::path::PathBuf)> {
-        if self.diff_surface().body != crate::view::panes::diff::DiffBody::Conflict
-            || self.conflict_resolver.is_binary_conflict
+        if self.conflict_resolver.is_binary_conflict
             || self.conflict_resolver.strategy
                 != Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
         {
             return None;
         }
         let repo_id = self.active_repo_id()?;
-        let (path, _) = self.conflicted_worktree_target()?;
+        let (path, _) = self.active_conflict_target()?;
         self.conflict_resolver
             .matches_target(repo_id, &path)
             .then_some((repo_id, path))
