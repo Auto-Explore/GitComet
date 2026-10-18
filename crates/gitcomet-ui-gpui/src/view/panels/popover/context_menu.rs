@@ -556,6 +556,24 @@ impl PopoverHost {
         repo_picker_row::model(self, entry)
     }
 
+    /// The actions of the entries of the menu `kind` opens, for tests.
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_actions_for_test(
+        &self,
+        kind: &PopoverKind,
+        cx: &gpui::Context<Self>,
+    ) -> Vec<ContextMenuAction> {
+        let model = self.context_menu_model(kind, cx).unwrap();
+        model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { action, .. } => Some((**action).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(in super::super) fn context_menu_model(
         &self,
         kind: &PopoverKind,
@@ -586,6 +604,11 @@ impl PopoverHost {
                 target,
                 selector,
             } => Some(reflog_entry::model(*repo_id, selector, target)),
+            PopoverKind::FileHistoryCommitMenu {
+                repo_id,
+                commit_id,
+                path,
+            } => Some(file_history_commit::model(self, *repo_id, commit_id, path)),
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 Some(tag::model(self, *repo_id, commit_id))
             }

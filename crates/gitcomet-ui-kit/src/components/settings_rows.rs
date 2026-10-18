@@ -9,7 +9,7 @@ use crate::interaction::{ControlInteractionExt, InteractionState, InteractionSty
 use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
-use gpui::{AnyElement, CursorStyle, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
+use gpui::{AnyElement, Div, FontWeight, Rgba, SharedString, Stateful, div, px};
 
 const TOGGLE_TRACK_WIDTH_PX: f32 = 28.0;
 const TOGGLE_TRACK_COMFORTABLE_WIDTH_PX: f32 = 36.0;
@@ -64,7 +64,6 @@ pub fn settings_option_row(
         .items_start()
         .gap_2()
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(
             InteractionStyle::new(theme),
             InteractionState::default().selected(selected, selected_bg),
@@ -307,7 +306,6 @@ pub fn settings_summary_row_with_value_prefix(
     let id = id.into();
     row_shell(&id, theme)
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(InteractionStyle::new(theme), InteractionState::default())
         .child(row_label(&id, label.into(), theme))
         .child(
@@ -350,12 +348,61 @@ pub fn settings_toggle_row(
     theme: AppTheme,
     ui_scale: UiScale,
 ) -> Stateful<Div> {
-    let id = id.into();
+    toggle_row(
+        id.into(),
+        label.into(),
+        enabled,
+        InteractionState::default(),
+        theme,
+        ui_scale,
+    )
+}
+
+/// A switch the user cannot change: dimmed and inert.
+pub fn settings_disabled_toggle_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    enabled: bool,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
+    toggle_row(
+        id.into(),
+        label.into(),
+        enabled,
+        InteractionState::default().disabled(true),
+        theme,
+        ui_scale,
+    )
+}
+
+fn toggle_row(
+    id: SharedString,
+    label: SharedString,
+    enabled: bool,
+    state: InteractionState,
+    theme: AppTheme,
+    ui_scale: UiScale,
+) -> Stateful<Div> {
+    let interaction = InteractionStyle::new(theme).dim_when_disabled(true);
+    let color = |color| interaction.color(color, state);
+    let separator = color(settings_row_separator_color(theme));
+    let text = color(theme.colors.foreground.primary);
+    let track_fill = color(if enabled {
+        theme.colors.accent.foreground
+    } else {
+        with_alpha(
+            theme.colors.foreground.secondary,
+            if theme.is_dark { 0.35 } else { 0.30 },
+        )
+    });
+    let knob_fill = color(gpui::rgba(0xFFFFFFF2));
     row_shell(&id, theme)
+        .border_color(separator)
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
-        .control_interaction(InteractionStyle::new(theme), InteractionState::default())
-        .child(row_label(&id, label.into(), theme))
+        .text_color(text)
+        .control_interaction(interaction, state)
+        .child(row_label(&id, label, theme))
         .child(
             div()
                 .debug_selector(selector(&id, "value"))
@@ -366,6 +413,7 @@ pub fn settings_toggle_row(
                     // Toggle-switch visual; the whole row stays the click
                     // target, so this carries no handlers of its own.
                     div()
+                        .debug_selector(selector(&id, "track"))
                         .w(ui_scale
                             .row_height(TOGGLE_TRACK_WIDTH_PX, TOGGLE_TRACK_COMFORTABLE_WIDTH_PX))
                         .h(ui_scale
@@ -374,23 +422,18 @@ pub fn settings_toggle_row(
                         .flex()
                         .items_center()
                         .p(ui_scale.px(TOGGLE_TRACK_INSET_PX))
-                        .when(enabled, |track| {
-                            track.justify_end().bg(theme.colors.accent.foreground)
-                        })
-                        .when(!enabled, |track| {
-                            track.justify_start().bg(with_alpha(
-                                theme.colors.foreground.secondary,
-                                if theme.is_dark { 0.35 } else { 0.30 },
-                            ))
-                        })
+                        .bg(track_fill)
+                        .when(enabled, |track| track.justify_end())
+                        .when(!enabled, |track| track.justify_start())
                         .child(
                             div()
+                                .debug_selector(selector(&id, "knob"))
                                 .size(ui_scale.row_height(
                                     TOGGLE_KNOB_SIZE_PX,
                                     TOGGLE_KNOB_COMFORTABLE_SIZE_PX,
                                 ))
                                 .rounded(px(theme.radii.pill))
-                                .bg(gpui::rgba(0xFFFFFFF2)),
+                                .bg(knob_fill),
                         ),
                 ),
         )
@@ -454,7 +497,6 @@ pub fn settings_link_row(
         .rounded(px(theme.radii.row))
         .border_b_1()
         .border_color(settings_row_separator_color(theme))
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(InteractionStyle::new(theme), InteractionState::default())
         .child(
             div()
@@ -508,7 +550,6 @@ pub fn settings_nav_item(
         .items_center()
         .gap_2()
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
         .overflow_hidden()
         .control_interaction(
             InteractionStyle::new(theme),
@@ -588,6 +629,87 @@ mod option_row_tests {
         assert_eq!(
             cx.debug_bounds("option_on").unwrap().size.width,
             cx.debug_bounds("option_off").unwrap().size.width
+        );
+    }
+}
+
+#[cfg(test)]
+mod toggle_row_tests {
+    use super::*;
+    use crate::test_support::{assert_color_close, painted_control_quads, redraw, solid_color};
+    use palette::IntoColor;
+
+    struct Toggles {
+        theme: AppTheme,
+    }
+
+    impl gpui::Render for Toggles {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let scale = UiScale::from_percent(100);
+            let theme = self.theme;
+            div()
+                .w(px(320.0))
+                .child(settings_toggle_row("live_on", "On", true, theme, scale))
+                .child(settings_disabled_toggle_row(
+                    "disabled_on",
+                    "On",
+                    true,
+                    theme,
+                    scale,
+                ))
+                .child(settings_toggle_row("live_off", "Off", false, theme, scale))
+                .child(settings_disabled_toggle_row(
+                    "disabled_off",
+                    "Off",
+                    false,
+                    theme,
+                    scale,
+                ))
+        }
+    }
+
+    #[gpui::test]
+    fn a_disabled_toggle_row_paints_its_switch_dimmed(cx: &mut gpui::TestAppContext) {
+        let theme = AppTheme::gitcomet_dark();
+        let (_view, cx) = cx.add_window_view(|_, _| Toggles { theme });
+        redraw(cx);
+        let fill = |cx: &mut gpui::VisualTestContext, selector| {
+            painted_control_quads(cx, selector)
+                .first()
+                .and_then(|(fill, _)| solid_color(fill))
+        };
+        for (live_selector, disabled_selector) in [
+            ("live_on_track", "disabled_on_track"),
+            ("live_on_knob", "disabled_on_knob"),
+            ("live_off_track", "disabled_off_track"),
+            ("live_off_knob", "disabled_off_knob"),
+        ] {
+            let live = fill(cx, live_selector);
+            assert!(live.is_some(), "{live_selector}");
+            assert_color_close(
+                fill(cx, disabled_selector),
+                live.map(|color| theme.disabled_color(color)),
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_toggle_row_dims_its_label_without_element_opacity() {
+        let theme = AppTheme::gitcomet_dark();
+        let scale = UiScale::from_percent(100);
+        let mut live = settings_toggle_row("live", "Live", true, theme, scale);
+        let mut disabled = settings_disabled_toggle_row("disabled", "On", true, theme, scale);
+        let text = |row: &mut Stateful<Div>| row.style().text.color.map(|c| c.into_color());
+
+        assert_eq!(disabled.style().opacity, None);
+        assert_color_close(text(&mut live), Some(theme.colors.foreground.primary));
+        assert_color_close(
+            text(&mut disabled),
+            Some(theme.disabled_color(theme.colors.foreground.primary)),
         );
     }
 }

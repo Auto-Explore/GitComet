@@ -531,7 +531,6 @@ impl GitCometView {
                 .justify_center()
                 .size(slot)
                 .rounded(px(theme.radii.control))
-                .cursor(CursorStyle::PointingHand)
                 .control_interaction(
                     InteractionStyle::new(theme),
                     InteractionState::default().open(is_active),

@@ -423,7 +423,6 @@ impl Render for TitleBarView {
                     .items_center()
                     .justify_center()
                     .gap(px(6.0))
-                    .cursor(CursorStyle::PointingHand)
                     .rounded(px(theme.radii.control))
                     // Reserved at rest so gaining the hover outline does not
                     // shift the chevron by a pixel.

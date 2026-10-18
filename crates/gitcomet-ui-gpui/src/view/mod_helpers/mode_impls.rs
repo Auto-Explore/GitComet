@@ -165,6 +165,9 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         purpose: StashPickerPurpose,
     },
+    FileHistoryFilePicker {
+        repo_id: RepoId,
+    },
     StashMenu {
         repo_id: RepoId,
         index: usize,
@@ -187,10 +190,6 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         kind: RepoPopoverKind,
     },
-    FileHistory {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-    },
     /// Right-click menu on a reflog panel row: the same reset actions the
     /// history log's commit context menu offers, targeting the commit the
     /// clicked reflog entry points at.
@@ -198,6 +197,12 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         target: CommitId,
         selector: SharedString,
+    },
+    /// Right-click menu on a row of the sidebar's file history tab.
+    FileHistoryCommitMenu {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
     },
     PushSetUpstreamPrompt {
         repo_id: RepoId,

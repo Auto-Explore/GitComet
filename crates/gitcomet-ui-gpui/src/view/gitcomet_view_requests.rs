@@ -40,6 +40,10 @@ pub(in crate::view) enum RootRequest {
     SetCommitAmend(bool),
     SetCommitPushAfter(bool),
     OpenPopoverCentered(PopoverKind),
+    OpenFileHistory {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     ResolveDeletePermanently {
         prompt_id: u64,
         confirmed: bool,
@@ -255,6 +259,9 @@ impl GitCometView {
                 self.perform_close_action(action, window, cx)
             }
             RootRequest::OpenPopoverCentered(kind) => self.open_popover_centered(kind, window, cx),
+            RootRequest::OpenFileHistory { repo_id, path } => {
+                self.open_file_history(repo_id, path, window, cx)
+            }
             RootRequest::ResolveDeletePermanently {
                 prompt_id,
                 confirmed,

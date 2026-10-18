@@ -705,25 +705,31 @@ impl SettingsWindowView {
 
         let update_check_locked = crate::view::update_checks_disabled_by_environment();
         let update_check_effective = self.check_for_updates_on_startup && !update_check_locked;
-        let mut update_check_row = self
-            .toggle_row(
-                "settings_window_check_for_updates_on_startup",
-                "Automatically check for updates on startup",
+        let update_check_id = "settings_window_check_for_updates_on_startup";
+        let update_check_label = "Automatically check for updates on startup";
+        let update_check_row = if update_check_locked {
+            self.disabled_toggle_row(
+                update_check_id,
+                update_check_label,
                 update_check_effective,
                 theme,
             )
-            .border_color(no_separator);
-        if update_check_locked {
-            update_check_row = update_check_row.opacity(0.6).cursor(CursorStyle::Arrow);
         } else {
-            update_check_row = update_check_row.on_activate(
+            self.toggle_row(
+                update_check_id,
+                update_check_label,
+                update_check_effective,
+                theme,
+            )
+            .on_activate(
                 false,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
                     this.set_check_for_updates_on_startup(!this.check_for_updates_on_startup, cx);
                 }),
-            );
+            )
         }
+        .border_color(no_separator);
 
         let mut security_privacy_card = self
             .card(

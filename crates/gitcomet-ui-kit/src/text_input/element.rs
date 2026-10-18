@@ -10,6 +10,17 @@ pub(super) struct TextElement {
     pub(super) input: Entity<TextInput>,
 }
 
+#[cfg(test)]
+thread_local! {
+    static SELECTION_QUAD_CAPACITY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Selection-quad capacity this thread painted from since the last call.
+#[cfg(test)]
+pub(super) fn take_selection_quad_capacity_for_tests() -> usize {
+    SELECTION_QUAD_CAPACITY.with(|painted| painted.replace(0))
+}
+
 /// Gap between the caret and the top/bottom of its line box.
 const CARET_INSET_Y_PX: f32 = 3.0;
 
@@ -250,16 +261,18 @@ impl Element for TextElement {
                         highlight_slice.unwrap_or(&[]),
                         None,
                     );
-                    let mut selections = Vec::with_capacity(4);
-                    let cursor_quad = if selected_range.is_empty() {
+                    let (cursor_quad, selections) = if selected_range.is_empty() {
                         let x = truncated_line_x_for_source_offset(&truncated_line, cursor);
                         let (caret_h, caret_top_inset) = caret_metrics(line_height);
                         let top = bounds.top() + caret_top_inset;
-                        Some(fill(
-                            Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
-                            style_colors.cursor,
+                        let caret = PaintQuad::new(Bounds::new(
+                            point(bounds.left() + x, top),
+                            size(px(1.0), caret_h),
                         ))
+                        .background(style_colors.cursor);
+                        (Some(caret), Vec::new())
                     } else {
+                        let mut selections = Vec::with_capacity(4);
                         for range in truncated_line
                             .projection
                             .selection_display_ranges(selected_range.clone())
@@ -269,15 +282,15 @@ impl Element for TextElement {
                             if x1 <= x0 {
                                 continue;
                             }
-                            selections.push(fill(
-                                Bounds::from_corners(
+                            selections.push(
+                                PaintQuad::new(Bounds::from_corners(
                                     point(bounds.left() + x0, bounds.top()),
                                     point(bounds.left() + x1, bounds.top() + line_height),
-                                ),
-                                style_colors.selection,
-                            ));
+                                ))
+                                .background(style_colors.selection),
+                            );
                         }
-                        None
+                        (None, selections)
                     };
 
                     return PrepaintState {
@@ -412,8 +425,7 @@ impl Element for TextElement {
                     scroll_x = px(0.0);
                 }
 
-                let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
-                let cursor_quad = if selected_range.is_empty() {
+                let (cursor_quad, selections) = if selected_range.is_empty() {
                     let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
                     let x = lines
                         .get(line_ix)
@@ -422,11 +434,14 @@ impl Element for TextElement {
                         - scroll_x;
                     let (caret_h, caret_top_inset) = caret_metrics(line_height);
                     let top = bounds.top() + line_height * line_ix as f32 + caret_top_inset;
-                    Some(fill(
-                        Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
-                        style_colors.cursor,
+                    let caret = PaintQuad::new(Bounds::new(
+                        point(bounds.left() + x, top),
+                        size(px(1.0), caret_h),
                     ))
+                    .background(style_colors.cursor);
+                    (Some(caret), Vec::new())
                 } else {
+                    let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
                     for ix in visible_line_range.clone() {
                         let Some(line) = lines.get(ix) else {
                             continue;
@@ -450,10 +465,11 @@ impl Element for TextElement {
                         );
                         for mut rect in line.selection_bounds(local_start..local_end, line_height) {
                             rect.origin += origin;
-                            selections.push(fill(rect, style_colors.selection));
+                            selections
+                                .push(PaintQuad::new(rect).background(style_colors.selection));
                         }
                     }
-                    None
+                    (None, selections)
                 };
 
                 return PrepaintState {
@@ -626,8 +642,7 @@ impl Element for TextElement {
                 rows: total_rows,
             });
 
-            let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
-            let cursor_quad = if selected_range.is_empty() {
+            let (cursor_quad, selections) = if selected_range.is_empty() {
                 let line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
                 let start = line_starts.get(line_ix).copied().unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(lines[line_ix].len());
@@ -636,11 +651,14 @@ impl Element for TextElement {
                     .position_for_index(local, line_height)
                     .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
                 let top = bounds.top() + y_offsets[line_ix] + pos.y + caret_top_inset;
-                Some(fill(
-                    Bounds::new(point(bounds.left() + pos.x, top), size(px(1.0), caret_h)),
-                    style_colors.cursor,
+                let caret = PaintQuad::new(Bounds::new(
+                    point(bounds.left() + pos.x, top),
+                    size(px(1.0), caret_h),
                 ))
+                .background(style_colors.cursor);
+                (Some(caret), Vec::new())
             } else {
+                let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
                 for ix in visible_line_range.clone() {
                     let start = line_starts.get(ix).copied().unwrap_or(0);
                     let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
@@ -660,10 +678,10 @@ impl Element for TextElement {
                     for mut rect in lines[ix].selection_bounds(local_start..local_end, line_height)
                     {
                         rect.origin += origin;
-                        selections.push(fill(rect, style_colors.selection));
+                        selections.push(PaintQuad::new(rect).background(style_colors.selection));
                     }
                 }
-                None
+                (None, selections)
             };
 
             PrepaintState {
@@ -773,6 +791,10 @@ impl Element for TextElement {
             });
         }
 
+        #[cfg(test)]
+        SELECTION_QUAD_CAPACITY.with(|painted| {
+            painted.set(painted.get() + prepaint.selections.capacity());
+        });
         for selection in prepaint.selections.drain(..) {
             window.paint_quad(selection);
         }

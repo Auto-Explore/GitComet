@@ -260,8 +260,6 @@ impl DiffRenderer {
                 _ => return None,
             };
 
-        let history_invoker: SharedString = "viewer_revision_badge".into();
-        let history_open = self.active_context_menu_invoker.as_ref() == Some(&history_invoker);
         // Monospace label so the badge keeps a constant width as the SHA changes.
         let badge = div()
             .id("viewer_revision_badge")
@@ -272,10 +270,9 @@ impl DiffRenderer {
             .px_1()
             .h(components::control_height(scale))
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 controls::InteractionStyle::header(theme),
-                controls::InteractionState::default().open(history_open),
+                controls::InteractionState::default(),
             )
             .child(svg_icon(
                 "icons/history.svg",
@@ -292,15 +289,12 @@ impl DiffRenderer {
             .on_activate(
                 false,
                 controls::ControlActivation::Action,
-                cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    this.open_popover_at(
-                        (PopoverKind::FileHistory {
-                            repo_id,
+                cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.commands.defer(
+                        crate::view::panes::diff::services::DiffCommand::OpenFileHistory {
+                            repo: repo_id,
                             path: path.clone(),
-                        })
-                        .invoked_by(history_invoker.clone()),
-                        e.position(),
-                        window,
+                        },
                         cx,
                     );
                 }),
@@ -349,12 +343,17 @@ impl DiffRenderer {
         )
     }
 
-    pub(super) fn diff_nav_hotkey_hint(theme: AppTheme, label: &'static str) -> gpui::Div {
-        div()
-            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-            .text_size(theme.ui_text(12.0))
-            .text_color(theme.colors.foreground.secondary)
-            .child(label)
+    pub(super) fn diff_nav_hotkey_hint(
+        theme: AppTheme,
+        label: &'static str,
+    ) -> components::ButtonSlot {
+        components::ButtonSlot::custom(move |disabled| {
+            div()
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_size(theme.ui_text(12.0))
+                .text_color(theme.disabled_color_if(disabled, theme.colors.foreground.secondary))
+                .child(label)
+        })
     }
 
     pub(in crate::view) fn collapsed_diff_total_file_stat(&self) -> Option<(usize, usize)> {

@@ -79,9 +79,9 @@ struct RepoTabDragCarrier;
 
 impl Render for RepoTabDragCarrier {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        // GPUI's drag machinery requires a preview entity. Keep that carrier
-        // invisible: the real tab remains in the strip and is what reorders.
-        div().size(px(1.0)).opacity(0.0)
+        // GPUI's drag machinery requires a preview entity. This empty one
+        // paints nothing: the real tab remains in the strip and is what reorders.
+        div().size(px(1.0))
     }
 }
 
@@ -875,7 +875,6 @@ impl Render for RepoTabsBarView {
                 // Fully cover any label ink beneath the button; the sibling
                 // ramp transitions into this exact background.
                 .bg(label_bg)
-                .cursor_pointer()
                 .control_interaction(
                     controls::InteractionStyle::destructive(theme).on_surface(label_bg),
                     controls::InteractionState::default(),

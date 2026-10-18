@@ -35,7 +35,14 @@ const COMPACT_KEYCAP_HEIGHT_PX: f32 = 16.0;
 /// [`shortcut_keys`] at a compact size, in `fg` on a faint plate of `fg`:
 /// legible on a toolbar and inside a tooltip bubble alike.
 pub fn shortcut_keys_compact(label: &str, fg: Rgba, scale: impl Into<UiScale>) -> Div {
-    let scale = scale.into();
+    compact_keycaps(label, fg, compact_keycap_plate(fg), scale.into())
+}
+
+pub(crate) fn compact_keycap_plate(fg: Rgba) -> Rgba {
+    crate::theme::with_alpha(fg, 0.14)
+}
+
+pub(crate) fn compact_keycaps(label: &str, fg: Rgba, bg: Rgba, scale: UiScale) -> Div {
     keycaps(
         label,
         scale,
@@ -45,7 +52,7 @@ pub fn shortcut_keys_compact(label: &str, fg: Rgba, scale: impl Into<UiScale>) -
             text: 11.0,
             line: 12.0,
             fg,
-            bg: crate::theme::with_alpha(fg, 0.14),
+            bg,
         },
     )
 }

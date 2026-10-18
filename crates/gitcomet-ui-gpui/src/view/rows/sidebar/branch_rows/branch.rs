@@ -399,7 +399,6 @@ impl SidebarPaneView {
             .bg(badge_colors.bg)
             .text_size(theme.ui_text(11.0))
             .text_color(badge_colors.text)
-            .cursor(CursorStyle::PointingHand)
             // A worktree folder can outrun the pane. Cap and
             // truncate the pill rather than let it push the
             // row's other badges off the trailing edge. An

@@ -63,6 +63,18 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
                 });
                 return;
             }
+            if let DiffCommand::OpenFileHistory { repo, path } = command {
+                // The sidebar lives in the main window, not in a pop-out window.
+                let Ok(root_window) = root.read_with(cx, |root, _| root.window_handle) else {
+                    return;
+                };
+                let _ = root_window.update(cx, |_, window, cx| {
+                    let _ = root.update(cx, |root, cx| {
+                        root.open_file_history(repo, path, window, cx)
+                    });
+                });
+                return;
+            }
             let _ = root.update(cx, |root, cx| match command {
                 DiffCommand::PersistSettings => root.schedule_ui_settings_persist(cx),
                 DiffCommand::Preference(preference) => match preference {
@@ -147,9 +159,9 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
                         cx.notify();
                     })
                 }
-                DiffCommand::OpenPopover { .. } | DiffCommand::OpenHostedMenu { .. } => {
-                    unreachable!()
-                }
+                DiffCommand::OpenPopover { .. }
+                | DiffCommand::OpenHostedMenu { .. }
+                | DiffCommand::OpenFileHistory { .. } => unreachable!(),
             });
         })),
     }

@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{App, Bounds, Pixels, Window, fill, point, px, size};
+use gpui::{App, Bounds, PaintQuad, Pixels, Window, point, px, size};
 use smallvec::SmallVec;
 
 /// Keep the last winner for each displayed geometry, visiting the selected
@@ -447,17 +447,17 @@ pub(super) fn paint_graph_fade(
         return;
     }
     let fade_w = graph_bounds.size.width.min(fade_width);
-    window.paint_quad(fill(
-        Bounds::new(
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(
             point(graph_bounds.right() - fade_w, graph_bounds.top()),
             size(fade_w, graph_bounds.size.height),
-        ),
-        gpui::linear_gradient(
+        ))
+        .background(gpui::linear_gradient(
             90.0,
             gpui::linear_color_stop(with_alpha(color, 0.0), 0.0),
             gpui::linear_color_stop(with_alpha(color, opacity), 1.0),
-        ),
-    ));
+        )),
+    );
 }
 
 /// The column the row directly above draws its connector down from, or `None`
@@ -1034,13 +1034,13 @@ pub(super) fn paint_vertical_segment(
     window: &mut Window,
 ) {
     gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
-    window.paint_quad(fill(
-        Bounds::new(
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(
             point(x - stroke_width * 0.5, y_from),
             size(stroke_width, y_to - y_from),
-        ),
-        color,
-    ));
+        ))
+        .background(color),
+    );
 }
 
 /// Pixel-aligned straight connectors are rectangles. Avoid a path scratch
@@ -1087,7 +1087,9 @@ pub(super) fn paint_straight_connector(
     }) {
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
         // Its own layer keeps the stroke's painter order, as a path's would.
-        window.paint_layer(bounds, |window| window.paint_quad(fill(bounds, color)));
+        window.paint_layer(bounds, |window| {
+            window.paint_quad(PaintQuad::new(bounds).background(color))
+        });
     } else {
         let mut path = gpui::PathBuilder::stroke(width);
         path.move_to(from);

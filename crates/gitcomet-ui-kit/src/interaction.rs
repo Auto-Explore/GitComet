@@ -89,7 +89,7 @@ pub struct InteractionStyle {
     pointer_feedback: bool,
     hover_feedback: bool,
     selection_outline: bool,
-    disabled_opacity: f32,
+    dim_when_disabled: bool,
 }
 
 impl InteractionStyle {
@@ -103,7 +103,7 @@ impl InteractionStyle {
             pointer_feedback: true,
             hover_feedback: true,
             selection_outline: true,
-            disabled_opacity: 1.0,
+            dim_when_disabled: false,
         }
     }
 
@@ -157,8 +157,9 @@ impl InteractionStyle {
         } else {
             feedback
         };
+        let resting = self.resting.map(|fill| self.color(fill, state));
         let refinement = match feedback {
-            InteractionFeedback::Resting => return self.resting,
+            InteractionFeedback::Resting => return resting,
             InteractionFeedback::Hovered => &self.hover,
             InteractionFeedback::Pressed => &self.pressed,
         };
@@ -168,7 +169,7 @@ impl InteractionStyle {
             .and_then(|fill| fill.color())
             .and_then(|background| background.as_solid())
             .map(|color| color.into_color())
-            .or(self.resting)
+            .or(resting)
     }
 
     pub fn resolved_background(
@@ -245,21 +246,33 @@ impl InteractionStyle {
         self
     }
 
-    pub fn disabled_opacity(mut self, opacity: f32) -> Self {
-        self.disabled_opacity = opacity;
+    /// A disabled control dims its fills; `color` dims the component's own
+    /// text, border and icon colours from the same decision.
+    pub fn dim_when_disabled(mut self, dim: bool) -> Self {
+        self.dim_when_disabled = dim;
         self
     }
 
     pub fn persistent_fill(&self, state: InteractionState) -> Option<Rgba> {
-        if state.open || state.busy {
+        let fill = if state.open || state.busy {
             Some(self.persistent)
         } else {
             state.selected
-        }
+        };
+        fill.map(|fill| self.color(fill, state))
     }
 
     pub fn resting_fill(&self, state: InteractionState) -> Option<Rgba> {
-        self.persistent_fill(state).or(self.resting)
+        self.persistent_fill(state)
+            .or(self.resting.map(|fill| self.color(fill, state)))
+    }
+
+    pub fn dims(&self, state: InteractionState) -> bool {
+        state.disabled && self.dim_when_disabled
+    }
+
+    pub fn color(&self, color: Rgba, state: InteractionState) -> Rgba {
+        self.theme.disabled_color_if(self.dims(state), color)
     }
 
     pub fn apply(self, mut control: Stateful<Div>, state: InteractionState) -> Stateful<Div> {
@@ -269,13 +282,12 @@ impl InteractionStyle {
         }
         if persistent.is_some() && self.selection_outline && !self.theme.is_dark {
             control = control.shadow(vec![interaction_outline(
-                self.theme.colors.interaction.selected_indicator,
+                self.color(self.theme.colors.interaction.selected_indicator, state),
             )]);
         }
         if state.disabled {
             return control
                 .tab_stop(false)
-                .opacity(self.disabled_opacity)
                 .cursor(CursorStyle::Arrow)
                 .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
                     window.prevent_default();

@@ -4,9 +4,7 @@ use crate::view::components::{
     PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptGeometry, PickerPromptItem,
     PickerPromptLayout, PickerPromptOrder, picker_prompt_layout, picker_prompt_layout_ordered,
 };
-use crate::view::panels::{
-    benchmark_branch_checkout_rows, benchmark_file_history_rows, benchmark_workspace_rows,
-};
+use crate::view::panels::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
 use gpui::{Entity, IntoElement, Render, ScrollHandle, Window, px};
 use rustc_hash::{FxHashMap, FxHasher};
 
@@ -261,7 +259,7 @@ impl PickerPromptFrameFixture {
                 benchmark_branch_checkout_rows(&self.repo, &self.query, now)
             }
             PickerPromptKind::Workspace => benchmark_workspace_rows(&self.repo, &self.query),
-            PickerPromptKind::FileHistory => benchmark_file_history_rows(
+            PickerPromptKind::FileHistory => crate::view::panes::file_history::benchmark_rows(
                 self.repo.history_state.file_history.ready().unwrap(),
                 now,
             ),

@@ -78,7 +78,6 @@ fn status_bar_chip(
         .flex()
         .items_center()
         .justify_center()
-        .cursor(CursorStyle::PointingHand)
         .tab_index(0)
         .control_interaction(
             InteractionStyle::link(theme)
@@ -290,7 +289,7 @@ impl BarItemOwner for BottomStatusBarView {
             theme.colors.foreground.secondary
         };
         let zoom_button = components::Button::new("bottom_status_bar_zoom", zoom_label)
-            .start_slot(
+            .start_slot(components::ButtonSlot::custom(move |_| {
                 div()
                     .debug_selector(|| "bottom_status_bar_zoom_icon".to_string())
                     .flex()
@@ -300,8 +299,8 @@ impl BarItemOwner for BottomStatusBarView {
                         "icons/zoom_in.svg",
                         zoom_icon_color,
                         scaled_px(14.0),
-                    )),
-            )
+                    ))
+            }))
             .style(components::ButtonStyle::Subtle)
             .borderless()
             .no_hover_border()
@@ -384,43 +383,46 @@ impl BarItemOwner for BottomStatusBarView {
         } else {
             theme.colors.foreground.secondary
         };
-        let activity_icon = div()
-            .flex()
-            .items_center()
-            .gap(scaled_px(3.0))
-            .child(
-                div()
-                    .debug_selector(|| "bottom_hook_activity_lightning".to_string())
-                    .child(svg_icon(
-                        "icons/lightning.svg",
-                        activity_icon_color,
-                        scaled_px(13.0),
-                    )),
-            )
-            .when(active_hook_count > 0, |icon| {
-                icon.child(
+        let activity_icon = components::ButtonSlot::custom(move |disabled| {
+            let color = |color| theme.disabled_color_if(disabled, color);
+            div()
+                .flex()
+                .items_center()
+                .gap(scaled_px(3.0))
+                .child(
                     div()
-                        .debug_selector(|| "bottom_hook_activity_running".to_string())
-                        .min_w(scaled_px(14.0))
-                        .h(scaled_px(14.0))
-                        .px(scaled_px(3.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(scaled_px(999.0))
-                        .bg(with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.24 } else { 0.16 },
-                        ))
-                        .text_size(theme.ui_text(9.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.accent.foreground)
-                        .child(active_hook_count.to_string()),
+                        .debug_selector(|| "bottom_hook_activity_lightning".to_string())
+                        .child(svg_icon(
+                            "icons/lightning.svg",
+                            color(activity_icon_color),
+                            scaled_px(13.0),
+                        )),
                 )
-            })
-            .when(has_hook_warning && active_hook_count == 0, |icon| {
-                icon.debug_selector(|| "bottom_hook_activity_warning".to_string())
-            });
+                .when(active_hook_count > 0, |icon| {
+                    icon.child(
+                        div()
+                            .debug_selector(|| "bottom_hook_activity_running".to_string())
+                            .min_w(scaled_px(14.0))
+                            .h(scaled_px(14.0))
+                            .px(scaled_px(3.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(scaled_px(999.0))
+                            .bg(color(with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.24 } else { 0.16 },
+                            )))
+                            .text_size(theme.ui_text(9.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(color(theme.colors.accent.foreground))
+                            .child(active_hook_count.to_string()),
+                    )
+                })
+                .when(has_hook_warning && active_hook_count == 0, |icon| {
+                    icon.debug_selector(|| "bottom_hook_activity_warning".to_string())
+                })
+        });
         let hook_activity_button = components::Button::new("bottom_hook_activity", "")
             .selected(keep_minimized)
             .start_slot(activity_icon)
@@ -547,7 +549,6 @@ impl BarItemOwner for BottomStatusBarView {
             .flex()
             .items_center()
             .gap(scaled_px(4.0))
-            .cursor(CursorStyle::PointingHand)
             .text_color(theme.colors.foreground.secondary)
             .tab_index(0)
             .control_interaction(InteractionStyle::link(theme), InteractionState::default())
@@ -582,7 +583,6 @@ impl BarItemOwner for BottomStatusBarView {
             .debug_selector(|| "bottom_status_bar_version".to_string())
             .flex()
             .items_center()
-            .cursor(CursorStyle::PointingHand)
             .text_size(theme.ui_text(11.0))
             .line_height(scaled_px(theme.metrics.ui_text(12.0)))
             .text_color(theme.colors.foreground.secondary)

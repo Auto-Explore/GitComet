@@ -73,6 +73,39 @@ pub fn painted_control_quads(
     })
 }
 
+/// Colours compared within the Rgba→Hsla→Rgba round trip a style applies.
+pub fn color_close(a: gpui::Rgba, b: gpui::Rgba) -> bool {
+    [
+        a.red - b.red,
+        a.green - b.green,
+        a.blue - b.blue,
+        a.alpha - b.alpha,
+    ]
+    .iter()
+    .all(|delta| delta.abs() < 1e-5)
+}
+
+pub fn assert_color_close(actual: Option<gpui::Rgba>, expected: Option<gpui::Rgba>) {
+    match (actual, expected) {
+        (Some(a), Some(e)) => assert!(color_close(a, e), "{actual:?} vs {expected:?}"),
+        (a, e) => assert_eq!(a.is_some(), e.is_some(), "{actual:?} vs {expected:?}"),
+    }
+}
+
+pub fn solid_color(background: &gpui::Background) -> Option<gpui::Rgba> {
+    use palette::IntoColor;
+    background.as_solid().map(|color| color.into_color())
+}
+
+pub fn solid_background(element: &mut impl gpui::Styled) -> Option<gpui::Rgba> {
+    element
+        .style()
+        .background
+        .as_ref()
+        .and_then(|fill| fill.color())
+        .and_then(|background| solid_color(&background))
+}
+
 /// Every `.rs` file below `dir`, for guards that scan a crate's own source.
 pub fn rust_sources_under(dir: &std::path::Path, sources: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("read source directory") {
@@ -90,8 +123,27 @@ pub fn rust_sources_under(dir: &std::path::Path, sources: &mut Vec<std::path::Pa
 pub mod source_guards {
     use std::path::Path;
 
+    /// `source` up to its inline test module. Any other `#[cfg(test)]` marks
+    /// one item, such as a test-only helper or `mod tests;`, and production
+    /// code continues after it.
+    pub fn production_text(source: &str) -> &str {
+        let mut offset = 0;
+        let mut lines = source.split_inclusive('\n').peekable();
+        while let Some(line) = lines.next() {
+            let opens_test_module = line.starts_with("#[cfg(test)]")
+                && lines
+                    .peek()
+                    .is_some_and(|next| next.starts_with("mod ") && next.trim_end().ends_with('{'));
+            if opens_test_module {
+                return &source[..offset];
+            }
+            offset += line.len();
+        }
+        source
+    }
+
     /// Production sources below `src_dir` as `(relative path, text before the
-    /// first inline test module)`, skipping test files and directories.
+    /// inline test module)`, skipping test files and directories.
     fn production_sources(src_dir: &Path) -> Vec<(String, String)> {
         let mut paths = Vec::new();
         super::rust_sources_under(src_dir, &mut paths);
@@ -107,14 +159,40 @@ pub mod source_guards {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("read Rust source");
-            let production = source
-                .split("#[cfg(test)]\nmod tests")
-                .next()
-                .unwrap_or("")
-                .to_string();
-            out.push((relative_str, production));
+            out.push((relative_str, production_text(&source).to_string()));
         }
         out
+    }
+
+    pub const ELEMENT_OPACITY_HINT: &str = "since gpui-ce #330 an element opacity below 1.0 paints a viewport-sized offscreen group that defeats partial redraw; use with_alpha or AppTheme::disabled_color";
+
+    /// Production files using element opacity, as `.opacity(` calls or `Some`
+    /// writes to an `opacity` field, with their counts.
+    pub fn opacity_uses(src_dir: &Path) -> Vec<(String, usize)> {
+        let mut uses: Vec<(String, usize)> = production_sources(src_dir)
+            .into_iter()
+            .filter_map(|(path, source)| {
+                let count = element_opacity_count(&source);
+                (count > 0).then_some((path, count))
+            })
+            .collect();
+        uses.sort();
+        uses
+    }
+
+    fn element_opacity_count(source: &str) -> usize {
+        source
+            .match_indices("opacity")
+            .filter(|(at, word)| {
+                let rest = &source[at + word.len()..];
+                let write = rest.starts_with(" = Some(") || rest.starts_with(": Some(");
+                match source[..*at].chars().next_back() {
+                    Some('.') => rest.starts_with('(') || write,
+                    Some(c) if c.is_alphanumeric() || c == '_' => false,
+                    _ => write,
+                }
+            })
+            .count()
     }
 
     /// The size argument of every `svg_icon(`/`svg_spinner(` call in `source`.
@@ -358,6 +436,30 @@ pub mod source_guards {
                     "moved.rs: allowlisted but missing",
                 ]
             );
+        }
+
+        #[test]
+        fn opacity_uses_count_calls_and_writes_but_not_other_fields() {
+            let sources = tempfile::tempdir().unwrap();
+            std::fs::write(
+                sources.path().join("fixture.rs"),
+                "#[cfg(test)]\nmod tests;\nfn a(d: Div) -> Div { d.opacity(0.5) }\nfn b(s: &mut Style) { s.opacity = Some(0.5); }\nconst C: Style = Style { opacity: Some(0.5) };\nconst D: Theme = Theme { graph_fade_opacity: Some(0.1) };\nfn e(t: &mut Theme) { t.graph_fade_opacity = Some(0.1); }\n#[cfg(test)]\nmod checks {\n    fn f(d: Div) -> Div { d.opacity(0.5) }\n}\n",
+            )
+            .unwrap();
+            assert_eq!(
+                super::opacity_uses(sources.path()),
+                [("fixture.rs".to_string(), 3)]
+            );
+        }
+
+        #[test]
+        fn production_text_ends_at_the_inline_test_module_only() {
+            let source = "fn a() {}\n#[cfg(test)]\nmod tests;\nfn b() {}\n#[cfg(test)]\nfn helper() {}\nfn c() {}\n#[cfg(test)]\nmod checks {\n    fn t() {}\n}\n";
+            assert_eq!(
+                super::production_text(source),
+                "fn a() {}\n#[cfg(test)]\nmod tests;\nfn b() {}\n#[cfg(test)]\nfn helper() {}\nfn c() {}\n"
+            );
+            assert_eq!(super::production_text("fn a() {}"), "fn a() {}");
         }
 
         #[test]

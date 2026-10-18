@@ -3,7 +3,9 @@ use crate::components::{
     Button, ButtonStyle, InteractiveRowExt, InteractiveRowStyle, SplitButton,
     on_nested_control_click, panel_tab, panel_tab_close,
 };
-use crate::test_support::painted_control_quads as paint;
+use crate::test_support::{
+    assert_color_close, painted_control_quads as paint, solid_background, solid_color,
+};
 use gpui::{
     Context, FocusHandle, IntoElement, Modifiers, MouseButton, MouseDownEvent, Pixels, Point,
     Render, TestAppContext, VisualTestContext, Window, div,
@@ -135,8 +137,7 @@ impl Render for Fixture {
                                 gpui::canvas(
                                     |_, _, _| (),
                                     move |bounds, _, window, _| {
-                                        window.paint_quad(gpui::fill(
-                                            bounds,
+                                        window.paint_quad(gpui::PaintQuad::new(bounds).background(
                                             paint.background(theme.colors.surface.chrome, window),
                                         ));
                                     },
@@ -557,6 +558,47 @@ fn split_segments_track_open_and_busy_independently(cx: &mut TestAppContext) {
 }
 
 #[test]
+fn dimmed_disabled_controls_dim_their_fill_without_element_opacity() {
+    for theme in themes() {
+        let selected = theme.colors.interaction.selected_background;
+        let state = InteractionState::default()
+            .selected(true, selected)
+            .disabled(true);
+        let mut dimmed = InteractionStyle::new(theme)
+            .dim_when_disabled(true)
+            .apply(div().id("dimmed"), state);
+        let mut plain = InteractionStyle::new(theme).apply(div().id("plain"), state);
+
+        assert_eq!(dimmed.style().opacity, None);
+        assert_eq!(plain.style().opacity, None);
+        assert_color_close(
+            solid_background(&mut dimmed),
+            Some(theme.disabled_color(selected)),
+        );
+        assert_color_close(solid_background(&mut plain), Some(selected));
+        if !theme.is_dark {
+            let outline = dimmed.style().box_shadow.clone().unwrap()[0].color;
+            assert_color_close(
+                solid_color(&outline),
+                Some(theme.disabled_color(theme.colors.interaction.selected_indicator)),
+            );
+        }
+    }
+}
+
+#[test]
+fn interaction_colour_dims_only_disabled_states_of_a_dimming_style() {
+    let theme = themes()[0];
+    let color = gpui::rgb(0x3388cc);
+    let disabled = InteractionState::default().disabled(true);
+    let dimmed = InteractionStyle::new(theme).dim_when_disabled(true);
+
+    assert_eq!(dimmed.color(color, disabled), theme.disabled_color(color));
+    assert_eq!(dimmed.color(color, InteractionState::default()), color);
+    assert_eq!(InteractionStyle::new(theme).color(color, disabled), color);
+}
+
+#[test]
 fn semantic_state_can_be_cleared_without_losing_selection_under_an_open_menu() {
     let theme = themes()[0];
     let style = InteractionStyle::accent(theme);
@@ -877,6 +919,17 @@ fn discrete_control_styles_and_activation_are_owned_by_the_interaction_kit() {
     assert!(
         violations.is_empty(),
         "Use the shared interaction APIs for discrete controls: {violations:?}"
+    );
+}
+
+#[test]
+fn kit_sources_use_colour_alpha_instead_of_element_opacity() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    assert_eq!(
+        crate::test_support::source_guards::opacity_uses(&root),
+        Vec::<(String, usize)>::new(),
+        "{}",
+        crate::test_support::source_guards::ELEMENT_OPACITY_HINT
     );
 }
 

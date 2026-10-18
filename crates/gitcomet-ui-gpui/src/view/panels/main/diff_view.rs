@@ -723,14 +723,11 @@ impl DiffRenderer {
             if let Some(path) = path {
                 match key {
                     "h" if !mods.shift => {
-                        let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-                        self.open_popover_at(
-                            PopoverKind::FileHistory {
-                                repo_id,
+                        self.commands.defer(
+                            DiffCommand::OpenFileHistory {
+                                repo: repo_id,
                                 path: path.clone(),
                             },
-                            anchor,
-                            window,
                             cx,
                         );
                         handled = true;

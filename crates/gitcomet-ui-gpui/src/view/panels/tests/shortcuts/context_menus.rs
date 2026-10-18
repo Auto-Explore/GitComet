@@ -963,9 +963,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         commit_file_model,
         "H",
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &commit_file_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &commit_file_path
     );
     assert_shortcut_action!(
         commit_file_model,
@@ -997,9 +995,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         unstaged_status_model,
         &sec("H"),
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &unstaged_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &unstaged_path
     );
     assert_shortcut_action!(
         unstaged_status_model,
@@ -1049,9 +1045,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         staged_status_model,
         &sec("H"),
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &staged_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &staged_path
     );
     assert_shortcut_action!(
         staged_status_model,
@@ -1101,9 +1095,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         conflicted_status_model,
         &sec("H"),
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &conflicted_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &conflicted_path
     );
     assert_shortcut_action!(
         conflicted_status_model,
