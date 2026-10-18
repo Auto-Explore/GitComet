@@ -164,19 +164,35 @@ pub mod source_guards {
         out
     }
 
-    /// Production files calling `.opacity(`, with their call counts. gpui-ce
-    /// paints element opacity below 1.0 as an offscreen group that defeats
-    /// partial redraw; colour alpha costs nothing.
-    pub fn opacity_calls(src_dir: &Path) -> Vec<(String, usize)> {
-        let mut calls: Vec<(String, usize)> = production_sources(src_dir)
+    pub const ELEMENT_OPACITY_HINT: &str = "since gpui-ce #330 an element opacity below 1.0 paints a viewport-sized offscreen group that defeats partial redraw; use with_alpha or AppTheme::disabled_color";
+
+    /// Production files using element opacity, as `.opacity(` calls or `Some`
+    /// writes to an `opacity` field, with their counts.
+    pub fn opacity_uses(src_dir: &Path) -> Vec<(String, usize)> {
+        let mut uses: Vec<(String, usize)> = production_sources(src_dir)
             .into_iter()
             .filter_map(|(path, source)| {
-                let count = source.matches(".opacity(").count();
+                let count = element_opacity_count(&source);
                 (count > 0).then_some((path, count))
             })
             .collect();
-        calls.sort();
-        calls
+        uses.sort();
+        uses
+    }
+
+    fn element_opacity_count(source: &str) -> usize {
+        source
+            .match_indices("opacity")
+            .filter(|(at, word)| {
+                let rest = &source[at + word.len()..];
+                let write = rest.starts_with(" = Some(") || rest.starts_with(": Some(");
+                match source[..*at].chars().next_back() {
+                    Some('.') => rest.starts_with('(') || write,
+                    Some(c) if c.is_alphanumeric() || c == '_' => false,
+                    _ => write,
+                }
+            })
+            .count()
     }
 
     /// The size argument of every `svg_icon(`/`svg_spinner(` call in `source`.
@@ -419,6 +435,20 @@ pub mod source_guards {
                     "plain.rs: allowlisted but no longer needed",
                     "moved.rs: allowlisted but missing",
                 ]
+            );
+        }
+
+        #[test]
+        fn opacity_uses_count_calls_and_writes_but_not_other_fields() {
+            let sources = tempfile::tempdir().unwrap();
+            std::fs::write(
+                sources.path().join("fixture.rs"),
+                "#[cfg(test)]\nmod tests;\nfn a(d: Div) -> Div { d.opacity(0.5) }\nfn b(s: &mut Style) { s.opacity = Some(0.5); }\nconst C: Style = Style { opacity: Some(0.5) };\nconst D: Theme = Theme { graph_fade_opacity: Some(0.1) };\nfn e(t: &mut Theme) { t.graph_fade_opacity = Some(0.1); }\n#[cfg(test)]\nmod checks {\n    fn f(d: Div) -> Div { d.opacity(0.5) }\n}\n",
+            )
+            .unwrap();
+            assert_eq!(
+                super::opacity_uses(sources.path()),
+                [("fixture.rs".to_string(), 3)]
             );
         }
 

@@ -1,8 +1,8 @@
 //! The kit's source guards over this crate's rendering code.
 
 use gitcomet_ui_kit::test_support::source_guards::{
-    DiscreteControlAllowlist, direct_clipboard_access, discrete_control_violations,
-    unscaled_icon_sizes,
+    DiscreteControlAllowlist, ELEMENT_OPACITY_HINT, direct_clipboard_access,
+    discrete_control_violations, opacity_uses, unscaled_icon_sizes,
 };
 
 fn src_dir() -> std::path::PathBuf {
@@ -34,4 +34,13 @@ fn clipboard_access_goes_through_the_kit() {
 fn icon_sizes_follow_the_ui_scale() {
     let unscaled = unscaled_icon_sizes(&src_dir(), &[]);
     assert!(unscaled.is_empty(), "{unscaled:#?}");
+}
+
+#[test]
+fn colour_alpha_instead_of_element_opacity() {
+    assert_eq!(
+        opacity_uses(&src_dir()),
+        Vec::<(String, usize)>::new(),
+        "{ELEMENT_OPACITY_HINT}"
+    );
 }

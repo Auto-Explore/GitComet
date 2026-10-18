@@ -927,9 +927,10 @@ fn discrete_control_styles_and_activation_are_owned_by_the_interaction_kit() {
 fn kit_sources_use_colour_alpha_instead_of_element_opacity() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     assert_eq!(
-        crate::test_support::source_guards::opacity_calls(&root),
+        crate::test_support::source_guards::opacity_uses(&root),
         Vec::<(String, usize)>::new(),
-        "element opacity becomes an offscreen group in gpui-ce; use with_alpha or AppTheme::disabled_color"
+        "{}",
+        crate::test_support::source_guards::ELEMENT_OPACITY_HINT
     );
 }
 
