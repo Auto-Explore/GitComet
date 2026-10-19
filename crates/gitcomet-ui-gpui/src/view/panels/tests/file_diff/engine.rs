@@ -14,6 +14,162 @@ fn difftastic_by_default(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<G
     });
 }
 
+fn assert_formatting_only_collapsed_diff_notice(
+    cx: &mut gpui::TestAppContext,
+    diff_view: DiffViewMode,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    difftastic_by_default(cx, &view);
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(940),
+        "formatting_only_canvas",
+        PathBuf::from("examples/01-formatting.js"),
+        concat!(
+            "@@ -1,3 +1,11 @@\n",
+            " function buildProfile(user) {\n",
+            "-  return { id: user.id, name: user.name, roles: [\"reader\", \"editor\"], active: true };\n",
+            "+  return {\n",
+            "+    id: user.id,\n",
+            "+    name: user.name,\n",
+            "+    roles: [\n",
+            "+      \"reader\",\n",
+            "+      \"editor\"\n",
+            "+    ],\n",
+            "+    active: true\n",
+            "+  };\n",
+            " }\n",
+        )
+        .to_string(),
+        concat!(
+            "function buildProfile(user) {\n",
+            "  return { id: user.id, name: user.name, roles: [\"reader\", \"editor\"], active: true };\n",
+            "}\n",
+        )
+        .to_string(),
+        concat!(
+            "function buildProfile(user) {\n",
+            "  return {\n",
+            "    id: user.id,\n",
+            "    name: user.name,\n",
+            "    roles: [\n",
+            "      \"reader\",\n",
+            "      \"editor\"\n",
+            "    ],\n",
+            "    active: true\n",
+            "  };\n",
+            "}\n",
+        )
+        .to_string(),
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the formatting-only JavaScript comparison",
+        |pane| {
+            pane.file_diff_cache_target == Some(target.clone())
+                && pane.diff_engine_status
+                    == DiffEngineStatus::Difftastic {
+                        syntactic_changes: false,
+                        text_differs: true,
+                    }
+        },
+        |pane| pane.diff_engine_status,
+    );
+    cx.update(|_window, app| {
+        let renderer = view.read(app).diff_renderer.clone();
+        renderer.update(app, |pane, cx| {
+            pane.diff_view = diff_view;
+            pane.set_diff_content_mode(DiffContentMode::Collapsed, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert!(pane.is_collapsed_diff_projection_active());
+        assert!(pane.collapsed_diff_visible_rows.is_empty());
+    });
+    let notice = cx
+        .debug_bounds("difftastic_text_only_canvas")
+        .expect("the canvas explains that text differs without syntactic changes");
+    assert!(
+        cx.debug_bounds("diff_engine_notice").is_none(),
+        "the canvas notice replaces the extra engine header"
+    );
+    assert!(cx.debug_bounds("diff_text_empty_space_Inline").is_none());
+    for selector in ["difftastic_show_full", "difftastic_show_line_changes"] {
+        let button = cx
+            .debug_bounds(selector)
+            .expect("the canvas offers both views");
+        assert!(notice.contains(&button.center()));
+    }
+    let show_full = debug_selector_center(cx, "difftastic_show_full");
+    cx.simulate_mouse_move(show_full, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        show_full,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        show_full,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert_eq!(pane.effective_diff_content_mode(), DiffContentMode::Full);
+        assert!(pane.diff_visible_len() > 0);
+    });
+    assert!(cx.debug_bounds("difftastic_text_only_canvas").is_none());
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+    let show_lines = debug_selector_center(cx, "difftastic_show_line_changes");
+    cx.simulate_mouse_move(show_lines, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        show_lines,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        show_lines,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "line changes after leaving the formatting-only canvas",
+        |pane| {
+            pane.diff_engine_status == DiffEngineStatus::LineByLine && pane.diff_visible_len() > 0
+        },
+        |pane| (pane.diff_engine_status, pane.diff_visible_len()),
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert_eq!(pane.diff_engine_override(), Some(DiffEngine::LineByLine));
+        assert_eq!(pane.diff_whitespace_mode, DiffWhitespaceMode::Show);
+    });
+    assert!(cx.debug_bounds("difftastic_text_only_canvas").is_none());
+}
+
+#[gpui::test]
+fn difftastic_formatting_only_collapsed_inline_diff_explains_text_changes_in_canvas(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_formatting_only_collapsed_diff_notice(cx, DiffViewMode::Inline);
+}
+
+#[gpui::test]
+fn difftastic_formatting_only_collapsed_split_diff_explains_text_changes_in_canvas(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_formatting_only_collapsed_diff_notice(cx, DiffViewMode::Split);
+}
+
 fn close_viewer(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<GitCometView>,

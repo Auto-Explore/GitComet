@@ -1,11 +1,12 @@
 use super::{
-    AppTheme, DiffRenderer, DiffSplitResizeDragGhost, DiffSplitResizeHandle, DiffSplitResizeState,
-    DiffTextEmptySpaceDecoration, DiffTextRegion, DiffViewMode, Loadable, PANE_RESIZE_HANDLE_PX,
-    components, diff_split_column_widths, diff_split_drag_params, empty_diff_text_document,
-    next_diff_split_drag_ratio,
+    AppTheme, DiffContentMode, DiffRenderer, DiffSplitResizeDragGhost, DiffSplitResizeHandle,
+    DiffSplitResizeState, DiffTextEmptySpaceDecoration, DiffTextRegion, DiffViewMode, Loadable,
+    PANE_RESIZE_HANDLE_PX, components, diff_split_column_widths, diff_split_drag_params,
+    empty_diff_text_document, next_diff_split_drag_ratio,
 };
 use crate::view::panes::diff::DiffBody;
 use crate::view::panes::diff::helpers::state::DiffHorizontalScrollColumn;
+use gitcomet_core::diff_engine::DiffEngineStatus;
 use gpui::{
     AnyElement, CursorStyle, MouseButton, MouseDownEvent, Window, div, prelude::*, px, uniform_list,
 };
@@ -39,6 +40,17 @@ impl DiffRenderer {
         }
     }
 
+    pub(super) fn collapsed_difftastic_has_only_text_changes(&self) -> bool {
+        self.is_collapsed_diff_projection_active()
+            && matches!(
+                self.diff_engine_status,
+                DiffEngineStatus::Difftastic {
+                    syntactic_changes: false,
+                    text_differs: true,
+                }
+            )
+    }
+
     pub(super) fn render_text_diff(
         &mut self,
         theme: AppTheme,
@@ -50,6 +62,39 @@ impl DiffRenderer {
         self.ensure_diff_visible_indices();
         self.ensure_diff_wrap_visible_rows(window, cx);
         self.maybe_autoscroll_diff_to_first_change();
+
+        if self.collapsed_difftastic_has_only_text_changes() {
+            return components::empty_state(
+                theme,
+                "Difftastic - Collapsed mode",
+                "No syntactic changes; text differs",
+            )
+            .debug_selector(|| "difftastic_text_only_canvas".to_string())
+            .size_full()
+            .text_center()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap_2()
+                    .child(
+                        components::Button::new("difftastic_show_full", "Show full text").on_click(
+                            theme,
+                            cx,
+                            |this, _, _, cx| this.set_diff_content_mode(DiffContentMode::Full, cx),
+                        ),
+                    )
+                    .child(
+                        components::Button::new(
+                            "difftastic_show_line_changes",
+                            "Show line changes",
+                        )
+                        .on_click(theme, cx, |this, _, _, cx| this.show_line_changes(cx)),
+                    ),
+            )
+            .into_any_element();
+        }
 
         let total_len = if self.diff_surface().body == DiffBody::Patch {
             self.patch_diff_row_len()

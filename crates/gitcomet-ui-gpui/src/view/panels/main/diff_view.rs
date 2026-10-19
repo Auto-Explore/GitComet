@@ -1823,6 +1823,7 @@ impl DiffRenderer {
             && !is_image_diff_view
             && !is_diagram_preview_view
             && self.effective_diff_engine() == DiffEngine::Difftastic
+            && !self.collapsed_difftastic_has_only_text_changes()
         {
             let mut notice = div()
                 .debug_selector(|| "diff_engine_notice".to_string())
