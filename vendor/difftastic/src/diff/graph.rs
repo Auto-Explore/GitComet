@@ -8,12 +8,12 @@ use std::hash::{Hash, Hasher};
 use bumpalo::Bump;
 use hashbrown::hash_map::RawEntryMut;
 use smallvec::{smallvec, SmallVec};
-use strsim::normalized_levenshtein;
 
 use self::Edge::*;
 use crate::diff::changes::{insert_deep_unchanged, ChangeKind, ChangeMap};
 use crate::diff::stack::Stack;
 use crate::hash::DftHashMap;
+use crate::interrupt::{self, Interrupted};
 use crate::parse::syntax::{AtomKind, Syntax, SyntaxId};
 
 /// A vertex in a directed acyclic graph that represents a diff.
@@ -513,6 +513,35 @@ fn pop_all_parents<'s, 'v>(
     (lhs_node, rhs_node, lhs_parent_id, rhs_parent_id, parents)
 }
 
+fn normalized_levenshtein(
+    lhs: &str,
+    rhs: &str,
+    should_stop: &dyn Fn() -> bool,
+) -> Result<f64, Interrupted> {
+    if lhs.is_empty() && rhs.is_empty() {
+        return Ok(1.0);
+    }
+
+    let rhs_chars: Vec<_> = rhs.chars().collect();
+    let mut row: Vec<usize> = (1..=rhs_chars.len()).collect();
+    let mut distance = rhs_chars.len();
+    let mut lhs_len = 0;
+    for (i, lhs_char) in lhs.chars().enumerate() {
+        interrupt::check(should_stop)?;
+        lhs_len = i + 1;
+        distance = lhs_len;
+        let mut diagonal = i;
+        for (&rhs_char, above) in rhs_chars.iter().zip(&mut row) {
+            let substitution = diagonal + usize::from(lhs_char != rhs_char);
+            diagonal = *above;
+            distance = (distance + 1).min((*above + 1).min(substitution));
+            *above = distance;
+        }
+    }
+
+    Ok(1.0 - distance as f64 / lhs_len.max(rhs_chars.len()) as f64)
+}
+
 /// Compute the neighbours of `v`.
 ///
 /// This function is extremely hot and directly affects difftastic
@@ -521,7 +550,8 @@ pub(crate) fn compute_neighbours<'s, 'v>(
     v: &Vertex<'s, 'v>,
     alloc: &'v Bump,
     seen: &mut DftHashMap<&Vertex<'s, 'v>, SmallVec<[&'v Vertex<'s, 'v>; 2]>>,
-) -> &'v [(Edge, &'v Vertex<'s, 'v>)] {
+    should_stop: &dyn Fn() -> bool,
+) -> Result<&'v [(Edge, &'v Vertex<'s, 'v>)], Interrupted> {
     // There are only seven pushes in this function, so that's sufficient.
     let mut neighbours: SmallVec<[(Edge, &Vertex); 7]> = SmallVec::new();
 
@@ -637,8 +667,12 @@ pub(crate) fn compute_neighbours<'s, 'v>(
             // Both sides are comments/both sides are strings and
             // their content is reasonably similar.
             if lhs_kind == rhs_kind && lhs_content != rhs_content {
-                let levenshtein_pct =
-                    (normalized_levenshtein(lhs_content, rhs_content) * 100.0).round() as u8;
+                let levenshtein_pct = (normalized_levenshtein(
+                    lhs_content,
+                    rhs_content,
+                    should_stop,
+                )? * 100.0)
+                    .round() as u8;
                 let edge = if lhs_kind == &AtomKind::Comment {
                     ReplacedComment { levenshtein_pct }
                 } else {
@@ -811,7 +845,7 @@ pub(crate) fn compute_neighbours<'s, 'v>(
         "Must always find some next steps if node is not the end"
     );
 
-    alloc.alloc_slice_copy(neighbours.as_slice())
+    Ok(alloc.alloc_slice_copy(neighbours.as_slice()))
 }
 
 pub(crate) fn populate_change_map<'s, 'v>(
@@ -864,5 +898,53 @@ pub(crate) fn populate_change_map<'s, 'v>(
                 change_map.insert(rhs, ChangeKind::Novel);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::never_stop;
+
+    #[test]
+    fn cancellable_similarity_keeps_strsim_scores_for_unicode_and_empty_strings() {
+        let samples = [
+            "",
+            "a",
+            "ab",
+            "ba",
+            "aaa",
+            "kitten",
+            "sitting",
+            "café",
+            "cafe\u{301}",
+            "🦀🙂",
+            "🙂🦀",
+            "日本語",
+            "日語",
+            "a\n\tb",
+        ];
+        for lhs in samples {
+            for rhs in samples {
+                assert_eq!(
+                    normalized_levenshtein(lhs, rhs, &never_stop),
+                    Ok(strsim::normalized_levenshtein(lhs, rhs)),
+                    "{lhs:?} -> {rhs:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn similarity_stops_between_rows() {
+        let polls = Cell::new(0);
+        let should_stop = || {
+            polls.set(polls.get() + 1);
+            polls.get() > 1
+        };
+        assert_eq!(
+            normalized_levenshtein(&"a".repeat(8192), &"b".repeat(8192), &should_stop),
+            Err(Interrupted),
+        );
     }
 }

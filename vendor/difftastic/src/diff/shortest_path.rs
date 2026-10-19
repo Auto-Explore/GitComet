@@ -90,9 +90,15 @@ fn shortest_vertex_path<'s, 'v>(
                     break current;
                 }
 
-                let neighbours = *current
-                    .neighbours
-                    .get_or_init(|| compute_neighbours(current, vertex_arena, &mut seen));
+                let neighbours = match current.neighbours.get() {
+                    Some(neighbours) => *neighbours,
+                    None => {
+                        let neighbours =
+                            compute_neighbours(current, vertex_arena, &mut seen, should_stop)
+                                .map_err(|_| SearchStop::Interrupted)?;
+                        *current.neighbours.get_or_init(|| neighbours)
+                    }
+                };
 
                 for neighbour in neighbours {
                     let (edge, next) = neighbour;
@@ -303,7 +309,7 @@ mod tests {
     use crate::diff::changes::ChangeKind;
     use crate::diff::graph::Edge::*;
     use crate::options::{never_stop, DEFAULT_GRAPH_LIMIT};
-    use crate::syntax::{init_all_info, AtomKind};
+    use crate::syntax::{init_all_info, AtomKind, StringKind};
 
     fn pos_helper(line: u32) -> Vec<SingleLineSpan> {
         vec![SingleLineSpan {
@@ -311,6 +317,36 @@ mod tests {
             start_col: 0,
             end_col: 1,
         }]
+    }
+
+    #[test]
+    fn a_stop_request_interrupts_comparing_long_atom_contents() {
+        for kind in [
+            AtomKind::Comment,
+            AtomKind::String(StringKind::StringLiteral),
+        ] {
+            let arena = Arena::new();
+            let lhs = Syntax::new_atom(&arena, pos_helper(0), "a".repeat(8192), kind);
+            let rhs = Syntax::new_atom(&arena, pos_helper(0), "b".repeat(8192), kind);
+            init_all_info(&[lhs], &[rhs]);
+            let polls = std::cell::Cell::new(0);
+            let should_stop = || {
+                polls.set(polls.get() + 1);
+                polls.get() > 1
+            };
+            let mut change_map = ChangeMap::default();
+
+            assert!(matches!(
+                mark_syntax(
+                    Some(lhs),
+                    Some(rhs),
+                    &mut change_map,
+                    DEFAULT_GRAPH_LIMIT,
+                    &should_stop,
+                ),
+                Err(SearchStop::Interrupted)
+            ));
+        }
     }
 
     #[test]

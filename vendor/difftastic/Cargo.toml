@@ -21,7 +21,6 @@ unsafe_code = "forbid"
 regex = { workspace = true }
 typed-arena = "2.0.2"
 rustc-hash = { workspace = true }
-strsim = { workspace = true }
 lazy_static = "1.4.0"
 log = { workspace = true }
 radix-heap = "0.4.2"
@@ -100,3 +99,4 @@ tree-sitter-zig = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = "1.3.0"
+strsim = { workspace = true }

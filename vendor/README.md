@@ -90,9 +90,12 @@ Changes against the baseline (`git log -- vendor/difftastic`):
 - Stopping: `api::compare` takes a `should_stop` closure, checked by
   tree-sitter's parse and query progress callbacks (embedded languages
   included), on the graph search's first vertex and every
-  `STOP_CHECK_INTERVAL` vertices, and between phases; a stop returns
-  `Interrupted`. The longest stretch without a check is about 0.5 s, in the
-  syntax conversion and `mark_unchanged` of a 1 MB release diff.
+  `STOP_CHECK_INTERVAL` vertices, on every edit-distance row when comparing
+  string or comment contents, and between phases; a stop returns
+  `Interrupted`. The similarity calculation preserves strsim's Unicode
+  character scores; strsim remains a test oracle. The longest stretch without
+  a check is about 0.5 s, in the syntax conversion and `mark_unchanged` of a
+  1 MB release diff.
 - Nesting: a tree deeper than the caller's limit falls back with
   `NestingLimit` before the recursive conversion. An embedded language's tree
   gets only the depth its host leaves, or is left to the host grammar, so one
