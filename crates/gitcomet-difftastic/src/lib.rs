@@ -64,6 +64,12 @@ fn compare_queued(
     if input.old == input.new {
         return Ok(StructuralDiffOutcome::Unchanged);
     }
+    // Checked before queueing: a fallback needs no slot.
+    if !api::supports(input) {
+        return Ok(StructuralDiffOutcome::Fallback(
+            DiffEngineFallback::UnsupportedLanguage,
+        ));
+    }
     let _worker = Worker::acquire(cancellation)?;
     let deadline = Instant::now() + DEADLINE;
     compare_until(
@@ -101,7 +107,9 @@ fn compare_until<'a>(
             return Ok(StructuralDiffOutcome::Fallback(DiffEngineFallback::Timeout));
         }
         Ok(Err(ContainedPanic { message, location })) => {
-            log::warn!("difftastic operation={operation} panicked at {location:?}: {message}");
+            let location =
+                location.map_or_else(|| "an unknown location".to_owned(), |l| l.to_string());
+            log::warn!("difftastic operation={operation} panicked at {location}: {message}");
             return Ok(StructuralDiffOutcome::Fallback(DiffEngineFallback::Failed));
         }
         Err(error) => {

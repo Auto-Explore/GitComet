@@ -1864,10 +1864,7 @@ impl DiffRenderer {
                 }
                 notice = notice.child(
                     components::Button::new("difftastic_show_line_changes", "Show line changes")
-                        .on_click(theme, cx, |this, _, _, cx| {
-                            this.set_diff_whitespace_mode(DiffWhitespaceMode::Show, cx);
-                            this.set_diff_engine_override(Some(DiffEngine::LineByLine), cx);
-                        }),
+                        .on_click(theme, cx, |this, _, _, cx| this.show_line_changes(cx)),
                 );
             }
             Some(notice)

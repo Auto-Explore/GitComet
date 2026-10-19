@@ -2,6 +2,7 @@ use super::DiffRenderer;
 use super::services::DiffCommand;
 use crate::view::{DiffTextRegion, DiffViewMode, components};
 use gitcomet_core::domain::{DiffArea, DiffTarget};
+use gitcomet_core::file_diff::FileDiffRowKind;
 use gitcomet_core::patch_action::{
     PatchActionError, PatchOperation, PreparedDiffPatch, SourceLineSelection,
 };
@@ -54,6 +55,22 @@ impl DiffRenderer {
         selection
     }
 
+    /// The source lines that `region` of `row` stands for when the user acts
+    /// on the row itself (its gutter button, a right-click without a
+    /// selection). Split draws a pair changed on one side as one change in the
+    /// changed column, so it stands for both lines, as its one Inline row does.
+    pub(super) fn structural_row_lines(
+        &self,
+        row: usize,
+        region: DiffTextRegion,
+    ) -> SourceLineSelection {
+        let one_sided_pair = self.diff_view == DiffViewMode::Split
+            && self
+                .file_diff_split_row(row)
+                .is_some_and(|row| row.kind == FileDiffRowKind::Context);
+        self.structural_source_lines([row], (!one_sided_pair).then_some(region))
+    }
+
     pub(super) fn open_structural_line_menu(
         &mut self,
         visible: usize,
@@ -84,13 +101,7 @@ impl DiffRenderer {
         region: DiffTextRegion,
     ) -> Option<SourceLineSelection> {
         let row = self.diff_source_visible_ix_for_visible_ix(visible)?;
-        let selected = self
-            .diff_text_normalized_selection()
-            .filter(|(start, end)| {
-                start != end
-                    && (start.region != end.region || start.region == region)
-                    && (start.source_visible_ix..=end.source_visible_ix).contains(&row)
-            });
+        let selected = self.diff_text_selection_line_rows_at(self.diff_view, row, region);
         if selected.is_none()
             && let Some((a, b)) = self.diff_selection_range
             && (a.min(b)..=a.max(b)).contains(&visible)
@@ -100,30 +111,24 @@ impl DiffRenderer {
                 Some(region),
             ));
         }
-        let Some((start, end)) = selected else {
-            return Some(self.structural_source_lines(
-                self.diff_source_mapped_ix_for_visible_ix(row),
-                Some(region),
-            ));
+        let Some((first, last)) = selected else {
+            return Some(
+                self.diff_source_mapped_ix_for_visible_ix(row)
+                    .map(|row| self.structural_row_lines(row, region))
+                    .unwrap_or_default(),
+            );
         };
         let regions: &[DiffTextRegion] = match self.diff_view {
             DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
             DiffViewMode::Inline => &[DiffTextRegion::Inline],
         };
         let mut selection = SourceLineSelection::default();
-        for row in start.source_visible_ix..=end.source_visible_ix {
+        for row in first..=last {
             let Some(source) = self.diff_source_mapped_ix_for_visible_ix(row) else {
                 continue;
             };
             for &side in regions {
-                if row == end.source_visible_ix && side == end.region && end.offset == 0 {
-                    continue;
-                }
-                let len = self.diff_text_full_line_for_region(row, side).len();
-                if self
-                    .diff_text_source_selection_range(row, side, len)
-                    .is_some()
-                {
+                if self.diff_text_selection_takes_line(row, side) {
                     let lines = self.structural_source_lines([source], Some(side));
                     selection.old.extend(lines.old);
                     selection.new.extend(lines.new);

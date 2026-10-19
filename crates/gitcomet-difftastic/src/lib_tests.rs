@@ -167,3 +167,44 @@ fn an_embedded_tree_at_the_limit_compares_on_the_worker_stack() {
         vec![8..page(996, "2").len() - "</script>\n".len()]
     );
 }
+
+/// A file difftastic has no grammar for still queued for the one comparison
+/// slot, so it waited out another pane's comparison (up to the deadline)
+/// before falling back.
+#[test]
+fn an_unsupported_language_falls_back_without_waiting_for_the_slot() {
+    let cancellation = CancellationToken::new();
+    let held = Worker::acquire(&cancellation).unwrap();
+    let (sent, outcome) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let _ = sent.send(compare(input("notes.txt", "a\n", "b\n"), &cancellation));
+        });
+        let outcome = outcome.recv_timeout(Duration::from_secs(2));
+        drop(held);
+        assert_eq!(
+            outcome,
+            Ok(Ok(StructuralDiffOutcome::Fallback(
+                DiffEngineFallback::UnsupportedLanguage
+            )))
+        );
+    });
+}
+
+/// The support check before queueing reads the content as difftastic does,
+/// so a script named without an extension still compares by its shebang.
+#[test]
+fn a_script_without_an_extension_compares_by_its_shebang() {
+    let outcome = compare(
+        input(
+            "build",
+            "#!/usr/bin/env python\nx = 1\n",
+            "#!/usr/bin/env python\nx = 2\n",
+        ),
+        &CancellationToken::new(),
+    );
+    let Ok(StructuralDiffOutcome::Compared(diff)) = outcome else {
+        panic!("expected a structural comparison, got {outcome:?}");
+    };
+    assert_eq!(diff.language, "Python");
+}

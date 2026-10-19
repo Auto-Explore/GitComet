@@ -1,9 +1,10 @@
-use super::plan::{apply_eof_newline_to_plan, push_plan_run};
+use super::plan::push_plan_run;
 use super::{FileDiffPlan, FileDiffPlanRun, eof_newline_delta};
 use crate::diff_engine::StructuralDiff;
 
 /// An aligned pair is one row unless both of its lines changed: a line with
-/// no changed tokens is not shown as removed or added.
+/// no changed tokens is not shown as removed or added. A final newline added
+/// or removed is not a token, so it reshapes no row; the plan only records it.
 pub fn plan(diff: &StructuralDiff, old: &str, new: &str) -> FileDiffPlan {
     let mut runs = Vec::new();
     for &(old_line, new_line) in &diff.aligned_lines {
@@ -30,7 +31,6 @@ pub fn plan(diff: &StructuralDiff, old: &str, new: &str) -> FileDiffPlan {
         push_plan_run(&mut runs, run);
     }
     let eof_newline = eof_newline_delta(old, new);
-    apply_eof_newline_to_plan(&mut runs, eof_newline);
     FileDiffPlan {
         row_count: runs.iter().map(FileDiffPlanRun::row_len).sum(),
         inline_row_count: runs.iter().map(FileDiffPlanRun::inline_row_len).sum(),
@@ -89,5 +89,38 @@ mod tests {
             result.eof_newline,
             Some(super::super::FileDiffEofNewline::MissingInOld)
         );
+    }
+
+    /// The line engine's final-newline step turned the last context pair into
+    /// a modification; with no changed tokens on either side Inline drew it
+    /// twice, both unmarked.
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn a_final_newline_change_keeps_the_last_pair_one_row() {
+        let diff = StructuralDiff {
+            language: "Rust".into(),
+            aligned_lines: vec![(Some(0), Some(0)), (Some(1), Some(1))],
+            old_changes: [(0, vec![3..4])].into(),
+            new_changes: [(0, vec![3..4])].into(),
+            blocks: vec![0..1],
+        };
+        let result = plan(&diff, "fn a() {}\nend", "fn b() {}\nend\n");
+        assert_eq!(
+            result.runs,
+            [
+                FileDiffPlanRun::Modify {
+                    old_start: 0,
+                    new_start: 0,
+                    len: 1,
+                },
+                FileDiffPlanRun::Context {
+                    old_start: 1,
+                    new_start: 1,
+                    len: 1,
+                },
+            ]
+        );
+        assert_eq!(result.row_count, 2);
+        assert_eq!(result.inline_row_count, 3);
     }
 }

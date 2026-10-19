@@ -543,7 +543,7 @@ impl GitCometView {
         }
 
         self.diff_renderer
-            .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
+            .update(cx, |pane, cx| pane.choose_diff_whitespace_mode(next, cx));
     }
 
     pub(super) fn apply_diff_reveal_whitespace_chars_preference(

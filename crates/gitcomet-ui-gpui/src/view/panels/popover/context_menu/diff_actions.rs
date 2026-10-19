@@ -40,7 +40,7 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
             .unwrap_or_else(|| format!("Use default ({})", pane.diff_engine_default.label()));
         model.items.push(ContextMenuItem::Entry {
             label: label.into(),
-            icon: (pane.diff_engine_override == engine).then_some("icons/check.svg".into()),
+            icon: (pane.diff_engine_override() == engine).then_some("icons/check.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::SetDiffEngineOverride { engine }),

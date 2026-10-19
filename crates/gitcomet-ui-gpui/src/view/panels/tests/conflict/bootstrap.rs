@@ -23,7 +23,11 @@ fn conflict_compare_does_not_show_the_text_diff_engine_notice(cx: &mut gpui::Tes
             );
             push_test_state(view, app_state_with_repo(repo, repo_id), cx);
             view.diff_renderer.update(cx, |pane, cx| {
-                pane.diff_engine_override = Some(DiffEngine::Difftastic);
+                pane.diff_engine_override = Some(
+                    crate::view::panes::diff::helpers::state::DiffEngineOverride::new(
+                        DiffEngine::Difftastic,
+                    ),
+                );
                 cx.notify();
             });
         });

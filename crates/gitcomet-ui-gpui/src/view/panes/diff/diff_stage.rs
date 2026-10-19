@@ -111,7 +111,7 @@ impl DiffRenderer {
                 _ => DiffTextRegion::SplitRight,
             };
             if let Some(row) = self.diff_mapped_ix_for_visible_ix(visible_ix) {
-                let selection = self.structural_source_lines(row..row + 1, Some(region));
+                let selection = self.structural_row_lines(row, region);
                 let operation = match area {
                     DiffArea::Unstaged => gitcomet_core::patch_action::PatchOperation::Stage,
                     DiffArea::Staged => gitcomet_core::patch_action::PatchOperation::Unstage,

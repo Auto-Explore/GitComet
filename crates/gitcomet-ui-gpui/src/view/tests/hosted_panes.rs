@@ -1399,6 +1399,21 @@ fn difftastic_file<'a>(
     &'a mut gpui::VisualTestContext,
     gpui::Entity<crate::view::panes::diff::DiffRenderer>,
 ) {
+    difftastic_file_in(cx, path, rows, gitcomet_extension_api::DiffLayout::Inline)
+}
+
+fn difftastic_file_in<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    path: &str,
+    rows: usize,
+    layout: gitcomet_extension_api::DiffLayout,
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &'a mut gpui::VisualTestContext,
+    gpui::Entity<crate::view::panes::diff::DiffRenderer>,
+) {
     let (dir, store, view, cx) = open_repository_in(cx, Arc::new(TestBackend), rust_repository());
     let (list_id, changes) = open_changes_view(cx, &view, &store);
     click_debug_selector(
@@ -1411,7 +1426,7 @@ fn difftastic_file<'a>(
             DiffTarget::working_tree(path.into(), DiffArea::Unstaged),
             app,
         );
-        pane.set_layout(gitcomet_extension_api::DiffLayout::Inline, app);
+        pane.set_layout(layout, app);
         pane.set_engine_override(
             Some(gitcomet_core::diff_engine::DiffEngine::Difftastic),
             app,
@@ -1470,9 +1485,13 @@ fn stage_row(
 }
 
 fn staged(dir: &tempfile::TempDir) -> String {
+    staged_file(dir, "a.rs")
+}
+
+fn staged_file(dir: &tempfile::TempDir, path: &str) -> String {
     String::from_utf8(crate::test_support::git(
         dir.path(),
-        &["diff", "--cached", "a.rs"],
+        &["diff", "--cached", path],
     ))
     .unwrap()
 }
@@ -1506,6 +1525,58 @@ fn staging_a_one_row_difftastic_pair_replaces_its_line(cx: &mut gpui::TestAppCon
         staged(&dir)
     );
     assert!(!staged(&dir).contains("let two"), "{}", staged(&dir));
+}
+
+/// Stages line 1 of `path` in Split through the gutter button of `column`,
+/// the only one Split draws on a pair changed on one side.
+fn stage_split_line_one(
+    cx: &mut gpui::TestAppContext,
+    path: &str,
+    rows: usize,
+    column: gitcomet_core::domain::DiffLineKind,
+) -> String {
+    let (dir, store, view, cx, renderer) =
+        difftastic_file_in(cx, path, rows, gitcomet_extension_api::DiffLayout::Split);
+    let pair = cx.update(|_window, app| {
+        let renderer = renderer.read(app);
+        assert_eq!(renderer.diff_view, crate::view::DiffViewMode::Split);
+        (0..renderer.diff_visible_len())
+            .find(|&visible| {
+                renderer
+                    .diff_mapped_ix_for_visible_ix(visible)
+                    .and_then(|row| renderer.file_diff_split_row(row))
+                    .is_some_and(|row| (row.old_line, row.new_line) == (Some(1), Some(1)))
+            })
+            .expect("the split row of line 1")
+    });
+    cx.update(|_window, app| {
+        renderer.update(app, |pane, cx| {
+            pane.stage_or_unstage_diff_line(pair, column, cx)
+        })
+    });
+    settle(cx, &view, &store, "line 1 staged", |_| {
+        !staged_file(&dir, path).is_empty()
+    });
+    staged_file(&dir, path)
+}
+
+/// Split draws a pair changed on one side with one gutter button, in the
+/// changed side's column. It staged only the new line, so the index kept the
+/// old line beside it.
+#[gpui::test]
+fn staging_a_split_pair_changed_on_the_new_side_replaces_its_line(cx: &mut gpui::TestAppContext) {
+    let staged = stage_split_line_one(cx, "a.rs", 4, gitcomet_core::domain::DiffLineKind::Add);
+    assert!(staged.contains("-fn a() -> i32 {"), "{staged}");
+    assert!(staged.contains("+pub fn a() -> i32 {"), "{staged}");
+}
+
+/// The old-side twin: its button staged only the removal, so the index lost
+/// the line.
+#[gpui::test]
+fn staging_a_split_pair_changed_on_the_old_side_replaces_its_line(cx: &mut gpui::TestAppContext) {
+    let staged = stage_split_line_one(cx, "b.rs", 3, gitcomet_core::domain::DiffLineKind::Remove);
+    assert!(staged.contains("-pub fn b() -> i32 {"), "{staged}");
+    assert!(staged.contains("+fn b() -> i32 {"), "{staged}");
 }
 
 /// An extension's selected text is the side it asks for, even on a one-row

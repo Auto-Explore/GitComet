@@ -1891,6 +1891,62 @@ impl DiffRenderer {
             .collect()
     }
 
+    /// Whether a line action on the text selection (stage, discard) takes
+    /// `region`'s line on `row`: the selection covers some of its text, or the
+    /// position of a blank line. Touching only an edge takes nothing, so a
+    /// selection ending at the start of a line never takes it, blank or not.
+    pub(super) fn diff_text_selection_takes_line(
+        &self,
+        row: usize,
+        region: DiffTextRegion,
+    ) -> bool {
+        let Some((_, end)) = self.diff_text_normalized_selection() else {
+            return false;
+        };
+        if row == end.source_visible_ix && region == end.region && end.offset == 0 {
+            return false;
+        }
+        let len = self.diff_text_full_line_for_region(row, region).len();
+        self.diff_text_source_selection_range(row, region, len)
+            .is_some_and(|range| !range.is_empty() || len == 0)
+    }
+
+    /// The first and last source rows a line action on the text selection
+    /// takes, when the user right-clicked `region` of `row` inside them; `None`
+    /// sends the action to the clicked row instead. A selection inside one
+    /// Split column counts only for clicks in that column.
+    pub(super) fn diff_text_selection_line_rows_at(
+        &self,
+        view: DiffViewMode,
+        row: usize,
+        region: DiffTextRegion,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end {
+            return None;
+        }
+        let regions: &[DiffTextRegion] = match view {
+            DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
+            DiffViewMode::Inline => &[DiffTextRegion::Inline],
+        };
+        let one_column = view == DiffViewMode::Split
+            && start.region == end.region
+            && regions.contains(&start.region);
+        if one_column && start.region != region {
+            return None;
+        }
+        let takes = |row: usize| {
+            regions
+                .iter()
+                .any(|&region| self.diff_text_selection_takes_line(row, region))
+        };
+        let first = (start.source_visible_ix..=end.source_visible_ix).find(|&row| takes(row))?;
+        let last = (first..=end.source_visible_ix)
+            .rev()
+            .find(|&row| takes(row))?;
+        (first..=last).contains(&row).then_some((first, last))
+    }
+
     /// The part of one row a selection covers, or `None` when the selection
     /// does not reach that row at all.
     ///
@@ -1898,7 +1954,8 @@ impl DiffRenderer {
     /// selection covers no characters and is still one of its lines, and so is
     /// a line the selection only touches the edge of. Callers that paint the
     /// highlight ignore an empty range; the one that copies has to keep it, or
-    /// every blank line falls out of the text.
+    /// every blank line falls out of the text. Line actions keep only a blank
+    /// line's: [`Self::diff_text_selection_takes_line`].
     pub(super) fn diff_text_source_selection_range(
         &self,
         source_visible_ix: usize,

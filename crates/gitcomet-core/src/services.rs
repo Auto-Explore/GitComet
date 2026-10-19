@@ -1072,13 +1072,10 @@ pub trait GitRepository: Send + Sync {
         new: &str,
         cancellation: &CancellationToken,
     ) -> Result<crate::patch_action::PreparedDiffPatch> {
+        // A snapshot torn by a concurrent write cannot match the one
+        // `apply_prepared_diff_patch` reads under the write gate, so one read
+        // is enough here.
         let snapshot = self.diff_action_snapshot(target, cancellation)?;
-        let current = self.diff_action_snapshot(target, cancellation)?;
-        if snapshot != current {
-            return Err(Error::new(ErrorKind::Backend(
-                crate::patch_action::PatchActionError::Stale.to_string(),
-            )));
-        }
         crate::patch_action::prepare(snapshot, operation, selection, old, new)
             .map_err(|error| Error::new(ErrorKind::Backend(error.to_string())))
     }

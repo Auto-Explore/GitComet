@@ -74,7 +74,7 @@ Changes against the baseline (`git log -- vendor/difftastic`):
   fallbacks, stopping and nesting. `api::compare` repeats
   the CLI's final-newline step and reports lines in the caller's numbering;
   `diff_file_content` guesses the language from the new text unless that is
-  empty.
+  empty, and `api::supports` makes the same guess without parsing.
 - tree-sitter 0.27: `QueryMatch::captures()` is a method.
 - Grammars: every language uses the workspace's grammar crate. Kotlin, Perl,
   Rust, Java and Dart replace upstream's forks; janet-simple, LaTeX and Smali

@@ -959,6 +959,8 @@ struct RecordingCheckoutRepo {
     /// Reported by `current_branch`; unsupported when `None`.
     current_branch: Option<String>,
     prepared_barrier: Option<PreparedPatchBarrier>,
+    /// Holds `fetch_all` and `pull` until released.
+    remote_barrier: Option<PreparedPatchBarrier>,
 }
 
 struct PreparedPatchBarrier {
@@ -976,6 +978,7 @@ impl RecordingCheckoutRepo {
             other_worktree: None,
             current_branch: None,
             prepared_barrier: None,
+            remote_barrier: None,
         }
     }
 
@@ -984,6 +987,18 @@ impl RecordingCheckoutRepo {
             .lock()
             .expect("checkout recording mutex")
             .push(call);
+    }
+
+    fn remote_call(&self, name: &str) -> Result<gitcomet_core::services::CommandOutput> {
+        let Some(barrier) = &self.remote_barrier else {
+            return unsupported_repo_result();
+        };
+        barrier.started.send(()).unwrap();
+        wait_for_release_signal(&barrier.release);
+        self.record(name.into());
+        Ok(gitcomet_core::services::CommandOutput::empty_success(
+            format!("git {name}"),
+        ))
     }
 }
 
@@ -1189,16 +1204,14 @@ impl GitRepository for RecordingCheckoutRepo {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
-        let result: Result<()> = { unsupported_repo_result() };
-        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
+        self.remote_call("fetch")
     }
     fn pull(
         &self,
         _mode: PullMode,
         _prune: bool,
     ) -> Result<gitcomet_core::services::CommandOutput> {
-        let result: Result<()> = { unsupported_repo_result() };
-        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
+        self.remote_call("pull")
     }
     fn push(&self) -> Result<()> {
         unsupported_repo_result()

@@ -1,5 +1,5 @@
 use gitcomet_base::panic::test_support::uncontained_panics;
-use gitcomet_base::panic::{ContainedPanic, contain};
+use gitcomet_base::panic::{ContainedPanic, PanicLocation, contain};
 
 #[test]
 fn a_noted_panic_carries_its_message_and_location() {
@@ -9,7 +9,10 @@ fn a_noted_panic_carries_its_message_and_location() {
         result,
         Err(ContainedPanic {
             message: "boom 7".to_owned(),
-            location: Some(format!("{}:{line}", file!())),
+            location: Some(PanicLocation {
+                file: file!().to_owned(),
+                line,
+            }),
         })
     );
     assert_eq!(uncontained, 0);
@@ -33,7 +36,10 @@ fn an_outer_containment_still_notes_after_an_inner_one_caught() {
         outer,
         Err(ContainedPanic {
             message: "outer".to_owned(),
-            location: Some(format!("{}:{line}", file!())),
+            location: Some(PanicLocation {
+                file: file!().to_owned(),
+                line,
+            }),
         })
     );
     assert_eq!(uncontained, 0);

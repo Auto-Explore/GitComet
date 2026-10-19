@@ -245,3 +245,254 @@ fn a_cancelled_difftastic_build_yields_no_rows() {
         }
     );
 }
+
+/// A final newline added on the new side is no changed token, so the last
+/// line stays one unmarked row; the line engine's newline step had drawn it
+/// twice as plain context.
+#[test]
+#[allow(clippy::single_range_in_vec_init)]
+fn a_final_newline_change_draws_the_last_line_once() {
+    let old = "fn a() {}\nend";
+    let new = "fn b() {}\nend\n";
+    let diff = StructuralDiff {
+        language: "Rust".into(),
+        aligned_lines: vec![(Some(0), Some(0)), (Some(1), Some(1))],
+        old_changes: BTreeMap::from([(0, vec![3..4])]),
+        new_changes: BTreeMap::from([(0, vec![3..4])]),
+        blocks: vec![0..1],
+    };
+    let plan = Arc::new(gitcomet_core::file_diff::structural::plan(&diff, old, new));
+    let mut source = StreamedFileDiffSource::new(
+        plan,
+        IndexedFileDiffSource::from_shared(Some(&Arc::from(old))),
+        IndexedFileDiffSource::from_shared(Some(&Arc::from(new))),
+        DiffWhitespaceMode::Show,
+    );
+    source.apply_structural(diff);
+    let rows: Vec<_> = (0..source.inline_len())
+        .map(|row| {
+            (
+                source.inline_row(row).unwrap().text.to_string(),
+                source.inline_visual_kind(row).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("-fn a() {}".to_owned(), DiffLineKind::Remove),
+            ("+fn b() {}".to_owned(), DiffLineKind::Add),
+            (" end".to_owned(), DiffLineKind::Context),
+        ]
+    );
+}
+
+fn show_structural_rows(pane: &mut DiffRenderer, old: &str, new: &str, diff: StructuralDiff) {
+    let plan = Arc::new(gitcomet_core::file_diff::structural::plan(&diff, old, new));
+    let mut source = StreamedFileDiffSource::new(
+        plan,
+        IndexedFileDiffSource::from_shared(Some(&Arc::from(old))),
+        IndexedFileDiffSource::from_shared(Some(&Arc::from(new))),
+        DiffWhitespaceMode::Show,
+    );
+    source.apply_structural(diff);
+    let source = Arc::new(source);
+    pane.diff_visible_indices = (0..source.split_len().max(source.inline_len())).collect();
+    pane.file_diff_row_provider = Some(Arc::new(PagedFileDiffRows::new(source.clone(), 10)));
+    pane.file_diff_inline_row_provider = Some(Arc::new(PagedFileDiffInlineRows::new(source, 10)));
+    pane.diff_engine_status = DiffEngineStatus::Difftastic {
+        syntactic_changes: true,
+        text_differs: true,
+    };
+    pane.diff_word_wrap = false;
+    // A current file identity, so rows read their text rather than none.
+    let target = DiffTarget::working_tree("file.js".into(), DiffArea::Unstaged);
+    let workdir = std::env::temp_dir().join("gitcomet-structural-rows");
+    let mut repo = gitcomet_state::model::RepoState::new_opening(
+        RepoId(812),
+        gitcomet_core::domain::RepoSpec {
+            workdir: workdir.clone(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff_file_rev = 1;
+    repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(FileDiffText::new(
+        "file.js".into(),
+        Some(old.to_owned()),
+        Some(new.to_owned()),
+    ))));
+    pane.input = DiffPaneInput::selected(Arc::new(AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..AppState::test_default()
+    }));
+    pane.file_diff_cache_repo_id = Some(RepoId(812).into());
+    pane.file_diff_cache_rev = 1;
+    pane.file_diff_cache_target = Some(target);
+    pane.file_diff_cache_path = Some(workdir.join("file.js"));
+    pane.file_diff_cache_engine = pane.effective_diff_engine();
+    pane.file_diff_cache_whitespace_mode = pane.diff_whitespace_mode;
+    pane.diff_content_mode = DiffContentMode::Full;
+    assert!(pane.is_file_diff_view_active());
+}
+
+/// A selection starting at the very end of a line covers none of that line,
+/// yet "Stage selected lines" took it with the rest. A blank line inside the
+/// selection still counts, as it has nothing else to select.
+#[gpui::test]
+fn a_selection_from_a_line_end_leaves_that_line_out(cx: &mut gpui::TestAppContext) {
+    use crate::view::test_support::TestBackend;
+    use std::collections::BTreeSet;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        root.read(app).diff_renderer.clone().update(app, |pane, _| {
+            pane.diff_view = DiffViewMode::Inline;
+            show_structural_rows(
+                pane,
+                "f(a);\nh(a);\n",
+                "f(a, b);\n\nh(a, b);\n",
+                StructuralDiff {
+                    language: "JavaScript".into(),
+                    aligned_lines: vec![(Some(0), Some(0)), (None, Some(1)), (Some(1), Some(2))],
+                    old_changes: BTreeMap::new(),
+                    new_changes: BTreeMap::from([
+                        (0, std::iter::once(3..6).collect()),
+                        (2, std::iter::once(3..6).collect()),
+                    ]),
+                    blocks: std::iter::once(0..3).collect(),
+                },
+            );
+            assert_eq!(
+                pane.diff_text_full_line_for_region(0, DiffTextRegion::Inline)
+                    .as_ref(),
+                "f(a, b);"
+            );
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix: 0,
+                region: DiffTextRegion::Inline,
+                offset: "f(a, b);".len(),
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix: 2,
+                region: DiffTextRegion::Inline,
+                offset: 3,
+            });
+            let selected = pane
+                .structural_line_selection(2, DiffTextRegion::Inline)
+                .unwrap();
+            assert_eq!(selected.old, BTreeSet::from([2]));
+            assert_eq!(selected.new, BTreeSet::from([2, 3]));
+        });
+    });
+}
+
+/// Right-clicking a Split pair changed on one side, with nothing selected,
+/// acts on the row as its one gutter button does: both of its lines. Taking
+/// only the clicked column staged the new line beside the old one.
+#[gpui::test]
+#[allow(clippy::single_range_in_vec_init)]
+fn right_clicking_a_split_pair_changed_on_one_side_takes_both_lines(cx: &mut gpui::TestAppContext) {
+    use crate::view::test_support::TestBackend;
+    use std::collections::BTreeSet;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        root.read(app).diff_renderer.clone().update(app, |pane, _| {
+            pane.diff_view = DiffViewMode::Split;
+            show_structural_rows(
+                pane,
+                "f(a);\ng(a);\n",
+                "f(a, b);\ng(b);\n",
+                StructuralDiff {
+                    language: "JavaScript".into(),
+                    aligned_lines: vec![(Some(0), Some(0)), (Some(1), Some(1))],
+                    old_changes: BTreeMap::from([(1, std::iter::once(2..3).collect())]),
+                    new_changes: BTreeMap::from([
+                        (0, std::iter::once(3..6).collect()),
+                        (1, std::iter::once(2..3).collect()),
+                    ]),
+                    blocks: vec![0..2],
+                },
+            );
+            for region in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
+                let selected = pane.structural_line_selection(0, region).unwrap();
+                assert_eq!(selected.old, BTreeSet::from([1]), "{region:?}");
+                assert_eq!(selected.new, BTreeSet::from([1]), "{region:?}");
+            }
+            let changed_on_both_sides = pane
+                .structural_line_selection(1, DiffTextRegion::SplitRight)
+                .unwrap();
+            assert!(changed_on_both_sides.old.is_empty());
+            assert_eq!(changed_on_both_sides.new, BTreeSet::from([2]));
+        });
+    });
+}
+
+/// A right-click acts on the text selection only inside the rows it takes:
+/// not on a row it only touches at an edge, not outside it, and not in the
+/// other column of a selection inside one Split column. Both engines decide
+/// this here.
+#[gpui::test]
+fn a_right_click_takes_the_selection_only_inside_the_rows_it_takes(cx: &mut gpui::TestAppContext) {
+    use crate::view::test_support::TestBackend;
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        root.read(app).diff_renderer.clone().update(app, |pane, _| {
+            pane.diff_view = DiffViewMode::Split;
+            show_structural_rows(
+                pane,
+                "a(1);\nb(1);\nc(1);\nd(1);\n",
+                "a(1, x);\nb(1, x);\nc(1, x);\nd(1, x);\n",
+                StructuralDiff {
+                    language: "JavaScript".into(),
+                    aligned_lines: (0..4).map(|line| (Some(line), Some(line))).collect(),
+                    old_changes: BTreeMap::new(),
+                    new_changes: (0..4)
+                        .map(|line| (line, std::iter::once(3..6).collect()))
+                        .collect(),
+                    blocks: std::iter::once(0..4).collect(),
+                },
+            );
+            let at = |row: usize, region| DiffTextPos {
+                source_visible_ix: row,
+                region,
+                offset: 0,
+            };
+            pane.diff_text_anchor = Some(at(1, DiffTextRegion::SplitLeft));
+            pane.diff_text_head = Some(DiffTextPos {
+                offset: 2,
+                ..at(3, DiffTextRegion::SplitLeft)
+            });
+            let split = |row, region| {
+                pane.diff_text_selection_line_rows_at(DiffViewMode::Split, row, region)
+            };
+            assert_eq!(split(2, DiffTextRegion::SplitLeft), Some((1, 3)));
+            assert_eq!(split(2, DiffTextRegion::SplitRight), None);
+            assert_eq!(split(0, DiffTextRegion::SplitLeft), None);
+            pane.diff_view = DiffViewMode::Inline;
+            pane.diff_text_anchor = Some(DiffTextPos {
+                offset: "a(1, x);".len(),
+                ..at(0, DiffTextRegion::Inline)
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                offset: 3,
+                ..at(2, DiffTextRegion::Inline)
+            });
+            let inline = |row| {
+                pane.diff_text_selection_line_rows_at(
+                    DiffViewMode::Inline,
+                    row,
+                    DiffTextRegion::Inline,
+                )
+            };
+            assert_eq!(inline(0), None);
+            assert_eq!(inline(1), Some((1, 2)));
+        });
+    });
+}

@@ -11,12 +11,37 @@ const UNKNOWN_PAYLOAD: &str = "unknown panic payload";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContainedPanic {
     pub message: String,
-    pub location: Option<String>,
+    pub location: Option<PanicLocation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PanicLocation {
+    pub file: String,
+    pub line: u32,
+}
+
+impl std::fmt::Display for PanicLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.file, self.line)
+    }
 }
 
 // A panic the hook let through to `contain`, until `contain` takes it.
-struct Noted {
-    location: Option<String>,
+enum Noted {
+    Pending(ContainedPanic),
+    // A later panic arrived first, and the hook reported this one.
+    Reported,
+}
+
+/// What the crash hook does with a panic.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Containment {
+    /// [`contain`] will return it; no crash report.
+    Contained,
+    /// Report it. `escaped` is this thread's earlier panic that never reached
+    /// `contain` (it could not unwind, or the contained code caught it): the
+    /// cause of this one when it could not unwind.
+    Report { escaped: Option<ContainedPanic> },
 }
 
 thread_local! {
@@ -31,32 +56,41 @@ pub fn contain<R>(f: impl FnOnce() -> R) -> Result<R, ContainedPanic> {
     let result = std::panic::catch_unwind(AssertUnwindSafe(f));
     CONTAINING.with(|depth| depth.set(depth.get() - 1));
     let noted = NOTED.with(|noted| noted.borrow_mut().take());
-    result.map_err(|payload| ContainedPanic {
-        message: payload_message(payload.as_ref()),
-        location: noted.and_then(|noted| noted.location),
+    result.map_err(|payload| match noted {
+        Some(Noted::Pending(panic)) => panic,
+        Some(Noted::Reported) | None => ContainedPanic {
+            message: payload_message(payload.as_ref()),
+            location: None,
+        },
     })
 }
 
-/// For the process panic hook: true when this thread is inside [`contain`],
-/// after recording where it panicked. A second panic before `contain` took the
-/// first means the first never reached `contain` (it cannot unwind, or the
-/// contained code caught it), so the hook reports it and no location is kept.
-pub fn note_contained(info: &PanicHookInfo<'_>) -> bool {
+/// For the process panic hook: `Contained` when this thread is inside
+/// [`contain`], after recording the panic. A second panic before `contain`
+/// took the first means the first never reached it, so the hook reports the
+/// second with the first as `escaped`, and `contain` keeps no location.
+pub fn note_contained(info: &PanicHookInfo<'_>) -> Containment {
     if CONTAINING.with(Cell::get) == 0 {
-        return false;
+        return Containment::Report { escaped: None };
     }
     NOTED.with(|noted| {
         let mut noted = noted.borrow_mut();
-        if let Some(pending) = noted.as_mut() {
-            pending.location = None;
-            return false;
+        match noted.replace(Noted::Reported) {
+            Some(Noted::Pending(escaped)) => Containment::Report {
+                escaped: Some(escaped),
+            },
+            Some(Noted::Reported) => Containment::Report { escaped: None },
+            None => {
+                *noted = Some(Noted::Pending(ContainedPanic {
+                    message: payload_message(info.payload()),
+                    location: info.location().map(|location| PanicLocation {
+                        file: location.file().to_owned(),
+                        line: location.line(),
+                    }),
+                }));
+                Containment::Contained
+            }
         }
-        *noted = Some(Noted {
-            location: info
-                .location()
-                .map(|location| format!("{}:{}", location.file(), location.line())),
-        });
-        true
     })
 }
 
@@ -88,7 +122,7 @@ pub mod test_support {
         HOOK.call_once(|| {
             let previous = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |info| {
-                if super::note_contained(info) {
+                if super::note_contained(info) == super::Containment::Contained {
                     return;
                 }
                 UNCONTAINED.with(|count| count.set(count.get() + 1));

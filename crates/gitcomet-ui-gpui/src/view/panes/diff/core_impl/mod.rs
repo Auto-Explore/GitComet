@@ -205,7 +205,7 @@ impl DiffRenderer {
         }
         match clear_diff_selection_action(self.view_mode) {
             ClearDiffSelectionAction::ClearSelection => {
-                self.set_diff_engine_override(None, cx);
+                self.end_diff_engine_override_with_target();
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             }
             ClearDiffSelectionAction::ExitFocusedMergetool => {
@@ -1996,6 +1996,9 @@ impl DiffRenderer {
         }
 
         self.input = next;
+        if prev_diff_target != next_diff_target {
+            self.end_override_of_closed_viewer(cx);
+        }
         self.release_stale_submodule_summary_cache();
         // Absolute buffer identities survive tab closure in Documents.
         self.prune_orphaned_file_editor_stash(cx);

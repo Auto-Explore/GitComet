@@ -283,3 +283,59 @@ fn pathspec_characters_address_only_the_literal_file() {
     assert_eq!(git(dir.path(), &["show", ":file*.rs"]), b"new\n");
     assert_eq!(git(dir.path(), &["show", ":fileX.rs"]), b"old\n");
 }
+
+/// The exact patch came from porcelain `git diff`, which still colours under
+/// `color.ui=false` when `color.diff=always`, and prints a blank context line
+/// as an empty one under `diff.suppressBlankEmpty`: either patch maps to no
+/// source line, so every partial action failed for that user.
+#[test]
+fn user_diff_config_does_not_reshape_the_exact_patch() {
+    let old = "fn a() {\n\n    1\n}\n";
+    let new = "fn a() {\n\n    2\n}\n";
+    for (key, value) in [
+        ("color.diff", "always"),
+        ("diff.suppressBlankEmpty", "true"),
+        ("diff.context", "0"),
+        ("diff.noprefix", "true"),
+        ("diff.relative", "true"),
+    ] {
+        let (dir, repo) = fixture(old, new);
+        git(dir.path(), &["config", key, value]);
+        let patch = prepare(repo.as_ref(), PatchOperation::Stage, &[3], &[3]);
+        repo.apply_prepared_diff_patch(&patch).unwrap();
+        assert_eq!(
+            git(dir.path(), &["show", ":file.rs"]),
+            new.as_bytes(),
+            "{key}"
+        );
+    }
+}
+
+/// Unstaging reads HEAD and the index only, yet the snapshot also held the
+/// worktree copy: an editor saving between prepare and apply made it stale.
+#[test]
+fn unstage_survives_a_worktree_edit_before_it_applies() {
+    let (dir, repo) = fixture("old\nkeep\n", "new\nkeep\n");
+    git(dir.path(), &["add", "file.rs"]);
+    let patch = prepare(repo.as_ref(), PatchOperation::Unstage, &[1], &[1]);
+    std::fs::write(dir.path().join("file.rs"), "autosaved\nkeep\n").unwrap();
+    repo.apply_prepared_diff_patch(&patch).unwrap();
+    assert_eq!(git(dir.path(), &["show", ":file.rs"]), b"old\nkeep\n");
+    assert_eq!(
+        std::fs::read(dir.path().join("file.rs")).unwrap(),
+        b"autosaved\nkeep\n"
+    );
+}
+
+/// Unstaging never reads the worktree, so its copy growing past the source
+/// limit must not refuse it.
+#[test]
+fn unstage_ignores_an_oversized_worktree_copy() {
+    let (dir, repo) = fixture("old\nkeep\n", "new\nkeep\n");
+    git(dir.path(), &["add", "file.rs"]);
+    let oversized = "x\n".repeat(gitcomet_core::patch_action::SOURCE_BYTE_LIMIT / 2 + 1);
+    std::fs::write(dir.path().join("file.rs"), &oversized).unwrap();
+    let patch = prepare(repo.as_ref(), PatchOperation::Unstage, &[1], &[1]);
+    repo.apply_prepared_diff_patch(&patch).unwrap();
+    assert_eq!(git(dir.path(), &["show", ":file.rs"]), b"old\nkeep\n");
+}

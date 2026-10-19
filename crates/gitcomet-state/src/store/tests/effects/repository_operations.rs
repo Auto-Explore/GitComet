@@ -3108,6 +3108,7 @@ fn checkout_branch_effect_defers_worktree_refresh_until_completion() {
         other_worktree: None,
         current_branch: None,
         prepared_barrier: None,
+        remote_barrier: None,
     });
     let mut repos: RepositoryRuntimes = {
         let mut repos = RepositoryRuntimes::default();
@@ -3151,6 +3152,7 @@ fn checkout_remote_branch_effect_defers_worktree_refresh_until_completion() {
         other_worktree: None,
         current_branch: None,
         prepared_barrier: None,
+        remote_barrier: None,
     });
     let mut repos: RepositoryRuntimes = {
         let mut repos = RepositoryRuntimes::default();
@@ -3197,6 +3199,7 @@ fn checkout_commit_effect_defers_worktree_refresh_until_completion() {
         other_worktree: None,
         current_branch: None,
         prepared_barrier: None,
+        remote_barrier: None,
     });
     let mut repos: RepositoryRuntimes = {
         let mut repos = RepositoryRuntimes::default();
@@ -3241,6 +3244,7 @@ fn create_branch_and_checkout_effect_defers_worktree_refresh_until_completion() 
         other_worktree: None,
         current_branch: None,
         prepared_barrier: None,
+        remote_barrier: None,
     });
     let mut repos: RepositoryRuntimes = {
         let mut repos = RepositoryRuntimes::default();
@@ -3289,6 +3293,7 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         other_worktree: None,
         current_branch: None,
         prepared_barrier: None,
+        remote_barrier: None,
     });
     let mut repos: RepositoryRuntimes = {
         let mut repos = RepositoryRuntimes::default();
@@ -3334,6 +3339,7 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         other_worktree: None,
         current_branch: None,
         prepared_barrier: None,
+        remote_barrier: None,
     });
     let mut repos: RepositoryRuntimes = {
         let mut repos = RepositoryRuntimes::default();

@@ -227,9 +227,7 @@ impl DiffRenderer {
         next: DiffWhitespaceMode,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.diff_whitespace_mode != next {
-            self.set_diff_whitespace_mode(next, cx);
-        }
+        self.choose_diff_whitespace_mode(next, cx);
         self.commands.send(
             DiffCommand::Preference(DiffPreference::Whitespace(next)),
             cx,

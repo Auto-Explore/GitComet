@@ -80,15 +80,22 @@ fn fallback_positions() -> (Vec<MatchedPos>, Vec<MatchedPos>) {
     (vec![], vec![])
 }
 
+pub(crate) fn guess_language_for(
+    path: &Path,
+    lhs_src: &str,
+    rhs_src: &str,
+) -> Option<crate::parse::guess_language::Language> {
+    let guess_src = if rhs_src.is_empty() { lhs_src } else { rhs_src };
+    guess(path, guess_src)
+}
+
 pub(crate) fn diff_file_content(
     path: &Path,
     lhs_src: &str,
     rhs_src: &str,
     diff_options: &DiffOptions,
 ) -> Result<DiffResult, Interrupted> {
-    let guess_src = if rhs_src.is_empty() { lhs_src } else { rhs_src };
-
-    let language = guess(path, guess_src);
+    let language = guess_language_for(path, lhs_src, rhs_src);
     let lang_config = language.map(|lang| (lang, tsp::from_language(lang)));
 
     if lhs_src == rhs_src {

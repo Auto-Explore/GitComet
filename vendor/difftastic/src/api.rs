@@ -63,6 +63,14 @@ pub struct LineRanges {
     pub ranges: Vec<Range<u32>>,
 }
 
+/// Whether `compare` would parse `input`; when false it returns
+/// `Fallback::UnsupportedLanguage` without parsing.
+pub fn supports(input: Input<'_>) -> bool {
+    let old = with_final_newline(input.old);
+    let new = with_final_newline(input.new);
+    crate::guess_language_for(input.path, &old, &new).is_some()
+}
+
 /// Falls back to `NestingLimit` when either side's tree is deeper than
 /// `nesting_limit` tree-sitter levels; an embedded language that would take its
 /// host past the limit is diffed with the host grammar instead. The diff

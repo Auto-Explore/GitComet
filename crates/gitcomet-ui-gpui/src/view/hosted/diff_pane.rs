@@ -276,7 +276,10 @@ impl DiffPaneView {
                 pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
                 pane.annotate_enabled = self.options.policy.blame;
                 pane.diff_view = diff_view_mode(self.options.layout, preferred);
-                pane.diff_engine_override = self.options.engine_override;
+                pane.diff_engine_override = self
+                    .options
+                    .engine_override
+                    .map(crate::view::panes::diff::helpers::state::DiffEngineOverride::new);
                 pane.hosted_content_width = Some(
                     self.options
                         .content_width
@@ -288,7 +291,7 @@ impl DiffPaneView {
                 pane
             });
             self.renderer_subscription = Some(cx.observe(&renderer, |this, renderer, cx| {
-                this.options.engine_override = renderer.read(cx).diff_engine_override;
+                this.options.engine_override = renderer.read(cx).diff_engine_override();
                 let cache = renderer
                     .read(cx)
                     .hosted_decor

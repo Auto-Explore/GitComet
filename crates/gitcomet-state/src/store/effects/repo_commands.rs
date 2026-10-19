@@ -269,6 +269,7 @@ fn schedule_repo_command_with_context<F>(
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
 {
+    let gated = command.holds_mutation_gate();
     schedule_repo_command_task(
         executor,
         repos,
@@ -277,8 +278,10 @@ fn schedule_repo_command_with_context<F>(
         command,
         context_override,
         move |repo| {
-            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
-            let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            let gate = gated.then(|| super::super::mutation_gate::for_repo(repo.as_ref()));
+            let _mutation = gate
+                .as_ref()
+                .map(|gate| gate.read().unwrap_or_else(|error| error.into_inner()));
             run(repo)
         },
     );
@@ -1432,8 +1435,6 @@ fn schedule_safe_push_after_commit(
     let finish_context = context.clone();
     let follow_up_auth = auth.clone();
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let gate = super::super::mutation_gate::for_repo(repo.as_ref());
-        let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
         let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
         send_or_log(
             &msg_tx,

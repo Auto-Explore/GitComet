@@ -1630,6 +1630,38 @@ fn pull_with_rerere_resolved_conflicts_reports_the_merge_in_progress() {
     assert!(repo.join(".git/MERGE_HEAD").exists());
 }
 
+/// `-c color.ui=false` loses to a user's `color.diff=always`, so the diffstat
+/// a merge, squash or pull prints reached the command log in colour escapes.
+#[test]
+fn integrating_commands_print_no_colour_under_color_diff_always() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path();
+    init_repo_with_user(repo);
+    run_git(repo, &["branch", "-m", "main"]);
+    fs::write(repo.join("base.txt"), "base\n").expect("write base file");
+    run_git(repo, &["add", "base.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+    run_git(repo, &["checkout", "-b", "dev"]);
+    fs::write(repo.join("base.txt"), "base\ndev\n").expect("write dev change");
+    run_git(repo, &["commit", "-am", "dev"]);
+    run_git(repo, &["checkout", "main"]);
+    run_git(repo, &["config", "color.diff", "always"]);
+
+    let opened = GixBackend.open(repo).expect("open repository");
+    let merged = opened.merge_ref_with_output("dev").expect("merge");
+    run_git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    let squashed = opened.squash_ref_with_output("dev").expect("squash");
+    run_git(repo, &["reset", "-q", "--hard", "HEAD"]);
+    let pulled = opened
+        .pull_branch_with_output(".", "dev", false)
+        .expect("pull");
+    for (what, output) in [("merge", merged), ("squash", squashed), ("pull", pulled)] {
+        assert!(output.stdout.contains("base.txt"), "{what}: {output:?}");
+        assert!(!output.stdout.contains('\x1b'), "{what}: {output:?}");
+    }
+}
+
 #[test]
 fn merge_ref_stopped_at_conflicts_says_so() {
     let _guard = remote_management_test_lock();

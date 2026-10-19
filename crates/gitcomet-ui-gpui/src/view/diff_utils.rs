@@ -476,36 +476,6 @@ pub(super) use gitcomet_core::partial_patch::{
     build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
 };
 
-pub(super) fn context_menu_selection_range_from_diff_text(
-    selection: Option<(DiffTextPos, DiffTextPos)>,
-    diff_view: DiffViewMode,
-    clicked_source_visible_ix: usize,
-    clicked_region: DiffTextRegion,
-) -> Option<(usize, usize)> {
-    let (start, end) = selection?;
-    if start == end {
-        return None;
-    }
-    if clicked_source_visible_ix < start.source_visible_ix
-        || clicked_source_visible_ix > end.source_visible_ix
-    {
-        return None;
-    }
-
-    let restrict_region = (diff_view == DiffViewMode::Split
-        && start.region == end.region
-        && matches!(
-            start.region,
-            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
-        ))
-    .then_some(start.region);
-    if restrict_region.is_some_and(|r| r != clicked_region) {
-        return None;
-    }
-
-    Some((start.source_visible_ix, end.source_visible_ix))
-}
-
 /// Placeholder line for a side that is binary or not UTF-8, with the sizes
 /// of whichever sides exist so a size change is still visible.
 pub(in crate::view) fn binary_diff_placeholder_message(
@@ -1229,74 +1199,6 @@ mod tests {
                 .get_pixel(decoded.width() / 2, decoded.height() / 2)
                 .0,
             [0, 170, 255, 255]
-        );
-    }
-
-    #[test]
-    fn context_menu_selection_range_from_diff_text_requires_click_in_selection() {
-        let selection = Some((
-            DiffTextPos {
-                source_visible_ix: 2,
-                region: DiffTextRegion::Inline,
-                offset: 0,
-            },
-            DiffTextPos {
-                source_visible_ix: 5,
-                region: DiffTextRegion::Inline,
-                offset: 3,
-            },
-        ));
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Inline,
-                4,
-                DiffTextRegion::Inline
-            ),
-            Some((2, 5))
-        );
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Inline,
-                1,
-                DiffTextRegion::Inline
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn context_menu_selection_range_from_diff_text_restricts_split_region() {
-        let selection = Some((
-            DiffTextPos {
-                source_visible_ix: 1,
-                region: DiffTextRegion::SplitLeft,
-                offset: 0,
-            },
-            DiffTextPos {
-                source_visible_ix: 3,
-                region: DiffTextRegion::SplitLeft,
-                offset: 2,
-            },
-        ));
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Split,
-                2,
-                DiffTextRegion::SplitLeft
-            ),
-            Some((1, 3))
-        );
-        assert_eq!(
-            context_menu_selection_range_from_diff_text(
-                selection,
-                DiffViewMode::Split,
-                2,
-                DiffTextRegion::SplitRight
-            ),
-            None
         );
     }
 

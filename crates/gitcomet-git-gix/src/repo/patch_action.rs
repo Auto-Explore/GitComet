@@ -1,6 +1,6 @@
 use super::GixRepo;
 use crate::util::{run_git_capture_bytes_cancellable, run_git_parsed_stdout_cancellable};
-use gitcomet_core::domain::{DiffTarget, FileDiffTextSource};
+use gitcomet_core::domain::{DiffArea, DiffTarget, FileDiffTextSource};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::patch_action::{DiffActionSnapshot, SOURCE_BYTE_LIMIT};
 use gitcomet_core::services::{CancellationToken, Result};
@@ -48,6 +48,27 @@ fn append_policy(policy: &mut Vec<u8>, bytes: &[u8]) {
     policy.extend_from_slice(bytes);
 }
 
+fn append_worktree_copy(policy: &mut Vec<u8>, path: &std::path::Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let bytes = if metadata.is_symlink() {
+                std::fs::read_link(path)
+                    .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .to_vec()
+            } else {
+                read_bounded(path)?
+            };
+            policy.push(1);
+            append_policy(policy, &bytes);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => policy.push(0),
+        Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+    }
+    Ok(())
+}
+
 impl GixRepo {
     pub(super) fn diff_action_snapshot_impl(
         &self,
@@ -59,7 +80,7 @@ impl GixRepo {
                 "partial actions are unavailable for linked-worktree comparisons",
             )));
         }
-        let DiffTarget::WorkingTree { path, .. } = target else {
+        let DiffTarget::WorkingTree { path, area, .. } = target else {
             return Err(Error::new(ErrorKind::Unsupported(
                 "partial patches require a working-tree comparison",
             )));
@@ -150,23 +171,10 @@ impl GixRepo {
         let mut policy = Vec::new();
         append_policy(&mut policy, &attributes);
         append_policy(&mut policy, &config);
-        let worktree_path = self.spec.workdir.join(path);
-        match std::fs::symlink_metadata(&worktree_path) {
-            Ok(metadata) => {
-                let bytes = if metadata.is_symlink() {
-                    std::fs::read_link(&worktree_path)
-                        .map_err(|error| Error::new(ErrorKind::Io(error.kind())))?
-                        .as_os_str()
-                        .as_encoded_bytes()
-                        .to_vec()
-                } else {
-                    read_bounded(&worktree_path)?
-                };
-                policy.push(1);
-                append_policy(&mut policy, &bytes);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => policy.push(0),
-            Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+        // Unstaging moves lines between HEAD and the index; the worktree copy
+        // plays no part in it, so it must not make the snapshot stale.
+        if *area == DiffArea::Unstaged {
+            append_worktree_copy(&mut policy, &self.spec.workdir.join(path))?;
         }
         Ok(DiffActionSnapshot {
             diff: gitcomet_core::patch_action::parse_exact_diff(target.clone(), bytes)

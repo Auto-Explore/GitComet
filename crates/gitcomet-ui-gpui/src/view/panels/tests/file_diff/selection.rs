@@ -381,6 +381,101 @@ fn difftastic_occurrences_skip_a_row_drawing_the_other_side(cx: &mut gpui::TestA
     });
 }
 
+/// The line engine took every row from a text selection's first to its last,
+/// so a drag from the end of one line to the start of another staged both of
+/// those lines, though neither had a character selected.
+#[gpui::test]
+fn line_engine_selection_edges_stage_no_untouched_line(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(938);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_line_engine_selection_edges",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = PathBuf::from("main.rs");
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    let unified = "diff --git a/main.rs b/main.rs\n--- a/main.rs\n+++ b/main.rs\n@@ -1,3 +1,3 @@\n-a1\n-b1\n-c1\n+a2\n+b2\n+c2\n";
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = 1;
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target.clone(), unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some("a1\nb1\nc1\n".into()),
+                    Some("a2\nb2\nc2\n".into()),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the line engine's six inline rows",
+        |pane| pane.file_diff_cache_target == Some(target.clone()) && pane.diff_visible_len() == 6,
+        |pane| pane.diff_visible_len(),
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                assert_eq!(
+                    pane.diff_text_full_line_for_region(0, DiffTextRegion::Inline)
+                        .as_ref(),
+                    "a1"
+                );
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    source_visible_ix: 0,
+                    region: DiffTextRegion::Inline,
+                    offset: 2,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    source_visible_ix: 2,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                });
+                pane.open_diff_editor_context_menu(
+                    1,
+                    DiffTextRegion::Inline,
+                    gpui::point(px(24.0), px(24.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        match view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+        {
+            Some(PopoverKind::DiffEditorMenu { lines_count, .. }) => {
+                assert_eq!(lines_count, 1, "only +a2 has selected text")
+            }
+            other => panic!("expected the diff editor menu, got {other:?}"),
+        }
+    });
+}
+
 /// Difftastic marks changed tokens, not lines: a changed row paints the same
 /// background as an unchanged one in both layouts, and its changed token keeps
 /// its highlight.
