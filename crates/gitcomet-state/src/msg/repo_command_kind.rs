@@ -289,6 +289,73 @@ impl RepoCommandKind {
         }
     }
 
+    /// Whether the command holds off prepared patch applies while it runs.
+    /// Only commands that never write the index, the worktree, or what a
+    /// prepared patch checks (attributes, `core.*`/`filter.*` config), and can
+    /// wait minutes on the network or a credential prompt, let them through.
+    pub(crate) fn holds_mutation_gate(&self) -> bool {
+        match self {
+            Self::FetchAll
+            | Self::FetchRefspecs { .. }
+            | Self::PruneMergedBranches
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. } => false,
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Reset { .. }
+            | Self::SquashCommits { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
+            | Self::ExportPatch { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::ApplyWorktreePatch { .. }
+            | Self::PruneLocalTags
+            | Self::RunMaintenance
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk
+            | Self::LargeFile { .. } => true,
+        }
+    }
+
     /// Commands that fetch, and so may leave new packs or run a repack.
     pub(crate) fn fetches_objects(&self) -> bool {
         matches!(

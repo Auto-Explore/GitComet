@@ -276,13 +276,7 @@ fn run_extraction_and_validate(
                 }
             }
             Err(e) => {
-                let msg = if let Some(s) = e.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = e.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    "unknown panic".to_string()
-                };
+                let msg = gitcomet_core::panic::payload_message(e.as_ref());
                 failures.push(format!("[{}] invariant violation: {}", case_name, msg));
             }
         }

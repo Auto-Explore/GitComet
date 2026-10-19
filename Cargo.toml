@@ -6,6 +6,7 @@ members = [
   "crates/gitcomet-base",
   "crates/gitcomet-conflict-resolver",
   "crates/gitcomet-core",
+  "crates/gitcomet-difftastic",
   "crates/gitcomet-diagrams",
   "crates/gitcomet-fonts",
   "crates/gitcomet-extension-api",
@@ -23,6 +24,9 @@ members = [
   "crates/gitcomet-ui-kit",
   "crates/gitcomet-ui-media",
   "crates/gitcomet-ui-terminal",
+  # Upstream source, a member so its grammars resolve to the workspace crates.
+  # See vendor/README.md.
+  "vendor/difftastic",
 ]
 exclude = [
   "vendor/block",
@@ -47,11 +51,13 @@ exclude = [
   "vendor/tree-sitter-gitignore",
   "vendor/tree-sitter-haskell",
   "vendor/tree-sitter-html",
+  "vendor/tree-sitter-janet-simple",
   "vendor/tree-sitter-jinja-dialects",
   "vendor/tree-sitter-julia",
   "vendor/tree-sitter-just",
   "vendor/tree-sitter-kdl",
   "vendor/tree-sitter-kotlin-sg",
+  "vendor/tree-sitter-latex",
   "vendor/tree-sitter-objc",
   "vendor/tree-sitter-ocaml",
   "vendor/tree-sitter-php",
@@ -62,6 +68,8 @@ exclude = [
   "vendor/tree-sitter-rust",
   "vendor/tree-sitter-scala",
   "vendor/tree-sitter-sequel",
+  "vendor/tree-sitter-smali",
+  "vendor/tree-sitter-solidity",
   "vendor/tree-sitter-spirv",
   "vendor/tree-sitter-swift",
   "vendor/tree-sitter-typescript",
@@ -86,6 +94,7 @@ default-members = [
   "crates/gitcomet-ui-kit",
   "crates/gitcomet-ui-media",
   "crates/gitcomet-ui-terminal",
+  "vendor/difftastic",
 ]
 
 [workspace.package]
@@ -106,6 +115,7 @@ gitcomet-app = { path = "crates/gitcomet-app", default-features = false }
 gitcomet-base = { path = "crates/gitcomet-base" }
 gitcomet-conflict-resolver = { path = "crates/gitcomet-conflict-resolver" }
 gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-difftastic = { path = "crates/gitcomet-difftastic" }
 gitcomet-diagrams = { path = "crates/gitcomet-diagrams" }
 gitcomet-fonts = { path = "crates/gitcomet-fonts" }
 gitcomet-extension-api = { path = "crates/gitcomet-extension-api" }
@@ -139,6 +149,8 @@ ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
 dekobon-tree-sitter-groovy = "0.3.0"
+# Vendored as a library; see vendor/README.md.
+difftastic = { path = "vendor/difftastic" }
 # Already in the tree via gix-filter; decodes and encodes non-UTF-8 file text.
 encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc", "fast-legacy-encode"] }
 faster-hex = { version = "1.0.0", default-features = false, features = ["std"] }
@@ -212,6 +224,7 @@ uuid = { version = "1.28.0", features = ["serde", "v4"] }
 # against upstream. vendor/README.md has the procedure, the proof, and the one
 # grammar this is *not* safe for; each crate's Cargo.toml header has its own
 # numbers.
+tree-sitter-ada = "0.1.0"
 # Vendored, not from crates.io: the grammar needed a `mnemonic` token so an
 # arm64 `b.eq` is one node instead of an ERROR, and upstream has not changed.
 # See vendor/tree-sitter-asm/Cargo.toml for the full list of edits.
@@ -230,6 +243,7 @@ tree-sitter-caddyfile = { path = "vendor/tree-sitter-caddyfile" }
 # Written here rather than vendored: no CIL or crontab grammar exists upstream.
 tree-sitter-cil = { path = "vendor/tree-sitter-cil" }
 tree-sitter-cmake = "0.7.5"
+tree-sitter-commonlisp = "0.4.1"
 # Dockerfile / Containerfile. The crate is named for the OCI-neutral spelling but
 # the grammar is the Docker one.
 tree-sitter-containerfile = "0.9.2"
@@ -246,11 +260,15 @@ tree-sitter-cue = { path = "vendor/tree-sitter-cue" }
 # vendor/tree-sitter-css/Cargo.toml.
 tree-sitter-css = { path = "vendor/tree-sitter-css" }
 tree-sitter-dart = "0.2.0"
+tree-sitter-devicetree = "0.14.1"
 tree-sitter-dhall = { path = "vendor/tree-sitter-dhall" }
 tree-sitter-diff = "0.1.0"
 tree-sitter-ebnf = { path = "vendor/tree-sitter-ebnf" }
+tree-sitter-elisp = "1.7.2"
 tree-sitter-elixir = "0.3.5"
+tree-sitter-elm = "5.9.4"
 tree-sitter-erlang = "0.21.0"
+tree-sitter-fish = "3.6.0"
 tree-sitter-fsharp = { path = "vendor/tree-sitter-fsharp" }
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-gleam = "1.0.0"
@@ -270,6 +288,9 @@ tree-sitter-html = { path = "vendor/tree-sitter-html" }
 tree-sitter-ini = "1.4.0"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
+# From difftastic's vendored parsers, shared with vendor/difftastic. See the
+# crate headers.
+tree-sitter-janet-simple = { path = "vendor/tree-sitter-janet-simple" }
 tree-sitter-jinja-dialects = { path = "vendor/tree-sitter-jinja-dialects" }
 tree-sitter-jsdoc = "0.25.0"
 tree-sitter-jsonnet = "0.0.1"
@@ -281,10 +302,12 @@ tree-sitter-just = { path = "vendor/tree-sitter-just" }
 tree-sitter-kdl = { path = "vendor/tree-sitter-kdl" }
 tree-sitter-julia = { path = "vendor/tree-sitter-julia" }
 tree-sitter-kotlin-sg = { path = "vendor/tree-sitter-kotlin-sg" }
+tree-sitter-latex = { path = "vendor/tree-sitter-latex" }
 tree-sitter-llvm = "1.1.0"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
+tree-sitter-newick = "1.1.0"
 tree-sitter-nix = "0.3.0"
 tree-sitter-objc = { path = "vendor/tree-sitter-objc" }
 tree-sitter-ocaml = { path = "vendor/tree-sitter-ocaml" }
@@ -311,7 +334,9 @@ tree-sitter-pascal = "0.10.2"
 tree-sitter-properties = { path = "vendor/tree-sitter-properties" }
 tree-sitter-proto = "0.6.0"
 tree-sitter-python = "0.25.0"
+tree-sitter-qmljs = "0.3.1"
 tree-sitter-r = "1.3.0"
+tree-sitter-racket = "0.24.7"
 tree-sitter-regex = "0.25.0"
 tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
 # Vendored for a grammar fix: a `=begin` block comment ended at any `=end`,
@@ -320,8 +345,13 @@ tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
 tree-sitter-ruby = { path = "vendor/tree-sitter-ruby" }
 tree-sitter-rust = { path = "vendor/tree-sitter-rust" }
 tree-sitter-scala = { path = "vendor/tree-sitter-scala" }
+tree-sitter-scheme = "0.24.7"
 tree-sitter-sequel = { path = "vendor/tree-sitter-sequel" }
-tree-sitter-solidity = "1.2.13"
+tree-sitter-sfapex = "2.4.0"
+tree-sitter-smali = { path = "vendor/tree-sitter-smali" }
+# Vendored to fix its highlight query for the workspace tree-sitter. See
+# vendor/tree-sitter-solidity/Cargo.toml.
+tree-sitter-solidity = { path = "vendor/tree-sitter-solidity" }
 # Vendored: no crates.io release, no Rust bindings upstream.
 tree-sitter-spirv = { path = "vendor/tree-sitter-spirv" }
 tree-sitter-svelte-ng = "1.0.2"
@@ -329,6 +359,7 @@ tree-sitter-swift = { path = "vendor/tree-sitter-swift" }
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = { path = "vendor/tree-sitter-typescript" }
 tree-sitter-v = { path = "vendor/tree-sitter-v" }
+tree-sitter-vhdl = "1.4.0"
 tree-sitter-vue = { path = "vendor/tree-sitter-vue" }
 # Vendored: nothing on crates.io provides a WebAssembly text grammar.
 tree-sitter-wat = { path = "vendor/tree-sitter-wat" }
@@ -386,6 +417,12 @@ opt-level = 2
 [profile.dev.package.chardetng]
 opt-level = 2
 
+# A structural diff gets five seconds; unoptimized, Difftastic takes several times
+# longer than a release build and misses that on larger files.
+[profile.dev.package.difftastic]
+opt-level = 2
+debug = "line-tables-only"
+
 [profile.test]
 opt-level = 1
 
@@ -417,6 +454,9 @@ opt-level = 1
 
 [profile.ci-test.package.taffy]
 opt-level = 1
+
+[profile.ci-test.package.difftastic]
+debug = 0
 
 # Unoptimized compile/link coverage only. Actual performance measurements use
 # release or bench with the production release settings below.

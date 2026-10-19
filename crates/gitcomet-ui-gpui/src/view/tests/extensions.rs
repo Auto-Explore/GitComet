@@ -75,7 +75,7 @@ fn config_for(mode: GitCometViewMode) -> GitCometViewConfig {
                 label_left: "before".into(),
                 label_right: "after".into(),
                 display_path: Some("example.rs".into()),
-                diff_text: "diff --git a/example.rs b/example.rs\n--- a/example.rs\n+++ b/example.rs\n@@ -1 +1 @@\n-old\n+new\n".into(),
+                input: crate::FocusedDiffInput::Patch("diff --git a/example.rs b/example.rs\n--- a/example.rs\n+++ b/example.rs\n@@ -1 +1 @@\n-old\n+new\n".into()),
             }),
             workspace: WorkspaceBootstrap::Empty,
             ..Default::default()

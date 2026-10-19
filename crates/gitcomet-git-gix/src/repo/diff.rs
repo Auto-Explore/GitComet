@@ -56,8 +56,18 @@ impl GixRepo {
     }
 
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
+        self.build_unified_diff_command_with_policy(target, false)
+    }
+
+    pub(super) fn build_unified_diff_command_with_policy(
+        &self,
+        target: &DiffTarget,
+        exact: bool,
+    ) -> Command {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c").arg("color.ui=false");
+        // Without it a blank context line prints as an empty one, which neither
+        // the row parser nor the exact patch check reads as context.
+        cmd.arg("-c").arg("diff.suppressBlankEmpty=false");
         // Pin the header format: the UI resolves a file's path out of the
         // `diff --git` / `---` / `+++` lines, and these settings are the ones a
         // user's git config could otherwise use to reshape them.
@@ -73,14 +83,25 @@ impl GixRepo {
             .arg("-c")
             .arg("diff.dstPrefix=b/");
         cmd.arg("--no-pager");
+        if matches!(target, DiffTarget::WorkingTree { .. }) {
+            cmd.arg("--no-optional-locks")
+                .arg("-c")
+                .arg("diff.autoRefreshIndex=false");
+        }
+        let subcommand = match target {
+            DiffTarget::Commit { .. } => "show",
+            DiffTarget::WorkingTree { .. } | DiffTarget::CommitRange { .. } => "diff",
+        };
+        // `--no-color`, as `-c color.ui=false` loses to a user's
+        // `color.diff=always`.
+        cmd.arg(subcommand).args(["--no-ext-diff", "--no-color"]);
 
         match target {
             DiffTarget::WorkingTree { path, area, .. } => {
-                cmd.arg("--no-optional-locks")
-                    .arg("-c")
-                    .arg("diff.autoRefreshIndex=false");
-                cmd.arg("diff").arg("--no-ext-diff");
-                if matches!(area, DiffArea::Unstaged) {
+                if exact {
+                    cmd.args(["--no-textconv", "--unified=3", "--no-renames"]);
+                }
+                if matches!(area, DiffArea::Unstaged) && !exact {
                     // Match the staged view on Windows by suppressing CR-at-EOL-only
                     // worktree noise before content is normalized into the index.
                     cmd.arg("--ignore-cr-at-eol");
@@ -96,9 +117,7 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                cmd.arg("show")
-                    .arg("--no-ext-diff")
-                    .arg("-m")
+                cmd.arg("-m")
                     .arg("--first-parent")
                     .arg("--pretty=format:")
                     .arg(commit_id.as_ref());
@@ -111,9 +130,7 @@ impl GixRepo {
                 old_path,
                 ..
             } => {
-                cmd.arg("diff")
-                    .arg("--no-ext-diff")
-                    .arg(from_commit_id.as_ref());
+                cmd.arg(from_commit_id.as_ref());
                 // `None` tip: `git diff <from>` compares against the working tree.
                 if let Some(to_commit_id) = to_commit_id {
                     cmd.arg(to_commit_id.as_ref());

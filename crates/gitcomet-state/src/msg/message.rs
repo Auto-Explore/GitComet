@@ -725,6 +725,14 @@ pub enum Msg {
         repo_id: RepoId,
         patch: ContentBytes,
     },
+    ApplyPreparedDiffPatch {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
+        prepared: std::sync::Arc<gitcomet_core::patch_action::PreparedDiffPatch>,
+    },
     UnstageHunk {
         repo_id: RepoId,
         patch: ContentBytes,

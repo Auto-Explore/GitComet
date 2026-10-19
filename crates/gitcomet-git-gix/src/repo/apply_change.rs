@@ -64,7 +64,7 @@ impl FileName {
 /// Renames the file in a single-file patch's headers, so a change made under
 /// an old name applies to the file as it is named now. Only headers before the
 /// first hunk are touched.
-fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
+pub(super) fn retarget_patch(patch: &[u8], to: &Path) -> Result<Vec<u8>> {
     let path = to;
     let to = repo_path_bytes(path)?;
     let line = |parts: &[&[u8]]| parts.concat();

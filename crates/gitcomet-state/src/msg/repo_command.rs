@@ -135,6 +135,14 @@ pub enum RepoCommandEffect {
         repo_id: RepoId,
         patch: super::ContentBytes,
     },
+    ApplyPreparedDiffPatch {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
+        prepared: std::sync::Arc<gitcomet_core::patch_action::PreparedDiffPatch>,
+    },
     UnstageHunk {
         repo_id: RepoId,
         patch: super::ContentBytes,
@@ -385,6 +393,7 @@ macro_rules! match_git_auth {
             | RepoCommandEffect::ChangeSubmodulePointer { .. }
             | RepoCommandEffect::RemoveSubmodule { .. }
             | RepoCommandEffect::StageHunk { .. }
+            | RepoCommandEffect::ApplyPreparedDiffPatch { .. }
             | RepoCommandEffect::UnstageHunk { .. }
             | RepoCommandEffect::ApplyWorktreePatch { .. }
             | RepoCommandEffect::PruneMergedBranches { .. }
@@ -598,6 +607,19 @@ impl RepoCommandEffect {
             }
             RepoCommandEffect::StageHunk { repo_id, .. } => {
                 Some(RepoCommandKind::StageHunk.finished(repo_id, Err(error)))
+            }
+            RepoCommandEffect::ApplyPreparedDiffPatch {
+                repo_id, prepared, ..
+            } => {
+                use gitcomet_core::patch_action::PatchOperation;
+                let command = match prepared.operation() {
+                    PatchOperation::Stage => RepoCommandKind::StageHunk,
+                    PatchOperation::Unstage => RepoCommandKind::UnstageHunk,
+                    PatchOperation::Discard => {
+                        RepoCommandKind::ApplyWorktreePatch { reverse: true }
+                    }
+                };
+                Some(command.finished(repo_id, Err(error)))
             }
             RepoCommandEffect::UnstageHunk { repo_id, .. } => {
                 Some(RepoCommandKind::UnstageHunk.finished(repo_id, Err(error)))

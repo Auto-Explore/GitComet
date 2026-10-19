@@ -1079,6 +1079,7 @@ fn missing_annex_content_offers_get_and_lists_copies(cx: &mut gpui::TestAppConte
     );
 }
 
+mod engine;
 mod folding;
 mod layout;
 mod navigation;

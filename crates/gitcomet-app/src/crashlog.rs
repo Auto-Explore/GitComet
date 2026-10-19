@@ -63,7 +63,11 @@ pub fn install() {
 
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        write_panic_log(info);
+        if let gitcomet_core::panic::Containment::Report { escaped } =
+            gitcomet_core::panic::note_contained(info)
+        {
+            write_panic_log(info, escaped.as_ref());
+        }
         previous(info);
     }));
 }
@@ -755,7 +759,14 @@ fn write_startup_report_snapshot(dir: &Path, report_log: &str) -> std::io::Resul
     Ok(report_path)
 }
 
-fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
+/// `escaped` is this thread's earlier contained panic that never reached
+/// `contain`, logged as the failure. When it could not unwind it caused the
+/// abort in `info`; when the contained code caught it, `info` is the panic
+/// that followed.
+fn write_panic_log(
+    info: &std::panic::PanicHookInfo<'_>,
+    escaped: Option<&gitcomet_core::panic::ContainedPanic>,
+) {
     if WRITING_CRASH_LOG
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -792,17 +803,21 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
         std::thread::current().name().unwrap_or("<unnamed>")
     );
 
-    if let Some(location) = info.location() {
-        let _ = writeln!(file, "location={}#L{}", location.file(), location.line());
+    match escaped {
+        Some(cause) => {
+            if let Some(location) = &cause.location {
+                let _ = writeln!(file, "location={}#L{}", location.file, location.line);
+            }
+            let _ = writeln!(file, "message={}", cause.message);
+        }
+        None => {
+            if let Some(location) = info.location() {
+                let _ = writeln!(file, "location={}#L{}", location.file(), location.line());
+            }
+            let payload = gitcomet_core::panic::payload_message(info.payload());
+            let _ = writeln!(file, "message={payload}");
+        }
     }
-
-    let payload = info
-        .payload()
-        .downcast_ref::<&str>()
-        .map(|s| (*s).to_string())
-        .or_else(|| info.payload().downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "<non-string panic payload>".to_string());
-    let _ = writeln!(file, "message={payload}");
     let _ = writeln!(file, "info={info}");
     let _ = write_cached_environment(&mut file);
 
@@ -1487,6 +1502,86 @@ mod tests {
         );
         assert!(parsed.backtrace.is_empty());
         assert!(!contents.contains("backtrace:"));
+    }
+
+    extern "C" fn panic_across_ffi() {
+        panic!("panic across ffi");
+    }
+
+    /// A contained panic that cannot unwind aborts with a second panic. The
+    /// hook let the first through for `contain`, so the report carried only the
+    /// second ("panic in a function that cannot unwind"), without the cause.
+    #[test]
+    fn only_panics_that_reach_contain_skip_the_crash_report() {
+        const CHILD: &str = "GITCOMET_CONTAINED_PANIC_TEST_CHILD";
+        if let Ok(kind) = std::env::var(CHILD) {
+            install();
+            begin_session().expect("begin child session");
+            let contained = gitcomet_core::panic::contain(|| panic!("contained test panic"));
+            assert_eq!(
+                contained.map_err(|panic| panic.message),
+                Err("contained test panic".to_owned())
+            );
+            match kind.as_str() {
+                "uncontained" => panic!("uncontained test panic"),
+                "cannot-unwind" => {
+                    let _ = gitcomet_core::panic::contain(|| panic_across_ffi());
+                }
+                _ => {}
+            }
+            finish_session().expect("finish child session");
+            std::process::exit(0);
+        }
+
+        for (kind, message) in [
+            ("contained", None),
+            ("uncontained", Some("uncontained test panic")),
+            ("cannot-unwind", Some("panic across ffi")),
+        ] {
+            let root = tempdir().expect("child profile root");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "crashlog::tests::only_panics_that_reach_contain_skip_the_crash_report",
+                    "--nocapture",
+                ])
+                .env(CHILD, kind)
+                .env("GITCOMET_PROFILE_ROOT", root.path())
+                .output()
+                .expect("run contained panic child");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.success(),
+                message.is_none(),
+                "{kind}: {stderr}"
+            );
+            assert!(stderr.contains("contained test panic"), "{kind}: {stderr}");
+            let dir = root
+                .path()
+                .join("state")
+                .join(identity::current().directory_name())
+                .join("crashes");
+            let report = take_startup_report_from_crash_dir(&dir);
+            let Some(message) = message else {
+                assert!(report.is_none(), "{kind}");
+                continue;
+            };
+            let report = report.expect("crash report");
+            let parsed = parse_crash_log(&std::fs::read_to_string(report.crash_log_path).unwrap());
+            assert_eq!(parsed.failure_kind.as_deref(), Some("panic"), "{kind}");
+            assert_eq!(parsed.message.as_deref(), Some(message), "{kind}");
+            assert!(
+                parsed
+                    .location
+                    .as_deref()
+                    .and_then(|location| location.rsplit_once("#L"))
+                    .is_some_and(
+                        |(file, line)| file.ends_with("crashlog.rs") && line.parse::<u32>().is_ok()
+                    ),
+                "{kind}: {:?}",
+                parsed.location
+            );
+        }
     }
 
     #[test]

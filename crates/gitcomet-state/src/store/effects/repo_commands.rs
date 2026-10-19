@@ -263,6 +263,35 @@ fn schedule_repo_command_with_context<F>(
     repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    command: RepoCommandKind,
+    context_override: Option<String>,
+    run: F,
+) where
+    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+{
+    let gated = command.holds_mutation_gate();
+    schedule_repo_command_task(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        command,
+        context_override,
+        move |repo| {
+            let gate = gated.then(|| super::super::mutation_gate::for_repo(repo.as_ref()));
+            let _mutation = gate
+                .as_ref()
+                .map(|gate| gate.read().unwrap_or_else(|error| error.into_inner()));
+            run(repo)
+        },
+    );
+}
+
+fn schedule_repo_command_task<F>(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
     mut command: RepoCommandKind,
     context_override: Option<String>,
     run: F,
@@ -2581,6 +2610,75 @@ pub(super) fn schedule(
         }
         RepoCommandEffect::StageHunk { repo_id, patch } => {
             schedule_stage_hunk(executor, repos, msg_tx, repo_id, patch);
+        }
+        RepoCommandEffect::ApplyPreparedDiffPatch {
+            repo_id,
+            lifetime,
+            view,
+            file_rev,
+            generation,
+            prepared,
+        } => {
+            use gitcomet_core::patch_action::{PatchActionError, PatchOperation};
+            let command = match prepared.operation() {
+                PatchOperation::Stage => RepoCommandKind::StageHunk,
+                PatchOperation::Unstage => RepoCommandKind::UnstageHunk,
+                PatchOperation::Discard => RepoCommandKind::ApplyWorktreePatch { reverse: true },
+            };
+            let filesystem = msg_tx.filesystem;
+            let thread_state = Arc::clone(thread_state);
+            schedule_repo_command_task(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                command,
+                None,
+                move |repo| {
+                    let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+                    let _mutation = match gate.try_write() {
+                        Ok(guard) => guard,
+                        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            return Err(Error::new(ErrorKind::Backend(
+                                "Another write is in progress. Prepare the patch again when it finishes."
+                                    .into(),
+                            )));
+                        }
+                    };
+                    let _filesystem = match filesystem.try_lock() {
+                        Ok(guard) => guard,
+                        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            return Err(Error::new(ErrorKind::Backend(
+                                "A filesystem operation is in progress. Prepare the patch again when it finishes."
+                                    .into(),
+                            )));
+                        }
+                    };
+                    let current = thread_state
+                        .read()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .is_some_and(|repo| {
+                            repo.matches_diff_origin(
+                                lifetime,
+                                view,
+                                file_rev,
+                                generation,
+                                prepared.target(),
+                            )
+                        });
+                    if !current {
+                        return Err(Error::new(ErrorKind::Backend(
+                            PatchActionError::Stale.to_string(),
+                        )));
+                    }
+                    repo.apply_prepared_diff_patch(&prepared)
+                },
+            );
         }
         RepoCommandEffect::UnstageHunk { repo_id, patch } => {
             schedule_unstage_hunk(executor, repos, msg_tx, repo_id, patch);

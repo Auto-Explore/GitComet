@@ -27,16 +27,27 @@ fn spawn_repo_action(
     action: RepoActionKind,
     task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender) + Send + 'static,
 ) {
-    spawn_with_repo_or_else(executor, repos, repo_id, msg_tx, task, move |msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(InternalMsg::RepoActionFinished {
-                repo_id,
-                action,
-                result: Err(missing_repo_error(repo_id)),
-            }),
-        );
-    });
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+            let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            task(repo, msg_tx);
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::RepoActionFinished {
+                    repo_id,
+                    action,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 fn schedule_repo_action_with_hook<F, H, M>(
@@ -100,6 +111,8 @@ fn schedule_repo_action_with_result<T, F, M>(
         return;
     }
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+        let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
         let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
         let result = {
             let _scope = operation.attach();

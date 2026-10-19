@@ -6,6 +6,13 @@ impl DiffRenderer {
         &mut self,
         inline_ix: usize,
     ) -> Arc<[Range<usize>]> {
+        if let Some(ranges) = self
+            .file_diff_inline_row_provider
+            .as_ref()
+            .and_then(|provider| provider.structural_ranges(inline_ix))
+        {
+            return ranges;
+        }
         if let Some(ranges) = self.file_diff_inline_word_highlights.get(&inline_ix) {
             return Arc::clone(ranges);
         }
@@ -50,6 +57,13 @@ impl DiffRenderer {
             DiffTextRegion::SplitRight => false,
             DiffTextRegion::Inline => return Arc::from(Vec::new()),
         };
+        if let Some(ranges) = self
+            .file_diff_row_provider
+            .as_ref()
+            .and_then(|provider| provider.structural_ranges(row_ix, is_left))
+        {
+            return ranges;
+        }
 
         if let Some(ranges) = self.file_diff_split_word_highlights.get(&row_ix) {
             return if is_left {

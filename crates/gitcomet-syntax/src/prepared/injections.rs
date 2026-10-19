@@ -48,12 +48,12 @@ pub(crate) fn collect_treesitter_injection_matches_for_line_window_at(
         FxHashMap::default();
     let mut truncated = false;
     for pass in &query_passes {
-        catch_treesitter_query_panic(|| {
+        catch_treesitter_query_panic(|catch| {
             TS_CURSOR.with(|cursor| {
                 let mut cursor = cursor.borrow_mut();
                 configure_query_cursor(&mut cursor, pass, input.len());
                 let mut matches = cursor.matches(injection_query, tree.root_node(), input);
-                tree_sitter::StreamingIterator::advance(&mut matches);
+                catch.advance(&mut matches);
                 while let Some(m) = matches.get() {
                     let Some(language) = injection_language_for_match(
                         injection_query,
@@ -62,7 +62,7 @@ pub(crate) fn collect_treesitter_injection_matches_for_line_window_at(
                         injection_language_capture_ix,
                         language_capture_ix,
                     ) else {
-                        tree_sitter::StreamingIterator::advance(&mut matches);
+                        catch.advance(&mut matches);
                         continue;
                     };
                     let pattern_ix = m.pattern_index;
@@ -97,7 +97,7 @@ pub(crate) fn collect_treesitter_injection_matches_for_line_window_at(
                             injections.push(injection);
                         }
                     }
-                    tree_sitter::StreamingIterator::advance(&mut matches);
+                    catch.advance(&mut matches);
                 }
                 // Read inside the same borrow: the cursor is a thread-local and
                 // the next pass reconfigures it.

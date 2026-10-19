@@ -3,6 +3,51 @@
 use super::*;
 
 #[gpui::test]
+fn conflict_compare_does_not_show_the_text_diff_engine_notice(cx: &mut gpui::TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            let repo_id = gitcomet_state::model::RepoId(813);
+            let repo = conflict_compare_repo_state(
+                repo_id,
+                directory.path(),
+                std::path::Path::new("file.rs"),
+                "base\n",
+                "ours\n",
+                "theirs\n",
+                "ours\n",
+            );
+            push_test_state(view, app_state_with_repo(repo, repo_id), cx);
+            view.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_engine_override = Some(
+                    crate::view::panes::diff::helpers::state::DiffEngineOverride::new(
+                        DiffEngine::Difftastic,
+                    ),
+                );
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert_eq!(
+            pane.conflicted_worktree_target(),
+            Some(("file.rs".into(), None))
+        );
+        assert_eq!(
+            pane.diff_surface().body,
+            crate::view::panes::diff::DiffBody::Conflict
+        );
+    });
+    assert!(cx.debug_bounds("diff_engine_notice").is_none());
+}
+
+#[gpui::test]
 fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::mergetool_trace::{self, MergetoolTraceStage};
 

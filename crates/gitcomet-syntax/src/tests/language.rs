@@ -464,6 +464,93 @@ const LANGUAGE_BASELINES: &[(DiffSyntaxLanguage, &str, &[SyntaxTokenKind])] = {
             &[K::Comment, K::Preproc, K::Label, K::String, K::Keyword],
         ),
         (
+            DiffSyntaxLanguage::Smali,
+            "# c\n.class public LFoo;\n.super Ljava/lang/Object;\n\n.method public static main()V\n    .registers 1\n    const-string v0, \"hi\"\n    return-void\n.end method\n",
+            &[
+                K::Comment,
+                K::Keyword,
+                K::KeywordControl,
+                K::String,
+                K::Type,
+            ],
+        ),
+        (
+            DiffSyntaxLanguage::Elm,
+            "-- c\nmodule Main exposing (main)\n\nmain =\n    if True then \"hi\" else \"no\"\n",
+            &[K::Comment, K::Keyword, K::KeywordControl, K::String],
+        ),
+        (
+            DiffSyntaxLanguage::DeviceTree,
+            "// c\n/dts-v1/;\n/ {\n    compatible = \"acme,board\";\n    reg = <0x40003000 0x1000>;\n};\n",
+            &[K::Comment, K::Keyword, K::Property, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Fish,
+            "# c\nfunction greet\n    if test -n \"$argv\"\n        echo \"hi\"\n    end\nend\n",
+            &[
+                K::Comment,
+                K::Keyword,
+                K::KeywordControl,
+                K::String,
+                K::Function,
+            ],
+        ),
+        (
+            DiffSyntaxLanguage::Newick,
+            "(A:0.1,B:0.2)95:0.3;\n",
+            &[K::Type, K::Number, K::PunctuationBracket],
+        ),
+        (
+            DiffSyntaxLanguage::Latex,
+            "% c\n\\section{Intro}\nCosts 5\\% more, see \\cite{knuth}.\n",
+            &[K::Comment, K::StringEscape],
+        ),
+        (
+            DiffSyntaxLanguage::Apex,
+            "// c\npublic class Invoice {\n    Integer total = 42;\n    List<Account> rows = [SELECT Id FROM Account];\n}\n",
+            &[K::Comment, K::Keyword, K::Type, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Qml,
+            "// c\nimport QtQuick\n\nRectangle {\n    width: 640\n    color: \"red\"\n}\n",
+            &[K::Comment, K::Keyword, K::Type, K::Number, K::String],
+        ),
+        (
+            DiffSyntaxLanguage::Vhdl,
+            "-- c\nentity counter is\n    port (clk : in std_logic);\nend entity;\n",
+            &[K::Comment, K::Keyword],
+        ),
+        (
+            DiffSyntaxLanguage::Ada,
+            "-- c\nprocedure Hello is\nbegin\n   Put_Line (\"hi\");\nend Hello;\n",
+            &[K::Comment, K::Keyword, K::String],
+        ),
+        (
+            DiffSyntaxLanguage::CommonLisp,
+            ";; c\n(defun add (a b)\n  \"Sum.\"\n  (+ a b 1))\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Racket,
+            "; c\n(define (square x)\n  (* x x 2))\n(displayln \"hi\")\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Scheme,
+            "; c\n(define (square x)\n  (* x x 2))\n(display \"hi\")\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::EmacsLisp,
+            ";; c\n(defun greet (name)\n  (message \"hi %s\" name 1))\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
+            DiffSyntaxLanguage::Janet,
+            "# c\n(defn add [a b]\n  (+ a b 1))\n(print \"hi\")\n",
+            &[K::Comment, K::Keyword, K::Function, K::String, K::Number],
+        ),
+        (
             DiffSyntaxLanguage::Dhall,
             "-- c\nlet name = \"demo\"\nin  { greeting = name }\n",
             &[K::Comment, K::String, K::Keyword],
@@ -666,6 +753,153 @@ fn objective_c_colours_comments_strings_and_numbers() {
             SyntaxTokenKind::Type,
             SyntaxTokenKind::PunctuationBracket,
         ],
+    );
+}
+
+/// The crate's query painted every identifier as a property through an
+/// unevaluated `#has-ancestor?`; only an instance variable's name is one.
+#[test]
+fn objective_c_marks_only_instance_variables_as_properties() {
+    let text = "@interface Foo : NSObject {\n  int count;\n  NSString *name;\n  char *names[2];\n}\n- (void)bar;\n@end\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::ObjectiveC, text);
+    let kinds = |line: usize, fragment| {
+        token_kinds_for_line_fragment(document, line, text.lines().nth(line).unwrap(), fragment)
+    };
+    assert_eq!(kinds(1, "count"), [SyntaxTokenKind::Property]);
+    assert_eq!(kinds(2, "name"), [SyntaxTokenKind::Property]);
+    assert!(!kinds(0, "Foo").contains(&SyntaxTokenKind::Property));
+    assert_eq!(kinds(3, "names"), [SyntaxTokenKind::Property]);
+    assert!(!kinds(5, "bar").contains(&SyntaxTokenKind::Property));
+}
+
+/// The crate's query gated two rules on `#lua-match?`, which the engine never
+/// evaluates: every bare argument read as a constant and every file's first
+/// comment as a shebang.
+#[test]
+fn cmake_marks_only_upper_case_arguments_constant_and_real_shebangs() {
+    let text = "# Copyright header\nadd_library(core STATIC main.cpp)\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Cmake, text);
+    let kinds = |line: usize, fragment| {
+        token_kinds_for_line_fragment(document, line, text.lines().nth(line).unwrap(), fragment)
+    };
+    assert_eq!(kinds(0, "Copyright"), [SyntaxTokenKind::Comment]);
+    assert!(!kinds(1, "core").contains(&SyntaxTokenKind::Constant));
+    assert!(!kinds(1, "main.cpp").contains(&SyntaxTokenKind::Constant));
+    assert_eq!(kinds(1, "STATIC"), [SyntaxTokenKind::Constant]);
+
+    let script = "#!/usr/bin/env -S cmake -P\nmessage(hi)\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Cmake, script);
+    let shebang = token_kinds_for_line_fragment(document, 0, "#!/usr/bin/env -S cmake -P", "#!");
+    assert_eq!(shebang, [SyntaxTokenKind::Keyword]);
+}
+
+/// A `def` names a value; only a `defn`, or a `def` of an `fn`, names a function.
+#[test]
+fn clojure_def_names_a_value_unless_it_binds_a_function() {
+    let text = "(def limit 10)\n(def f (fn [x] x))\n(defn g [x] x)\n(def h \"Doc.\" (fn [x] x))\n(def k #(inc %))\n(def ^:dynamic *out-dir* \"x\")\n(println *out-dir*)\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Clojure, text);
+    let kinds = |line: usize, fragment| {
+        token_kinds_for_line_fragment(document, line, text.lines().nth(line).unwrap(), fragment)
+    };
+    assert_eq!(kinds(0, "limit"), [SyntaxTokenKind::Variable]);
+    assert_eq!(kinds(1, " f "), [SyntaxTokenKind::Function]);
+    assert_eq!(kinds(2, " g "), [SyntaxTokenKind::Function]);
+    assert_eq!(kinds(3, " h "), [SyntaxTokenKind::Function]);
+    assert_eq!(kinds(4, " k "), [SyntaxTokenKind::Function]);
+    assert_eq!(kinds(5, "*out-dir*"), [SyntaxTokenKind::VariableSpecial]);
+    assert_eq!(kinds(6, "*out-dir*"), [SyntaxTokenKind::VariableSpecial]);
+}
+
+/// `#_` discards the form after it; its strings, keywords and brackets must not
+/// keep their own colours.
+#[test]
+fn clojure_discarded_forms_are_comments_throughout() {
+    let text = "(+ 1 2)\n#_(foo \"bar\" :k [1 {:a 2}])\n#_42\n#_\"skip\"\n#_nil\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Clojure, text);
+    for line in 1..=4 {
+        let tokens = syntax_tokens_for_prepared_document_line(document, line).expect("line tokens");
+        assert!(
+            !tokens.is_empty()
+                && tokens
+                    .iter()
+                    .all(|token| token.kind == SyntaxTokenKind::Comment),
+            "line {line}: {tokens:?}"
+        );
+    }
+}
+
+/// A Lisp datum comment (`#_`, `#;`) greys its form however deep it nests; a
+/// discarded `defn` is the usual case. The form after it keeps its colours.
+#[test]
+fn lisp_discarded_forms_are_comments_at_any_depth() {
+    for (language, discarded) in [
+        (
+            DiffSyntaxLanguage::Clojure,
+            "#_(defn old [x] (let [y (inc x)] (when (pos? y) (println \"deep\" :kw (str/join [\"a\" {:b #{\"c\"}}])))))",
+        ),
+        (
+            DiffSyntaxLanguage::Racket,
+            "#;(define (f x) (let ([y 1]) (when y (display (list \"deep\" 'a (vector #\\c \"e\"))))))",
+        ),
+        (
+            DiffSyntaxLanguage::Scheme,
+            "#;(define (f x) (let ((y 1)) (when y (display (list \"deep\" 'a (vector #\\c \"e\"))))))",
+        ),
+    ] {
+        let text = format!("{discarded}\n(+ 1 2)\n");
+        let document = prepare_test_document(language, &text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0).expect("line tokens");
+        assert!(
+            !tokens.is_empty()
+                && tokens
+                    .iter()
+                    .all(|token| token.kind == SyntaxTokenKind::Comment),
+            "{language:?}: {tokens:?}"
+        );
+        let next = syntax_tokens_for_prepared_document_line(document, 1).expect("line tokens");
+        assert!(
+            next.iter()
+                .any(|token| token.kind == SyntaxTokenKind::Number),
+            "{language:?}: {next:?}"
+        );
+    }
+}
+
+/// The editor's live highlighter greys a deep discarded form as the diff does.
+#[test]
+fn live_highlighting_greys_a_deep_discarded_form() {
+    struct Kinds;
+    impl gitcomet_text::SyntaxPalette for Kinds {
+        type Style = SyntaxTokenKind;
+        fn style(&self, kind: SyntaxTokenKind) -> Option<SyntaxTokenKind> {
+            Some(kind)
+        }
+    }
+    let text = "#_(defn old [x] (let [y (inc x)] (when (pos? y) (println \"deep\" (str/join [\"a\" {:b #{\"c\"}}])))))\n(+ 1 2)\n";
+    let live = LiveSyntaxDocument::new(
+        DiffSyntaxLanguage::Clojure,
+        gitcomet_text::rope::Rope::from_text(text),
+        Vec::new().into(),
+        None,
+    )
+    .expect("clojure live document should build");
+    let line_end = text.find('\n').expect("two lines");
+    let (discarded, next): (Vec<_>, Vec<_>) = live
+        .snapshot(Kinds)
+        .highlights_for_byte_range(0..text.len())
+        .into_iter()
+        .partition(|(range, _)| range.end <= line_end);
+    assert!(
+        !discarded.is_empty()
+            && discarded
+                .iter()
+                .all(|(_, kind)| *kind == SyntaxTokenKind::Comment),
+        "{discarded:?}"
+    );
+    assert!(
+        next.iter()
+            .any(|(_, kind)| *kind == SyntaxTokenKind::Number),
+        "{next:?}"
     );
 }
 

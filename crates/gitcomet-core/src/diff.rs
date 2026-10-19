@@ -14,6 +14,15 @@ pub fn annotate_unified(diff: &Diff) -> Vec<AnnotatedDiffLine> {
 
     let mut out = Vec::with_capacity(diff.lines.len());
     for line in &diff.lines {
+        if line.text.raw_bytes().starts_with(b"\\") {
+            out.push(AnnotatedDiffLine {
+                kind: line.kind,
+                text: line.text.clone(),
+                old_line: None,
+                new_line: None,
+            });
+            continue;
+        }
         match line.kind {
             DiffLineKind::Hunk => {
                 if let Some(header) = parse_unified_hunk_header(line.text.as_bytes())

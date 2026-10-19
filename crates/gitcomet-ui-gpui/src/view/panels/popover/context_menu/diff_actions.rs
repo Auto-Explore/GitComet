@@ -1,12 +1,52 @@
 use super::*;
 
-pub(super) fn model(host: &PopoverHost) -> ContextMenuModel {
-    model_for_diff_actions(
+pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
+    let pane = host.diff_renderer.read(cx);
+    let mut model = model_for_diff_actions(
         host.diff_whitespace_mode,
         host.diff_reveal_whitespace_chars,
         host.diff_word_wrap,
         host.diff_show_line_numbers,
-    )
+    );
+    if pane.structural_diff_active() {
+        for item in &mut model.items {
+            if let ContextMenuItem::Entry {
+                action,
+                label,
+                disabled,
+                ..
+            } = item
+                && matches!(
+                    action.as_ref(),
+                    ContextMenuAction::SetDiffWhitespaceMode { .. }
+                )
+            {
+                *disabled = true;
+                *label = "Whitespace comparison is syntax-based".into();
+            }
+        }
+    }
+    model.items.push(ContextMenuItem::Separator);
+    model
+        .items
+        .push(ContextMenuItem::Header("Diff engine".into()));
+    for engine in [
+        None,
+        Some(DiffEngine::LineByLine),
+        Some(DiffEngine::Difftastic),
+    ] {
+        let label = engine
+            .map(|engine| engine.label().to_owned())
+            .unwrap_or_else(|| format!("Use default ({})", pane.diff_engine_default.label()));
+        model.items.push(ContextMenuItem::Entry {
+            label: label.into(),
+            icon: (pane.diff_engine_override() == engine).then_some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetDiffEngineOverride { engine }),
+        });
+    }
+    model
 }
 
 fn model_for_diff_actions(

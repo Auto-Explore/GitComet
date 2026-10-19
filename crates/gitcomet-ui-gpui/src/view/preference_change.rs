@@ -26,6 +26,7 @@ pub(in crate::view) enum PreferenceChange {
     DiffContentMode(DiffContentMode),
     DiffWhitespaceMode(DiffWhitespaceMode),
     DiffViewMode(DiffViewMode),
+    DiffEngine(gitcomet_core::diff_engine::DiffEngine),
     DiffRevealWhitespaceChars(bool),
     DiffWordWrap(bool),
     DiffTabSize(u8),

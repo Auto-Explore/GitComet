@@ -1130,9 +1130,47 @@ impl SettingsWindowView {
                 }),
             );
 
-        let mut diff_card = self
-            .card("settings_window_diff_card", "Diff", theme)
-            .child(diff_content_mode_row);
+        let mut diff_card = self.card("settings_window_diff_card", "Diff", theme).child(
+            self.summary_row(
+                "settings_window_diff_engine",
+                "Diff engine",
+                self.diff_engine.label().into(),
+                self.expanded_section == Some(SettingsSection::DiffEngine),
+                theme,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_section(SettingsSection::DiffEngine, cx)
+                }),
+            ),
+        );
+        if self.expanded_section == Some(SettingsSection::DiffEngine) {
+            for engine in DiffEngine::ALL {
+                let detail = match engine {
+                    DiffEngine::LineByLine => "Compare changed lines and words",
+                    DiffEngine::Difftastic => "Compare syntax; works in Split and Inline views",
+                };
+                diff_card = diff_card.child(
+                    self.setting_option_row(
+                        format!("settings_window_diff_engine_{}", engine.key()),
+                        engine.label(),
+                        Some(detail.into()),
+                        self.diff_engine == engine,
+                        theme,
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.set_diff_engine(engine, cx)
+                        }),
+                    ),
+                );
+            }
+        }
+        diff_card = diff_card.child(diff_content_mode_row);
 
         if self.expanded_section == Some(SettingsSection::DiffContentMode) {
             let list = uniform_list(

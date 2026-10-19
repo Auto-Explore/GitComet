@@ -919,6 +919,12 @@ pub(crate) struct CommandResultShown {
 
 impl gpui::EventEmitter<CommandResultShown> for GitCometView {}
 
+#[derive(Clone)]
+pub(super) struct FocusedDiffPane {
+    pub(super) pane: gitcomet_extension_api::DiffPane,
+    pub(super) labels: [SharedString; 2],
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -985,7 +991,7 @@ pub struct GitCometView {
     /// Focus to hand back when an overlay opened from a background window
     /// closes. Shared by the command palette and the Reveal Commit dialog.
     pub(super) pre_palette_focus: Option<FocusHandle>,
-    pub(super) focused_diff_pane: Option<gitcomet_extension_api::DiffPane>,
+    pub(super) focused_diff_pane: Option<FocusedDiffPane>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,

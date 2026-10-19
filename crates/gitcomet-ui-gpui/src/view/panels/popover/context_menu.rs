@@ -894,7 +894,7 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(self, *repo_id))
             }
-            PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
+            PopoverKind::DiffActionMenu => Some(diff_actions::model(self, cx)),
             PopoverKind::ExplorerSettingsMenu { repo_id } => {
                 Some(explorer_settings::model(self, *repo_id))
             }

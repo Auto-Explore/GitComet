@@ -1,0 +1,32 @@
+# Vendored from the `tree-sitter-solidity 1.2.13` crates.io release
+# (https://github.com/JoranHonig/tree-sitter-solidity at
+# 4e938a46c7030dd001bc99e1ac0f0c750ac98254, MIT -- see LICENSE) because tree-sitter
+# 0.26.11+ rejects the trailing `.` anchor in its highlight query's `(struct_expression
+# type: ((expression(identifier)) @type .))`. queries/highlights.scm applies upstream PR
+# #80 (head d92bdde, open on 2026-10-16), which rewrites that pattern and keeps the
+# `@type` capture on `expression`. Return to crates.io once a release carries the fix.
+# GitComet's highlighter and vendor/difftastic read `HIGHLIGHT_QUERY`. `src/` is upstream's tree-sitter 0.25.8
+# output (ABI 15), neither regenerated nor retuned; its `tree_sitter/` headers come from
+# vendor/tree-sitter-headers. highlights-nvim.scm is not vendored.
+[package]
+name = "tree-sitter-solidity"
+description = "Solidity grammar for the tree-sitter parsing library"
+version = "1.2.13"
+repository = "https://github.com/JoranHonig/tree-sitter-solidity"
+edition = "2018"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.27.0"

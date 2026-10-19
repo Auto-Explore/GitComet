@@ -281,7 +281,7 @@ fn collect_layer_captures(
     clip: &[Range<usize>],
     out: &mut Vec<LayerCapture>,
 ) {
-    catch_treesitter_query_panic(|| {
+    catch_treesitter_query_panic(|catch| {
         TS_CURSOR.with(|cursor| {
             let mut cursor = cursor.borrow_mut();
             cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
@@ -293,14 +293,16 @@ fn collect_layer_captures(
             // rope, so this path never needs a contiguous buffer either.
             let mut captures =
                 cursor.captures(&spec.query, tree.root_node(), RopeTextProvider(rope));
-            tree_sitter::StreamingIterator::advance(&mut captures);
+            catch.advance(&mut captures);
             let capture_kinds = spec.capture_kinds.as_slice();
+            let mut discarded = DiscardedForms::new(spec);
             // Counts every capture the cursor yields, including the ones dropped
             // below, so the numbering is the emission order itself rather than
             // the order of what survived.
             let mut seq: u32 = 0;
             while let Some((m, capture_ix)) = captures.get() {
                 if let Some(capture) = m.captures().get(*capture_ix)
+                    && !discarded.hides(capture)
                     && let Some(kind) = capture_kinds.get(capture.index as usize).copied().flatten()
                 {
                     let range = clamp_to_len(capture.node.byte_range(), text_len);
@@ -339,7 +341,7 @@ fn collect_layer_captures(
                     }
                 }
                 seq = seq.saturating_add(1);
-                tree_sitter::StreamingIterator::advance(&mut captures);
+                catch.advance(&mut captures);
             }
         });
     });
@@ -510,7 +512,7 @@ fn collect_injection_targets(
         FxHashMap::default();
     let mut truncated = false;
     let interrupted = std::cell::Cell::new(false);
-    catch_treesitter_query_panic(|| {
+    catch_treesitter_query_panic(|catch| {
         TS_CURSOR.with(|cursor| {
             let mut cursor = cursor.borrow_mut();
             cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
@@ -531,7 +533,7 @@ fn collect_injection_targets(
                 RopeTextProvider(rope),
                 options,
             );
-            tree_sitter::StreamingIterator::advance(&mut matches);
+            catch.advance(&mut matches);
             while let Some(m) = matches.get() {
                 if deadline_expired(deadline) {
                     interrupted.set(true);
@@ -558,7 +560,7 @@ fn collect_injection_targets(
                 }
                 #[cfg(test)]
                 injection_tests::query_match_completed();
-                tree_sitter::StreamingIterator::advance(&mut matches);
+                catch.advance(&mut matches);
             }
             drop(matches);
             truncated = interrupted.get() || cursor.did_exceed_match_limit();

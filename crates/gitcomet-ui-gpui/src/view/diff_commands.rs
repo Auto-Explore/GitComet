@@ -10,6 +10,22 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
     DiffCommands {
         navigation: Some(navigation),
         dispatch: Some(Rc::new(move |command, cx| {
+            if let DiffCommand::OpenHostedMenu {
+                id,
+                items,
+                anchor,
+                window,
+            } = command
+            {
+                let _ = window.update(cx, |_, window, cx| {
+                    let _ = root.update(cx, |root, cx| {
+                        root.popover_host.update(cx, |host, cx| {
+                            host.open_hosted_menu(id, items, anchor, window, cx)
+                        });
+                    });
+                });
+                return;
+            }
             if let DiffCommand::OpenPopover {
                 request,
                 anchor,
@@ -143,9 +159,9 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
                         cx.notify();
                     })
                 }
-                DiffCommand::OpenPopover { .. } | DiffCommand::OpenFileHistory { .. } => {
-                    unreachable!()
-                }
+                DiffCommand::OpenPopover { .. }
+                | DiffCommand::OpenHostedMenu { .. }
+                | DiffCommand::OpenFileHistory { .. } => unreachable!(),
             });
         })),
     }

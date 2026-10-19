@@ -35,6 +35,7 @@ fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-conflict-resolver = { workspace = true }
 gitcomet-core = { workspace = true }
+gitcomet-difftastic = { workspace = true }
 gitcomet-diagrams = { workspace = true }
 gitcomet-extension-api = { workspace = true }
 gitcomet-markdown = { workspace = true }

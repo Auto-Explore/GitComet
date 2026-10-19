@@ -20,7 +20,8 @@
 # sweep report in vendor/README.md. GitComet uses the main grammar for .fsi too;
 # signature-specific upstream queries are not the main grammar's queries.
 #
-# queries/ is vendored because GitComet uses the upstream query constants.
+# queries/ is vendored because GitComet uses the upstream query constants, and
+# vendor/difftastic reads `HIGHLIGHTS_QUERY`.
 [package]
 name = "tree-sitter-fsharp"
 description = "fsharp grammar for the tree-sitter parsing library"

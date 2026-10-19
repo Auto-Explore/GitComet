@@ -179,14 +179,12 @@ fn grammar_dirs(manifest: &Path) -> Vec<PathBuf> {
 /// Declare and set the `with_*_query` cfgs upstream bindings guard their optional
 /// query consts with.
 ///
-/// Most vendored grammars have no `queries/`: GitComet keeps its own in
-/// `crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/`, so the consts
-/// compile out. Grammars whose upstream query consts GitComet reads directly
-/// vendor their `queries/`, and for those the cfgs are set. Either way they are
-/// all *declared*, because the vendored `bindings/rust/lib.rs` files reference
-/// them and without the `rustc-check-cfg` lines those files would warn about
-/// unexpected cfgs. `folds` and `indents` are here for tree-sitter-objc, the only
-/// grammar that ships them.
+/// A grammar vendors `queries/` only when something reads its query consts (see
+/// vendor/README.md); for those the cfgs are set, and otherwise the consts compile
+/// out. Either way every cfg is *declared*, because the vendored
+/// `bindings/rust/lib.rs` files reference them and without the `rustc-check-cfg`
+/// lines those files would warn about unexpected cfgs. `folds` and `indents` are
+/// here for tree-sitter-objc, the only grammar whose bindings reference them.
 fn emit_query_cfgs(manifest: &Path) {
     let queries = manifest.join("queries");
     // Cargo treats a missing watched path as dirty on every build. Watch the

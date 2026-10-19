@@ -20,8 +20,11 @@ grammar that still has a `src/tree_sitter/` of its own keeps using it, because
 both `#include "tree_sitter/parser.h"` (relative to the including file) and the
 `-I` search order reach `src/` first.
 
-`tree-sitter-v` and `tree-sitter-properties` use this override for their
-pre-0.26 parsers' older macro API.
+A grammar that keeps its own headers says so in its `Cargo.toml` header:
+`tree-sitter-v` and `tree-sitter-properties` for their pre-0.26 parsers' older
+macro API, and `tree-sitter-janet-simple`, `tree-sitter-latex` and
+`tree-sitter-smali`, whose verbatim ABI 13/14 parsers predate the current
+header (latex and smali use `TSFieldMapSlice`, which it no longer defines).
 `tree-sitter-vue` is another case worth knowing about: it is the only grammar here whose
 `grammar.js` was not vendored, so it cannot be regenerated, and the `array.h` it
 used to carry was an older implementation with a different macro contract

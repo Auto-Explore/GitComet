@@ -4,8 +4,7 @@ use super::{
     DiffArea, DiffRenderer, DiffTarget, DiffTextRegion, DiffViewMode, FxHashMap, FxHashSet, Pixels,
     Point, PopoverKind, Window, build_unified_patch_for_hunks,
     build_unified_patch_for_selected_lines_across_hunks,
-    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
-    context_menu_selection_range_from_diff_text, rows,
+    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply, rows,
 };
 
 impl DiffRenderer {
@@ -26,6 +25,10 @@ impl DiffRenderer {
             self.diff_text_selection_owner.adopt(window, cx);
         }
         if self.is_inline_submodule_diff_active() {
+            return;
+        }
+        if self.structural_diff_active() {
+            self.open_structural_line_menu(visible_ix, region, anchor, window, cx);
             return;
         }
         let Some(workdir) = self
@@ -76,17 +79,14 @@ impl DiffRenderer {
         let clicked_source_visible_ix = self
             .diff_source_visible_ix_for_visible_ix(clicked_visible_ix)
             .unwrap_or(clicked_visible_ix);
-        let text_selection = context_menu_selection_range_from_diff_text(
-            self.diff_text_normalized_selection(),
-            if is_file_preview {
-                DiffViewMode::Inline
-            } else {
-                self.diff_view
-            },
-            clicked_source_visible_ix,
-            region,
-        )
-        .and_then(|(a, b)| self.diff_text_visible_range_for_source_range(a, b));
+        let menu_view = if is_file_preview {
+            DiffViewMode::Inline
+        } else {
+            self.diff_view
+        };
+        let text_selection = self
+            .diff_text_selection_line_rows_at(menu_view, clicked_source_visible_ix, region)
+            .and_then(|(a, b)| self.diff_text_visible_range_for_source_range(a, b));
 
         if list_len > 0 && text_selection.is_none() {
             let existing = self

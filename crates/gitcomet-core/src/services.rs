@@ -1053,6 +1053,53 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn diff_unified(&self, target: &DiffTarget) -> Result<String>;
+    fn diff_action_snapshot(
+        &self,
+        _target: &DiffTarget,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::patch_action::DiffActionSnapshot> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "exact partial patches are not available for this backend",
+        )))
+    }
+
+    fn prepare_diff_patch(
+        &self,
+        target: &DiffTarget,
+        operation: crate::patch_action::PatchOperation,
+        selection: &crate::patch_action::SourceLineSelection,
+        old: &str,
+        new: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::patch_action::PreparedDiffPatch> {
+        // A snapshot torn by a concurrent write cannot match the one
+        // `apply_prepared_diff_patch` reads under the write gate, so one read
+        // is enough here.
+        let snapshot = self.diff_action_snapshot(target, cancellation)?;
+        crate::patch_action::prepare(snapshot, operation, selection, old, new)
+            .map_err(|error| Error::new(ErrorKind::Backend(error.to_string())))
+    }
+
+    fn apply_prepared_diff_patch(
+        &self,
+        prepared: &crate::patch_action::PreparedDiffPatch,
+    ) -> Result<CommandOutput> {
+        let current = self.diff_action_snapshot(prepared.target(), &CancellationToken::new())?;
+        prepared
+            .validate(&current)
+            .map_err(|error| Error::new(ErrorKind::Backend(error.to_string())))?;
+        match prepared.operation() {
+            crate::patch_action::PatchOperation::Stage => {
+                self.apply_unified_patch_to_index_with_output(prepared.patch(), false)
+            }
+            crate::patch_action::PatchOperation::Unstage => {
+                self.apply_unified_patch_to_index_with_output(prepared.patch(), true)
+            }
+            crate::patch_action::PatchOperation::Discard => {
+                self.apply_unified_patch_to_worktree_with_output(prepared.patch(), true)
+            }
+        }
+    }
     /// Load and parse unified diff rows for the target.
     ///
     /// Default implementation goes through `diff_unified`; backends may

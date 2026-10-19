@@ -36,6 +36,7 @@ pub struct UiSettings {
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
+    pub diff_engine: Option<String>,
     pub diff_view_mode: Option<String>,
     pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
@@ -140,6 +141,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, diff_scroll_sync);
         apply_setting!(settings, file, diff_content_mode);
         apply_setting!(settings, file, diff_whitespace_mode);
+        apply_setting!(settings, file, diff_engine);
         apply_setting!(settings, file, diff_view_mode);
         apply_setting!(settings, file, annotate_enabled);
         apply_setting!(settings, file, diff_reveal_whitespace_chars);

@@ -78,6 +78,24 @@ language_registry! {
     DiffSyntaxLanguage::Crontab => ["crontab", "cron", "cronfile"],
     // Not `.ils` or `.cil`: neither is a thing. `ilasm` reads `.il`.
     DiffSyntaxLanguage::Cil => ["il"],
+    DiffSyntaxLanguage::Smali => ["smali"],
+    DiffSyntaxLanguage::Elm => ["elm"],
+    DiffSyntaxLanguage::DeviceTree => ["dts", "dtsi", "dtso", "its", "devicetree"],
+    DiffSyntaxLanguage::Fish => ["fish"],
+    DiffSyntaxLanguage::Newick => ["nwk", "nh", "nhx", "newick"],
+    // Not `.cls`: detection is by path alone, and a Salesforce project holds a
+    // `.cls` per class where a LaTeX project holds one document class at most.
+    // (Linguist tells them apart by content, which this lookup never reads.)
+    DiffSyntaxLanguage::Latex => ["tex", "sty", "aux", "latex"],
+    DiffSyntaxLanguage::Apex => ["cls", "trigger", "apex", "apexc"],
+    DiffSyntaxLanguage::Qml => ["qml"],
+    DiffSyntaxLanguage::Vhdl => ["vhd", "vhdl"],
+    DiffSyntaxLanguage::Ada => ["adb", "ads", "ada"],
+    DiffSyntaxLanguage::CommonLisp => ["lisp", "lsp", "asd", "commonlisp", "common-lisp"],
+    DiffSyntaxLanguage::Racket => ["rkt", "racket"],
+    DiffSyntaxLanguage::Scheme => ["scm", "sch", "ss", "scheme"],
+    DiffSyntaxLanguage::EmacsLisp => ["el", ".emacs", "_emacs", "cask", "elisp", "emacs-lisp"],
+    DiffSyntaxLanguage::Janet => ["janet", "jdn"],
     DiffSyntaxLanguage::Kotlin => ["kt", "kts", "kotlin"],
     DiffSyntaxLanguage::Zig => ["zig"],
     // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
@@ -425,6 +443,70 @@ pub(super) fn tree_sitter_grammar(
             tree_sitter_cil::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(CIL_HIGHLIGHTS_QUERY),
         )),
+        DiffSyntaxLanguage::Smali => Some((
+            tree_sitter_smali::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(SMALI_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Elm => Some((
+            tree_sitter_elm::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(ELM_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::DeviceTree => Some((
+            tree_sitter_devicetree::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(DEVICETREE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Fish => Some((
+            tree_sitter_fish::language(),
+            TreesitterQueryAsset::highlights(FISH_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Newick => Some((
+            tree_sitter_newick::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(NEWICK_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Latex => Some((
+            tree_sitter_latex::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(LATEX_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Apex => Some((
+            tree_sitter_sfapex::apex::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(APEX_HIGHLIGHTS_QUERY),
+        )),
+        // qmljs extends the TypeScript grammar, so TypeScript's query is its base.
+        DiffSyntaxLanguage::Qml => Some((
+            tree_sitter_qmljs::LANGUAGE.into(),
+            TreesitterQueryAsset::with_supplement(
+                TYPESCRIPT_HIGHLIGHTS_QUERY,
+                QML_SUPPLEMENT_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Vhdl => Some((
+            tree_sitter_vhdl::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(VHDL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Ada => Some((
+            tree_sitter_ada::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(ADA_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::CommonLisp => Some((
+            tree_sitter_commonlisp::LANGUAGE_COMMONLISP.into(),
+            TreesitterQueryAsset::highlights(COMMONLISP_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Racket => Some((
+            tree_sitter_racket::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(RACKET_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Scheme => Some((
+            tree_sitter_scheme::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(SCHEME_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::EmacsLisp => Some((
+            tree_sitter_elisp::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(ELISP_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Janet => Some((
+            tree_sitter_janet_simple::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(JANET_HIGHLIGHTS_QUERY),
+        )),
         DiffSyntaxLanguage::Crontab => Some((
             tree_sitter_crontab::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -454,10 +536,9 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Cmake => Some((
             tree_sitter_cmake::LANGUAGE.into(),
-            TreesitterQueryAsset::with_injections_and_supplement(
-                tree_sitter_cmake::HIGHLIGHTS_QUERY,
+            TreesitterQueryAsset::with_injections(
+                CMAKE_HIGHLIGHTS_QUERY,
                 tree_sitter_cmake::INJECTIONS_QUERY,
-                CMAKE_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::Dockerfile => Some((
@@ -537,7 +618,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Solidity => Some((
             tree_sitter_solidity::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(SOLIDITY_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                SOLIDITY_HIGHLIGHTS_QUERY,
+                SOLIDITY_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Assembly => Some((
             tree_sitter_asm::LANGUAGE.into(),
@@ -574,7 +658,7 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::ObjectiveC => Some((
             tree_sitter_objc::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections_and_supplement(
-                tree_sitter_objc::HIGHLIGHTS_QUERY,
+                OBJC_HIGHLIGHTS_QUERY,
                 tree_sitter_objc::INJECTIONS_QUERY,
                 OBJC_SUPPLEMENT_QUERY,
             ),
@@ -729,6 +813,7 @@ fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec 
         .iter()
         .map(|name| syntax_kind_from_capture_name(name))
         .collect::<Vec<_>>();
+    let discarded_capture = query.capture_index_for_name("comment.discarded");
     let injection_query = asset.injections.map(|source| {
         tree_sitter::Query::new(&ts_language, source).expect("injections.scm should compile")
     });
@@ -750,6 +835,7 @@ fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec 
         ts_language,
         query,
         capture_kinds,
+        discarded_capture,
         injection_query,
         injection_combined_patterns,
         has_combined_injections,
@@ -882,6 +968,21 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Gleam => highlight_spec_entry!(Gleam),
         DiffSyntaxLanguage::V => highlight_spec_entry!(V),
         DiffSyntaxLanguage::Cil => highlight_spec_entry!(Cil),
+        DiffSyntaxLanguage::Smali => highlight_spec_entry!(Smali),
+        DiffSyntaxLanguage::Elm => highlight_spec_entry!(Elm),
+        DiffSyntaxLanguage::DeviceTree => highlight_spec_entry!(DeviceTree),
+        DiffSyntaxLanguage::Fish => highlight_spec_entry!(Fish),
+        DiffSyntaxLanguage::Newick => highlight_spec_entry!(Newick),
+        DiffSyntaxLanguage::Latex => highlight_spec_entry!(Latex),
+        DiffSyntaxLanguage::Apex => highlight_spec_entry!(Apex),
+        DiffSyntaxLanguage::Qml => highlight_spec_entry!(Qml),
+        DiffSyntaxLanguage::Vhdl => highlight_spec_entry!(Vhdl),
+        DiffSyntaxLanguage::Ada => highlight_spec_entry!(Ada),
+        DiffSyntaxLanguage::CommonLisp => highlight_spec_entry!(CommonLisp),
+        DiffSyntaxLanguage::Racket => highlight_spec_entry!(Racket),
+        DiffSyntaxLanguage::Scheme => highlight_spec_entry!(Scheme),
+        DiffSyntaxLanguage::EmacsLisp => highlight_spec_entry!(EmacsLisp),
+        DiffSyntaxLanguage::Janet => highlight_spec_entry!(Janet),
         DiffSyntaxLanguage::Crontab => highlight_spec_entry!(Crontab),
         DiffSyntaxLanguage::Caddyfile => highlight_spec_entry!(Caddyfile),
         DiffSyntaxLanguage::Gitignore => highlight_spec_entry!(Gitignore),
@@ -969,7 +1070,14 @@ fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         "diff.minus" => SyntaxTokenKind::DiffMinus,
         "diff.delta" => SyntaxTokenKind::DiffDelta,
         // Keywords
-        "conditional" | "keyword.control" | "repeat" => SyntaxTokenKind::KeywordControl,
+        // `keyword.conditional.ternary` is `?`/`:`, not a control-flow word.
+        "keyword.conditional.ternary" => SyntaxTokenKind::Keyword,
+        "conditional"
+        | "keyword.control"
+        | "keyword.conditional"
+        | "keyword.repeat"
+        | "keyword.return"
+        | "repeat" => SyntaxTokenKind::KeywordControl,
         "exception"
         | "keyword"
         | "keyword.declaration"

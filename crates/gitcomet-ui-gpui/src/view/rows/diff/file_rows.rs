@@ -228,6 +228,7 @@ pub(super) fn render_collapsed_diff_rows(
     pass: DiffRowsRenderPass,
     cx: &mut gpui::Context<DiffRenderer>,
 ) -> Vec<AnyElement> {
+    let mark_lines = !this.structural_diff_active();
     let DiffRowsRenderPass {
         tab_width,
         annot_hover,
@@ -455,6 +456,7 @@ pub(super) fn render_collapsed_diff_rows(
                             tint: row_tint,
                             selected,
                             visual_kind,
+                            mark_lines,
                             file_stat: None,
                             header_display: None,
                             styled,
@@ -491,6 +493,7 @@ pub(super) fn render_file_diff_rows(
     pass: DiffRowsRenderPass,
     cx: &mut gpui::Context<DiffRenderer>,
 ) -> Vec<AnyElement> {
+    let mark_lines = !this.structural_diff_active();
     let DiffRowsRenderPass {
         tab_width,
         annot_hover,
@@ -560,7 +563,7 @@ pub(super) fn render_file_diff_rows(
             ) {
                 continue;
             }
-            if this.file_diff_inline_modify_pair_texts(inline_ix).is_some() {
+            if !this.file_diff_inline_word_ranges(inline_ix).is_empty() {
                 continue;
             }
             syntax_only_rows.push(SyntaxOnlyBatchRow {
@@ -800,6 +803,7 @@ pub(super) fn render_file_diff_rows(
                     tint: row_tint,
                     selected,
                     visual_kind,
+                    mark_lines,
                     file_stat: None,
                     header_display: None,
                     styled,
@@ -837,6 +841,7 @@ pub(super) fn render_collapsed_diff_split_rows(
     pass: SplitDiffRowsRenderPass,
     cx: &mut gpui::Context<DiffRenderer>,
 ) -> Vec<AnyElement> {
+    let mark_lines = !this.structural_diff_active();
     let SplitDiffRowsRenderPass {
         common,
         column,
@@ -1040,6 +1045,7 @@ pub(super) fn render_collapsed_diff_split_rows(
                         min_width,
                         &row,
                         visual_kind,
+                        mark_lines,
                         styled,
                         streamed_spec,
                         reveal_whitespace_chars,
@@ -1079,6 +1085,7 @@ pub(super) fn render_file_diff_split_rows(
     pass: SplitDiffRowsRenderPass,
     cx: &mut gpui::Context<DiffRenderer>,
 ) -> Vec<AnyElement> {
+    let mark_lines = !this.structural_diff_active();
     let SplitDiffRowsRenderPass {
         common,
         column,
@@ -1229,6 +1236,7 @@ pub(super) fn render_file_diff_split_rows(
                 min_width,
                 &row,
                 visual_kind,
+                mark_lines,
                 styled,
                 streamed_spec,
                 reveal_whitespace_chars,

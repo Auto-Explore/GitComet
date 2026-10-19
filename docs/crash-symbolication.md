@@ -20,7 +20,8 @@ produced it.
 
 **GitComet's own crash log.** Written by the panic hook in
 [`crates/gitcomet-app/src/crashlog.rs`](../crates/gitcomet-app/src/crashlog.rs) whenever a
-Rust panic occurs:
+Rust panic occurs, except one contained by `gitcomet_base::panic::contain`, which
+the caller turns into a fallback:
 
 | OS | Location |
 | --- | --- |

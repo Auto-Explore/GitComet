@@ -427,6 +427,9 @@ pub(crate) struct TreesitterHighlightSpec {
     pub(crate) ts_language: tree_sitter::Language,
     pub(crate) query: tree_sitter::Query,
     pub(crate) capture_kinds: Vec<Option<SyntaxTokenKind>>,
+    /// The query's `@comment.discarded` capture: a form the reader skips (a
+    /// Lisp `#_` or `#;`), greyed whole. See [`DiscardedForms`].
+    pub(crate) discarded_capture: Option<u32>,
     pub(crate) injection_query: Option<tree_sitter::Query>,
     /// One flag per injection-query pattern: `true` when the pattern carries
     /// `(#set! injection.combined)`, meaning every match of it belongs to one

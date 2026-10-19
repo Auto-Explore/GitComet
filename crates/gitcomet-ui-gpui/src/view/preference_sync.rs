@@ -2,6 +2,20 @@ use super::preference_change::PreferenceChange;
 use super::*;
 
 impl GitCometView {
+    pub(in crate::view) fn set_diff_engine(
+        &mut self,
+        next: DiffEngine,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.ui_model.read(cx).preferences.diff.engine == next {
+            return;
+        }
+        self.update_ui_preferences(cx, move |preferences| preferences.diff.engine = next);
+        self.ui_model.update(cx, |_, cx| cx.notify());
+        self.diff_renderer
+            .update(cx, |pane, cx| pane.set_diff_engine_default(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
     pub(in crate::view) fn set_remote_url_policy(
         &mut self,
         next: RemoteUrlPolicy,
@@ -529,7 +543,7 @@ impl GitCometView {
         }
 
         self.diff_renderer
-            .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
+            .update(cx, |pane, cx| pane.choose_diff_whitespace_mode(next, cx));
     }
 
     pub(super) fn apply_diff_reveal_whitespace_chars_preference(
@@ -964,6 +978,7 @@ impl GitCometView {
             PreferenceChange::DiffContentMode(next) => self.set_diff_content_mode(next, cx),
             PreferenceChange::DiffWhitespaceMode(next) => self.set_diff_whitespace_mode(next, cx),
             PreferenceChange::DiffViewMode(next) => self.set_diff_view_mode(next, cx),
+            PreferenceChange::DiffEngine(next) => self.set_diff_engine(next, cx),
             PreferenceChange::DiffRevealWhitespaceChars(next) => {
                 self.set_diff_reveal_whitespace_chars(next, cx)
             }

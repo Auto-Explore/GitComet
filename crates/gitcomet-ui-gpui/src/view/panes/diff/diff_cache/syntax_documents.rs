@@ -1351,6 +1351,8 @@ impl DiffRenderer {
     /// Resets file-diff data fields (syntax, rows, text, highlights) without
     /// touching the identity fields (repo_id, target, rev).
     pub(in crate::view) fn reset_file_diff_cache_data(&mut self) {
+        self.file_diff_cancellation.cancel();
+        self.diff_engine_status = DiffEngineStatus::LineByLine;
         self.reset_collapsed_diff_projection(false);
         self.file_diff_cache_content_signature = None;
         self.file_diff_cache_inflight = None;

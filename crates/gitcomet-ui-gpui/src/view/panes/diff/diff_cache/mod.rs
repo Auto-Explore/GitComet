@@ -17,9 +17,7 @@ pub(in crate::view) use self::file_diff::FileDiffCacheError;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
-pub(in crate::view) use self::file_diff::{
-    PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
-};
+pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
 use self::file_diff::{file_diff_source_identity, file_diff_text_signature, line_starts_describe};
 pub(in crate::view) use self::image_cache::render_raster_conflict_preview;
 pub(in crate::view) use self::image_cache::{
@@ -319,6 +317,11 @@ impl DiffRenderer {
             return;
         };
 
+        let engine = self.effective_diff_engine();
+        if self.file_diff_cache_target.as_ref() != Some(&diff_target) {
+            self.diff_engine_anchor = None;
+            self.diff_wrap_pending_scroll = None;
+        }
         let diff_target_for_task = diff_target.clone();
         let patch_signature = patch_diff
             .as_ref()
@@ -334,6 +337,7 @@ impl DiffRenderer {
         });
         let same_repo_and_target = self.file_diff_cache_repo_id == Some(repo_id)
             && self.file_diff_cache_target == Some(diff_target.clone())
+            && self.file_diff_cache_engine == engine
             && self.file_diff_cache_whitespace_mode == self.diff_whitespace_mode
             && self.file_diff_cache_path.as_ref() == Some(&expected_abs_path);
         let previous_split_left_reparse_seed = same_repo_and_target
@@ -359,6 +363,7 @@ impl DiffRenderer {
                 self.file_diff_cache_repo_id = Some(repo_id);
                 self.file_diff_cache_rev = diff_file_rev;
                 self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
+                self.file_diff_cache_engine = engine;
                 self.file_diff_cache_target = Some(diff_target);
                 self.reset_file_diff_cache_data();
                 self.clear_diff_text_style_caches();
@@ -406,6 +411,7 @@ impl DiffRenderer {
         self.file_diff_cache_repo_id = Some(repo_id);
         self.file_diff_cache_rev = diff_file_rev;
         self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
+        self.file_diff_cache_engine = engine;
         self.file_diff_cache_target = Some(diff_target);
 
         // Rebuilding the same file keeps the rows that are already on screen:
@@ -429,17 +435,35 @@ impl DiffRenderer {
             file_content_signature.unwrap_or_else(|| file_diff_text_signature(file.as_ref()));
 
         self.file_diff_cache_seq = self.file_diff_cache_seq.wrapping_add(1);
+        self.file_diff_cancellation.cancel();
+        self.file_diff_cancellation = gitcomet_core::services::CancellationToken::new();
+        let cancellation = self.file_diff_cancellation.clone();
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
         let whitespace_mode = self.diff_whitespace_mode;
-        let shared_file = self
-            .hosted_decor
-            .as_ref()
-            .and_then(|decor| decor.file_cache.clone())
-            .filter(|cache| {
-                whitespace_mode == DiffWhitespaceMode::Show
-                    && cache.matches(&file, patch_diff.as_ref(), &workdir)
-            });
+        let shared_file = self.hosted_decor.as_mut().map(|decor| {
+            if !decor.file_cache.as_ref().is_some_and(|cache| {
+                cache.matches_engine(
+                    &file,
+                    patch_diff.as_ref(),
+                    &workdir,
+                    engine,
+                    whitespace_mode,
+                )
+            }) {
+                if let Some(cache) = decor.file_cache.take() {
+                    cache.cancel();
+                }
+                decor.file_cache = Some(Arc::new(SharedFileDiffCache::with_engine(
+                    file.clone(),
+                    patch_diff.as_ref(),
+                    workdir.clone(),
+                    engine,
+                    whitespace_mode,
+                )));
+            }
+            decor.file_cache.as_ref().unwrap().clone()
+        });
 
         cx.spawn(
             async move |view: WeakEntity<DiffRenderer>, cx: &mut gpui::AsyncApp| {
@@ -447,11 +471,13 @@ impl DiffRenderer {
                     if let Some(cache) = shared_file {
                         return cache.build().cloned().map_err(Clone::clone);
                     }
-                    build_file_diff_cache_rebuild_with_patch(
+                    file_diff::build_file_diff_cache_with_engine(
                         file.as_ref(),
                         &workdir,
                         patch_diff.as_deref(),
                         whitespace_mode,
+                        engine,
+                        &cancellation,
                     )
                 };
                 let rebuild_result = if crate::ui_runtime::current().uses_background_compute() {
@@ -466,6 +492,7 @@ impl DiffRenderer {
                     }
                     if this.file_diff_cache_repo_id != Some(repo_id)
                         || this.file_diff_cache_rev != diff_file_rev
+                        || this.effective_diff_engine() != engine
                         || this.file_diff_cache_whitespace_mode != whitespace_mode
                         || this.file_diff_cache_target != Some(diff_target_for_task.clone())
                     {
@@ -475,6 +502,7 @@ impl DiffRenderer {
                     this.file_diff_cache_inflight = None;
                     let rebuild = match rebuild_result {
                         Ok(rebuild) => rebuild,
+                        Err(file_diff::FileDiffCacheError::Cancelled) => return,
                         Err(error) => {
                             this.reset_file_diff_cache_data();
                             this.file_diff_cache_repo_id = Some(repo_id);
@@ -488,6 +516,7 @@ impl DiffRenderer {
                             return;
                         }
                     };
+                    this.diff_engine_status = rebuild.engine_status;
                     this.file_diff_cache_error = None;
                     // The old rows remained interactive during a same-target
                     // rebuild. Invalidate their workers and retained source only
@@ -566,6 +595,11 @@ impl DiffRenderer {
                     // row mapping. Its search document can still hold the old
                     // rows under the incoming revision, so replace it too.
                     this.diff_search_document = None;
+                    if let Some(anchor) = this.diff_engine_anchor.take() {
+                        this.ensure_diff_visible_indices();
+                        this.hosted_reveal_at(anchor.side, anchor.line, true);
+                        this.diff_autoscroll_pending = false;
+                    }
                     if this.diff_search_has_query() {
                         this.diff_search_schedule_preserving_current(cx);
                     }

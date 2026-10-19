@@ -214,6 +214,7 @@ impl GitCometView {
                             diff_whitespace_mode: Some(
                                 this.diff_whitespace_mode.key().to_string(),
                             ),
+                            diff_engine: Some(this.ui_model.read(cx).preferences.diff.engine.key().to_string()),
                             diff_view_mode: Some(this.diff_view_mode.key().to_string()),
                             annotate_enabled: Some(this.annotate_enabled),
                             diff_reveal_whitespace_chars: Some(

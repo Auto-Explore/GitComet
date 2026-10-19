@@ -29,8 +29,13 @@ pub(in crate::view) struct HostedDiffDecor {
 }
 
 impl DiffRenderer {
+    /// Whether the hosted rows are file-diff rows rather than patch rows.
+    fn hosted_rows_are_file_rows(&self) -> bool {
+        self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active()
+    }
+
     pub(in crate::view) fn hosted_selected_text(&self, range: DiffLineRange) -> String {
-        let full = self.wants_file_diff_view(false) || self.is_collapsed_diff_projection_active();
+        let full = self.hosted_rows_are_file_rows();
         let count = if full {
             self.file_diff_inline_row_len()
         } else {
@@ -54,10 +59,27 @@ impl DiffRenderer {
                 if !text.is_empty() {
                     text.push('\n');
                 }
-                text.push_str(crate::view::diff_utils::diff_content_line_text(&row).as_ref());
+                // A one-row Difftastic pair draws one side; read the side asked for.
+                let side_text = full
+                    .then_some(self.file_diff_inline_row_provider.as_ref())
+                    .flatten()
+                    .and_then(|rows| rows.line_text(index, range.side == DiffLineSide::Old));
+                match side_text {
+                    Some(side_text) => text.push_str(side_text.as_ref()),
+                    None => text
+                        .push_str(crate::view::diff_utils::diff_content_line_text(&row).as_ref()),
+                }
             }
         }
         text
+    }
+
+    fn inline_row_draws_old(&self, visible: usize) -> bool {
+        self.hosted_rows_are_file_rows()
+            && self
+                .diff_mapped_ix_for_visible_ix(visible)
+                .and_then(|row| self.file_diff_inline_render_data(row))
+                .is_some_and(|row| row.kind == gitcomet_core::domain::DiffLineKind::Remove)
     }
 
     pub(in crate::view) fn hosted_row_tint(
@@ -68,12 +90,14 @@ impl DiffRenderer {
         let decor = self.hosted_decor.as_ref()?;
         let provider = decor.options.decor.as_ref()?;
         let (old, new) = self.hosted_line_numbers(row);
+        let old = old.map(|line| (DiffLineSide::Old, line));
+        let new = new.map(|line| (DiffLineSide::New, line));
         let (side, line) = match side {
-            Some(DiffLineSide::Old) => (DiffLineSide::Old, old?),
-            Some(DiffLineSide::New) => (DiffLineSide::New, new?),
-            None => new
-                .map(|line| (DiffLineSide::New, line))
-                .or_else(|| old.map(|line| (DiffLineSide::Old, line)))?,
+            Some(DiffLineSide::Old) => old?,
+            Some(DiffLineSide::New) => new?,
+            // An inline row takes the tint of the side it draws.
+            None if self.inline_row_draws_old(row) => old.or(new)?,
+            None => new.or(old)?,
         };
         provider(side, line)?.tint.map(IntoColor::into_color)
     }
@@ -97,6 +121,13 @@ impl DiffRenderer {
         &self,
         visible: usize,
     ) -> (Option<u32>, Option<u32>) {
+        self.diff_source_visible_ix_for_visible_ix(visible)
+            .map_or((None, None), |source| {
+                self.hosted_source_line_numbers(source)
+            })
+    }
+
+    fn hosted_source_line_numbers(&self, source: usize) -> (Option<u32>, Option<u32>) {
         if self
             .rendered_diff_target()
             .and_then(DiffTarget::file_path)
@@ -104,9 +135,6 @@ impl DiffRenderer {
         {
             return (None, None);
         }
-        let Some(source) = self.diff_source_visible_ix_for_visible_ix(visible) else {
-            return (None, None);
-        };
         if self.is_collapsed_diff_projection_active() {
             return self
                 .collapsed_visible_row(source)
@@ -114,7 +142,7 @@ impl DiffRenderer {
                 .and_then(|row| self.collapsed_diff_file_row_line_numbers(row))
                 .unwrap_or_default();
         }
-        let Some(row) = self.diff_mapped_ix_for_visible_ix(visible) else {
+        let Some(row) = self.diff_source_mapped_ix_for_visible_ix(source) else {
             return (None, None);
         };
         if self.is_file_diff_view_active() {
@@ -229,26 +257,23 @@ impl DiffRenderer {
         line: u32,
         top: bool,
     ) -> bool {
-        let found = (0..self.diff_visible_len()).find(|&row| {
-            let (old, new) = self.hosted_line_numbers(row);
+        self.ensure_diff_visible_indices();
+        let Some(source) = (0..self.diff_source_visible_len()).find(|&source| {
+            let (old, new) = self.hosted_source_line_numbers(source);
             (match side {
                 DiffLineSide::Old => old,
                 DiffLineSide::New => new,
             }) == Some(line)
-        });
-        if let Some(row) = found {
-            self.scroll_diff_to_item_strict(
-                row,
-                if top {
-                    gpui::ScrollStrategy::Top
-                } else {
-                    gpui::ScrollStrategy::Center
-                },
-            );
-            true
+        }) else {
+            return false;
+        };
+        let strategy = if top {
+            gpui::ScrollStrategy::Top
         } else {
-            false
-        }
+            gpui::ScrollStrategy::Center
+        };
+        self.scroll_diff_to_source_row(source, strategy);
+        true
     }
 
     pub(in crate::view) fn set_hosted_decor(
@@ -274,7 +299,10 @@ impl DiffRenderer {
         }
     }
 
+    // The hosted reads refresh the row index themselves: the host pane reads
+    // them before this renderer's own render does.
     fn prepare_hosted_projection(&mut self) {
+        self.ensure_diff_visible_indices();
         let Some(decor) = &self.hosted_decor else {
             return;
         };

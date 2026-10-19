@@ -387,6 +387,9 @@ pub(in crate::view) enum ContextMenuAction {
     SetDiffWhitespaceMode {
         mode: DiffWhitespaceMode,
     },
+    SetDiffEngineOverride {
+        engine: Option<DiffEngine>,
+    },
     SetDiffRevealWhitespaceChars {
         enabled: bool,
     },

@@ -75,6 +75,20 @@ impl DiffRenderer {
         .map(Into::into)
     }
 
+    /// Whether an earlier stage or discard is still applying or reloading the
+    /// diff. The rows stay on screen meanwhile (so the pane does not flash) and
+    /// still describe the index as it was, so a gutter click is dropped rather
+    /// than built into a patch that no longer applies.
+    ///
+    /// Both halves matter: the command finishing is what clears
+    /// `local_actions_in_flight`, and the reload it asks for only starts
+    /// there, so between them the rows are at their most stale.
+    pub(in crate::view::panes::diff) fn diff_actions_busy(&self) -> bool {
+        self.active_repo().is_some_and(|repo| {
+            repo.local_actions_in_flight > 0 || self.bound_diff_state(repo).diff_reload_in_flight
+        })
+    }
+
     /// Apply the gutter button: stage the line in an unstaged diff, unstage it in
     /// a staged one. The reducer reloads the diff once the command finishes, so
     /// there is nothing to refresh here.
@@ -87,22 +101,28 @@ impl DiffRenderer {
         let Some(area) = self.diff_stage_gutter_area() else {
             return;
         };
+        if self.diff_actions_busy() {
+            return;
+        }
+        if self.structural_diff_active() {
+            let region = match (self.diff_view, kind) {
+                (DiffViewMode::Inline, _) => DiffTextRegion::Inline,
+                (_, DiffLineKind::Remove) => DiffTextRegion::SplitLeft,
+                _ => DiffTextRegion::SplitRight,
+            };
+            if let Some(row) = self.diff_mapped_ix_for_visible_ix(visible_ix) {
+                let selection = self.structural_row_lines(row, region);
+                let operation = match area {
+                    DiffArea::Unstaged => gitcomet_core::patch_action::PatchOperation::Stage,
+                    DiffArea::Staged => gitcomet_core::patch_action::PatchOperation::Unstage,
+                };
+                self.prepare_structural_patch(selection, operation, cx);
+            }
+            return;
+        }
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };
-        // The rows stay on screen while the previous stage reloads the diff (so
-        // the pane does not flash), which means they still describe the index as
-        // it was. A patch built from them would no longer apply, so drop the
-        // click and let the reload land first.
-        //
-        // Both halves matter: the command finishing is what clears
-        // `local_actions_in_flight`, and the reload it asks for only starts
-        // there, so between them the rows are at their most stale.
-        if self.active_repo().is_some_and(|repo| {
-            repo.local_actions_in_flight > 0 || self.bound_diff_state(repo).diff_reload_in_flight
-        }) {
-            return;
-        }
         let Some(patch) = self.diff_stage_gutter_patch(visible_ix, kind) else {
             let message = match area {
                 DiffArea::Unstaged => "Couldn't build patch to stage this line",

@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 import boundaries
 import cache
+import grammar_symbols
 import identity_literals
 import inventory
 import report
@@ -1917,6 +1918,13 @@ class BoundaryTests(unittest.TestCase):
         self.assertIn("gpui-ce", rules["gitcomet-app"])
         self.assertIn("gitcomet-ui-gpui", rules["gitcomet-extension-api"])
 
+    def test_glob_patterns_forbid_every_matching_package(self):
+        rules = {package: forbidden for package, _, forbidden in boundaries.RULES}
+        reached = {"difftastic", "tree-sitter", "gitcomet", "gitcomet-core", "gitcomet-base"}
+        self.assertEqual(boundaries.violations("difftastic", reached, rules["difftastic"]),
+                         ["gitcomet", "gitcomet-base", "gitcomet-core"])
+        self.assertEqual(boundaries.violations("difftastic", {"difftastic", "tree-sitter"}, rules["difftastic"]), [])
+
     def test_missing_packages_are_skipped_and_violations_fail(self):
         reached = {"gitcomet-core": {"gitcomet-core"}, "gitcomet": {"gitcomet", "gpui-ce"}}
         with patch.object(boundaries, "workspace_packages", return_value={"gitcomet-core", "gitcomet"}), \
@@ -1925,6 +1933,119 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(boundaries.main(), 1)
         self.assertIn("skip gitcomet-ui-kit", out.getvalue())
         self.assertIn("gitcomet (--no-default-features --features gix) reaches forbidden packages: gpui-ce", err.getvalue())
+
+
+class GrammarSymbolTests(unittest.TestCase):
+    def write_parser(self, root, relative, text):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def package(self, root, name, version="1.0.0", source=None):
+        directory = root / f"{name}-{version}-{len(list(root.iterdir()))}"
+        directory.mkdir()
+        (directory / "Cargo.toml").write_text("")
+        return {"id": f"{name} {directory.name}", "name": name, "version": version, "source": source,
+                "manifest_path": str(directory / "Cargo.toml")}
+
+    def metadata(self, root, edges, packages):
+        nodes = [{"id": package["id"], "deps": [{"pkg": target["id"], "dep_kinds": [{"kind": kind} for kind in kinds]}
+                                                for source, target, kinds in edges if source is package]}
+                 for package in packages]
+        return {"packages": packages, "workspace_members": [root["id"]], "resolve": {"nodes": nodes}}
+
+    def test_definitions_are_found_in_every_generated_parser_outside_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_parser(root, "src/parser.c",
+                              '#include "tree_sitter/parser.h"\n'
+                              "const TSLanguage *tree_sitter_declared(void);\n"
+                              "TS_PUBLIC const TSLanguage *tree_sitter_alpha(void) {\n  return &language;\n}\n")
+            self.write_parser(root, "tsx/src/parser.c",
+                              '#include "tree_sitter/parser.h"\nextern const TSLanguage *tree_sitter_beta(void)\n{\n}\n')
+            self.write_parser(root, "fish/src/parser.c",
+                              '#include "tree_sitter/parser.h"\nTS_PUBLIC const TSLanguage *tree_sitter_fish() {\n}\n')
+            self.write_parser(root, "runtime/lib/src/parser.c", "static void ts_parser__advance(void) {}\n")
+            self.write_parser(root, "target/build/parser.c",
+                              '#include "tree_sitter/parser.h"\nconst TSLanguage *tree_sitter_built(void) {}\n')
+            self.assertEqual(grammar_symbols.language_functions(root),
+                             ({"tree_sitter_alpha", "tree_sitter_beta", "tree_sitter_fish"}, []))
+
+    def test_a_generated_parser_without_a_readable_definition_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_parser(root, "src/parser.c",
+                              '#include "tree_sitter/parser.h"\nLANGUAGE_FN(tree_sitter_hidden)\n')
+            self.assertEqual(grammar_symbols.language_functions(root), (set(), [root / "src/parser.c"]))
+
+    def test_a_function_defined_by_two_packages_clashes(self):
+        found = grammar_symbols.clashes({
+            "tree-sitter-perl 1.1.2 (git)": {"tree_sitter_perl"},
+            "ts-parser-perl 1.2.1 (registry)": {"tree_sitter_perl"},
+            "tree-sitter-rust 0.24.2 (registry)": {"tree_sitter_rust"},
+        })
+        self.assertEqual(found, {"tree_sitter_perl": ["tree-sitter-perl 1.1.2 (git)", "ts-parser-perl 1.2.1 (registry)"]})
+
+    def test_linked_packages_follow_normal_dependencies_transitively(self):
+        packages = {name: {"id": f"{name}-id", "name": name, "version": "1.0.0", "source": None,
+                           "manifest_path": f"/x/{name}/Cargo.toml"}
+                    for name in ("gitcomet", "app", "grammar", "shared", "test-grammar", "builder")}
+        meta = self.metadata(packages["gitcomet"], [
+            (packages["gitcomet"], packages["app"], [None]),
+            (packages["app"], packages["grammar"], [None]),
+            (packages["gitcomet"], packages["shared"], ["dev", None]),
+            (packages["gitcomet"], packages["test-grammar"], ["dev"]),
+            (packages["gitcomet"], packages["builder"], ["build"]),
+        ], list(packages.values()))
+        self.assertEqual([package["name"] for package in grammar_symbols.linked_packages(meta, "gitcomet")],
+                         ["app", "gitcomet", "grammar", "shared"])
+
+    def test_the_same_grammar_version_from_two_places_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self.package(root, "gitcomet")
+            vendored = self.package(root, "tree-sitter-solidity", "1.2.13")
+            registry = self.package(root, "tree-sitter-solidity", "1.2.13", source="registry+https://example")
+            for package in (vendored, registry):
+                self.write_parser(Path(package["manifest_path"]).parent, "src/parser.c",
+                                  '#include "tree_sitter/parser.h"\nTS_PUBLIC const TSLanguage *tree_sitter_solidity(void) {}\n')
+            meta = self.metadata(app, [(app, vendored, [None]), (app, registry, [None])], [app, vendored, registry])
+            with patch.object(grammar_symbols, "metadata", return_value=meta), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(grammar_symbols.main(), 1)
+        self.assertIn("tree_sitter_solidity is defined by tree-sitter-solidity 1.2.13 (", err.getvalue())
+        self.assertIn("tree-sitter-solidity 1.2.13 (registry+https://example)", err.getvalue())
+
+    def test_distinct_functions_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self.package(root, "gitcomet")
+            packages = [app]
+            for name in ("rust", "perl"):
+                package = self.package(root, f"tree-sitter-{name}")
+                self.write_parser(Path(package["manifest_path"]).parent, "src/parser.c",
+                                  f'#include "tree_sitter/parser.h"\nTS_PUBLIC const TSLanguage *tree_sitter_{name}(void) {{}}\n')
+                packages.append(package)
+            meta = self.metadata(app, [(app, package, [None]) for package in packages[1:]], packages)
+            with patch.object(grammar_symbols, "metadata", return_value=meta), \
+                    redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+                self.assertEqual(grammar_symbols.main(), 0)
+        self.assertIn("ok   2 language functions in 2 linked packages", out.getvalue())
+
+    def test_an_unreadable_generated_parser_fails_the_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self.package(root, "gitcomet")
+            hidden = self.package(root, "tree-sitter-hidden")
+            parser = Path(hidden["manifest_path"]).parent / "src/parser.c"
+            self.write_parser(parser.parent.parent, "src/parser.c",
+                              '#include "tree_sitter/parser.h"\nLANGUAGE_FN(tree_sitter_hidden)\n')
+            meta = self.metadata(app, [(app, hidden, [None])], [app, hidden])
+            with patch.object(grammar_symbols, "metadata", return_value=meta), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(grammar_symbols.main(), 1)
+        self.assertIn(f"tree-sitter-hidden 1.0.0 ({parser.parent.parent}): no tree-sitter language function found in {parser}",
+                      err.getvalue())
 
 
 class GitIsolationTests(unittest.TestCase):

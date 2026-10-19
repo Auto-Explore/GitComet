@@ -475,25 +475,30 @@ pub(crate) fn collect_query_pass_tokens_for_document(
     pass: &TreesitterQueryPass,
     context: &mut DocumentTokenCollectionContext<'_>,
 ) -> bool {
-    catch_treesitter_query_panic(|| {
+    catch_treesitter_query_panic(|catch| {
         TS_CURSOR.with(|cursor| {
             let mut cursor = cursor.borrow_mut();
             configure_query_cursor(&mut cursor, pass, input.len());
             let pass_range = clamp_query_range(pass.byte_range.clone(), input.len());
             let mut captures = cursor.captures(&highlight.query, tree.root_node(), input);
-            tree_sitter::StreamingIterator::advance(&mut captures);
+            catch.advance(&mut captures);
+            let mut discarded = DiscardedForms::new(highlight);
             while let Some((m, capture_ix)) = captures.get() {
                 let Some(capture) = m.captures().get(*capture_ix) else {
-                    tree_sitter::StreamingIterator::advance(&mut captures);
+                    catch.advance(&mut captures);
                     continue;
                 };
+                if discarded.hides(capture) {
+                    catch.advance(&mut captures);
+                    continue;
+                }
                 let Some(kind) = highlight
                     .capture_kinds
                     .get(capture.index as usize)
                     .copied()
                     .flatten()
                 else {
-                    tree_sitter::StreamingIterator::advance(&mut captures);
+                    catch.advance(&mut captures);
                     continue;
                 };
 
@@ -503,7 +508,7 @@ pub(crate) fn collect_query_pass_tokens_for_document(
                 byte_range.start = byte_range.start.max(pass_range.start);
                 byte_range.end = byte_range.end.min(pass_range.end);
                 if byte_range.start >= byte_range.end {
-                    tree_sitter::StreamingIterator::advance(&mut captures);
+                    catch.advance(&mut captures);
                     continue;
                 }
 
@@ -528,7 +533,7 @@ pub(crate) fn collect_query_pass_tokens_for_document(
                     line_ix = line_ix.saturating_add(1);
                 }
 
-                tree_sitter::StreamingIterator::advance(&mut captures);
+                catch.advance(&mut captures);
             }
         });
     })
