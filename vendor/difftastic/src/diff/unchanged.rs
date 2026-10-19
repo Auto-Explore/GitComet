@@ -188,7 +188,7 @@ fn is_mostly_unchanged_list(lhs: &Syntax, rhs: &Syntax) -> bool {
 /// This is important in cases where we have two adjacent lists that
 /// have a small number of changes.
 ///
-/// ```
+/// ```lisp
 /// ; old
 /// (1 2 3 4) (a b c d)
 ///
