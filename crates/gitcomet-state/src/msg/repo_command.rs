@@ -137,6 +137,10 @@ pub enum RepoCommandEffect {
     },
     ApplyPreparedDiffPatch {
         repo_id: RepoId,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
         prepared: std::sync::Arc<gitcomet_core::patch_action::PreparedDiffPatch>,
     },
     UnstageHunk {
@@ -604,7 +608,9 @@ impl RepoCommandEffect {
             RepoCommandEffect::StageHunk { repo_id, .. } => {
                 Some(RepoCommandKind::StageHunk.finished(repo_id, Err(error)))
             }
-            RepoCommandEffect::ApplyPreparedDiffPatch { repo_id, prepared } => {
+            RepoCommandEffect::ApplyPreparedDiffPatch {
+                repo_id, prepared, ..
+            } => {
                 use gitcomet_core::patch_action::PatchOperation;
                 let command = match prepared.operation() {
                     PatchOperation::Stage => RepoCommandKind::StageHunk,

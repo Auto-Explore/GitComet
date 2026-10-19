@@ -1256,23 +1256,16 @@ fn reduce_inner(
             let valid = state
                 .repos
                 .iter()
-                .find(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+                .find(|repo| repo.id == repo_id)
                 .is_some_and(|repo| {
-                    let diff = match view {
-                        Some(view) => repo
-                            .diff_sessions
-                            .get(&view)
-                            .filter(|session| session.generation == generation)
-                            .map(|session| &session.diff_state),
-                        None => (repo.diff_state.diff_target_rev == generation)
-                            .then_some(&repo.diff_state),
-                    };
                     repo.local_actions_in_flight == 0
-                        && diff.is_some_and(|diff| {
-                            diff.diff_file_rev == file_rev
-                                && diff.diff_target.as_ref() == Some(prepared.target())
-                                && !diff.diff_reload_in_flight
-                        })
+                        && repo.matches_diff_origin(
+                            lifetime,
+                            view,
+                            file_rev,
+                            generation,
+                            prepared.target(),
+                        )
                 });
             if !valid {
                 util::push_notification(
@@ -1285,7 +1278,14 @@ fn reduce_inner(
             }
             begin_local_action(state, repo_id);
             vec![Effect::RepoCommand(
-                crate::msg::RepoCommandEffect::ApplyPreparedDiffPatch { repo_id, prepared },
+                crate::msg::RepoCommandEffect::ApplyPreparedDiffPatch {
+                    repo_id,
+                    lifetime,
+                    view,
+                    file_rev,
+                    generation,
+                    prepared,
+                },
             )]
         }
         Msg::UnstageHunk { repo_id, patch } => {

@@ -451,6 +451,32 @@ pub enum ConflictFileLoadMode {
 }
 
 impl RepoState {
+    pub(crate) fn matches_diff_origin(
+        &self,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
+        target: &DiffTarget,
+    ) -> bool {
+        if self.lifetime() != lifetime {
+            return false;
+        }
+        let diff = match view {
+            Some(view) => self
+                .diff_sessions
+                .get(&view)
+                .filter(|session| session.generation == generation)
+                .map(|session| &session.diff_state),
+            None => (self.diff_state.diff_target_rev == generation).then_some(&self.diff_state),
+        };
+        diff.is_some_and(|diff| {
+            diff.diff_file_rev == file_rev
+                && diff.diff_target.as_ref() == Some(target)
+                && !diff.diff_reload_in_flight
+        })
+    }
+
     pub(crate) fn begin_conflict_load(
         &mut self,
         mode: ConflictFileLoadMode,
