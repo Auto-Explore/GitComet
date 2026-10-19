@@ -98,6 +98,7 @@ pub fn reset_conflict_resolutions_sync(state: &mut AppState, repo_id: RepoId, pa
 mod tests {
     use super::*;
     use crate::model::{Loadable, RepoState};
+    use crate::msg::{PersistenceEffect, StatusEffect};
     use gitcomet_core::conflict_session::{
         ConflictPayload, ConflictRegion, ConflictRegionResolution, ConflictRegionText,
         ConflictSession,
@@ -174,7 +175,7 @@ mod tests {
             assert!(
                 effects.iter().any(|effect| matches!(
                     effect,
-                    Effect::LoadStatus { repo_id } if *repo_id == RepoId(2)
+                    Effect::Status(StatusEffect::LoadStatus { repo_id }) if *repo_id == RepoId(2)
                 )),
                 "expected reducer refresh effects for the target repo"
             );
@@ -209,10 +210,10 @@ mod tests {
         with_reorder_repo_tabs_sync(&mut state, RepoId(1), None, |_state, effects| {
             assert!(matches!(
                 effects,
-                [Effect::PersistSession {
+                [Effect::Persistence(PersistenceEffect::PersistSession {
                     repo_id: Some(RepoId(1)),
                     action: "reordering repository tabs",
-                }]
+                })]
             ));
         });
         assert_eq!(state.repos[0].id, RepoId(2));

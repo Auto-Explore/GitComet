@@ -6,7 +6,6 @@ use super::*;
 fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -231,7 +230,6 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
 
 #[gpui::test]
 fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -326,7 +324,6 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
 fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -353,27 +350,27 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
                             "src/modified.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Modified,
                         )
-                        .with_line_counts(Some(1), Some(2)),
+                        .with_line_stats((Some(1), Some(2)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/removed.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Deleted,
                         )
-                        .with_line_counts(Some(0), Some(4)),
+                        .with_line_stats((Some(0), Some(4)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/added.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Added,
                         )
-                        .with_line_counts(Some(5), Some(0)),
+                        .with_line_stats((Some(5), Some(0)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/renamed.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Renamed,
                         )
-                        .with_line_counts(Some(0), Some(0)),
+                        .with_line_stats((Some(0), Some(0)).into()),
                         gitcomet_core::domain::CommitFileChange::new(
                             "src/added-small.rs".into(),
                             gitcomet_core::domain::FileStatusKind::Added,
                         )
-                        .with_line_counts(Some(1), Some(0)),
+                        .with_line_stats((Some(1), Some(0)).into()),
                     ],
                 },
             ));
@@ -527,15 +524,15 @@ fn commit_file_projection_changes_notify_the_cached_main_pane(cx: &mut gpui::Tes
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
     });
-    let (details_pane, main_pane) = cx.update(|_window, app| {
+    let (details_pane, diff_renderer) = cx.update(|_window, app| {
         let view = view.read(app);
-        (view.details_pane.clone(), view.main_pane.clone())
+        (view.details_pane.clone(), view.diff_renderer.clone())
     });
 
     let main_notifies = Arc::new(AtomicUsize::new(0));
     let _main_notify_subscription = cx.update(|_window, app| {
         let main_notifies = Arc::clone(&main_notifies);
-        main_pane.update(app, |_pane, cx| {
+        diff_renderer.update(app, |_pane, cx| {
             cx.observe_self(move |_pane, _cx| {
                 main_notifies.fetch_add(1, Ordering::Relaxed);
             })
@@ -570,7 +567,6 @@ fn commit_file_projection_changes_notify_the_cached_main_pane(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -950,7 +946,7 @@ fn commit_details_state_with_paths(
                         (*path).into(),
                         gitcomet_core::domain::FileStatusKind::Modified,
                     )
-                    .with_line_counts(Some(1), Some(1))
+                    .with_line_stats((Some(1), Some(1)).into())
                 })
                 .collect(),
         }));
@@ -963,7 +959,6 @@ fn commit_details_state_with_paths(
 
 #[gpui::test]
 fn commit_file_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1014,7 +1009,6 @@ fn commit_file_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppCont
 /// prev/next arrows vanish the moment a folder is shut.
 #[gpui::test]
 fn collapsing_a_folder_keeps_every_file_navigable(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1088,7 +1082,6 @@ fn collapsing_a_folder_keeps_every_file_navigable(cx: &mut gpui::TestAppContext)
 /// The override is scoped to the commit it was made on.
 #[gpui::test]
 fn commit_file_layout_override_resets_on_commit_switch(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1145,7 +1138,6 @@ fn commit_file_layout_override_resets_on_commit_switch(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn status_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1184,7 +1176,6 @@ fn status_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) 
 /// order must not be trusted — it would silently select the wrong range.
 #[gpui::test]
 fn status_shift_click_range_follows_the_sorted_display_order(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1248,6 +1239,25 @@ fn status_shift_click_range_follows_the_sorted_display_order(cx: &mut gpui::Test
     });
 }
 
+/// `repo_with_unstaged_paths` with every path untracked.
+fn repo_with_untracked_paths(
+    repo_id: gitcomet_state::model::RepoId,
+    paths: &[&str],
+) -> gitcomet_state::model::RepoState {
+    let mut repo = repo_with_unstaged_paths(repo_id, paths);
+    repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
+        paths
+            .iter()
+            .map(|path| gitcomet_core::domain::FileStatus {
+                path: (*path).into(),
+                kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                conflict: None,
+            })
+            .collect(),
+    ));
+    repo
+}
+
 /// Counts arrive on their own effect, after the list is drawn and without
 /// `worktree_status_rev` moving. Keyed on the status rev alone, the cache would
 /// keep serving pre-stats rows until some unrelated change shifted the key.
@@ -1255,7 +1265,6 @@ fn status_shift_click_range_follows_the_sorted_display_order(cx: &mut gpui::Test
 fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1263,6 +1272,7 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
 
     let repo_id = gitcomet_state::model::RepoId(650);
     let paths = ["src/a.rs", "src/b.rs"];
+    let mut repo = repo_with_unstaged_paths(repo_id, &paths);
 
     let folder_additions = |cx: &mut gpui::VisualTestContext| -> Option<u64> {
         cx.update(|_window, app| {
@@ -1276,13 +1286,10 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
         })
     };
 
+    let without_counts = repo.clone();
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            push_test_state(
-                this,
-                app_state_with_repo(repo_with_unstaged_paths(repo_id, &paths), repo_id),
-                cx,
-            );
+            push_test_state(this, app_state_with_repo(without_counts, repo_id), cx);
         });
     });
     draw_and_drain_test_window(cx);
@@ -1300,24 +1307,10 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
     draw_and_drain_test_window(cx);
     assert_eq!(folder_additions(cx), None, "no counts before they load");
 
-    // Same status, same rev — only the stats lane moves.
+    // The same repository and status rev: only the stats lane moves.
+    load_unstaged_line_stats(&mut repo, &[("src/a.rs", 1, 1), ("src/b.rs", 2, 1)]);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let mut repo = repo_with_unstaged_paths(repo_id, &paths);
-            let mut unstaged = rustc_hash::FxHashMap::default();
-            for (ix, path) in paths.iter().enumerate() {
-                unstaged.insert(
-                    std::path::PathBuf::from(path),
-                    gitcomet_core::domain::LineStats::from((Some(ix as u32 + 1), Some(1))),
-                );
-            }
-            repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
-                gitcomet_core::domain::UncommittedLineStats {
-                    staged: Default::default(),
-                    unstaged,
-                },
-            ));
-            repo.unstaged_line_stats_rev = 1;
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
     });
@@ -1330,11 +1323,196 @@ fn status_rows_pick_up_line_stats_that_arrive_without_a_status_change(
     );
 }
 
+/// Untracked files are counted in the unstaged lane, so the split view's
+/// Untracked section shows them, and picks them up like the other sections.
+#[gpui::test]
+fn the_untracked_section_shows_line_stats_that_arrive_without_a_status_change(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(651);
+    let mut repo = repo_with_untracked_paths(repo_id, &["new/a.rs", "new/b.rs"]);
+    let folder_additions = |cx: &mut gpui::VisualTestContext| -> Option<u64> {
+        cx.update(|_window, app| {
+            let pane = view.read(app).details_pane.read(app);
+            let repo = pane.active_repo().expect("active repo");
+            let plan = pane.status_file_plan(repo, StatusSection::Untracked);
+            match plan.row_at(crate::view::rows::RowIx(0)) {
+                Some(crate::view::rows::FileListRow::Directory { additions, .. }) => additions,
+                other => panic!("expected a folder row, got {other:?}"),
+            }
+        })
+    };
+
+    let without_counts = repo.clone();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(without_counts, repo_id), cx);
+            this.set_change_tracking_view(ChangeTrackingView::SplitUntracked, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.toggle_file_list_layout(
+                    repo_id,
+                    crate::view::rows::FileListId::Status(StatusSection::Untracked),
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert_eq!(folder_additions(cx), None, "no counts before they load");
+
+    // The same repository and status rev: only the stats lane moves.
+    load_unstaged_line_stats(&mut repo, &[("new/a.rs", 2, 0), ("new/b.rs", 3, 0)]);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(folder_additions(cx), Some(5));
+}
+
+/// The Untracked section orders its files by their counts under an
+/// edit-size sort, rather than falling back to path order.
+#[gpui::test]
+fn the_untracked_section_sorts_by_edit_size(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(652);
+    let mut repo = repo_with_untracked_paths(repo_id, &["a.rs", "b.rs", "c.rs"]);
+    load_unstaged_line_stats(&mut repo, &[("a.rs", 2, 0), ("b.rs", 5, 0), ("c.rs", 1, 0)]);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.set_change_tracking_view(ChangeTrackingView::SplitUntracked, cx);
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_status_file_sort(
+                    StatusSection::Untracked,
+                    crate::view::rows::CommitFileSort::EditSizeDescending,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let displayed = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .status_display_order_paths(repo_id, StatusSection::Untracked)
+    });
+    assert_eq!(
+        displayed,
+        ["b.rs", "a.rs", "c.rs"].map(std::path::PathBuf::from)
+    );
+}
+
+/// Line counts arrive after every save of a modified file. A section sorted by
+/// path keeps its cached order and the identity a shift-click anchor checks;
+/// only a sort that reads the counts re-sorts.
+#[gpui::test]
+fn status_line_stats_resort_only_sections_sorted_by_edit_size(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(651);
+    let paths = ["src/a.rs", "src/b.rs", "src/c.rs"];
+    // One repository lifetime: a fresh RepoState would key every cache anew.
+    let base = repo_with_unstaged_paths(repo_id, &paths);
+    let push_stats = |cx: &mut gpui::VisualTestContext, rev: u64| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = base.clone();
+                let unstaged = paths
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, path)| {
+                        let added = (ix as u64 + rev) as u32;
+                        (
+                            std::path::PathBuf::from(path),
+                            gitcomet_core::domain::LineStats::from((Some(added), Some(1))),
+                        )
+                    })
+                    .collect();
+                repo.uncommitted_line_stats = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    gitcomet_core::domain::UncommittedLineStats {
+                        staged: Default::default(),
+                        unstaged,
+                    },
+                ));
+                repo.unstaged_line_stats_rev = rev;
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+    let order = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).details_pane.read(app);
+            let repo = pane.active_repo().expect("active repo");
+            (
+                pane.active_status_section_order(repo_id, StatusSection::CombinedUnstaged)
+                    .expect("combined order"),
+                pane.status_anchor_order_rev(repo, StatusSection::CombinedUnstaged),
+            )
+        })
+    };
+
+    push_stats(cx, 1);
+    let (path_sorted, path_anchor) = order(cx);
+    push_stats(cx, 2);
+    let (path_resorted, path_anchor_after) = order(cx);
+    assert!(
+        Arc::ptr_eq(&path_sorted, &path_resorted),
+        "path sort kept its order"
+    );
+    assert_eq!(path_anchor, path_anchor_after, "path sort kept its anchor");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_status_file_sort(
+                    StatusSection::CombinedUnstaged,
+                    crate::view::rows::CommitFileSort::EditSizeDescending,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let (size_sorted, size_anchor) = order(cx);
+    assert_eq!(&*size_sorted, &[2, 1, 0], "largest edit first");
+    push_stats(cx, 3);
+    let (size_resorted, size_anchor_after) = order(cx);
+    assert!(
+        !Arc::ptr_eq(&size_sorted, &size_resorted),
+        "edit-size sort re-sorted for the new counts"
+    );
+    assert_ne!(
+        size_anchor, size_anchor_after,
+        "edit-size sort moved its anchor"
+    );
+}
+
 /// A tree hoists directories above files, so a range computed in ordinal space
 /// skips files displayed between the clicks — and those files then get staged.
 #[gpui::test]
 fn status_shift_click_in_tree_layout_spans_the_displayed_rows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1405,7 +1583,6 @@ fn status_shift_click_in_tree_layout_spans_the_displayed_rows(cx: &mut gpui::Tes
 /// anchor captured under the old order must not be trusted.
 #[gpui::test]
 fn status_shift_click_drops_an_anchor_invalidated_by_a_sort_change(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1472,7 +1649,6 @@ fn status_shift_click_drops_an_anchor_invalidated_by_a_sort_change(cx: &mut gpui
 /// list under a header still counting changes.
 #[gpui::test]
 fn worktree_filter_resets_when_the_shown_worktree_changes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1536,7 +1712,6 @@ fn worktree_filter_resets_when_the_shown_worktree_changes(cx: &mut gpui::TestApp
 /// indexes rows — which a tree pads with directories and may be hiding.
 #[gpui::test]
 fn commit_file_scroll_resolves_a_file_position_to_its_row(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -1610,7 +1785,6 @@ fn commit_file_scroll_resolves_a_file_position_to_its_row(cx: &mut gpui::TestApp
 /// and a tree reorders that.
 #[gpui::test]
 fn status_navigation_order_matches_the_drawn_rows_in_a_tree(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

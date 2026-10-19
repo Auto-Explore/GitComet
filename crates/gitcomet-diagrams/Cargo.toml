@@ -10,7 +10,11 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
+gitcomet-base.workspace = true
 mermaid-rs-renderer.workspace = true
 roxmltree.workspace = true
 serde_json.workspace = true
@@ -19,6 +23,7 @@ resvg.workspace = true
 gitcomet-fonts.workspace = true
 
 [dev-dependencies]
+gitcomet-base = { workspace = true, features = ["test-support"] }
 criterion.workspace = true
 image.workspace = true
 

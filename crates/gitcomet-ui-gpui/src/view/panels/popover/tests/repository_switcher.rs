@@ -31,7 +31,6 @@ fn normalize_existing_path(path: std::path::PathBuf) -> std::path::PathBuf {
 fn repository_switcher_opens_the_repo_picker_with_a_fresh_search_input(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -145,7 +144,6 @@ fn repository_switcher_selecting_recent_repo_opens_it_subprocess(cx: &mut gpui::
         return;
     }
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let expected_path = gitcomet_state::session::load()
         .recent_repos
         .into_iter()
@@ -237,7 +235,6 @@ fn repository_switcher_removes_a_recent_repo_subprocess(cx: &mut gpui::TestAppCo
         return;
     }
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let seeded = gitcomet_state::session::load().recent_repos;
     assert_eq!(seeded.len(), 2, "expected two seeded recent repositories");
     let removed = seeded[0].clone();
@@ -310,7 +307,6 @@ fn repository_switcher_removes_a_recent_repo_subprocess(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn repository_switcher_shortcut_toggles_the_picker_closed(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -346,7 +342,6 @@ fn repository_switcher_shortcut_toggles_the_picker_closed(cx: &mut gpui::TestApp
 fn repository_switcher_anchors_to_the_toggle_but_the_palette_centres(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events, _repo, _workdir) = super::branch::create_tracking_store("switcher-anchor");
     let store_for_view = store.clone();
     let (view, cx) = cx

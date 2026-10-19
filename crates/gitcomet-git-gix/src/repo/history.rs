@@ -1,9 +1,9 @@
 use super::GixRepo;
 use super::patch::write_pathspec_file;
 use crate::util::{
-    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error, run_git_capture,
-    run_git_capture_bytes, run_git_raw_output, run_git_with_output, validate_hex_commit_id,
-    validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, describe_path_list, git_command_failed_error,
+    push_literal_pathspec_file, run_git_capture, run_git_capture_bytes, run_git_raw_output,
+    run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, short_commit_id};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -40,7 +40,9 @@ const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.sh";
 
 pub(super) fn peel_commit<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Commit<'r>> {
     crate::refs::resolve_required(repo, spec)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+        .map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))).with_source(e)
+        })?
         .object()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}"))))?
         .peel_to_commit()
@@ -144,13 +146,7 @@ fn nul_separated_paths(listing: &[u8]) -> BTreeSet<Vec<u8>> {
         .collect()
 }
 
-pub(super) fn pathspec_from_file_arg(path: &Path) -> std::ffi::OsString {
-    let mut arg = std::ffi::OsString::from("--pathspec-from-file=");
-    arg.push(path);
-    arg
-}
-
-pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &std::process::Output) {
+pub(super) fn append_raw_output(acc: &mut CommandOutput, output: &crate::util::GitOutput) {
     append_command_output(
         acc,
         CommandOutput {
@@ -386,8 +382,9 @@ impl GixRepo {
         }
         cmd.arg("--").arg(id.as_ref());
 
-        let output = run_git_raw_output(cmd, &label)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("failed to run {label}: {e}"))))?;
+        let output = run_git_raw_output(cmd, &label).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("failed to run {label}: {e}"))).with_source(e)
+        })?;
         if output.status.success() {
             if !started_with_sequencer {
                 self.clear_persisted_cherry_pick_mainline();
@@ -539,13 +536,11 @@ impl GixRepo {
             Some(write_pathspec_file(paths.iter().map(Vec::as_slice))?)
         };
         let mut cmd = self.git_workdir_cmd();
-        cmd.env("GIT_LITERAL_PATHSPECS", "1");
         cmd.env("GIT_REFLOG_ACTION", "cherry-pick");
         cmd.args(["commit", "--no-verify", "--only", "--allow-empty", "-C"])
             .arg(id.as_ref());
         if let Some(pathspec) = &pathspec {
-            cmd.arg("--pathspec-file-nul")
-                .arg(pathspec_from_file_arg(pathspec.path()));
+            push_literal_pathspec_file(&mut cmd, pathspec.path());
         }
         run_git_with_output(cmd, &format!("git commit --only -C {}", id.as_ref()))
     }
@@ -592,11 +587,10 @@ impl GixRepo {
     fn restore_paths_from_tree(&self, tree: &str, paths: &BTreeSet<Vec<u8>>) -> Result<()> {
         let pathspec = write_pathspec_file(paths.iter().map(Vec::as_slice))?;
         let mut cmd = self.git_workdir_cmd();
-        cmd.env("GIT_LITERAL_PATHSPECS", "1");
         cmd.arg("restore")
             .arg(format!("--source={tree}"))
-            .args(["--staged", "--worktree", "--pathspec-file-nul"])
-            .arg(pathspec_from_file_arg(pathspec.path()));
+            .args(["--staged", "--worktree"]);
+        push_literal_pathspec_file(&mut cmd, pathspec.path());
         run_git_with_output(cmd, "git restore --staged --worktree").map(|_| ())
     }
 
@@ -810,7 +804,7 @@ impl GixRepo {
         &self,
         cmd: Command,
         label: &str,
-    ) -> Result<(CommandOutput, std::process::Output)> {
+    ) -> Result<(CommandOutput, crate::util::GitOutput)> {
         let mut acc = CommandOutput {
             command: label.to_string(),
             stdout: String::new(),
@@ -986,20 +980,30 @@ impl GixRepo {
                 // The persisted editor only services steps the plan knew
                 // about; a message-editing step added to the todo outside
                 // GitComet would silently keep its old message.
+                let comment_char = planned_messages_comment_char(&repo, &messages)?;
                 if rebase_unplanned_message_edit(repo.path(), &plan) {
                     return Err(Error::new(ErrorKind::Backend(
-                        unplanned_rebase_edit_message(),
+                        unplanned_rebase_edit_message(comment_char),
                     )));
                 }
                 cmd.env("GIT_EDITOR", shell_quote_path(&editor));
+                if let Some(comment_char) = comment_char {
+                    cmd.arg("-c").arg(comment_char_config(comment_char));
+                }
                 cmd.env("GITCOMET_MSGS_DIR", messages);
                 cmd.env("GITCOMET_GIT_DIR", repo.path());
             }
-            PersistedReword::Damaged => {
+            PersistedReword::Damaged { messages } => {
+                // The hint is all that is left to give; unreadable messages
+                // leave it without the override rather than hide it.
+                let comment_char = planned_messages_comment_char(&repo, &messages)
+                    .ok()
+                    .flatten();
                 return Err(Error::new(ErrorKind::Backend(format!(
                     "{}'s reword data for this rebase is incomplete; continue it in a \
-                     terminal with `git rebase --continue`, or abort the rebase",
-                    gitcomet_core::identity::current().display_name()
+                     terminal with `{}`, or abort the rebase",
+                    gitcomet_core::identity::current().display_name(),
+                    continue_command(comment_char)
                 ))));
             }
             PersistedReword::Absent => {
@@ -1012,7 +1016,7 @@ impl GixRepo {
                 // in a terminal, continued here after a conflict).
                 if rebase_pending_message_edit(repo.path()) {
                     return Err(Error::new(ErrorKind::Backend(
-                        unplanned_rebase_edit_message(),
+                        unplanned_rebase_edit_message(None),
                     )));
                 }
                 cmd.env("GIT_EDITOR", "true");
@@ -1126,7 +1130,7 @@ impl GixRepo {
         &self,
         cmd: Command,
         label: &str,
-    ) -> Result<(CommandOutput, std::process::Output)> {
+    ) -> Result<(CommandOutput, crate::util::GitOutput)> {
         let mut acc = CommandOutput {
             command: label.to_string(),
             stdout: String::new(),
@@ -1219,7 +1223,9 @@ impl GixRepo {
                 }
                 fs::rename(&staging, &path)
             })
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+            .map_err(|error| {
+                Error::from(error).with_context("persist cherry-pick mainline", Some(&path))
+            })
     }
 
     fn persisted_cherry_pick_mainline_parent(&self, source: &str) -> Option<String> {
@@ -1489,6 +1495,8 @@ impl GixRepo {
             Error::new(ErrorKind::Backend(format!(
                 "failed to create rebase scripts: {e}"
             )))
+            .with_source(e)
+            .with_context("create rebase scripts", None)
         })?;
 
         let mut cmd = self.git_workdir_cmd();
@@ -1501,6 +1509,9 @@ impl GixRepo {
             cmd.env("GITCOMET_MSGS_DIR", &scripts.msgs_dir);
             let repo = self.repo();
             cmd.env("GITCOMET_GIT_DIR", repo.path());
+            if let Some(comment_char) = planned_messages_comment_char(&repo, &scripts.msgs_dir)? {
+                cmd.arg("-c").arg(comment_char_config(comment_char));
+            }
         }
         cmd.env("GITCOMET_TODO_FILE", &scripts.todo_path);
         let empty_policy = if entries.iter().any(|entry| {
@@ -1758,7 +1769,7 @@ impl GixRepo {
         entries: &[InteractiveRebaseEntry],
         stopped: usize,
         label: &str,
-        output: std::process::Output,
+        output: crate::util::GitOutput,
     ) -> Error {
         let short = |entry: &InteractiveRebaseEntry| short_commit_id(&entry.commit_id).to_string();
         let conflicted = self.index_has_conflicts();
@@ -1791,14 +1802,17 @@ impl GixRepo {
         if !git_said.trim().is_empty() {
             let _ = write!(detail, "\n\n{}", git_said.trim());
         }
-        Error::new(ErrorKind::Git(GitFailure::new(
-            label,
-            GitFailureId::CommandFailed,
-            output.status.code(),
-            output.stdout,
-            output.stderr,
-            Some(detail),
-        )))
+        Error::new(ErrorKind::Git(
+            GitFailure::new(
+                label,
+                GitFailureId::CommandFailed,
+                output.status.code(),
+                output.stdout,
+                output.stderr,
+                Some(detail),
+            )
+            .with_auth_outcome(output.auth_outcome),
+        ))
     }
 
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {
@@ -1816,7 +1830,11 @@ impl GixRepo {
         let contents = match std::fs::read_to_string(&merge_msg_path) {
             Ok(v) => v,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+            Err(e) => {
+                return Err(
+                    Error::from(e).with_context("read commit message", Some(&merge_msg_path))
+                );
+            }
         };
 
         let mut lines: Vec<&str> = Vec::new();
@@ -1844,6 +1862,73 @@ impl GixRepo {
             Ok(Some(message))
         }
     }
+}
+
+/// `core.commentChar` values, in the order git's own `auto` setting tries them.
+const COMMENT_CHAR_CANDIDATES: [u8; 10] = *b"#;@!$%^&|:";
+
+/// The comment character a rebase installing `planned` messages must run
+/// with, or `None` when no configured prefix starts any of their lines. The
+/// message editor hands git each planned message as an edit, and git strips
+/// every edited line starting with the prefix (`#123 Fix crash`). Both
+/// `core.commentChar` and `core.commentString` count, since the one read last
+/// wins; `auto` picks from git's own message, not the planned one, so it
+/// always needs an override.
+fn comment_char_override(configured: &[Vec<u8>], planned: &[Vec<u8>]) -> Result<Option<u8>> {
+    let lines = || {
+        planned
+            .iter()
+            .flat_map(|message| message.split(|byte| *byte == b'\n'))
+    };
+    let collides = configured.iter().any(|prefix| {
+        prefix.eq_ignore_ascii_case(b"auto") || lines().any(|line| line.starts_with(prefix))
+    });
+    if !collides {
+        return Ok(None);
+    }
+    COMMENT_CHAR_CANDIDATES
+        .into_iter()
+        .find(|candidate| !lines().any(|line| line.first() == Some(candidate)))
+        .map(Some)
+        .ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "every comment character {} can choose starts a line of a planned \
+                 commit message, so git would delete those lines; reword in a terminal \
+                 instead",
+                gitcomet_core::identity::current().display_name()
+            )))
+        })
+}
+
+/// Every planned message installed for a rebase (none when `msgs_dir` is absent).
+fn read_planned_messages(msgs_dir: &Path) -> Result<Vec<Vec<u8>>> {
+    let io_error = |error: std::io::Error| Error::new(ErrorKind::Io(error.kind()));
+    let entries = match fs::read_dir(msgs_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(io_error(error)),
+    };
+    entries
+        .map(|entry| fs::read(entry?.path()))
+        .collect::<std::io::Result<_>>()
+        .map_err(io_error)
+}
+
+/// [`comment_char_override`] for the planned messages in `msgs_dir`.
+fn planned_messages_comment_char(repo: &gix::Repository, msgs_dir: &Path) -> Result<Option<u8>> {
+    let config = repo.config_snapshot();
+    let mut configured: Vec<Vec<u8>> = ["core.commentChar", "core.commentString"]
+        .into_iter()
+        .filter_map(|key| config.string(key).map(|value| value.to_vec()))
+        .collect();
+    if configured.is_empty() {
+        configured.push(b"#".to_vec());
+    }
+    comment_char_override(&configured, &read_planned_messages(msgs_dir)?)
+}
+
+fn comment_char_config(comment_char: u8) -> String {
+    format!("core.commentChar={}", char::from(comment_char))
 }
 
 struct RebaseScripts {
@@ -1986,7 +2071,7 @@ enum PersistedReword {
     /// A plan was persisted but is missing pieces (external deletion; the
     /// persist itself is atomic): continuing with it would silently drop
     /// rewords.
-    Damaged,
+    Damaged { messages: PathBuf },
 }
 
 fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
@@ -2004,7 +2089,7 @@ fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
             plan,
         }
     } else {
-        PersistedReword::Damaged
+        PersistedReword::Damaged { messages }
     }
 }
 
@@ -2233,27 +2318,75 @@ exit 0
     .to_string()
 }
 
-fn unplanned_rebase_edit_message() -> String {
+/// The terminal command that continues this rebase. A rebase started with a
+/// comment-character override wrote git's own instruction lines with it, so
+/// continuing without it would commit them.
+fn continue_command(comment_char: Option<u8>) -> String {
+    match comment_char {
+        Some(comment_char) => format!(
+            "git -c {} rebase --continue",
+            gitcomet_core::text_utils::shell_single_quote(&comment_char_config(comment_char))
+        ),
+        None => "git rebase --continue".to_string(),
+    }
+}
+
+fn unplanned_rebase_edit_message(comment_char: Option<u8>) -> String {
     format!(
         "this rebase has pending reword/squash steps that {} did not \
-         plan; continue it in a terminal with `git rebase --continue`, or \
-         abort the rebase",
-        gitcomet_core::identity::current().display_name()
+         plan; continue it in a terminal with `{}`, or abort the rebase",
+        gitcomet_core::identity::current().display_name(),
+        continue_command(comment_char)
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_todo_content, parse_interactive_rebase_log, shell_quote_path};
+    use super::{
+        build_todo_content, comment_char_override, continue_command, parse_interactive_rebase_log,
+        shell_quote_path,
+    };
     use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
     use std::path::Path;
+
+    #[test]
+    fn comment_char_override_keeps_the_configured_prefix_unless_a_planned_line_starts_with_it() {
+        let bytes = |values: &[&str]| -> Vec<Vec<u8>> {
+            values
+                .iter()
+                .map(|value| value.as_bytes().to_vec())
+                .collect()
+        };
+        let decide = |configured: &[&str], planned: &[&str]| {
+            comment_char_override(&bytes(configured), &bytes(planned))
+        };
+        assert_eq!(decide(&["#"], &["Subject\n\nbody"]).unwrap(), None);
+        assert_eq!(decide(&[";"], &["#1 Subject"]).unwrap(), None);
+        assert_eq!(
+            decide(&["#"], &["#1 Subject\n\n; note"]).unwrap(),
+            Some(b'@')
+        );
+        assert_eq!(decide(&["//"], &["/ one slash"]).unwrap(), None);
+        assert_eq!(decide(&[";", "#"], &["#1 Subject"]).unwrap(), Some(b';'));
+        assert_eq!(decide(&["Auto"], &["Subject"]).unwrap(), Some(b'#'));
+        assert!(decide(&["#"], &["#\n;\n@\n!\n$\n%\n^\n&\n|\n:"]).is_err());
+    }
+
+    #[test]
+    fn continue_hint_quotes_the_comment_char_override() {
+        assert_eq!(continue_command(None), "git rebase --continue");
+        assert_eq!(
+            continue_command(Some(b';')),
+            "git -c 'core.commentChar=;' rebase --continue"
+        );
+    }
 
     #[test]
     fn conflicts_are_read_from_a_fresh_index_when_its_mtime_does_not_move() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
         let git = |args: &[&str]| {
-            gitcomet_core::test_support::git_fixture::git_command()
+            crate::test_support::git_command()
                 .current_dir(path)
                 .args(["-c", "user.name=T", "-c", "user.email=t@e.st"])
                 .args(["-c", "commit.gpgsign=false"])
@@ -2272,7 +2405,7 @@ mod tests {
         std::fs::write(path.join("a.txt"), "main\n").unwrap();
         git(&["commit", "-qam", "main"]);
 
-        let repo = super::GixRepo::new(path.to_path_buf(), gix::open(path).unwrap().into_sync());
+        let repo = crate::test_support::open_repo(path);
         // Cache the pre-merge index in gix's shared snapshot.
         assert!(repo.repo().index_or_empty().is_ok());
         assert!(!repo.index_has_conflicts());

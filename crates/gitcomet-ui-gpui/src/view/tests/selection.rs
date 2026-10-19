@@ -41,7 +41,6 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
 
 #[gpui::test]
 fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let alpha = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/alpha")]);
     let beta = gitcomet_state::session::Workspace::new(vec![PathBuf::from("/work/beta")]);
     let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
@@ -51,9 +50,10 @@ fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {
         crate::workspaces::initialize_for_test(app, vec![alpha, beta]);
-        view.update(app, |view, _cx| {
-            view.home_recent_repos = vec![PathBuf::from("/work/gamma")];
-            view.home_pinned_repos.clear();
+        let home = view.read(app).home.clone();
+        home.update(app, |home, _cx| {
+            home.recent_repos = vec![PathBuf::from("/work/gamma")];
+            home.pinned_repos.clear();
         });
         let _ = window.draw(app);
     });
@@ -68,8 +68,8 @@ fn home_search_filters_workspaces_and_repositories(cx: &mut gpui::TestAppContext
 
     cx.update(|window, app| {
         view.update(app, |view, cx| {
-            view.home_search_input
-                .update(cx, |input, cx| input.set_text("ALPHA", cx));
+            let input = view.home.read(cx).search_input.clone();
+            input.update(cx, |input, cx| input.set_text("ALPHA", cx));
         });
         let _ = window.draw(app);
     });
@@ -90,16 +90,17 @@ fn home_selected(
     view: &gpui::Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Option<usize> {
-    cx.update(|_window, app| view.read(app).home_selected)
+    cx.update(|_window, app| view.read(app).home.read(app).selected)
 }
 
 #[gpui::test]
 fn new_window_focuses_the_home_search(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(cx, Vec::new(), Vec::new());
     let focused = cx.update(|window, app| {
         view.read(app)
-            .home_search_input
+            .home
+            .read(app)
+            .search_input
             .read(app)
             .focus_handle()
             .is_focused(window)
@@ -109,7 +110,6 @@ fn new_window_focuses_the_home_search(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_selects_the_first_row_and_arrows_walk_both_columns(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(
         cx,
         vec![
@@ -142,7 +142,6 @@ fn home_selects_the_first_row_and_arrows_walk_both_columns(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(
         cx,
         vec![
@@ -165,8 +164,8 @@ fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
     // With text and the caret mid-text, Left edits the query instead.
     cx.update(|_window, app| {
         view.update(app, |view, cx| {
-            view.home_search_input
-                .update(cx, |input, cx| input.set_text("work", cx));
+            let input = view.home.read(cx).search_input.clone();
+            input.update(cx, |input, cx| input.set_text("work", cx));
         });
     });
     cx.run_until_parked();
@@ -181,7 +180,6 @@ fn home_left_and_right_jump_between_columns(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let mut empty = gitcomet_state::session::Workspace::new(Vec::new());
     empty.custom_name = Some("Later".to_string());
     empty.restore_on_launch = false;
@@ -194,8 +192,8 @@ fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestA
     press(cx, "down down");
     cx.update(|_window, app| {
         view.update(app, |view, cx| {
-            view.home_search_input
-                .update(cx, |input, cx| input.set_text("later", cx));
+            let input = view.home.read(cx).search_input.clone();
+            input.update(cx, |input, cx| input.set_text("later", cx));
         });
     });
     cx.run_until_parked();
@@ -218,7 +216,6 @@ fn home_typing_reselects_the_first_match_and_enter_opens_it(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn home_lists_are_virtualized_and_capped(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let recents = (0..50)
         .map(|ix| PathBuf::from(format!("/work/repo-{ix:02}")))
         .collect::<Vec<_>>();
@@ -262,7 +259,6 @@ fn home_lists_are_virtualized_and_capped(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_selected_row_shows_the_enter_hint(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let alpha = named_saved_workspace("Alpha", "/work/a");
     let alpha_row: &'static str = format!("home_workspace_{}", alpha.id).leak();
     let repo_row: &'static str = format!(
@@ -294,7 +290,6 @@ fn home_selected_row_shows_the_enter_hint(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn home_cross_removes_a_recent_repository(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = home_view_with(
         cx,
         Vec::new(),
@@ -307,14 +302,13 @@ fn home_cross_removes_a_recent_repository(cx: &mut gpui::TestAppContext) {
     cx.simulate_click(cross.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
-    let recents = cx.update(|_window, app| view.read(app).home_recent_repos.clone());
+    let recents = cx.update(|_window, app| view.read(app).home.read(app).recent_repos.clone());
     assert_eq!(recents, vec![PathBuf::from("/work/d")]);
     assert_eq!(home_selected(&view, cx), Some(0), "a row stays selected");
 }
 
 #[gpui::test]
 fn home_cross_deletes_a_saved_workspace_but_not_an_open_one(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let saved = named_saved_workspace("Saved", "/work/a");
     let saved_id = saved.id;
     let mut open = named_saved_workspace("Open elsewhere", "/work/b");

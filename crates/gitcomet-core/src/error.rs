@@ -1,18 +1,107 @@
 use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-#[derive(Clone, Debug, thiserror::Error)]
-#[error("{kind}")]
+#[derive(Clone, Debug)]
 pub struct Error {
+    data: Arc<ErrorData>,
+}
+
+#[derive(Clone, Debug)]
+struct ErrorData {
     kind: ErrorKind,
+    source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+    context: Option<ErrorContext>,
+}
+
+/// The operation and native path associated with a failure. Diagnostic context
+/// does not change the classification callers use to choose recovery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorContext {
+    operation: Arc<str>,
+    path: Option<PathBuf>,
+}
+
+impl ErrorContext {
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
 }
 
 impl Error {
     pub fn new(kind: ErrorKind) -> Self {
-        Self { kind }
+        Self {
+            data: Arc::new(ErrorData {
+                kind,
+                source: None,
+                context: None,
+            }),
+        }
     }
 
     pub fn kind(&self) -> &ErrorKind {
-        &self.kind
+        &self.data.kind
+    }
+
+    /// Retains a concrete cause without making state snapshots clone it.
+    pub fn with_source(
+        mut self,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Arc::make_mut(&mut self.data).source = Some(Arc::from(source.into()));
+        self
+    }
+
+    pub fn with_context(mut self, operation: impl Into<Arc<str>>, path: Option<&Path>) -> Self {
+        Arc::make_mut(&mut self.data).context = Some(ErrorContext {
+            operation: operation.into(),
+            path: path.map(Path::to_path_buf),
+        });
+        self
+    }
+
+    pub fn context(&self) -> Option<&ErrorContext> {
+        self.data.context.as_ref()
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(source: std::io::Error) -> Self {
+        Self::new(ErrorKind::Io(source.kind())).with_source(source)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.data.source.as_deref().map(|source| source as _)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(context) = self.context() {
+            write!(f, "{}", context.operation())?;
+            if let Some(path) = context.path() {
+                write!(f, " ({})", path.display())?;
+            }
+            write!(f, ": ")?;
+        }
+        if matches!(self.kind(), ErrorKind::Io(_))
+            && let Some(source) = std::error::Error::source(self)
+        {
+            fmt::Display::fmt(source, f)?;
+            let mut cause = source.source();
+            while let Some(source) = cause {
+                write!(f, ": {source}")?;
+                cause = source.source();
+            }
+            return Ok(());
+        }
+        self.kind().fmt(f)
     }
 }
 
@@ -40,6 +129,23 @@ pub enum GitFailureId {
     LfsUploadFailed,
 }
 
+/// Git refused for a local reason (working-tree changes, merge or branch
+/// reconciliation). Any credential exchange earlier in the same command, such
+/// as a pull's fetch, did its job and is not why the command failed.
+pub fn git_output_reports_local_refusal(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    [
+        "would be overwritten",
+        "automatic merge failed",
+        "cannot pull with rebase: you have unstaged changes",
+        "cannot pull with rebase: your index contains uncommitted changes",
+        "not possible to fast-forward",
+        "need to specify how to reconcile divergent branches",
+    ]
+    .iter()
+    .any(|refusal| lower.contains(refusal))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitFailure {
     command: String,
@@ -48,7 +154,14 @@ pub struct GitFailure {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     detail: Option<String>,
-    apply_file_change_retry: Option<Box<crate::domain::ApplyFileChangeRetry>>,
+    extras: Option<Box<GitFailureExtras>>,
+}
+
+/// Rarely present details, boxed together so [`Error`] stays small.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct GitFailureExtras {
+    apply_file_change_retry: Option<crate::domain::ApplyFileChangeRetry>,
+    auth_outcome: Option<crate::auth::AuthOutcome>,
 }
 
 impl GitFailure {
@@ -67,8 +180,12 @@ impl GitFailure {
             stdout,
             stderr,
             detail,
-            apply_file_change_retry: None,
+            extras: None,
         }
+    }
+
+    fn extras_mut(&mut self) -> &mut GitFailureExtras {
+        self.extras.get_or_insert_default()
     }
 
     pub fn command(&self) -> &str {
@@ -77,6 +194,16 @@ impl GitFailure {
 
     pub fn id(&self) -> GitFailureId {
         self.id
+    }
+
+    /// Authoritative authentication information, separate from Git's output.
+    pub fn auth_outcome(&self) -> Option<&crate::auth::AuthOutcome> {
+        self.extras.as_ref()?.auth_outcome.as_ref()
+    }
+
+    pub fn with_auth_outcome(mut self, outcome: crate::auth::AuthOutcome) -> Self {
+        self.extras_mut().auth_outcome = Some(outcome);
+        self
     }
 
     pub fn exit_code(&self) -> Option<i32> {
@@ -99,12 +226,12 @@ impl GitFailure {
         mut self,
         retry: crate::domain::ApplyFileChangeRetry,
     ) -> Self {
-        self.apply_file_change_retry = Some(Box::new(retry));
+        self.extras_mut().apply_file_change_retry = Some(retry);
         self
     }
 
     pub fn apply_file_change_retry(&self) -> Option<&crate::domain::ApplyFileChangeRetry> {
-        self.apply_file_change_retry.as_deref()
+        self.extras.as_ref()?.apply_file_change_retry.as_ref()
     }
 }
 
@@ -142,6 +269,8 @@ pub enum ErrorKind {
 #[cfg(test)]
 mod tests {
     use super::{Error, ErrorKind, GitFailure, GitFailureId};
+    use std::error::Error as _;
+    use std::path::Path;
 
     #[test]
     fn backend_error_kind_display_is_human_readable() {
@@ -153,6 +282,61 @@ mod tests {
     fn error_display_uses_error_kind_display() {
         let error = Error::new(ErrorKind::Backend("message".to_string()));
         assert_eq!(error.to_string(), "message");
+        assert!(error.source().is_none());
+        assert!(error.context().is_none());
+    }
+
+    #[test]
+    fn io_error_clones_share_the_original_cause_and_keep_context() {
+        let source = std::io::Error::from_raw_os_error(13);
+        let kind = source.kind();
+        let message = source.to_string();
+        let error = Error::from(source).with_context("read index", Some(Path::new("repo")));
+        let cloned = error.clone();
+
+        assert!(matches!(cloned.kind(), ErrorKind::Io(actual) if *actual == kind));
+        assert!(std::ptr::eq(
+            error.source().unwrap(),
+            cloned.source().unwrap()
+        ));
+        drop(error);
+
+        let source = cloned
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(source.raw_os_error(), Some(13));
+        let context = cloned.context().unwrap();
+        assert_eq!(context.operation(), "read index");
+        assert_eq!(context.path(), Some(Path::new("repo")));
+        assert_eq!(cloned.to_string(), format!("read index (repo): {message}"));
+    }
+
+    #[test]
+    fn adding_context_to_a_clone_does_not_change_the_retained_error() {
+        let original = Error::from(std::io::Error::other("read failed"))
+            .with_context("read file", Some(Path::new("file")));
+        let contextual = original.clone().with_context("load status", None);
+
+        assert_eq!(original.to_string(), "read file (file): read failed");
+        assert_eq!(contextual.to_string(), "load status: read failed");
+        assert!(std::ptr::eq(
+            original.source().unwrap(),
+            contextual.source().unwrap()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn error_context_preserves_non_utf8_paths() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"repo-\xff".to_vec()));
+        let error = Error::from(std::io::Error::other("read failed"))
+            .with_context("read file", Some(&path));
+
+        assert_eq!(error.context().unwrap().path(), Some(path.as_path()));
     }
 
     #[test]

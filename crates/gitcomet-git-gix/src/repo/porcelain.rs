@@ -8,7 +8,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::path_utils::{canonicalize_or_original, symlink_free_write_target};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -24,8 +24,9 @@ fn local_branch_ref_name(branch: &str) -> String {
 }
 
 fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<bool> {
-    let head_name = crate::refs::head_name(repo)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))))?;
+    let head_name = crate::refs::head_name(repo).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!("gix head_name: {e}"))).with_source(e)
+    })?;
     Ok(head_name.is_some_and(|name| name.as_bstr() == branch_ref_name))
 }
 
@@ -263,7 +264,7 @@ fn branch_target_missing_error(repo: &gix::Repository, target: &str) -> Error {
 
 fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Result<gix::ObjectId> {
     let object = crate::refs::resolve_required(repo, target)
-        .map_err(|_| branch_target_missing_error(repo, target))?
+        .map_err(|error| branch_target_missing_error(repo, target).with_source(error))?
         .object()
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
@@ -291,6 +292,7 @@ fn resolve_stash_commit(repo: &gix::Repository, index: usize) -> Result<gix::Com
             Error::new(ErrorKind::Backend(format!(
                 "gix rev-parse {stash_spec}: {e}"
             )))
+            .with_source(e)
         })?
         .object()
         .map_err(|e| {
@@ -477,6 +479,7 @@ impl GixRepo {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find_reference {ref_name}: {e}"
                 )))
+                .with_source(e)
             })?
             .is_some())
     }
@@ -515,7 +518,8 @@ impl GixRepo {
             }
             return Err(Error::new(ErrorKind::Backend(format!(
                 "gix create branch {branch}: {e}"
-            ))));
+            )))
+            .with_source(e));
         }
         Ok(())
     }
@@ -577,8 +581,9 @@ impl GixRepo {
                 path.display()
             ))));
         }
-        let holder = crate::open::open_worktree_repo(&path)
-            .map_err(|e| crate::open::map_open_error(e, "gix open worktree holding branch"))?;
+        let holder = crate::open::open_worktree_repo(&path).map_err(|e| {
+            crate::open::map_open_error(e, "gix open worktree holding branch", &path)
+        })?;
         let same_repo = canonicalize_or_original(holder.common_dir().to_path_buf())
             == canonicalize_or_original(repo.common_dir().to_path_buf());
         if !same_repo {
@@ -821,14 +826,17 @@ impl GixRepo {
         }
 
         let detail = stash_apply_failure_detail(&stdout, &stderr);
-        Err(Error::new(ErrorKind::Git(GitFailure::new(
-            "git stash apply",
-            failure_id,
-            output.status.code(),
-            output.stdout,
-            output.stderr,
-            detail,
-        ))))
+        Err(Error::new(ErrorKind::Git(
+            GitFailure::new(
+                "git stash apply",
+                failure_id,
+                output.status.code(),
+                output.stdout,
+                output.stderr,
+                detail,
+            )
+            .with_auth_outcome(output.auth_outcome),
+        )))
     }
 
     pub(super) fn stash_drop_impl(&self, index: usize) -> Result<()> {
@@ -866,13 +874,18 @@ impl GixRepo {
         }
 
         for path in conflicts.paths {
-            let ours_path = self.spec.workdir.join(&path);
+            // A symlink at or above the path has no text of its own to merge,
+            // and reading and writing through it would rewrite its target.
+            let Ok(ours_path) = symlink_free_write_target(&self.spec.workdir, &path) else {
+                continue;
+            };
             if !ours_path.exists() {
                 continue;
             }
 
-            let ours_bytes =
-                fs::read(&ours_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            let ours_bytes = fs::read(&ours_path).map_err(|error| {
+                Error::from(error).with_context("read untracked stash conflict", Some(&ours_path))
+            })?;
             let theirs_bytes = stashed_contents.remove(&path).ok_or_else(|| {
                 stash_apply_error(
                     GitFailureId::UntrackedRestoreConflict,
@@ -903,7 +916,9 @@ impl GixRepo {
             })?;
 
             let merged_text = build_untracked_conflict_markers(ours_text, theirs_text);
-            fs::write(&ours_path, merged_text).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            fs::write(&ours_path, merged_text).map_err(|error| {
+                Error::from(error).with_context("write untracked stash conflict", Some(&ours_path))
+            })?;
         }
 
         Ok(())

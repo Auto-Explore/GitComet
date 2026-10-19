@@ -1,5 +1,5 @@
 use super::cancellation::test_progress::{ScanHook, with_hook};
-use super::tests::{git_success, init_test_repo, open_repo, write_file};
+use crate::test_support::{git_success, init_test_repo, open_repo, write_file};
 use gitcomet_core::error::ErrorKind;
 use gitcomet_core::services::CancellationToken;
 use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
@@ -31,7 +31,13 @@ fn cancels_clean_walk(cached: bool, through_parent: bool) {
     touch(timestamp + 1);
     if cached {
         assert!(repo.status_impl().unwrap().unstaged.is_empty());
-        assert!(repo.worktree_status_impl().unwrap().is_empty());
+        assert!(
+            repo.worktree_status_cancellable_impl(
+                &gitcomet_core::services::CancellationToken::new()
+            )
+            .unwrap()
+            .is_empty()
+        );
         assert!(repo.stat_refreshed_index.lock().unwrap().is_some());
         touch(timestamp + 2);
     }

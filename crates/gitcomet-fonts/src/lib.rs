@@ -7,7 +7,8 @@ const FIRA_CODE_REGULAR_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraC
 const FIRA_CODE_SEMIBOLD_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-SemiBold.ttf");
 const FIRA_CODE_BOLD_BYTES: &[u8] = include_bytes!("../assets/fira_code/FiraCode-Bold.ttf");
 
-const IBM_PLEX_SANS_REGULAR_BYTES: &[u8] =
+/// The UI face alone, for tests that shape text without the full family.
+pub const IBM_PLEX_SANS_REGULAR_BYTES: &[u8] =
     include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-Regular.ttf");
 const IBM_PLEX_SANS_ITALIC_BYTES: &[u8] =
     include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-Italic.ttf");
@@ -20,7 +21,8 @@ const IBM_PLEX_SANS_BOLD_BYTES: &[u8] =
 const IBM_PLEX_SANS_BOLD_ITALIC_BYTES: &[u8] =
     include_bytes!("../assets/ibm_plex_sans/IBMPlexSans-BoldItalic.ttf");
 
-const LILEX_REGULAR_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-Regular.ttf");
+/// The editor face alone, for tests that shape text without the full family.
+pub const LILEX_REGULAR_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-Regular.ttf");
 const LILEX_ITALIC_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-Italic.ttf");
 const LILEX_SEMIBOLD_BYTES: &[u8] = include_bytes!("../assets/lilex/Lilex-SemiBold.ttf");
 const LILEX_SEMIBOLD_ITALIC_BYTES: &[u8] =

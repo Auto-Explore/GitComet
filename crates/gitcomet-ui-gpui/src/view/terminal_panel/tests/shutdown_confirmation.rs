@@ -33,7 +33,6 @@ fn click_dialog_button(selector: &'static str, cx: &mut gpui::VisualTestContext)
 
 #[gpui::test]
 fn terminal_shutdown_confirm_click_closes_only_the_selected_tab(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -66,7 +65,6 @@ fn terminal_shutdown_confirm_click_closes_only_the_selected_tab(cx: &mut gpui::T
 
 #[gpui::test]
 fn terminal_shutdown_confirm_click_closes_the_panel(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -92,7 +90,6 @@ fn terminal_shutdown_confirm_click_closes_the_panel(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn terminal_shutdown_confirm_cancel_keeps_the_panel(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -118,7 +115,6 @@ fn terminal_shutdown_confirm_cancel_keeps_the_panel(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn terminal_shutdown_confirm_click_closes_the_window(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -135,7 +131,6 @@ fn terminal_shutdown_confirm_click_closes_the_window(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn terminal_shutdown_confirm_click_preserves_later_close_guards(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {

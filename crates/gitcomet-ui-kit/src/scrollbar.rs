@@ -2,8 +2,8 @@ use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
     Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, ListState, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, UniformListScrollHandle,
-    canvas, div, fill, point, px, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, ScrollHandle,
+    UniformListScrollHandle, canvas, div, point, px, size,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -425,19 +425,22 @@ impl Scrollbar {
 
                         let (left, right) = marker_colors(theme, marker.kind);
                         if let Some(left) = left {
-                            window.paint_quad(fill(
-                                gpui::Bounds::new(point(marker_x, y0), size(marker_w / 2.0, h)),
-                                left,
-                            ));
+                            window.paint_quad(
+                                PaintQuad::new(gpui::Bounds::new(
+                                    point(marker_x, y0),
+                                    size(marker_w / 2.0, h),
+                                ))
+                                .background(left),
+                            );
                         }
                         if let Some(right) = right {
-                            window.paint_quad(fill(
-                                gpui::Bounds::new(
+                            window.paint_quad(
+                                PaintQuad::new(gpui::Bounds::new(
                                     point(marker_x + marker_w / 2.0, y0),
                                     size(marker_w / 2.0, h),
-                                ),
-                                right,
-                            ));
+                                ))
+                                .background(right),
+                            );
                         }
                     }
                 }
@@ -505,7 +508,8 @@ impl Scrollbar {
 
                 if show {
                     window.paint_quad(
-                        fill(prepaint.thumb_bounds, thumb_color)
+                        PaintQuad::new(prepaint.thumb_bounds)
+                            .background(thumb_color)
                             .corner_radii(px(SCROLLBAR_THUMB_THICKNESS_PX / 2.0)),
                     );
                 }

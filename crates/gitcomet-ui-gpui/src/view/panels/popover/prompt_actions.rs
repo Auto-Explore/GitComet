@@ -17,7 +17,7 @@ impl PopoverHost {
             .clone()
             .unwrap_or_else(|| PopoverAnchor::Point(point(px(64.0), px(64.0))));
         let anchor_is_bounds = matches!(&anchor_source, PopoverAnchor::Bounds(_));
-        let surface = crate::view::chrome::window_surface_bounds(window);
+        let surface = crate::kit::window_chrome::window_surface_bounds(window);
         let margin_x = scaled_px(16.0);
 
         let is_context_menu = popover_is_context_menu(&kind);
@@ -101,6 +101,9 @@ impl PopoverHost {
             } => branch_exists_prompt::panel(self, repo_id, name, target, operation, cx),
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
+            PopoverKind::FileHistoryFilePicker { repo_id } => {
+                file_history_file_picker::panel(self, repo_id, cx)
+            }
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {
                 stash_picker_prompt::panel(self, repo_id, purpose, cx)
             }
@@ -202,9 +205,6 @@ impl PopoverHost {
                     }
                 },
             },
-            PopoverKind::FileHistory { repo_id, path } => {
-                file_history::panel(self, repo_id, path, cx)
-            }
             PopoverKind::PushSetUpstreamPrompt {
                 repo_id,
                 remote,
@@ -365,6 +365,18 @@ impl PopoverHost {
                     repo_id,
                     target,
                     selector,
+                },
+                cx,
+            ),
+            PopoverKind::FileHistoryCommitMenu {
+                repo_id,
+                commit_id,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::FileHistoryCommitMenu {
+                    repo_id,
+                    commit_id,
+                    path,
                 },
                 cx,
             ),

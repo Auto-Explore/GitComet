@@ -94,7 +94,7 @@ fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppConte
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.ensure_conflict_image_preview_cache(cx);
             });
         });
@@ -261,7 +261,7 @@ fn raster_conflict_preview_uses_alpha_correct_oriented_render_images(
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.ensure_conflict_image_preview_cache(cx);
             });
         });

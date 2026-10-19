@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::kit::components::secondary_shortcut;
 
 /// What a commit-diff file row belongs to: one commit's details, or the
 /// comparison view (`to: None` compares against the working tree).
@@ -220,11 +220,9 @@ pub(super) fn model(
         icon: Some("icons/refresh.svg".into()),
         shortcut: Some("H".into()),
         disabled: false,
-        action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory {
-                repo_id,
-                path: path.to_path_buf(),
-            },
+        action: Box::new(ContextMenuAction::OpenFileHistory {
+            repo_id,
+            path: path.to_path_buf(),
         }),
     });
     if let Some(apply_source) = source.apply_source() {

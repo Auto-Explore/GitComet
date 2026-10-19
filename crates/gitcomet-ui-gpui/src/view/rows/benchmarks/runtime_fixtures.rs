@@ -1601,7 +1601,7 @@ impl DisplayFixture {
     }
 
     fn run_internal(&self) -> (u64, DisplayMetrics) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        use crate::view::panes::diff::pane_content_width_for_layout;
 
         let mut hash = 0u64;
         let total_history = self.history.total_rows();

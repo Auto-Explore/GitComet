@@ -4,7 +4,6 @@ use super::*;
 fn standalone_diagram_uses_code_while_editing_and_tracks_buffer_changes(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("diagram.mmd");
     std::fs::write(&path, "flowchart LR\nA-->B").unwrap();
@@ -21,7 +20,6 @@ fn standalone_diagram_uses_code_while_editing_and_tracks_buffer_changes(
             path,
             AppTheme::gitcomet_dark(),
             root.downgrade(),
-            store.into(),
             model,
             None,
             cx,
@@ -33,7 +31,7 @@ fn standalone_diagram_uses_code_while_editing_and_tracks_buffer_changes(
             let _ = window.draw(app);
         });
         cx.run_until_parked();
-        if cx.update(|_, app| !buffer.read(app).loading) {
+        if cx.update(|_, app| !buffer.read(app).loading()) {
             break;
         }
         assert!(
@@ -75,7 +73,7 @@ fn standalone_diagram_uses_code_while_editing_and_tracks_buffer_changes(
     assert!(cx.debug_bounds("diagram_preview").is_none());
     cx.update(|_, app| {
         let buffer = buffer.read(app);
-        assert!(buffer.dirty);
+        assert!(buffer.dirty());
         let super::super::diagram_preview::DiagramInput::Text { text, .. } =
             buffer.diagram_input.as_ref().unwrap()
         else {
@@ -99,6 +97,6 @@ fn standalone_diagram_uses_code_while_editing_and_tracks_buffer_changes(
             buffer.read(app).diagram_input,
             Some(super::super::diagram_preview::DiagramInput::TooLarge { .. })
         ));
-        assert!(buffer.read(app).dirty);
+        assert!(buffer.read(app).dirty());
     });
 }

@@ -705,25 +705,31 @@ impl SettingsWindowView {
 
         let update_check_locked = crate::view::update_checks_disabled_by_environment();
         let update_check_effective = self.check_for_updates_on_startup && !update_check_locked;
-        let mut update_check_row = self
-            .toggle_row(
-                "settings_window_check_for_updates_on_startup",
-                "Automatically check for updates on startup",
+        let update_check_id = "settings_window_check_for_updates_on_startup";
+        let update_check_label = "Automatically check for updates on startup";
+        let update_check_row = if update_check_locked {
+            self.disabled_toggle_row(
+                update_check_id,
+                update_check_label,
                 update_check_effective,
                 theme,
             )
-            .border_color(no_separator);
-        if update_check_locked {
-            update_check_row = update_check_row.opacity(0.6).cursor(CursorStyle::Arrow);
         } else {
-            update_check_row = update_check_row.on_activate(
+            self.toggle_row(
+                update_check_id,
+                update_check_label,
+                update_check_effective,
+                theme,
+            )
+            .on_activate(
                 false,
                 controls::ControlActivation::Action,
                 cx.listener(|this, _e: &ClickEvent, _window, cx| {
                     this.set_check_for_updates_on_startup(!this.check_for_updates_on_startup, cx);
                 }),
-            );
+            )
         }
+        .border_color(no_separator);
 
         let mut security_privacy_card = self
             .card(
@@ -1124,9 +1130,47 @@ impl SettingsWindowView {
                 }),
             );
 
-        let mut diff_card = self
-            .card("settings_window_diff_card", "Diff", theme)
-            .child(diff_content_mode_row);
+        let mut diff_card = self.card("settings_window_diff_card", "Diff", theme).child(
+            self.summary_row(
+                "settings_window_diff_engine",
+                "Diff engine",
+                self.diff_engine.label().into(),
+                self.expanded_section == Some(SettingsSection::DiffEngine),
+                theme,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_section(SettingsSection::DiffEngine, cx)
+                }),
+            ),
+        );
+        if self.expanded_section == Some(SettingsSection::DiffEngine) {
+            for engine in DiffEngine::ALL {
+                let detail = match engine {
+                    DiffEngine::LineByLine => "Compare changed lines and words",
+                    DiffEngine::Difftastic => "Compare syntax; works in Split and Inline views",
+                };
+                diff_card = diff_card.child(
+                    self.setting_option_row(
+                        format!("settings_window_diff_engine_{}", engine.key()),
+                        engine.label(),
+                        Some(detail.into()),
+                        self.diff_engine == engine,
+                        theme,
+                    )
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.set_diff_engine(engine, cx)
+                        }),
+                    ),
+                );
+            }
+        }
+        diff_card = diff_card.child(diff_content_mode_row);
 
         if self.expanded_section == Some(SettingsSection::DiffContentMode) {
             let list = uniform_list(
@@ -1654,9 +1698,10 @@ impl SettingsWindowView {
                             false,
                             controls::ControlActivation::Action,
                             cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                                this.update_main_windows(cx, |view, _window, cx| {
-                                    view.reset_history_column_widths(cx);
-                                });
+                                this.broadcast_preference(
+                                    PreferenceChange::ResetHistoryColumnWidths,
+                                    cx,
+                                );
                                 cx.notify();
                             }),
                         ),
@@ -1664,6 +1709,21 @@ impl SettingsWindowView {
             );
         }
 
+        git_log_card = git_log_card.child(
+            self.toggle_row(
+                "settings_window_git_log_show_graph_gradient",
+                "Show graph gradient",
+                self.history_show_graph_gradient,
+                theme,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                    this.set_history_show_graph_gradient(!this.history_show_graph_gradient, cx);
+                }),
+            ),
+        );
         git_log_card = git_log_card.child(highlight_commit_chain_row);
         git_log_card = git_log_card.child(files_follow_selected_commit_row);
         git_log_card = git_log_card.child(relative_dates_row);

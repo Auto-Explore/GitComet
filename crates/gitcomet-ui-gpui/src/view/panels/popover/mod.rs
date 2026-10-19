@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::components::ControlInteractionExt;
+use crate::view::gitcomet_view_requests::{RootRequest, RootRequests as _};
 use gitcomet_core::services::InteractiveRebaseAction;
 use std::rc::Rc;
 
@@ -27,7 +28,7 @@ mod discard_changes_confirm;
 mod discard_folder_changes_confirm;
 mod error_details;
 mod extension_dialog;
-mod file_history;
+mod file_history_file_picker;
 mod filesystem_conflict_prompt;
 mod filesystem_unsaved_edits_confirm;
 mod fingerprint;
@@ -51,7 +52,7 @@ mod rename_branch_prompt;
 mod repo_picker;
 mod reset_prompt;
 mod revert_commit_confirm;
-mod rows_cache;
+pub(in crate::view) mod rows_cache;
 mod search_inputs;
 mod squash_prompt;
 mod stage_conflict_markers_confirm;
@@ -174,7 +175,8 @@ impl DialogFocus {
 pub(in super::super) struct PopoverHost {
     store: crate::view::pane_store::PaneStore,
     history_store: crate::view::pane_store::PaneStore,
-    history_pane: Entity<MainPaneView>,
+    primary_diff_renderer: Entity<DiffRenderer>,
+    main_pane: Entity<MainPaneView>,
     extension_dialog: Option<extension_dialog::ExtensionDialog>,
     state: Arc<AppState>,
     theme: AppTheme,
@@ -198,7 +200,6 @@ pub(in super::super) struct PopoverHost {
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_badge_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
-    _file_history_search_input_subscription: Option<gpui::Subscription>,
     _history_author_filter_search_input_subscription: Option<gpui::Subscription>,
     _squash_message_input_subscription: gpui::Subscription,
     _squash_description_input_subscription: gpui::Subscription,
@@ -211,7 +212,7 @@ pub(in super::super) struct PopoverHost {
     root_view_mode: GitCometViewMode,
     pub(in crate::view) extension_editor_available: bool,
     tooltip_host: WeakEntity<TooltipHost>,
-    main_pane: Entity<MainPaneView>,
+    diff_renderer: Entity<DiffRenderer>,
     details_pane: Entity<DetailsPaneView>,
     reflog_pane: Entity<ReflogPaneView>,
     sidebar_pane: Entity<SidebarPaneView>,
@@ -319,7 +320,6 @@ pub(in super::super) struct PopoverHost {
     /// open from elsewhere still starts blank.
     pending_worktree_add_prefill: Option<(String, String)>,
     submodule_picker_selected_index: Option<usize>,
-    file_history_selected_index: Option<usize>,
     history_author_filter_selected_index: Option<usize>,
     /// Collected author names survive frames and active author filters.
     history_author_suggestions: Option<author_filter::SuggestionCache>,
@@ -333,15 +333,15 @@ pub(in super::super) struct PopoverHost {
         rows_cache::RowsCache<worktree_badge_picker::WorktreeBadgeRow>,
     repo_picker_rows_cache: rows_cache::RowsCache<repo_picker::RepoPickerEntry>,
     stash_picker_rows_cache: rows_cache::RowsCache<stash_picker_prompt::StashRow>,
-    file_history_rows_cache: rows_cache::RowsCache<CommitId>,
+    file_history_file_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     submodule_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     worktree_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
     branch_ref_rows_cache: rows_cache::RowsCache<String>,
+    history_author_rows_cache: rows_cache::RowsCache<author_filter::AuthorTarget>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
-    file_history_search_input: Option<Entity<components::TextInput>>,
     history_author_filter_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
     worktree_badge_picker_search_input: Option<Entity<components::TextInput>>,
@@ -350,7 +350,6 @@ pub(in super::super) struct PopoverHost {
 
     clone_repo_url_input: Entity<components::TextInput>,
     clone_repo_parent_dir_input: Entity<components::TextInput>,
-    rebase_onto_input: Entity<components::TextInput>,
     create_tag_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,
@@ -402,6 +401,12 @@ pub(in super::super) struct PopoverHost {
     stash_message_input: Entity<components::TextInput>,
     stash_focus: DialogFocus,
     stash_picker_prompt_selected_index: Option<usize>,
+    file_history_file_picker_selected_index: Option<usize>,
+    file_history_file_picker_query: String,
+    #[cfg(test)]
+    file_browser_loads_for_tests: usize,
+    file_history_file_picker_search_input: Option<Entity<components::TextInput>>,
+    _file_history_file_picker_search_input_subscription: Option<gpui::Subscription>,
     stash_picker_search_input: Option<Entity<components::TextInput>>,
     _stash_picker_search_input_subscription: Option<gpui::Subscription>,
     commit_prompt_message_drafts: FxHashMap<RepoId, SharedString>,
@@ -447,6 +452,7 @@ pub(in crate::view) struct PopoverHostInit {
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) root_view_mode: GitCometViewMode,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) diff_renderer: Entity<DiffRenderer>,
     pub(in crate::view) main_pane: Entity<MainPaneView>,
     pub(in crate::view) details_pane: Entity<DetailsPaneView>,
     pub(in crate::view) reflog_pane: Entity<ReflogPaneView>,
@@ -517,7 +523,6 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .border_1()
         .border_color(gpui::transparent_black())
         .track_focus(&focus_handle)
-        .cursor(CursorStyle::PointingHand)
         .control_interaction(
             components::InteractionStyle::new(theme),
             components::InteractionState::default(),
@@ -613,6 +618,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::ConflictResolverOutputMenu { .. }
             | PopoverKind::CommitMenu { .. }
             | PopoverKind::ReflogEntryMenu { .. }
+            | PopoverKind::FileHistoryCommitMenu { .. }
             | PopoverKind::TagMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::StatusConflictMenu { .. }
@@ -721,13 +727,16 @@ pub(super) fn hotkey_hint(
     theme: AppTheme,
     debug_selector: &'static str,
     label: impl Into<SharedString>,
-) -> gpui::Div {
-    div()
-        .debug_selector(move || debug_selector.to_string())
-        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-        .text_size(theme.ui_text(12.0))
-        .text_color(theme.colors.foreground.secondary)
-        .child(label.into())
+) -> components::ButtonSlot {
+    let label = label.into();
+    components::ButtonSlot::custom(move |disabled| {
+        div()
+            .debug_selector(move || debug_selector.to_string())
+            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+            .text_size(theme.ui_text(12.0))
+            .text_color(theme.disabled_color_if(disabled, theme.colors.foreground.secondary))
+            .child(label)
+    })
 }
 
 /// Shared Cancel button for confirm dialogs and prompt popovers: consistent
@@ -1056,6 +1065,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::StashPrompt
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }
+        | PopoverKind::FileHistoryFilePicker { .. }
         | PopoverKind::CloneRepo
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
@@ -1146,8 +1156,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
                     SubmodulePopoverKind::OpenPicker | SubmodulePopoverKind::RemovePicker,
                 ),
             ..
-        }
-        | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
+        } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::TerminalShutdownConfirm(_)
@@ -1213,6 +1222,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::SidebarPinnedOverflow { .. }
         | PopoverKind::SidebarAncestorMenu { .. }
         | PopoverKind::ReflogEntryMenu { .. }
+        | PopoverKind::FileHistoryCommitMenu { .. }
         | PopoverKind::FileListFolderMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
@@ -1329,11 +1339,3 @@ mod prompt_actions;
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn benchmark_file_history_rows(
-    page: &gitcomet_core::domain::LogPage,
-    now: std::time::SystemTime,
-) -> Vec<components::PickerPromptItem> {
-    file_history::benchmark_rows(page, now)
-}

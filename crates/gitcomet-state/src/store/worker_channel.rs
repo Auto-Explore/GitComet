@@ -68,6 +68,7 @@ enum StoreWorkerSenderInner {
 pub(super) struct StoreWorkerSender {
     inner: StoreWorkerSenderInner,
     pub(super) preferences: Arc<super::repository_preferences::PreferenceHub>,
+    pub(super) filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     alive: Arc<AtomicBool>,
     store_id: StoreInstanceId,
     repo_load_guard: Option<RepoLoadGuard>,
@@ -79,7 +80,7 @@ pub(super) struct StoreWorkerSender {
 #[derive(Clone)]
 struct RepoLoadGuard {
     repo_id: RepoId,
-    load_epoch: u64,
+    load_epoch: crate::model::RepoLoadEpoch,
 }
 
 impl StoreWorkerSender {
@@ -112,6 +113,7 @@ impl StoreWorkerSender {
         alive: Arc<AtomicBool>,
         store_id: StoreInstanceId,
         preferences: Arc<super::repository_preferences::PreferenceHub>,
+        filesystem: &'static std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     ) -> Self {
         let subscriber_tx = tx.clone();
         let subscriber_alive = Arc::downgrade(&alive);
@@ -130,6 +132,7 @@ impl StoreWorkerSender {
         );
         Self {
             preferences,
+            filesystem,
             inner: StoreWorkerSenderInner::Command(tx),
             alive,
             store_id,
@@ -145,6 +148,7 @@ impl StoreWorkerSender {
         Self {
             inner: StoreWorkerSenderInner::MsgForTest(tx),
             preferences: super::repository_preferences::PreferenceHub::new(None),
+            filesystem: super::isolated_filesystem(),
             alive: Arc::new(AtomicBool::new(true)),
             store_id: StoreInstanceId(0),
             repo_load_guard: None,
@@ -193,7 +197,7 @@ impl StoreWorkerSender {
     pub(super) fn with_repo_load_guard(
         &self,
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
         cancellation: CancellationToken,
     ) -> Self {
         let mut guarded = self.clone();

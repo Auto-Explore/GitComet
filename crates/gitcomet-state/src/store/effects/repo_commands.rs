@@ -1,4 +1,7 @@
+use crate::model::{AppState, Loadable};
+use crate::msg::RepoCommandEffect;
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::domain::{DiffTarget, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -10,10 +13,11 @@ use gitcomet_core::services::{
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, RepoMap, message_subject, missing_repo_error, send_or_log, short_commit_id,
+    GitOperationTask, message_subject, missing_repo_error, send_or_log, short_commit_id,
     single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
 
@@ -256,7 +260,36 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
 
 fn schedule_repo_command_with_context<F>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    command: RepoCommandKind,
+    context_override: Option<String>,
+    run: F,
+) where
+    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+{
+    let gated = command.holds_mutation_gate();
+    schedule_repo_command_task(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        command,
+        context_override,
+        move |repo| {
+            let gate = gated.then(|| super::super::mutation_gate::for_repo(repo.as_ref()));
+            let _mutation = gate
+                .as_ref()
+                .map(|gate| gate.read().unwrap_or_else(|error| error.into_inner()));
+            run(repo)
+        },
+    );
+}
+
+fn schedule_repo_command_task<F>(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mut command: RepoCommandKind,
@@ -302,23 +335,12 @@ fn schedule_repo_command_with_context<F>(
             {
                 *commit_retry = Some(retry.clone());
             }
-            operation.finish(
-                outcome,
-                InternalMsg::RepoCommandFinished {
-                    repo_id,
-                    command,
-                    result,
-                },
-            );
+            operation.finish(outcome, command.finished(repo_id, result));
         },
         move |msg_tx| {
             send_or_log(
                 &msg_tx,
-                Msg::Internal(InternalMsg::RepoCommandFinished {
-                    repo_id,
-                    command: missing,
-                    result: Err(missing_repo_error(repo_id)),
-                }),
+                Msg::Internal(missing.finished(repo_id, Err(missing_repo_error(repo_id)))),
             );
         },
     );
@@ -326,7 +348,7 @@ fn schedule_repo_command_with_context<F>(
 
 fn schedule_repo_command<F>(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     command: RepoCommandKind,
@@ -380,9 +402,17 @@ fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
 fn resolve_worktree_save_target(workdir: &Path, path: &Path) -> Result<(PathBuf, PathBuf), Error> {
     let relative_path = normalize_worktree_relative_path(path)?;
     let full = gitcomet_core::path_utils::symlink_free_write_target(workdir, &relative_path)
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::InvalidInput => Error::new(ErrorKind::Backend(err.to_string())),
-            kind => Error::new(ErrorKind::Io(kind)),
+        .map_err(|error| {
+            let error = match error.kind() {
+                std::io::ErrorKind::InvalidInput => {
+                    Error::new(ErrorKind::Backend(error.to_string())).with_source(error)
+                }
+                _ => Error::from(error),
+            };
+            error.with_context(
+                "resolve worktree save target",
+                Some(&workdir.join(&relative_path)),
+            )
         })?;
     Ok((relative_path, full))
 }
@@ -400,37 +430,37 @@ fn run_with_git_auth<R>(
     }
 }
 
-pub(super) struct AddSubmoduleRequest {
-    pub(super) url: String,
-    pub(super) path: PathBuf,
-    pub(super) branch: Option<String>,
-    pub(super) name: Option<String>,
-    pub(super) force: bool,
-    pub(super) approved_sources: Vec<SubmoduleTrustTarget>,
-    pub(super) remote_url_policy: RemoteUrlPolicy,
-    pub(super) auth: Option<StagedGitAuth>,
+struct AddSubmoduleRequest {
+    url: String,
+    path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
+    approved_sources: Vec<SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
+    auth: Option<StagedGitAuth>,
 }
 
-pub(super) struct CheckSubmoduleAddTrustRequest {
-    pub(super) url: String,
-    pub(super) path: PathBuf,
-    pub(super) branch: Option<String>,
-    pub(super) name: Option<String>,
-    pub(super) force: bool,
-    pub(super) remote_url_policy: RemoteUrlPolicy,
+struct CheckSubmoduleAddTrustRequest {
+    url: String,
+    path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
+    remote_url_policy: RemoteUrlPolicy,
 }
 
-pub(super) struct SaveWorktreeFileRequest {
-    pub path: PathBuf,
-    pub contents: crate::msg::ContentBytes,
-    pub expected_contents: Option<std::sync::Arc<[u8]>>,
-    pub stage: bool,
-    pub completion: Option<smol::channel::Sender<bool>>,
+struct SaveWorktreeFileRequest {
+    path: PathBuf,
+    contents: crate::msg::ContentBytes,
+    expected_contents: Option<std::sync::Arc<[u8]>>,
+    stage: bool,
+    completion: Option<smol::channel::Sender<bool>>,
 }
 
-pub(super) fn schedule_save_worktree_file(
+fn schedule_save_worktree_file(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: SaveWorktreeFileRequest,
@@ -443,6 +473,7 @@ pub(super) fn schedule_save_worktree_file(
         completion,
     } = request;
     let command_path = path.clone();
+    let engine = msg_tx.filesystem;
     schedule_repo_command(
         executor,
         repos,
@@ -454,9 +485,7 @@ pub(super) fn schedule_save_worktree_file(
         },
         move |repo| {
             let result = (|| {
-                let mut filesystem = gitcomet_core::filesystem::global()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut filesystem = engine.lock().unwrap_or_else(|e| e.into_inner());
                 let (relative_path, full) =
                     resolve_worktree_save_target(&repo.spec().workdir, &path)?;
                 guarded_worktree_save(
@@ -494,7 +523,11 @@ fn guarded_worktree_save(
     contents: &[u8],
     expected_contents: Option<&[u8]>,
 ) -> Result<(), Error> {
-    let io_error = |e: std::io::Error| Error::new(ErrorKind::Backend(e.to_string()));
+    let io_error = |error: std::io::Error| {
+        Error::new(ErrorKind::Backend(error.to_string()))
+            .with_source(error)
+            .with_context("save worktree file", Some(path))
+    };
     let version = match gitcomet_core::filesystem::DiskVersion::read(path) {
         Ok(version) => Some(version),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -522,14 +555,15 @@ fn guarded_worktree_save(
 /// the read in the UI would mean holding the file's contents across a
 /// user-visible dialog and then writing the whole thing back, clobbering any
 /// competing edit from the file editor, an external editor, or another window.
-pub(super) fn schedule_append_gitignore_patterns(
+fn schedule_append_gitignore_patterns(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patterns: Vec<String>,
 ) {
     let command_patterns = patterns.clone();
+    let engine = msg_tx.filesystem;
     schedule_repo_command(
         executor,
         repos,
@@ -538,13 +572,13 @@ pub(super) fn schedule_append_gitignore_patterns(
         RepoCommandKind::AppendGitignorePatterns {
             patterns: command_patterns,
         },
-        move |repo| append_gitignore_patterns_in_workdir(&repo.spec().workdir, &patterns),
+        move |repo| append_gitignore_patterns_in_workdir(engine, &repo.spec().workdir, &patterns),
     );
 }
 
-pub(super) fn schedule_append_gitattributes_rule(
+fn schedule_append_gitattributes_rule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     rule: String,
@@ -571,11 +605,15 @@ fn append_gitattributes_rule_in_workdir(
     let existing = match std::fs::read(&full) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(error) => {
+            return Err(Error::from(error).with_context("read .gitattributes", Some(&full)));
+        }
     };
     let stdout = match append_rule(&existing, rule) {
         Some(updated) => {
-            std::fs::write(&full, updated).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            std::fs::write(&full, updated).map_err(|error| {
+                Error::from(error).with_context("write .gitattributes", Some(&full))
+            })?;
             String::new()
         }
         None => NOTHING_TO_ADD.to_string(),
@@ -589,30 +627,35 @@ fn append_gitattributes_rule_in_workdir(
 }
 
 fn append_gitignore_patterns_in_workdir(
+    engine: &std::sync::Mutex<gitcomet_core::filesystem::Filesystem>,
     workdir: &Path,
     patterns: &[String],
 ) -> Result<CommandOutput, Error> {
-    let mut filesystem = gitcomet_core::filesystem::global()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut filesystem = engine.lock().unwrap_or_else(|e| e.into_inner());
     let (_, full) = resolve_worktree_save_target(workdir, Path::new(GITIGNORE_FILE_NAME))?;
     let version = match gitcomet_core::filesystem::DiskVersion::read(&full) {
         Ok(version) => Some(version),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+        Err(error) => {
+            return Err(Error::from(error).with_context("read .gitignore version", Some(&full)));
+        }
     };
 
     // Read bytes and convert explicitly: `read_to_string` would report a
     // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
     // the user nothing about what to do next. Never rewrite it lossily.
     let existing = match std::fs::read(&full) {
-        Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|error| {
             Error::new(ErrorKind::Backend(format!(
                 "{GITIGNORE_FILE_NAME} is not valid UTF-8; edit it manually"
             )))
+            .with_source(error.utf8_error())
+            .with_context("decode .gitignore", Some(&full))
         })?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+        Err(error) => {
+            return Err(Error::from(error).with_context("read .gitignore", Some(&full)));
+        }
     };
 
     let Some(updated) = gitcomet_core::gitignore::append_patterns(&existing, patterns) else {
@@ -626,7 +669,11 @@ fn append_gitignore_patterns_in_workdir(
 
     filesystem
         .save(&full, updated.as_bytes(), version.as_ref(), false)
-        .map_err(|error| Error::new(ErrorKind::Backend(error.to_string())))?;
+        .map_err(|error| {
+            Error::new(ErrorKind::Backend(error.to_string()))
+                .with_source(error)
+                .with_context("save .gitignore", Some(&full))
+        })?;
 
     Ok(CommandOutput {
         command: format!("Update {GITIGNORE_FILE_NAME}"),
@@ -636,9 +683,9 @@ fn append_gitignore_patterns_in_workdir(
     })
 }
 
-pub(super) fn schedule_export_patch(
+fn schedule_export_patch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -659,9 +706,9 @@ pub(super) fn schedule_export_patch(
     );
 }
 
-pub(super) fn schedule_apply_patch(
+fn schedule_apply_patch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: PathBuf,
@@ -679,9 +726,9 @@ pub(super) fn schedule_apply_patch(
     );
 }
 
-pub(super) fn schedule_add_worktree(
+fn schedule_add_worktree(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -702,9 +749,9 @@ pub(super) fn schedule_add_worktree(
     );
 }
 
-pub(super) fn schedule_remove_worktree(
+fn schedule_remove_worktree(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -720,9 +767,9 @@ pub(super) fn schedule_remove_worktree(
     );
 }
 
-pub(super) fn schedule_force_remove_worktree(
+fn schedule_force_remove_worktree(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -738,9 +785,9 @@ pub(super) fn schedule_force_remove_worktree(
     );
 }
 
-pub(super) fn schedule_add_submodule(
+fn schedule_add_submodule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: AddSubmoduleRequest,
@@ -775,7 +822,7 @@ pub(super) fn schedule_add_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.add_submodule_with_output_and_policy(
+                repo.add_submodule_with_output(
                     &url,
                     &path,
                     branch.as_deref(),
@@ -789,9 +836,9 @@ pub(super) fn schedule_add_submodule(
     );
 }
 
-pub(super) fn schedule_update_submodules(
+fn schedule_update_submodules(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     approved_sources: Vec<SubmoduleTrustTarget>,
@@ -809,15 +856,15 @@ pub(super) fn schedule_update_submodules(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.update_submodules_with_output_and_policy(&approved_sources, remote_url_policy)
+                repo.update_submodules_with_output(&approved_sources, remote_url_policy)
             })
         },
     );
 }
 
-pub(super) fn schedule_check_submodule_add_trust(
+fn schedule_check_submodule_add_trust(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: CheckSubmoduleAddTrustRequest,
@@ -831,7 +878,7 @@ pub(super) fn schedule_check_submodule_add_trust(
         remote_url_policy,
     } = request;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_add_trust_with_policy(&url, &path, remote_url_policy);
+        let result = repo.check_submodule_add_trust(&url, &path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
@@ -847,15 +894,15 @@ pub(super) fn schedule_check_submodule_add_trust(
     });
 }
 
-pub(super) fn schedule_check_submodule_update_trust(
+fn schedule_check_submodule_update_trust(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_update_trust_with_policy(remote_url_policy);
+        let result = repo.check_submodule_update_trust(remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }),
@@ -863,16 +910,16 @@ pub(super) fn schedule_check_submodule_update_trust(
     });
 }
 
-pub(super) fn schedule_check_submodule_load_trust(
+fn schedule_check_submodule_load_trust(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_load_trust_with_policy(&path, remote_url_policy);
+        let result = repo.check_submodule_load_trust(&path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
@@ -884,9 +931,9 @@ pub(super) fn schedule_check_submodule_load_trust(
     });
 }
 
-pub(super) fn schedule_load_submodule(
+fn schedule_load_submodule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -907,19 +954,15 @@ pub(super) fn schedule_load_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.load_submodule_with_output_and_policy(
-                    &path,
-                    &approved_sources,
-                    remote_url_policy,
-                )
+                repo.load_submodule_with_output(&path, &approved_sources, remote_url_policy)
             })
         },
     );
 }
 
-pub(super) fn schedule_change_submodule_pointer(
+fn schedule_change_submodule_pointer(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -940,9 +983,9 @@ pub(super) fn schedule_change_submodule_pointer(
     );
 }
 
-pub(super) fn schedule_remove_submodule(
+fn schedule_remove_submodule(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -958,9 +1001,9 @@ pub(super) fn schedule_remove_submodule(
     );
 }
 
-pub(super) fn schedule_stage_hunk(
+fn schedule_stage_hunk(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: crate::msg::ContentBytes,
@@ -975,9 +1018,9 @@ pub(super) fn schedule_stage_hunk(
     );
 }
 
-pub(super) fn schedule_unstage_hunk(
+fn schedule_unstage_hunk(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: crate::msg::ContentBytes,
@@ -992,9 +1035,9 @@ pub(super) fn schedule_unstage_hunk(
     );
 }
 
-pub(super) fn schedule_apply_worktree_patch(
+fn schedule_apply_worktree_patch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: crate::msg::ContentBytes,
@@ -1010,9 +1053,9 @@ pub(super) fn schedule_apply_worktree_patch(
     );
 }
 
-pub(super) fn schedule_large_file_command(
+fn schedule_large_file_command(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     command: gitcomet_core::large_files::LargeFileCommand,
@@ -1026,9 +1069,9 @@ pub(super) fn schedule_large_file_command(
     });
 }
 
-pub(super) fn schedule_fetch_all(
+fn schedule_fetch_all(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     prune: bool,
@@ -1040,13 +1083,13 @@ pub(super) fn schedule_fetch_all(
         msg_tx,
         repo_id,
         RepoCommandKind::FetchAll,
-        move |repo| run_with_git_auth(auth, || repo.fetch_all_with_output_prune(prune)),
+        move |repo| run_with_git_auth(auth, || repo.fetch_all(prune)),
     );
 }
 
-pub(super) fn schedule_fetch_refspecs(
+fn schedule_fetch_refspecs(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1062,9 +1105,9 @@ pub(super) fn schedule_fetch_refspecs(
     });
 }
 
-pub(super) fn schedule_prune_merged_branches(
+fn schedule_prune_merged_branches(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1078,9 +1121,9 @@ pub(super) fn schedule_prune_merged_branches(
     );
 }
 
-pub(super) fn schedule_prune_local_tags(
+fn schedule_prune_local_tags(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1103,8 +1146,8 @@ fn maintenance_executor() -> TaskExecutor {
 /// Asks git whether the repository needs maintenance, at most once a day per
 /// repository: the claim lives in the session file, shared by its worktrees
 /// and every window.
-pub(super) fn schedule_check_maintenance(
-    repos: &RepoMap,
+fn schedule_check_maintenance(
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1130,8 +1173,8 @@ pub(super) fn schedule_check_maintenance(
     );
 }
 
-pub(super) fn schedule_run_maintenance(
-    repos: &RepoMap,
+fn schedule_run_maintenance(
+    repos: &RepositoryRuntimes,
     backend: Arc<dyn GitBackend>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -1160,9 +1203,9 @@ pub(super) fn schedule_run_maintenance(
     );
 }
 
-pub(super) fn schedule_pull(
+fn schedule_pull(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
@@ -1184,13 +1227,13 @@ pub(super) fn schedule_pull(
         repo_id,
         command,
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull_with_output_prune(mode, prune)),
+        move |repo| run_with_git_auth(auth, || repo.pull(mode, prune)),
     );
 }
 
-pub(super) fn schedule_pull_branch(
+fn schedule_pull_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1214,15 +1257,15 @@ pub(super) fn schedule_pull_branch(
         context,
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.pull_branch_with_output_prune(&remote, &branch, prune)
+                repo.pull_branch_with_output(&remote, &branch, prune)
             })
         },
     );
 }
 
-pub(super) fn schedule_merge_ref(
+fn schedule_merge_ref(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: String,
@@ -1240,9 +1283,9 @@ pub(super) fn schedule_merge_ref(
     );
 }
 
-pub(super) fn schedule_squash_ref(
+fn schedule_squash_ref(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: String,
@@ -1260,9 +1303,9 @@ pub(super) fn schedule_squash_ref(
     );
 }
 
-pub(super) fn schedule_push_with_tags(
+fn schedule_push_with_tags(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: gitcomet_core::tag_push::TagPushRequest,
@@ -1287,9 +1330,9 @@ pub(super) fn schedule_push_with_tags(
     );
 }
 
-pub(super) fn schedule_push(
+fn schedule_push(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     tracking: Option<(String, String)>,
@@ -1307,9 +1350,9 @@ pub(super) fn schedule_push(
     );
 }
 
-pub(super) fn schedule_push_after_commit(
+fn schedule_push_after_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: SafePushAfterCommitTarget,
@@ -1338,9 +1381,9 @@ pub(super) fn schedule_push_after_commit(
     );
 }
 
-pub(super) fn schedule_safe_push_after_commit(
+fn schedule_safe_push_after_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     context: SafePushAfterCommitContext,
@@ -1362,9 +1405,9 @@ pub(super) fn schedule_safe_push_after_commit(
     });
 }
 
-pub(super) fn schedule_force_push(
+fn schedule_force_push(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     tracking: Option<(String, String)>,
@@ -1382,9 +1425,9 @@ pub(super) fn schedule_force_push(
     );
 }
 
-pub(super) fn schedule_force_push_with_lease(
+fn schedule_force_push_with_lease(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     lease: ForcePushLease,
@@ -1403,9 +1446,9 @@ pub(super) fn schedule_force_push_with_lease(
     );
 }
 
-pub(super) fn schedule_push_set_upstream(
+fn schedule_push_set_upstream(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1434,9 +1477,9 @@ pub(super) fn schedule_push_set_upstream(
     );
 }
 
-pub(super) fn schedule_set_upstream_branch(
+fn schedule_set_upstream_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     branch: String,
@@ -1457,9 +1500,9 @@ pub(super) fn schedule_set_upstream_branch(
     );
 }
 
-pub(super) fn schedule_unset_upstream_branch(
+fn schedule_unset_upstream_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     branch: String,
@@ -1477,9 +1520,9 @@ pub(super) fn schedule_unset_upstream_branch(
     );
 }
 
-pub(super) fn schedule_delete_remote_branch(
+fn schedule_delete_remote_branch(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1505,9 +1548,9 @@ pub(super) fn schedule_delete_remote_branch(
     );
 }
 
-pub(super) fn schedule_delete_remote_branches(
+fn schedule_delete_remote_branches(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1533,9 +1576,9 @@ pub(super) fn schedule_delete_remote_branches(
     );
 }
 
-pub(super) fn schedule_reset(
+fn schedule_reset(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: String,
@@ -1555,9 +1598,9 @@ pub(super) fn schedule_reset(
     );
 }
 
-pub(super) fn schedule_squash_commits(
+fn schedule_squash_commits(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     oldest: gitcomet_core::domain::CommitId,
@@ -1576,9 +1619,9 @@ pub(super) fn schedule_squash_commits(
     });
 }
 
-pub(super) fn schedule_rebase(
+fn schedule_rebase(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     onto: String,
@@ -1594,9 +1637,9 @@ pub(super) fn schedule_rebase(
     );
 }
 
-pub(super) fn schedule_rebase_continue(
+fn schedule_rebase_continue(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,
@@ -1611,9 +1654,9 @@ pub(super) fn schedule_rebase_continue(
     );
 }
 
-pub(super) fn schedule_rebase_abort(
+fn schedule_rebase_abort(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1627,9 +1670,9 @@ pub(super) fn schedule_rebase_abort(
     );
 }
 
-pub(super) fn schedule_interactive_rebase(
+fn schedule_interactive_rebase(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     base: String,
@@ -1650,9 +1693,9 @@ pub(super) fn schedule_interactive_rebase(
     );
 }
 
-pub(super) fn schedule_interactive_cherry_pick(
+fn schedule_interactive_cherry_pick(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     entries: Vec<InteractiveRebaseEntry>,
@@ -1672,9 +1715,9 @@ pub(super) fn schedule_interactive_cherry_pick(
     );
 }
 
-pub(super) fn schedule_cherry_pick_commit(
+fn schedule_cherry_pick_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1703,9 +1746,9 @@ pub(super) fn schedule_cherry_pick_commit(
     );
 }
 
-pub(super) fn schedule_revert_commit(
+fn schedule_revert_commit(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1747,9 +1790,9 @@ pub(super) fn schedule_revert_commit(
     );
 }
 
-pub(super) fn schedule_apply_file_change(
+fn schedule_apply_file_change(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: gitcomet_core::domain::ApplyChangeTarget,
@@ -1829,9 +1872,9 @@ fn applied_change_commit_message(
     }
 }
 
-pub(super) fn schedule_merge_abort(
+fn schedule_merge_abort(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
@@ -1845,9 +1888,9 @@ pub(super) fn schedule_merge_abort(
     );
 }
 
-pub(super) fn schedule_create_tag(
+fn schedule_create_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1873,9 +1916,9 @@ pub(super) fn schedule_create_tag(
     );
 }
 
-pub(super) fn schedule_delete_tag(
+fn schedule_delete_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1891,9 +1934,9 @@ pub(super) fn schedule_delete_tag(
     );
 }
 
-pub(super) fn schedule_push_tag(
+fn schedule_push_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1915,9 +1958,9 @@ pub(super) fn schedule_push_tag(
     );
 }
 
-pub(super) fn schedule_delete_remote_tag(
+fn schedule_delete_remote_tag(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
@@ -1939,9 +1982,9 @@ pub(super) fn schedule_delete_remote_tag(
     );
 }
 
-pub(super) fn schedule_add_remote(
+fn schedule_add_remote(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1959,13 +2002,13 @@ pub(super) fn schedule_add_remote(
             name: command_name,
             url: command_url,
         },
-        move |repo| repo.add_remote_with_output_and_policy(&name, &url, remote_url_policy),
+        move |repo| repo.add_remote_with_output(&name, &url, remote_url_policy),
     );
 }
 
-pub(super) fn schedule_remove_remote(
+fn schedule_remove_remote(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -1981,9 +2024,9 @@ pub(super) fn schedule_remove_remote(
     );
 }
 
-pub(super) fn schedule_set_remote_url(
+fn schedule_set_remote_url(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
@@ -2003,15 +2046,13 @@ pub(super) fn schedule_set_remote_url(
             url: command_url,
             kind,
         },
-        move |repo| {
-            repo.set_remote_url_with_output_and_policy(&name, &url, kind, remote_url_policy)
-        },
+        move |repo| repo.set_remote_url_with_output(&name, &url, kind, remote_url_policy),
     );
 }
 
-pub(super) fn schedule_checkout_conflict_side(
+fn schedule_checkout_conflict_side(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2031,9 +2072,9 @@ pub(super) fn schedule_checkout_conflict_side(
     );
 }
 
-pub(super) fn schedule_checkout_conflict_base(
+fn schedule_checkout_conflict_base(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2049,9 +2090,9 @@ pub(super) fn schedule_checkout_conflict_base(
     );
 }
 
-pub(super) fn schedule_accept_conflict_deletion(
+fn schedule_accept_conflict_deletion(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2067,9 +2108,9 @@ pub(super) fn schedule_accept_conflict_deletion(
     );
 }
 
-pub(super) fn schedule_launch_mergetool(
+fn schedule_launch_mergetool(
     executor: &TaskExecutor,
-    repos: &RepoMap,
+    repos: &RepositoryRuntimes,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
@@ -2189,8 +2230,12 @@ mod worktree_save_target_tests {
         std::fs::write(&victim, "original\n").expect("write victim");
         std::os::unix::fs::symlink(&victim, dir.path().join(".gitignore")).expect("symlink");
 
-        let err = append_gitignore_patterns_in_workdir(dir.path(), &["secret".to_string()])
-            .expect_err("symlinked .gitignore");
+        let err = append_gitignore_patterns_in_workdir(
+            &std::sync::Mutex::default(),
+            dir.path(),
+            &["secret".to_string()],
+        )
+        .expect_err("symlinked .gitignore");
         let ErrorKind::Backend(message) = err.kind() else {
             panic!("expected a backend refusal, got {err:?}");
         };
@@ -2288,5 +2333,624 @@ mod hook_activity_context_tests {
         });
         assert_eq!(context.as_deref(), Some("origin"));
         assert!(!context.unwrap().contains("token"));
+    }
+}
+
+fn current_branch_context(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<String> {
+    let state = thread_state
+        .read()
+        .unwrap_or_else(|error| error.into_inner());
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    match &repo.head_branch {
+        Loadable::Ready(branch) if branch != "HEAD" => Some(branch.clone()),
+        _ => None,
+    }
+}
+
+/// Returns `(local branch, remote/branch)` from the same UI-state snapshot
+/// that enabled the operation. This is display metadata only; Git still
+/// resolves and validates the real target when the command executes.
+fn tracking_branch_context(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<(String, String)> {
+    let state = thread_state
+        .read()
+        .unwrap_or_else(|error| error.into_inner());
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    let Loadable::Ready(local) = &repo.head_branch else {
+        return None;
+    };
+    let Loadable::Ready(branches) = &repo.branches else {
+        return None;
+    };
+    let upstream = branches
+        .iter()
+        .find(|branch| branch.name == *local)?
+        .upstream
+        .as_ref()?;
+    Some((
+        local.clone(),
+        format!("{}/{}", upstream.remote, upstream.branch),
+    ))
+}
+
+pub(super) fn schedule(
+    executor: &TaskExecutor,
+    filesystem_executor: &TaskExecutor,
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    backend: &Arc<dyn GitBackend>,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    work: RepoCommandEffect,
+) {
+    match work {
+        RepoCommandEffect::SaveWorktreeFile {
+            repo_id,
+            path,
+            contents,
+            expected_contents,
+            stage,
+            completion,
+        } => schedule_save_worktree_file(
+            filesystem_executor,
+            repos,
+            msg_tx,
+            repo_id,
+            SaveWorktreeFileRequest {
+                path,
+                contents,
+                expected_contents,
+                stage,
+                completion,
+            },
+        ),
+        RepoCommandEffect::AppendGitignorePatterns { repo_id, patterns } => {
+            schedule_append_gitignore_patterns(
+                filesystem_executor,
+                repos,
+                msg_tx,
+                repo_id,
+                patterns,
+            )
+        }
+        RepoCommandEffect::RunLargeFileCommand {
+            repo_id,
+            command,
+            auth,
+        } => schedule_large_file_command(executor, repos, msg_tx, repo_id, command, auth),
+        RepoCommandEffect::AppendGitattributesRule { repo_id, rule } => {
+            schedule_append_gitattributes_rule(filesystem_executor, repos, msg_tx, repo_id, rule)
+        }
+        RepoCommandEffect::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+            auth,
+        } => {
+            schedule_cherry_pick_commit(
+                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary, auth,
+            );
+        }
+        RepoCommandEffect::RevertCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+            auth,
+        } => {
+            schedule_revert_commit(
+                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary, auth,
+            );
+        }
+        RepoCommandEffect::ApplyFileChange {
+            repo_id,
+            target,
+            commit,
+            commit_retry,
+            auth,
+        } => {
+            schedule_apply_file_change(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                target,
+                commit,
+                commit_retry,
+                auth,
+            );
+        }
+        RepoCommandEffect::ExportPatch {
+            repo_id,
+            commit_id,
+            dest,
+        } => schedule_export_patch(executor, repos, msg_tx, repo_id, commit_id, dest),
+        RepoCommandEffect::ApplyPatch { repo_id, patch } => {
+            schedule_apply_patch(executor, repos, msg_tx, repo_id, patch);
+        }
+        RepoCommandEffect::AddWorktree {
+            repo_id,
+            path,
+            reference,
+        } => schedule_add_worktree(executor, repos, msg_tx, repo_id, path, reference),
+        RepoCommandEffect::RemoveWorktree { repo_id, path } => {
+            schedule_remove_worktree(executor, repos, msg_tx, repo_id, path);
+        }
+        RepoCommandEffect::ForceRemoveWorktree { repo_id, path } => {
+            schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path);
+        }
+        RepoCommandEffect::CheckSubmoduleAddTrust {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            remote_url_policy,
+        } => {
+            schedule_check_submodule_add_trust(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                CheckSubmoduleAddTrustRequest {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    remote_url_policy,
+                },
+            );
+        }
+        RepoCommandEffect::CheckSubmoduleUpdateTrust {
+            repo_id,
+            remote_url_policy,
+        } => {
+            schedule_check_submodule_update_trust(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                remote_url_policy,
+            );
+        }
+        RepoCommandEffect::CheckSubmoduleLoadTrust {
+            repo_id,
+            path,
+            remote_url_policy,
+        } => {
+            schedule_check_submodule_load_trust(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                path,
+                remote_url_policy,
+            );
+        }
+        RepoCommandEffect::AddSubmodule {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+            remote_url_policy,
+            auth,
+        } => {
+            schedule_add_submodule(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                AddSubmoduleRequest {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    approved_sources,
+                    remote_url_policy,
+                    auth,
+                },
+            );
+        }
+        RepoCommandEffect::UpdateSubmodules {
+            repo_id,
+            approved_sources,
+            remote_url_policy,
+            auth,
+        } => {
+            schedule_update_submodules(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                approved_sources,
+                remote_url_policy,
+                auth,
+            );
+        }
+        RepoCommandEffect::LoadSubmodule {
+            repo_id,
+            path,
+            approved_sources,
+            remote_url_policy,
+            auth,
+        } => {
+            schedule_load_submodule(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                path,
+                approved_sources,
+                remote_url_policy,
+                auth,
+            );
+        }
+        RepoCommandEffect::ChangeSubmodulePointer {
+            repo_id,
+            path,
+            reference,
+        } => {
+            schedule_change_submodule_pointer(executor, repos, msg_tx, repo_id, path, reference);
+        }
+        RepoCommandEffect::RemoveSubmodule { repo_id, path } => {
+            schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);
+        }
+        RepoCommandEffect::StageHunk { repo_id, patch } => {
+            schedule_stage_hunk(executor, repos, msg_tx, repo_id, patch);
+        }
+        RepoCommandEffect::ApplyPreparedDiffPatch {
+            repo_id,
+            lifetime,
+            view,
+            file_rev,
+            generation,
+            prepared,
+        } => {
+            use gitcomet_core::patch_action::{PatchActionError, PatchOperation};
+            let command = match prepared.operation() {
+                PatchOperation::Stage => RepoCommandKind::StageHunk,
+                PatchOperation::Unstage => RepoCommandKind::UnstageHunk,
+                PatchOperation::Discard => RepoCommandKind::ApplyWorktreePatch { reverse: true },
+            };
+            let filesystem = msg_tx.filesystem;
+            let thread_state = Arc::clone(thread_state);
+            schedule_repo_command_task(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                command,
+                None,
+                move |repo| {
+                    let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+                    let _mutation = match gate.try_write() {
+                        Ok(guard) => guard,
+                        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            return Err(Error::new(ErrorKind::Backend(
+                                "Another write is in progress. Prepare the patch again when it finishes."
+                                    .into(),
+                            )));
+                        }
+                    };
+                    let _filesystem = match filesystem.try_lock() {
+                        Ok(guard) => guard,
+                        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            return Err(Error::new(ErrorKind::Backend(
+                                "A filesystem operation is in progress. Prepare the patch again when it finishes."
+                                    .into(),
+                            )));
+                        }
+                    };
+                    let current = thread_state
+                        .read()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .is_some_and(|repo| {
+                            repo.matches_diff_origin(
+                                lifetime,
+                                view,
+                                file_rev,
+                                generation,
+                                prepared.target(),
+                            )
+                        });
+                    if !current {
+                        return Err(Error::new(ErrorKind::Backend(
+                            PatchActionError::Stale.to_string(),
+                        )));
+                    }
+                    repo.apply_prepared_diff_patch(&prepared)
+                },
+            );
+        }
+        RepoCommandEffect::UnstageHunk { repo_id, patch } => {
+            schedule_unstage_hunk(executor, repos, msg_tx, repo_id, patch);
+        }
+        RepoCommandEffect::ApplyWorktreePatch {
+            repo_id,
+            patch,
+            reverse,
+        } => schedule_apply_worktree_patch(executor, repos, msg_tx, repo_id, patch, reverse),
+        RepoCommandEffect::SafePushAfterCommit {
+            repo_id,
+            context,
+            auth,
+        } => {
+            schedule_safe_push_after_commit(executor, repos, msg_tx, repo_id, context, auth);
+        }
+        RepoCommandEffect::FetchAll {
+            repo_id,
+            prune,
+            auth,
+        } => schedule_fetch_all(executor, repos, msg_tx, repo_id, prune, auth),
+        RepoCommandEffect::FetchRefspecs {
+            repo_id,
+            remote,
+            refspecs,
+            auth,
+        } => schedule_fetch_refspecs(executor, repos, msg_tx, repo_id, remote, refspecs, auth),
+        RepoCommandEffect::PruneMergedBranches { repo_id } => {
+            schedule_prune_merged_branches(executor, repos, msg_tx, repo_id)
+        }
+        RepoCommandEffect::PruneLocalTags { repo_id } => {
+            schedule_prune_local_tags(executor, repos, msg_tx, repo_id)
+        }
+        RepoCommandEffect::CheckRepoMaintenance { repo_id } => {
+            schedule_check_maintenance(repos, msg_tx, repo_id)
+        }
+        RepoCommandEffect::RunMaintenance { repo_id } => {
+            schedule_run_maintenance(repos, Arc::clone(backend), msg_tx, repo_id)
+        }
+        RepoCommandEffect::Pull {
+            repo_id,
+            mode,
+            prune,
+            auth,
+        } => schedule_pull(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            mode,
+            prune,
+            tracking_branch_context(thread_state, repo_id),
+            auth,
+        ),
+        RepoCommandEffect::PullBranch {
+            repo_id,
+            remote,
+            branch,
+            prune,
+            auth,
+        } => schedule_pull_branch(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            remote,
+            branch,
+            prune,
+            current_branch_context(thread_state, repo_id),
+            auth,
+        ),
+        RepoCommandEffect::MergeRef { repo_id, reference } => {
+            schedule_merge_ref(executor, repos, msg_tx, repo_id, reference);
+        }
+        RepoCommandEffect::SquashRef { repo_id, reference } => {
+            schedule_squash_ref(executor, repos, msg_tx, repo_id, reference);
+        }
+        RepoCommandEffect::PushWithTags {
+            repo_id,
+            request,
+            auth,
+        } => schedule_push_with_tags(executor, repos, msg_tx, repo_id, request, auth),
+        RepoCommandEffect::Push { repo_id, auth } => schedule_push(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            tracking_branch_context(thread_state, repo_id),
+            auth,
+        ),
+        RepoCommandEffect::PushAfterCommit {
+            repo_id,
+            target,
+            set_upstream,
+            auth,
+        } => {
+            schedule_push_after_commit(executor, repos, msg_tx, repo_id, target, set_upstream, auth)
+        }
+        RepoCommandEffect::ForcePush { repo_id, auth } => schedule_force_push(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            tracking_branch_context(thread_state, repo_id),
+            auth,
+        ),
+        RepoCommandEffect::ForcePushWithLease {
+            repo_id,
+            lease,
+            auth,
+        } => schedule_force_push_with_lease(executor, repos, msg_tx, repo_id, lease, auth),
+        RepoCommandEffect::PushSetUpstream {
+            repo_id,
+            remote,
+            branch,
+            auth,
+        } => schedule_push_set_upstream(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            remote,
+            branch,
+            current_branch_context(thread_state, repo_id),
+            auth,
+        ),
+        RepoCommandEffect::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        } => schedule_set_upstream_branch(executor, repos, msg_tx, repo_id, branch, upstream),
+        RepoCommandEffect::UnsetUpstreamBranch { repo_id, branch } => {
+            schedule_unset_upstream_branch(executor, repos, msg_tx, repo_id, branch)
+        }
+        RepoCommandEffect::DeleteRemoteBranch {
+            repo_id,
+            remote,
+            branch,
+            auth,
+        } => schedule_delete_remote_branch(executor, repos, msg_tx, repo_id, remote, branch, auth),
+        RepoCommandEffect::DeleteRemoteBranches {
+            repo_id,
+            remote,
+            branches,
+            auth,
+        } => schedule_delete_remote_branches(
+            executor, repos, msg_tx, repo_id, remote, branches, auth,
+        ),
+        RepoCommandEffect::Reset {
+            repo_id,
+            target,
+            mode,
+        } => schedule_reset(executor, repos, msg_tx, repo_id, target, mode),
+        RepoCommandEffect::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        } => schedule_squash_commits(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        ),
+        RepoCommandEffect::Rebase { repo_id, onto } => {
+            schedule_rebase(executor, repos, msg_tx, repo_id, onto)
+        }
+        RepoCommandEffect::RebaseContinue { repo_id, auth } => {
+            schedule_rebase_continue(executor, repos, msg_tx, repo_id, auth);
+        }
+        RepoCommandEffect::RebaseAbort { repo_id } => {
+            schedule_rebase_abort(executor, repos, msg_tx, repo_id)
+        }
+        RepoCommandEffect::InteractiveRebase {
+            repo_id,
+            base,
+            entries,
+            interactive,
+        } => schedule_interactive_rebase(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            base,
+            entries,
+            interactive,
+        ),
+        RepoCommandEffect::InteractiveCherryPick {
+            repo_id,
+            entries,
+            commit,
+        } => schedule_interactive_cherry_pick(executor, repos, msg_tx, repo_id, entries, commit),
+        RepoCommandEffect::MergeAbort { repo_id } => {
+            schedule_merge_abort(executor, repos, msg_tx, repo_id)
+        }
+        RepoCommandEffect::CreateTag {
+            repo_id,
+            name,
+            target,
+            message,
+            annotated,
+        } => schedule_create_tag(
+            executor, repos, msg_tx, repo_id, name, target, message, annotated,
+        ),
+        RepoCommandEffect::DeleteTag { repo_id, name } => {
+            schedule_delete_tag(executor, repos, msg_tx, repo_id, name);
+        }
+        RepoCommandEffect::PushTag {
+            repo_id,
+            remote,
+            name,
+            auth,
+        } => schedule_push_tag(executor, repos, msg_tx, repo_id, remote, name, auth),
+        RepoCommandEffect::DeleteRemoteTag {
+            repo_id,
+            remote,
+            name,
+            auth,
+        } => schedule_delete_remote_tag(executor, repos, msg_tx, repo_id, remote, name, auth),
+        RepoCommandEffect::AddRemote {
+            repo_id,
+            name,
+            url,
+            remote_url_policy,
+        } => {
+            schedule_add_remote(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                name,
+                url,
+                remote_url_policy,
+            );
+        }
+        RepoCommandEffect::RemoveRemote { repo_id, name } => {
+            schedule_remove_remote(executor, repos, msg_tx, repo_id, name);
+        }
+        RepoCommandEffect::SetRemoteUrl {
+            repo_id,
+            name,
+            url,
+            kind,
+            remote_url_policy,
+        } => schedule_set_remote_url(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            name,
+            url,
+            kind,
+            remote_url_policy,
+        ),
+        RepoCommandEffect::CheckoutConflictSide {
+            repo_id,
+            path,
+            side,
+        } => schedule_checkout_conflict_side(executor, repos, msg_tx, repo_id, path, side),
+        RepoCommandEffect::AcceptConflictDeletion { repo_id, path } => {
+            schedule_accept_conflict_deletion(executor, repos, msg_tx, repo_id, path)
+        }
+        RepoCommandEffect::CheckoutConflictBase { repo_id, path } => {
+            schedule_checkout_conflict_base(executor, repos, msg_tx, repo_id, path)
+        }
+        RepoCommandEffect::LaunchMergetool { repo_id, path } => {
+            schedule_launch_mergetool(executor, repos, msg_tx, repo_id, path);
+        }
     }
 }

@@ -43,13 +43,15 @@ pub(super) fn panel(
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     if let Some(branch) = remove_branch.clone() {
                         let root_view = this.root_view.clone();
-                        let _ = root_view.update(cx, |root, _cx| {
-                            root.register_pending_worktree_branch_removal(
+                        let _ = root_view.request(
+                            RootRequest::RegisterPendingWorktreeBranchRemoval {
                                 repo_id,
-                                path.clone(),
+                                path: path.clone(),
                                 branch,
-                            );
-                        });
+                            },
+                            None,
+                            cx,
+                        );
                     }
                     this.store.dispatch(Msg::ForceRemoveWorktree {
                         repo_id,

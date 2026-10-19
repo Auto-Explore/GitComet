@@ -219,20 +219,7 @@ pub struct ConflictRegionResolutionUpdate {
     pub resolution: gitcomet_core::conflict_session::ConflictRegionResolution,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ConflictAutosolveStats {
-    pub pass1: usize,
-    pub pass2_split: usize,
-    pub pass1_after_split: usize,
-    pub regex: usize,
-    pub history: usize,
-}
-
-impl ConflictAutosolveStats {
-    pub fn total_resolved(self) -> usize {
-        self.pass1 + self.pass2_split + self.pass1_after_split + self.regex + self.history
-    }
-}
+pub use gitcomet_core::conflict_session::ConflictAutosolveStats;
 
 /// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -305,6 +292,21 @@ pub enum Msg {
     AcknowledgeRepoOpenFailures {
         through_revision: u64,
     },
+    /// Release notifications the window has shown, retaining any pushed after
+    /// `through_seq` while the acknowledgement was queued. The store worker
+    /// applies it with its next state change rather than publishing for it.
+    AcknowledgeNotifications {
+        through_seq: u64,
+    },
+    /// Release the diagnostics and command results the window has shown for
+    /// this repository lifetime, retaining any appended after them. Applied
+    /// with the store's next state change, like `AcknowledgeNotifications`.
+    AcknowledgeRepoFeedback {
+        repo_id: RepoId,
+        lifetime: u64,
+        diagnostics_through_seq: u64,
+        command_log_through_seq: u64,
+    },
     RestoreSession {
         open_repos: Vec<PathBuf>,
         active_repo: Option<PathBuf>,
@@ -336,6 +338,7 @@ pub enum Msg {
         operation_id: GitOperationId,
     },
     SubmitAuthPrompt {
+        generation: u64,
         username: Option<String>,
         secret: String,
     },
@@ -721,6 +724,14 @@ pub enum Msg {
     StageHunk {
         repo_id: RepoId,
         patch: ContentBytes,
+    },
+    ApplyPreparedDiffPatch {
+        repo_id: RepoId,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
+        prepared: std::sync::Arc<gitcomet_core::patch_action::PreparedDiffPatch>,
     },
     UnstageHunk {
         repo_id: RepoId,
@@ -1290,6 +1301,11 @@ pub enum Msg {
 
 #[derive(strum::IntoStaticStr)]
 pub enum InternalMsg {
+    AuthPromptValidated {
+        generation: u64,
+        result: gitcomet_core::auth::PassphraseValidation,
+        auth: StagedGitAuth,
+    },
     TagPushPreviewLoaded {
         repo_id: RepoId,
         mode: gitcomet_core::tag_push::TagPushMode,
@@ -1335,7 +1351,7 @@ pub enum InternalMsg {
     },
     RepoLoadFinished {
         repo_id: RepoId,
-        load_epoch: u64,
+        load_epoch: crate::model::RepoLoadEpoch,
         message: Box<InternalMsg>,
     },
     RepoOpenedOk {
@@ -1469,6 +1485,7 @@ pub enum InternalMsg {
         result: Result<String, Error>,
     },
     FileHistoryLoaded {
+        request: crate::model::FileHistoryRequestId,
         repo_id: RepoId,
         path: PathBuf,
         /// The cursor the page was requested with: `None` for the first page,
@@ -1483,6 +1500,7 @@ pub enum InternalMsg {
         result: Result<Vec<gitcomet_core::services::BlameLine>, Error>,
     },
     ConflictFileLoaded {
+        request: crate::model::ConflictLoadRequestId,
         repo_id: RepoId,
         path: PathBuf,
         result: Box<Result<Option<crate::model::ConflictFile>, Error>>,

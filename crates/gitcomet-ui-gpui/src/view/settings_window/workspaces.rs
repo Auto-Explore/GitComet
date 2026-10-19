@@ -128,7 +128,6 @@ impl SettingsWindowView {
                             gpui::rgba(0x00000000)
                         })
                         .p(px(2.0))
-                        .cursor(CursorStyle::PointingHand)
                         .child(
                             div()
                                 .size_full()
@@ -165,11 +164,9 @@ impl SettingsWindowView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
-        self.workspace_name_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         let workspaces = sorted_workspaces(cx);
-        let new_window_shortcut = crate::view::shortcut_labels::secondary_shortcut("N");
-        let open_workspace_shortcut = crate::view::shortcut_labels::secondary_shortcut("Shift+R");
+        let new_window_shortcut = crate::kit::components::secondary_shortcut("N");
+        let open_workspace_shortcut = crate::kit::components::secondary_shortcut("Shift+R");
         let new_workspace_button =
             components::Button::new("settings_window_workspace_new", "New Workspace")
                 .style(components::ButtonStyle::Outlined)

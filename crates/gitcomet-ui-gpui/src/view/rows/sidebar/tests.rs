@@ -973,7 +973,6 @@ fn branch_click_history_reveal_target_preserves_a_slash_remote_identity() {
 
 #[gpui::test]
 fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     // OpenRepo normalizes paths. Give it and the worktree list the same
     // native absolute paths, including on Windows and symlinked temp dirs.
     let worktrees_dir = tempfile::tempdir().expect("worktree fixture directory");
@@ -1381,7 +1380,6 @@ fn branch_badges_are_static_and_worktree_badge_remains_interactive(cx: &mut gpui
 
 #[gpui::test]
 fn branch_reveal_marks_the_branch_chip_on_the_revealed_history_row(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1483,7 +1481,6 @@ fn branch_reveal_marks_the_branch_chip_on_the_revealed_history_row(cx: &mut gpui
 
 #[gpui::test]
 fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1557,14 +1554,14 @@ fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::Test
     wait_until(cx, "history view active repo", |cx| {
         sync_view_for_tests(cx, &view);
         cx.update(|_window, app| {
-            let (sidebar_pane, main_pane) = {
+            let (sidebar_pane, diff_renderer) = {
                 let root = view.read(app);
-                (root.sidebar_pane.clone(), root.main_pane.clone())
+                (root.sidebar_pane.clone(), root.diff_renderer.clone())
             };
-            let history_view = main_pane.read(app).history_view.clone();
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
 
             sidebar_pane.read(app).active_repo_id() == Some(repo_id)
-                && main_pane.read(app).active_repo_id() == Some(repo_id)
+                && diff_renderer.read(app).active_repo_id() == Some(repo_id)
                 && history_view.read(app).active_repo_id() == Some(repo_id)
         })
     });
@@ -1599,7 +1596,6 @@ fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::Test
 fn branch_reveal_closes_open_history_refs_hover_without_reentrant_root_update(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =

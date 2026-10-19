@@ -3,17 +3,13 @@
 
 use super::*;
 use crate::diff_session::{DiffSessionContent, DiffSessionMsg, DiffSessionWork, DiffViewId};
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{Diff, DiffArea, DiffTarget};
 
-fn setup() -> (
-    FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    AtomicU64,
-    AppState,
-    RepoId,
-) {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+fn setup() -> (RepositoryRuntimes, AtomicU64, AppState, RepoId) {
+    let mut repos: RepositoryRuntimes = Default::default();
     let repo_id = RepoId(1);
-    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/sessions")));
+    repos.attach_repository_for_test(repo_id, Arc::new(DummyRepo::new("/tmp/sessions")));
     let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -409,6 +405,46 @@ fn change_lists_load_by_generation_and_give_each_file_its_target() {
     );
     assert!(second.cancellation.is_cancelled());
     assert!(state.repos[0].change_lists.is_empty());
+}
+
+#[test]
+fn watcher_edits_inside_a_submodule_reload_its_gitlink_session() {
+    let (mut repos, ids, mut state, repo_id) = setup();
+    let lifetime = state.repos[0].lifetime();
+    let view = DiffViewId::next();
+    reduce(
+        &mut repos,
+        &ids,
+        &mut state,
+        Msg::DiffSession(DiffSessionMsg::Open {
+            repo_id,
+            lifetime,
+            view,
+            target: worktree("vendor/sub"),
+        }),
+    );
+    for (path, queued) in [
+        ("vendor/subtle.rs", false),
+        ("vendor/sub-old/lib.rs", false),
+        ("vendor/sub/src/lib.rs", true),
+    ] {
+        reduce(
+            &mut repos,
+            &ids,
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id,
+                change: RepoExternalChange {
+                    paths: crate::msg::ChangedPaths::known(vec![path.into()]),
+                    ..RepoExternalChange::worktree()
+                },
+            },
+        );
+        assert_eq!(
+            state.repos[0].diff_sessions[&view].refresh_queued, queued,
+            "{path}"
+        );
+    }
 }
 
 #[test]

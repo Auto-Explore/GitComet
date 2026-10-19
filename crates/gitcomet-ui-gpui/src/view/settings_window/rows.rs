@@ -73,7 +73,6 @@ impl SettingsWindowView {
             .items_center()
             .gap_2()
             .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
             .control_interaction(
                 InteractionStyle::new(theme),
                 InteractionState::default().selected(selected, selected_bg),
@@ -239,6 +238,16 @@ impl SettingsWindowView {
         components::settings_toggle_row(id, label, enabled, theme, self.row_scale(theme))
     }
 
+    pub(super) fn disabled_toggle_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        enabled: bool,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        components::settings_disabled_toggle_row(id, label, enabled, theme, self.row_scale(theme))
+    }
+
     pub(super) fn info_row(
         &self,
         id: impl Into<SharedString>,
@@ -294,7 +303,7 @@ impl SettingsWindowView {
                     format!("settings_window_{}_{}", row.key, index)
                 }
                 .into();
-                let input = self.environment_value_input(id.clone(), row.value, theme, cx);
+                let input = self.environment_value_input(id.clone(), row.value, cx);
                 shown.insert(id.clone());
                 card = card.child(self.info_row(id, row.label, input, theme));
             }
@@ -309,7 +318,6 @@ impl SettingsWindowView {
         &mut self,
         id: SharedString,
         value: String,
-        theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = self
@@ -332,7 +340,6 @@ impl SettingsWindowView {
             })
             .clone();
         input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
             input.set_text(value, cx);
         });
         input
@@ -595,7 +602,6 @@ impl SettingsWindowView {
                 .operating_system
                 .clone()
                 .unwrap_or_default(),
-            theme,
             cx,
         );
         div()

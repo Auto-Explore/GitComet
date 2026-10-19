@@ -42,29 +42,35 @@ fn main() {
         let (witness, commands) = gitcomet_git_gix::command_trace::capture(|| {
             match operation.as_str() {
                 "diff" => {
-                    let diff = repo.diff_file_text(&target).unwrap().expect("text diff");
+                    let diff = repo
+                        .diff_file_text(
+                            &target,
+                            None,
+                            &gitcomet_core::services::CancellationToken::new(),
+                        )
+                        .unwrap()
+                        .expect("text diff");
                     json!({"old": diff.old_source.as_ref().map(|source| &source.path),
                     "new": diff.new_source.as_ref().map(|source| &source.path)})
                 }
                 "status" => {
-                    let status = repo.status().unwrap();
+                    let status = repo
+                        .status(&gitcomet_core::services::CancellationToken::new())
+                        .unwrap();
                     json!({"staged":status.staged.len(), "unstaged":status.unstaged.len()})
                 }
                 "large-file-support" => {
-                    let support = repo
-                        .large_file_support_cancellable(&Default::default())
-                        .unwrap();
+                    let support = repo.large_file_support(&Default::default()).unwrap();
                     json!({"lfs": support.lfs.in_use(), "annex": support.annex.in_use(),
                         "lfs_patterns": support.lfs.tracked_patterns.len(),
                         "annex_repositories": support.annex.repositories.len()})
                 }
                 "large-file-status" => {
-                    let status = repo.status().unwrap();
+                    let status = repo
+                        .status(&gitcomet_core::services::CancellationToken::new())
+                        .unwrap();
                     let files = repo
-                        .uncommitted_large_files_for_status_cancellable(
-                            &status,
-                            &Default::default(),
-                        )
+                        .uncommitted_large_files_for_status(&status, &Default::default())
                         .unwrap();
                     json!({"staged": files.staged.len(), "unstaged": files.unstaged.len()})
                 }
@@ -88,15 +94,15 @@ fn main() {
                     json!("pushed")
                 }
                 "fetch" => {
-                    repo.fetch_all_with_output().unwrap();
+                    repo.fetch_all(true).unwrap();
                     json!("fetched")
                 }
                 "pull" | "pull-merge" => {
-                    repo.pull_with_output(PullMode::Merge).unwrap();
+                    repo.pull(PullMode::Merge, true).unwrap();
                     json!("pulled")
                 }
                 "pull-rebase" => {
-                    repo.pull_with_output(PullMode::Rebase).unwrap();
+                    repo.pull(PullMode::Rebase, true).unwrap();
                     json!("pulled")
                 }
                 "lfs-fetch" => {

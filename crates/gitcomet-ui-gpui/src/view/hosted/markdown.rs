@@ -68,6 +68,7 @@ impl Render for MarkdownView {
             query: None,
             reveal: Default::default(),
             scroll: None,
+            diagram_heights: crate::view::diagram_preview::block::DiagramHeights::new(cx),
             hovered_link: None,
             change_extents: None,
             tasks_editable: false,

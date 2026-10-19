@@ -2,6 +2,7 @@ use super::*;
 use crate::appearance::{Appearance, FontRole, UiDensity};
 use crate::preference_writer::PreferenceWriter;
 use crate::ui_scale;
+use crate::view::preference_change::PreferenceChange;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, current_git_runtime, select_git_executable_path,
@@ -321,6 +322,7 @@ enum SettingsSection {
     FileListLayout,
     FileListSort,
     DiffContentMode,
+    DiffEngine,
     Diff,
     DiffViewMode,
     DiffTabSize,
@@ -351,9 +353,11 @@ impl SettingsSection {
             Self::TerminalExternal | Self::TerminalButton => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
             Self::FileListLayout | Self::FileListSort => SettingsCategory::ChangeTracking,
-            Self::DiffContentMode | Self::Diff | Self::DiffViewMode | Self::DiffTabSize => {
-                SettingsCategory::Diff
-            }
+            Self::DiffEngine
+            | Self::DiffContentMode
+            | Self::Diff
+            | Self::DiffViewMode
+            | Self::DiffTabSize => SettingsCategory::Diff,
             Self::GitLogDefaultMode
             | Self::GitLogColumns
             | Self::GitLogBranchNames
@@ -497,14 +501,14 @@ impl SettingsCategory {
             Self::Terminal => "terminal external terminal button opens status bar",
             Self::ChangeTracking => "change tracking untracked files",
             Self::Diff => {
-                "diff mode scroll sync show whitespace changes reveal whitespace characters \
+                "diff engine difftastic structural line by line mode scroll sync show whitespace changes reveal whitespace characters \
                  word wrap show line numbers unified split"
             }
             Self::FileEditing => {
                 "file editing edit file auto save autosave save automatically editor"
             }
             Self::GitLog => {
-                "git log default history mode history columns relative dates show tags graph \
+                "git log default history mode history columns relative dates show tags graph gradient fade glow \
                  author sha files tab follows selected commit browse repository file browsing start exit \
                  verify commit signatures verification signing key trust"
             }
@@ -610,7 +614,7 @@ pub(crate) struct SettingsWindowView {
     ui_scale_percent: u32,
     /// The "Default UI scale" setting.
     default_ui_scale_percent: u32,
-    pub(super) window_controls_mode: crate::window_controls::WindowControlsMode,
+    pub(super) window_controls_mode: crate::kit::window_chrome::controls::WindowControlsMode,
     pub(super) browser_open_target: crate::app::BrowserOpenTarget,
     appearance_metrics: Appearance,
     font_size_inputs: [Entity<components::TextInput>; 3],
@@ -649,6 +653,7 @@ pub(crate) struct SettingsWindowView {
     terminal_status: Option<TerminalSettingsStatus>,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
+    diff_engine: DiffEngine,
     diff_view_mode: DiffViewMode,
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
@@ -661,6 +666,7 @@ pub(crate) struct SettingsWindowView {
     diff_scroll_sync: DiffScrollSync,
     history_branch_names: HistoryBranchNamesMode,
     history_show_graph: bool,
+    history_show_graph_gradient: bool,
     history_show_author: bool,
     history_show_date: bool,
     history_show_sha: bool,
@@ -706,7 +712,7 @@ pub(crate) struct SettingsWindowView {
     workspace_name_input: Entity<components::TextInput>,
     workspace_delete_confirm: Option<gitcomet_state::session::WorkspaceId>,
     hover_resize_edge: Option<ResizeEdge>,
-    title_drag_state: chrome::TitleBarDragState,
+    title_drag_state: crate::kit::window_chrome::TitleBarDragState,
     _git_executable_input_subscription: gpui::Subscription,
     _external_editor_custom_path_input_subscription: gpui::Subscription,
     _external_editor_custom_arguments_input_subscription: gpui::Subscription,
@@ -882,7 +888,7 @@ fn settings_window_titlebar_options() -> TitlebarOptions {
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
         traffic_light_position: cfg!(target_os = "macos")
-            .then_some(chrome::macos_traffic_light_position()),
+            .then_some(crate::kit::window_chrome::macos_traffic_light_position()),
     }
 }
 
@@ -895,7 +901,7 @@ fn settings_window_client_inset_for_scale(ui_scale_percent: u32) -> Pixels {
     if cfg!(target_os = "windows") {
         px(0.0)
     } else {
-        chrome::client_side_decoration_inset(ui_scale_percent)
+        crate::kit::window_chrome::client_side_decoration_inset(ui_scale_percent)
     }
 }
 
@@ -908,7 +914,7 @@ fn settings_window_frame(
     if cfg!(target_os = "windows") {
         content
     } else {
-        chrome::window_frame(theme, decorations, content, None, ui_scale_percent)
+        crate::kit::window_chrome::window_frame(theme, decorations, content, None, ui_scale_percent)
     }
 }
 
@@ -1055,8 +1061,7 @@ impl SettingsWindowView {
         let ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         let ui_scale = crate::session_ui::ui_scale(&ui_session, cx);
-        let window_controls =
-            crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+        let window_controls = crate::session_ui::window_controls(&ui_session, cx);
         let browser_open_target = ui_session
             .browser_open_target
             .as_deref()
@@ -1074,6 +1079,7 @@ impl SettingsWindowView {
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
         let diff_whitespace_mode = ui_preferences.diff.whitespace_mode;
+        let diff_engine = ui_preferences.diff.engine;
         let diff_view_mode = ui_preferences.diff.view_mode;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
@@ -1085,6 +1091,7 @@ impl SettingsWindowView {
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let history_branch_names = ui_preferences.history.branch_names;
         let history_show_graph = ui_preferences.history.show_graph;
+        let history_show_graph_gradient = ui_preferences.history.show_graph_gradient;
         let history_show_author = ui_preferences.history.show_author;
         let history_show_date = ui_preferences.history.show_date;
         let history_show_sha = ui_preferences.history.show_sha;
@@ -1169,7 +1176,6 @@ impl SettingsWindowView {
                 window,
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_text(terminal_preferences.external_terminal_program.clone(), cx);
             input
         });
@@ -1184,7 +1190,6 @@ impl SettingsWindowView {
                 window,
                 cx,
             );
-            input.set_theme(theme, cx);
             input.set_line_height(Some(px(20.0)), cx);
             input.set_text(terminal_preferences.external_args_multiline(), cx);
             input
@@ -1283,7 +1288,7 @@ impl SettingsWindowView {
                 cx.notify();
             });
         let search_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
+            components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Search".into(),
                     leading_icon: Some("icons/zoom.svg"),
@@ -1291,9 +1296,7 @@ impl SettingsWindowView {
                 },
                 window,
                 cx,
-            );
-            input.set_theme(theme, cx);
-            input
+            )
         });
         let search_input_subscription = cx.observe(&search_input, |this, input, cx| {
             let next = input.read(cx).text().to_string();
@@ -1348,7 +1351,6 @@ impl SettingsWindowView {
                 let mut input =
                     components::TextInput::new(components::TextInputOptions::default(), window, cx);
                 input.set_text(appearance_metrics.size(role).to_string(), cx);
-                input.set_theme(theme, cx);
                 input
             })
         });
@@ -1426,6 +1428,7 @@ impl SettingsWindowView {
             terminal_status: None,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_engine,
             diff_view_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
@@ -1438,6 +1441,7 @@ impl SettingsWindowView {
             diff_scroll_sync,
             history_branch_names,
             history_show_graph,
+            history_show_graph_gradient,
             history_show_author,
             history_show_date,
             history_show_sha,
@@ -1476,7 +1480,7 @@ impl SettingsWindowView {
             external_editor_custom_arguments_input,
             expanded_section: None,
             hover_resize_edge: None,
-            title_drag_state: chrome::TitleBarDragState::default(),
+            title_drag_state: crate::kit::window_chrome::TitleBarDragState::default(),
             _git_executable_input_subscription: git_executable_input_subscription,
             _external_editor_custom_path_input_subscription:
                 external_editor_custom_path_input_subscription,

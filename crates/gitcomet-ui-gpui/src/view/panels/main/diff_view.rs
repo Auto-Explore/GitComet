@@ -1,8 +1,9 @@
 use super::*;
 use crate::kit::interaction as controls;
 use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
-use crate::view::panes::main::DiskSurface;
-use crate::view::panes::main::diff_search::DiffSearchOptions;
+use crate::view::panes::diff::diff_search::DiffSearchOptions;
+use crate::view::panes::diff::services::{DiffCommand, DiffPreference};
+use crate::view::panes::diff::{DiffBody, DiskSurface};
 use gpui::Focusable;
 
 struct DiffSearchOverlayLayer {
@@ -66,13 +67,13 @@ impl Element for DiffSearchOverlayLayer {
     }
 }
 
-impl Focusable for MainPaneView {
+impl Focusable for DiffRenderer {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.diff_panel_focus_handle.clone()
     }
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// A thin vertical drag handle at the annotation column's right edge that
     /// resizes the column. Positioned absolutely; the caller's container must
     /// be `relative()`.
@@ -197,7 +198,8 @@ impl MainPaneView {
             status_section_order.as_deref(),
         )
         .and_then(|navigation| navigation.next_or_prev_path());
-        let status_ready = repo.status_entries_for_area(area).is_some();
+        let status_ready =
+            !self.shows_linked_worktree() && repo.status_entries_for_area(area).is_some();
 
         // A multi-file status selection wins over the single shown file, so
         // the shortcut matches what the status row button and context menu
@@ -514,7 +516,8 @@ impl MainPaneView {
         {
             let path = path.clone();
             let area = *area;
-            let status_ready = repo.status_entries_for_area(area).is_some();
+            let status_ready =
+                !self.shows_linked_worktree() && repo.status_entries_for_area(area).is_some();
 
             match key {
                 "s" if area == DiffArea::Unstaged && !mods.shift => {
@@ -674,16 +677,10 @@ impl MainPaneView {
                 }
                 "e" if !mods.shift && self.external_editor_available() => {
                     let full_path = repo.spec.workdir.join(&path);
-                    let root_view = self.root_view.clone();
-                    let bound = self.store.binding.is_some();
-                    let p = full_path;
-                    cx.defer(move |cx| {
-                        if !bound && let Some(root) = root_view.upgrade() {
-                            root.update(cx, |root, cx| {
-                                root.open_path_in_external_code_editor(p, cx);
-                            });
-                        }
-                    });
+                    if self.hosted_decor.is_none() {
+                        self.commands
+                            .defer(DiffCommand::OpenExternal(full_path), cx);
+                    }
                     handled = true;
                 }
                 "c" if mods.shift => {
@@ -726,14 +723,11 @@ impl MainPaneView {
             if let Some(path) = path {
                 match key {
                     "h" if !mods.shift => {
-                        let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
-                        self.open_popover_at(
-                            PopoverKind::FileHistory {
-                                repo_id,
+                        self.commands.defer(
+                            DiffCommand::OpenFileHistory {
+                                repo: repo_id,
                                 path: path.clone(),
                             },
-                            anchor,
-                            window,
                             cx,
                         );
                         handled = true;
@@ -741,16 +735,10 @@ impl MainPaneView {
 
                     "e" if !mods.shift && self.external_editor_available() => {
                         let full_path = repo.spec.workdir.join(&path);
-                        let root_view = self.root_view.clone();
-                        let bound = self.store.binding.is_some();
-                        let p = full_path;
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.open_path_in_external_code_editor(p, cx);
-                                });
-                            }
-                        });
+                        if self.hosted_decor.is_none() {
+                            self.commands
+                                .defer(DiffCommand::OpenExternal(full_path), cx);
+                        }
                         handled = true;
                     }
                     _ => {}
@@ -838,15 +826,14 @@ impl MainPaneView {
                     } else if self.active_conflict_target().is_some() {
                         self.set_diff_view_mode(DiffViewMode::Split, cx);
                         handled = true;
-                        let root_view = self.root_view.clone();
-                        let bound = self.store.binding.is_some();
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.set_diff_view_mode(DiffViewMode::Split, cx);
-                                });
-                            }
-                        });
+                        if self.hosted_decor.is_none() {
+                            self.commands.defer(
+                                DiffCommand::Preference(DiffPreference::Layout(
+                                    DiffViewMode::Split,
+                                )),
+                                cx,
+                            );
+                        }
                     // The markdown diff preview renders both layouts (see
                     // `render_markdown_diff_preview`), so these switch it just
                     // like the text diff. The single-pane file preview has no
@@ -859,16 +846,12 @@ impl MainPaneView {
                         };
                         self.set_diff_view_mode(new_mode, cx);
                         handled = true;
-                        let root_view = self.root_view.clone();
-                        let bound = self.store.binding.is_some();
-                        let mode = new_mode;
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.set_diff_view_mode(mode, cx);
-                                });
-                            }
-                        });
+                        if self.hosted_decor.is_none() {
+                            self.commands.defer(
+                                DiffCommand::Preference(DiffPreference::Layout(new_mode)),
+                                cx,
+                            );
+                        }
                     }
                 }
                 "w" if !markdown_preview_active && !conflict_preview_active => {
@@ -882,15 +865,10 @@ impl MainPaneView {
                     }
                     self.set_annotate_enabled(next, cx);
                     handled = true;
-                    let root_view = self.root_view.clone();
-                    let bound = self.store.binding.is_some();
-                    cx.defer(move |cx| {
-                        if !bound && let Some(root) = root_view.upgrade() {
-                            root.update(cx, |root, cx| {
-                                root.set_annotate_enabled(next, cx);
-                            });
-                        }
-                    });
+                    if self.hosted_decor.is_none() {
+                        self.commands
+                            .defer(DiffCommand::Preference(DiffPreference::Annotate(next)), cx);
+                    }
                 }
                 "up" => {
                     handled = self.navigate_prev_diff_change(cx);
@@ -1199,7 +1177,7 @@ impl MainPaneView {
         cx.notify();
     }
 
-    fn restore_diff_panel_focus_after_toolbar_action(
+    pub(in crate::view) fn restore_diff_panel_focus_after_toolbar_action(
         &self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -1251,7 +1229,7 @@ impl MainPaneView {
                     true,
                 ),
                 _ => {
-                    shortcuts.push(crate::view::shortcut_labels::alt_shortcut("B").into());
+                    shortcuts.push(crate::kit::components::alt_shortcut("B").into());
                     ("Toggle blame annotations".into(), false)
                 }
             }
@@ -1278,15 +1256,10 @@ impl MainPaneView {
                 this.set_annotate_enabled(next, cx);
                 cx.notify();
                 this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                let root_view = this.root_view.clone();
-                let bound = this.store.binding.is_some();
-                cx.defer(move |cx| {
-                    if !bound && let Some(root) = root_view.upgrade() {
-                        root.update(cx, |root, cx| {
-                            root.set_annotate_enabled(next, cx);
-                        });
-                    }
-                });
+                if this.hosted_decor.is_none() {
+                    this.commands
+                        .defer(DiffCommand::Preference(DiffPreference::Annotate(next)), cx);
+                }
                 cx.notify();
             })
             .debug_selector(|| "diff_annotate".to_string())
@@ -1324,7 +1297,7 @@ impl MainPaneView {
         } else if dirty {
             format!(
                 "Unsaved changes — {} saves",
-                crate::view::shortcut_labels::secondary_shortcut("S")
+                crate::kit::components::secondary_shortcut("S")
             )
             .into()
         } else {
@@ -1333,7 +1306,7 @@ impl MainPaneView {
         let shortcuts: Vec<SharedString> = if disabled || dirty {
             Vec::new()
         } else {
-            vec![crate::view::shortcut_labels::alt_shortcut("E").into()]
+            vec![crate::kit::components::alt_shortcut("E").into()]
         };
 
         components::Button::new("diff_edit", if dirty { "Edit •" } else { "Edit" })
@@ -1373,8 +1346,8 @@ impl MainPaneView {
             // With auto-save on, leaving is a save; one that cannot be written
             // keeps the editor open instead of hiding the edits in the stash.
             if self.auto_save_file_edits
-                && self.file_editor_dirty
-                && !self.file_editor_loading
+                && self.file_editor_dirty()
+                && !self.file_editor_loading()
                 && !self.file_disk_notice_awaits_editor()
                 && !self.save_file_editor_buffer(cx)
             {
@@ -1432,9 +1405,9 @@ impl MainPaneView {
         // The toolbar button is disabled in these states, but the keyboard
         // shortcut can still arrive. A no-op save must not unexpectedly act as
         // an editor-close shortcut.
-        if self.file_editor_loading
+        if self.file_editor_loading()
             || !self.file_editor_is_dirty()
-            || self.file_editor_key.is_none()
+            || self.file_editor_key().is_none()
         {
             return;
         }
@@ -1466,7 +1439,7 @@ impl MainPaneView {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "this file".to_string());
         // Read live, not at notice time: the user may have typed since.
-        let discards_edits = notice.surface == DiskSurface::Editor && self.file_editor_dirty;
+        let discards_edits = notice.surface == DiskSurface::Editor && self.file_editor_dirty();
         let actor = if notice.by_git_operation {
             "A git operation"
         } else {
@@ -1580,7 +1553,7 @@ impl MainPaneView {
             .gitcomet_tooltip_keyed(
                 theme,
                 "Save the file and return".into(),
-                vec![crate::view::shortcut_labels::secondary_shortcut("S").into()],
+                vec![crate::kit::components::secondary_shortcut("S").into()],
             )
     }
 
@@ -1620,10 +1593,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let diff_visible = self
-            .active_repo()
-            .and_then(|repo| self.bound_diff_state(repo).diff_target.as_ref())
-            .is_some();
+        let diff_visible = self.rendered_diff_target().is_some();
         if diff_visible {
             if !self.store.policy.search {
                 return false;
@@ -1631,12 +1601,7 @@ impl MainPaneView {
             self.activate_diff_search(window, cx);
             return true;
         }
-        if !self.history_is_active_surface() {
-            return false;
-        }
-        self.history_view
-            .update(cx, |history, cx| history.open_history_find(window, cx));
-        true
+        false
     }
 
     fn render_diff_search_overlay(
@@ -1678,9 +1643,12 @@ impl MainPaneView {
                     .render(theme),
                 )
                 .newline(|this, window, cx| this.insert_diff_search_line_break(window, cx))
-                .options(self.diff_search_options, |this, next, window, cx| {
-                    this.set_diff_search_options(next, window, cx);
-                })
+                .options(
+                    components::search_toggles(self.diff_search_options),
+                    |this, next, window, cx| {
+                        this.set_diff_search_options(components::search_options(next), window, cx);
+                    },
+                )
                 .navigation(
                     !self.diff_search_matches.is_empty(),
                     |this, window, cx| {
@@ -1751,7 +1719,7 @@ impl MainPaneView {
         let title = self.diff_panel_title(theme, cx);
         self.ensure_diagram_search_source(cx);
         // What the pane shows, as every other question about it answers it.
-        let surface = self.main_pane_surface();
+        let surface = self.diff_surface();
         let inline_submodule_diff_active = surface.inline_submodule_diff;
         let has_submodule_summary = surface.submodule_summary;
         let untracked_directory_notice = surface
@@ -1849,6 +1817,61 @@ impl MainPaneView {
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
 
+        let engine_notice = if matches!(surface.body, DiffBody::FileDiff | DiffBody::Patch)
+            && !inline_submodule_diff_active
+            && !surface.markdown_preview
+            && !is_image_diff_view
+            && !is_diagram_preview_view
+            && self.effective_diff_engine() == DiffEngine::Difftastic
+            && !self.collapsed_difftastic_has_only_text_changes()
+        {
+            let mut notice = div()
+                .debug_selector(|| "diff_engine_notice".to_string())
+                .w_full()
+                .flex_none()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .border_b_1()
+                .border_color(theme.colors.stroke.default)
+                .child(
+                    div()
+                        .debug_selector(|| "diff_engine_notice_label".to_string())
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .whitespace_normal()
+                        .text_xs()
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(self.diff_engine_label()),
+                );
+            if matches!(
+                self.diff_engine_status,
+                DiffEngineStatus::Difftastic {
+                    syntactic_changes: false,
+                    text_differs: true
+                }
+            ) {
+                if self.effective_diff_content_mode() == DiffContentMode::Collapsed {
+                    notice = notice.child(
+                        components::Button::new("difftastic_show_full", "Show full text").on_click(
+                            theme,
+                            cx,
+                            |this, _, _, cx| this.set_diff_content_mode(DiffContentMode::Full, cx),
+                        ),
+                    );
+                }
+                notice = notice.child(
+                    components::Button::new("difftastic_show_line_changes", "Show line changes")
+                        .on_click(theme, cx, |this, _, _, cx| this.show_line_changes(cx)),
+                );
+            }
+            Some(notice)
+        } else {
+            None
+        };
         let mut controls = div().flex().items_center().gap_1();
         let mut change_navigation = None;
         let is_simple_conflict_strategy = matches!(
@@ -1984,7 +2007,7 @@ impl MainPaneView {
                         .child(next_hunk_btn),
                 );
 
-                let alt = crate::view::shortcut_labels::alt_shortcut;
+                let alt = crate::kit::components::alt_shortcut;
                 let view_toggle = components::SegmentedControl::new("diff_view_toggle")
                     .segment(
                         components::Segment::new("diff_inline", "Inline")
@@ -2006,13 +2029,10 @@ impl MainPaneView {
                         };
                         this.set_diff_view_mode(mode, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
-                        let root_view = this.root_view.clone();
-                        let bound = this.store.binding.is_some();
-                        cx.defer(move |cx| {
-                            if !bound && let Some(root) = root_view.upgrade() {
-                                root.update(cx, |root, cx| root.set_diff_view_mode(mode, cx));
-                            }
-                        });
+                        if this.hosted_decor.is_none() {
+                            this.commands
+                                .defer(DiffCommand::Preference(DiffPreference::Layout(mode)), cx);
+                        }
                         cx.notify();
                     });
 
@@ -2110,7 +2130,7 @@ impl MainPaneView {
             );
         }
 
-        if let Some(repo_id) = repo_id {
+        {
             // The full text resolver gets its own settings menu under the cog
             // (section 30); everything else keeps the diff actions menu.
             let resolver_settings_active = is_conflict_resolver && !is_simple_conflict_strategy;
@@ -2157,6 +2177,8 @@ impl MainPaneView {
                     .debug_selector(move || cog_id.to_string())
                     .gitcomet_tooltip(theme, cog_tooltip.into()),
             );
+        }
+        if let Some(repo_id) = repo_id {
             controls = controls.when(self.store.policy.close_button, |controls| {
                 controls.child(
                     components::Button::new("diff_close", "")
@@ -2355,6 +2377,10 @@ impl MainPaneView {
                                                     .base_handle
                                                     .clone(),
                                             ),
+                                            diagram_heights:
+                                                crate::view::diagram_preview::block::DiagramHeights::new(
+                                                    cx,
+                                                ),
                                         },
                                     );
                                     self.watch_pending_markdown_preview_images(
@@ -2416,7 +2442,6 @@ impl MainPaneView {
                     }
                     Loadable::Error(e) => {
                         self.diff_raw_input.update(cx, |input, cx| {
-                            input.set_theme(theme, cx);
                             input.set_text(e.clone(), cx);
                             input.set_read_only(true, cx);
                         });
@@ -2649,6 +2674,12 @@ impl MainPaneView {
             }
         } else if wants_file_diff || wants_collapsed_diff {
             self.render_selected_file_diff(theme, window, cx)
+        } else if surface.body == DiffBody::Patch
+            && self.rendered_diff_target().is_some()
+            && (self.hosted_decor.is_some()
+                || Self::is_file_diff_target(self.rendered_diff_target()))
+        {
+            self.render_selected_patch_diff(theme, window, cx)
         } else {
             components::empty_state(
                 theme,
@@ -2807,6 +2838,7 @@ impl MainPaneView {
                     .border_color(theme.colors.stroke.default),
             )
             .when_some(disk_notice, |d, strip| d.child(strip))
+            .when_some(engine_notice, |d, strip| d.child(strip))
             .child(
                 div()
                     .id("diff_body_container")

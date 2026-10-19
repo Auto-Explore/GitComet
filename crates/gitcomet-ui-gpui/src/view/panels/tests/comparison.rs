@@ -37,7 +37,7 @@ impl Files {
                             std::path::PathBuf::from(format!("src/file_{ix}.rs")),
                             FileStatusKind::Modified,
                         )
-                        .with_line_counts(Some(1), Some(0))
+                        .with_line_stats((Some(1), Some(0)).into())
                     })
                     .collect(),
             )),
@@ -392,6 +392,53 @@ mod worktree_uncommitted {
         cx
     }
 
+    /// A linked worktree's rows carry the edit its scan computed, which the
+    /// Edits sort orders by, not just the counts.
+    #[gpui::test]
+    fn worktree_file_rows_keep_their_edit(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(98);
+        let mut signed = gitcomet_core::edit_signature::EditSignatureBuilder::default();
+        let additions = signed.added_lines(b"fn added() {}\n");
+        let stats = gitcomet_core::domain::LineStats {
+            additions: Some(additions),
+            deletions: Some(0),
+            edit: signed.finish(),
+        };
+        let mut line_stats = gitcomet_core::domain::UncommittedLineStats::default();
+        line_stats
+            .unstaged
+            .insert(std::path::PathBuf::from("a.rs"), stats);
+        let summary = WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/linked-worktree-edits"),
+            head: Some(CommitId(sha(0).into())),
+            branch: Some("side".into()),
+            detached: false,
+            added: 0,
+            modified: 1,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: vec![file("a.rs", FileStatusKind::Modified)],
+            line_stats,
+        };
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+
+        let edit = cx.update(|_window, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .cached_worktree_file_inputs(repo_id, 0, &summary)
+                .files[0]
+                .line_stats
+                .edit
+        });
+
+        assert!(stats.edit.is_some());
+        assert_eq!(edit, stats.edit);
+    }
+
     /// `selected_ix` indexes the entry list the reducer re-derives from the
     /// scan, so it must stay a source index no matter how the rows are sorted
     /// or grouped. Passing the display row instead opens a different file, and
@@ -579,8 +626,8 @@ mod worktree_uncommitted {
         direction: i8,
     ) -> bool {
         cx.update(|window, app| {
-            let main_pane = view.read(app).main_pane.clone();
-            main_pane.update(app, |pane, cx| {
+            let diff_renderer = view.read(app).diff_renderer.clone();
+            diff_renderer.update(app, |pane, cx| {
                 pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
             })
         })
@@ -715,7 +762,6 @@ mod worktree_uncommitted {
     #[gpui::test]
     fn worktree_filters_activate_on_key_release_like_other_controls(cx: &mut gpui::TestAppContext) {
         use crate::view::rows::{CommitFileFilter, FileListId};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = draw_worktree(
             cx,
             RepoId(103),

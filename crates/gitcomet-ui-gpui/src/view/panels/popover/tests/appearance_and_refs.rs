@@ -47,7 +47,6 @@ fn ref_repo() -> RepoState {
 fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -109,7 +108,6 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
 
 #[gpui::test]
 fn history_ref_submenus_share_the_sidebar_header_surface(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

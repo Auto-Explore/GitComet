@@ -111,7 +111,6 @@ fn activate(
 /// stages the folder's whole subtree.
 #[gpui::test]
 fn status_folder_right_click_opens_a_menu_that_stages_the_folder(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(690);
     let (view, cx) = status_tree_view(cx, repo_id, &["src/a.rs", "src/b.rs"]);
 
@@ -193,7 +192,6 @@ fn status_folder_right_click_opens_a_menu_that_stages_the_folder(cx: &mut gpui::
 /// The discard confirmation counts the folder's files and discards them all.
 #[gpui::test]
 fn discard_folder_confirm_discards_every_file_under_it(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(691);
     let (view, cx) = status_tree_view(cx, repo_id, &["src/a.rs", "src/b.rs", "docs/c.md"]);
     cx.update(|window, app| {
@@ -246,7 +244,6 @@ fn discard_folder_confirm_discards_every_file_under_it(cx: &mut gpui::TestAppCon
 /// menu offers no absolute path and nothing to apply.
 #[gpui::test]
 fn worktree_folder_menu_copies_only_the_relative_path(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let repo_id = RepoId(692);
     let (view, cx) = status_tree_view(cx, repo_id, &["src/a.rs"]);
     let entries = menu_entries(
@@ -277,7 +274,6 @@ fn worktree_folder_menu_copies_only_the_relative_path(cx: &mut gpui::TestAppCont
 fn deleted_linked_worktree_files_keep_diff_and_path_actions_without_file_opening(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = lock_visual_test();
     let linked = tempfile::tempdir().unwrap();
     let path = std::path::PathBuf::from("deleted.txt");
     let file = gitcomet_core::domain::FileStatus {

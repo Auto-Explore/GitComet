@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::LoadKind;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{BlameLine, SequencerState};
 use rustc_hash::FxHashMap;
@@ -554,28 +555,28 @@ fn request_primary_refresh_batch_marks_all_primary_loads_when_idle() {
             .request_primary_refresh_batch(test_log_request())
             .is_some()
     );
-    assert!(loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
-    assert!(loads.is_in_flight(RepoLoadsInFlight::UPSTREAM_DIVERGENCE));
-    assert!(loads.is_in_flight(RepoLoadsInFlight::REBASE_STATE));
-    assert!(loads.is_in_flight(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE));
-    assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
-    assert!(loads.is_in_flight(RepoLoadsInFlight::STAGED_STATUS));
-    assert!(loads.is_in_flight(RepoLoadsInFlight::LOG));
+    assert!(loads.is_in_flight(LoadKind::HeadBranch));
+    assert!(loads.is_in_flight(LoadKind::UpstreamDivergence));
+    assert!(loads.is_in_flight(LoadKind::RebaseState));
+    assert!(loads.is_in_flight(LoadKind::MergeCommitMessage));
+    assert!(loads.is_in_flight(LoadKind::WorktreeStatus));
+    assert!(loads.is_in_flight(LoadKind::StagedStatus));
+    assert!(loads.log_in_flight());
 }
 
 #[test]
 fn request_primary_refresh_batch_skips_when_any_load_is_already_in_flight() {
     let mut loads = RepoLoadsInFlight::default();
-    assert!(loads.request(RepoLoadsInFlight::WORKTREE_STATUS));
+    assert!(loads.request(LoadKind::WorktreeStatus));
 
     assert!(
         loads
             .request_primary_refresh_batch(test_log_request())
             .is_none()
     );
-    assert!(!loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
-    assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
-    assert!(!loads.is_in_flight(RepoLoadsInFlight::LOG));
+    assert!(!loads.is_in_flight(LoadKind::HeadBranch));
+    assert!(loads.is_in_flight(LoadKind::WorktreeStatus));
+    assert!(!loads.log_in_flight());
 }
 
 /// A scope change supersedes the walk in flight rather than queueing behind
@@ -605,7 +606,10 @@ fn request_log_scope_change_starts_immediately() {
     assert!(!loads.is_active_log_reply(first));
     assert!(loads.is_active_log_reply(latest));
     // Nothing is left queued: the newest request is the one running.
-    assert_eq!(loads.finish_log(|_| {}), None);
+    assert_eq!(
+        loads.finish_log(loads.active_log_seq().unwrap(), |_| {}),
+        None
+    );
 }
 
 #[test]
@@ -634,19 +638,11 @@ fn request_log_same_scope_refresh_replaces_stale_pending_pagination() {
     );
 
     assert_eq!(
-        loads.finish_log(|_| {}).map(|(_, next)| next),
+        loads
+            .finish_log(loads.active_log_seq().unwrap(), |_| {})
+            .map(|(_, next)| next),
         Some(log_request(LogScope::MergesOnly, None, None))
     );
-}
-
-#[test]
-fn promoted_log_bookkeeping_matches_the_prepared_effect_request() {
-    let mut loads = RepoLoadsInFlight::default();
-    loads.request_log(test_log_request()).unwrap();
-    assert!(loads.request_log(test_log_request()).is_none());
-    let (seq, request) = loads.finish_log(|next| next.limit = 800).unwrap();
-    assert_eq!(request.limit, 800);
-    assert_eq!(loads.active_log.as_ref(), Some(&(seq, request)));
 }
 
 #[test]
@@ -675,7 +671,10 @@ fn request_log_author_change_starts_immediately_and_drops_pending_pagination() {
         .expect("an author change starts at once");
 
     assert!(loads.is_active_log_reply(latest));
-    assert_eq!(loads.finish_log(|_| {}), None);
+    assert_eq!(
+        loads.finish_log(loads.active_log_seq().unwrap(), |_| {}),
+        None
+    );
 }
 
 /// Replies are matched against the walk that is actually running, and by
@@ -704,6 +703,29 @@ fn superseded_reply_is_not_the_active_one_even_when_it_asked_for_the_same_thing(
     assert!(!loads.is_active_log_reply(first));
     assert!(!loads.is_active_log_reply(alice));
     assert!(loads.is_active_log_reply(again));
+}
+
+#[test]
+fn stale_log_completion_cannot_release_the_current_walk_or_promote_its_pending_request() {
+    let mut loads = RepoLoadsInFlight::default();
+    let first = loads.request_log(test_log_request()).unwrap();
+    let replacement = log_request(LogScope::NoMerges, Some("alice"), None);
+    let active = loads.request_log(replacement.clone()).unwrap();
+    let mut pending = replacement;
+    pending.cursor = Some(test_cursor("page-2"));
+    assert!(loads.request_log(pending.clone()).is_none());
+
+    let before = loads.clone();
+    assert_eq!(
+        loads.finish_log(first, |_| panic!("stale request promoted")),
+        None
+    );
+    assert_eq!(loads, before);
+    let (promoted, request) = loads.finish_log(active, |_| {}).unwrap();
+    assert_eq!(request, pending);
+    assert_ne!(promoted, active);
+    assert_eq!(loads.active_log_seq(), Some(promoted));
+    assert!(loads.active_log_is_load_more());
 }
 
 #[test]
@@ -1484,4 +1506,45 @@ fn line_stats_revs_move_per_lane_only_when_that_lane_changes() {
         repo.unstaged_line_stats_rev, unstaged_rev,
         "the untouched lane keeps its rev so its rows are not rebuilt"
     );
+}
+
+fn diagnostic(message: &str) -> DiagnosticEntry {
+    DiagnosticEntry {
+        time: SystemTime::UNIX_EPOCH,
+        kind: DiagnosticKind::Error,
+        message: message.into(),
+    }
+}
+
+fn messages(entries: &[DiagnosticEntry]) -> Vec<&str> {
+    entries.iter().map(|entry| entry.message.as_str()).collect()
+}
+
+#[test]
+fn feedback_queues_number_entries_and_release_only_acknowledged_ones() {
+    let mut feedback = RepoFeedbackState::default();
+    for ix in 1..=6 {
+        feedback.push_diagnostic(diagnostic(&format!("d{ix}")));
+    }
+    assert_eq!(messages(feedback.diagnostics_after(4)), ["d5", "d6"]);
+
+    feedback.acknowledge(3, 0);
+    assert_eq!(messages(&feedback.diagnostics), ["d4", "d5", "d6"]);
+    // Dropped entries keep their numbers counted.
+    assert_eq!(messages(feedback.diagnostics_after(4)), ["d5", "d6"]);
+    assert!(feedback.diagnostics_after(6).is_empty());
+
+    feedback.acknowledge(6, 0);
+    assert!(feedback.diagnostics.is_empty());
+    assert_eq!(feedback.diagnostics_seq, 6);
+}
+
+#[test]
+fn feedback_numbers_from_before_a_restart_count_every_entry_as_new() {
+    let mut feedback = RepoFeedbackState::default();
+    feedback.push_diagnostic(diagnostic("new"));
+
+    assert_eq!(messages(feedback.diagnostics_after(6)), ["new"]);
+    feedback.acknowledge(6, 6);
+    assert_eq!(messages(&feedback.diagnostics), ["new"]);
 }

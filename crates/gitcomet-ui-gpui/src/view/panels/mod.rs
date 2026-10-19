@@ -151,7 +151,7 @@ pub(in crate::view) enum ContextMenuAction {
     },
     /// Throw away the editor's unsaved buffer for this file and reload it from
     /// disk. Handled in the view rather than dispatched: the buffer lives in
-    /// `MainPaneView`, and the store has no message for it.
+    /// `DiffRenderer`, and the store has no message for it.
     DiscardFileEdits {
         repo_id: RepoId,
         path: std::path::PathBuf,
@@ -387,6 +387,9 @@ pub(in crate::view) enum ContextMenuAction {
     SetDiffWhitespaceMode {
         mode: DiffWhitespaceMode,
     },
+    SetDiffEngineOverride {
+        engine: Option<DiffEngine>,
+    },
     SetDiffRevealWhitespaceChars {
         enabled: bool,
     },
@@ -523,6 +526,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         branch: String,
     },
+    OpenFileHistory {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     OpenPopover {
         kind: PopoverKind,
     },
@@ -602,7 +609,7 @@ pub(in crate::view) enum ContextMenuAction {
     TerminalCommand {
         repo_id: RepoId,
         session_seq: u64,
-        command: terminal_panel::TerminalCommand,
+        command: gitcomet_ui_terminal::TerminalCommand,
     },
     TerminalOpenExternal {
         repo_id: RepoId,
@@ -781,9 +788,7 @@ pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height
 pub(super) use bottom_status_bar::{BottomStatusBarView, bottom_status_bar_height};
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
-pub(in crate::view) use popover::{
-    benchmark_branch_checkout_rows, benchmark_file_history_rows, benchmark_workspace_rows,
-};
+pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
 /// Layout guards outside this module assert against the tab padding, so they
 /// follow the constant instead of hardcoding the current value.
 #[cfg(test)]

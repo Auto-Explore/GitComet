@@ -40,6 +40,33 @@ fn layer_over_matches_painting_both_layers_in_turn() {
 }
 
 #[test]
+fn disabled_colors_halve_translucent_alpha_and_mix_opaque_toward_the_panel() {
+    for key in [DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY] {
+        let theme = AppTheme::from_key(key).unwrap();
+        let panel = theme.colors.surface.panel;
+
+        let border = Rgba::new(0.4, 0.5, 0.6, 0.38);
+        assert_eq!(theme.disabled_color(border), Rgba::new(0.4, 0.5, 0.6, 0.19));
+
+        let text = Rgba::new(0.9, 0.8, 0.7, 1.0);
+        let mid = |a: f32, b: f32| a * 0.5 + b * 0.5;
+        assert_eq!(
+            theme.disabled_color(text),
+            Rgba::new(
+                mid(text.red, panel.red),
+                mid(text.green, panel.green),
+                mid(text.blue, panel.blue),
+                1.0,
+            ),
+            "{key}"
+        );
+
+        let clear = Rgba::new(0.0, 0.0, 0.0, 0.0);
+        assert_eq!(theme.disabled_color(clear), clear);
+    }
+}
+
+#[test]
 fn theme_hex_colors_keep_all_four_spellings_and_strict_validation() {
     for (input, expected) in [
         ("#aBc", [0xaa_u8, 0xbb, 0xcc, 0xff]),
@@ -88,6 +115,45 @@ fn test_theme_bundle_json(name: &str, themes: Vec<serde_json::Value>) -> String 
         "themes": themes,
     }))
     .expect("theme fixture should serialize")
+}
+
+#[test]
+fn graph_fade_opacity_accepts_zero_and_custom_values() {
+    for opacity in [0.0, 0.35, 1.0] {
+        let mut entry = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+        entry["graph_fade_opacity"] = serde_json::json!(opacity);
+        let json = test_theme_bundle_json("Graph fade", vec![entry]);
+        let theme = AppTheme::from_json_str(&json).expect("valid graph fade opacity");
+        assert_eq!(theme.graph_fade_opacity, opacity as f32);
+    }
+}
+
+#[test]
+fn graph_fade_opacity_defaults_preserve_existing_themes() {
+    for key in [DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY] {
+        let json = test_theme_bundle_json("Default graph fade", vec![test_theme_entry(key)]);
+        let theme = AppTheme::from_json_str(&json).expect("existing theme should load");
+        assert_eq!(theme.graph_fade_opacity, 0.10);
+    }
+}
+
+#[test]
+fn graph_fade_opacity_rejects_invalid_values() {
+    for opacity in [
+        serde_json::json!(-0.1),
+        serde_json::json!(1.1),
+        serde_json::json!(1.0000000001),
+        serde_json::json!(-1e-50),
+        serde_json::json!(1e100),
+        serde_json::json!("0.10"),
+        serde_json::json!(false),
+        serde_json::Value::Null,
+    ] {
+        let mut entry = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+        entry["graph_fade_opacity"] = opacity.clone();
+        let json = test_theme_bundle_json("Invalid graph fade", vec![entry]);
+        assert!(AppTheme::from_json_str(&json).is_err(), "{opacity}");
+    }
 }
 
 fn themes_markdown_example() -> String {
@@ -2332,9 +2398,12 @@ fn render_code_never_builds_its_own_theme() {
                 || name.ends_with("tests.rs")
                 || name == "theme.rs"
                 || name == "smoke_tests.rs"
-                // TextInput's constructor supplies a default until set_theme is called.
-                // Match path components before formatting platform-specific diagnostics.
-                || path.ends_with(std::path::Path::new("text_input/editing.rs"))
+                // The window theme falls back to the default in the current appearance.
+                || path.ends_with(std::path::Path::new("theme/window.rs"))
+                // TextInput's constructor supplies a default until its first render
+                // reads the window's theme. Match path components before formatting
+                // platform-specific diagnostics.
+                || path.ends_with(std::path::Path::new("text_input/configuration.rs"))
             {
                 continue;
             }

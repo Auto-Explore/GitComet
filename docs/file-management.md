@@ -123,6 +123,30 @@ If the visible image exceeds the 64 MiB tile cache, central tiles retain full
 detail and peripheral areas use the smaller preview. Reducing the pane size
 allows the entire view to fit within that budget.
 
+## Diagram previews
+
+Mermaid files (`.mmd`, `.mermaid`) and Mermaid code blocks in Markdown previews
+render as diagrams. A code block counts as Mermaid when its info string names
+`mermaid` (also as `language-mermaid` or `{.mermaid}`), or when it has none and
+its source reads as a Mermaid diagram.
+
+- **Size**: a diagram in a Markdown preview shows at its full height at 100%.
+  One taller than 320 px has a **Collapse diagram** bar under it that folds it
+  to 320 px; **Show full diagram** opens it again. Collapsing a diagram whose top
+  has scrolled out of view scrolls it back into view.
+- **Preview | Code**: the toggle above each Markdown diagram switches between the
+  diagram and its source. This choice and the collapse are kept for the session
+  per diagram source, so a diagram opens the same way after scrolling away, an
+  edit above it, or in another view of the same source.
+- **Zoom**: Ctrl or Cmd while scrolling zooms around the pointer, from 50% to
+  400%, one step per wheel notch or per 40 px of trackpad scrolling. Zooming
+  pans inside a Markdown diagram and leaves its height alone. Double-click
+  returns to 100%.
+- **Pan**: drag the diagram, or use the scrollbars that appear along each edge
+  the diagram runs past. A sideways swipe or Shift while scrolling pans
+  horizontally; in a Mermaid file, plain scrolling pans vertically too, while in
+  Markdown it scrolls the document. A diagram that fits its box stays inside it.
+
 ## Filesystem service and recovery
 
 `gitcomet-core::filesystem` owns typed requests, cancellation, progress, per-item

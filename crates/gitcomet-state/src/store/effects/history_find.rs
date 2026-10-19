@@ -1,11 +1,12 @@
 use super::*;
 use crate::history_find::{HistoryFindEffect, HistoryFindMsg};
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 /// Runs on the store's own find worker: a complete history scan must not
 /// occupy interactive range-load workers, nor wait on another window's scan.
 pub(super) fn schedule(
     executor: &TaskExecutor,
-    repos: &util::RepoMap,
+    repos: &RepositoryRuntimes,
     tx: StoreWorkerSender,
     work: HistoryFindEffect,
     parent: CancellationToken,
@@ -57,7 +58,7 @@ pub(super) fn schedule(
                     work.cache.clear_poison();
                     send(Err(Error::new(ErrorKind::Backend(format!(
                         "History search panicked: {}",
-                        super::super::send_diagnostics::panic_payload_to_string(payload.as_ref()),
+                        gitcomet_core::panic::payload_message(payload.as_ref()),
                     )))));
                 }
             }

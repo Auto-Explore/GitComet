@@ -2,7 +2,6 @@ use super::*;
 
 #[gpui::test]
 fn active_search_switches_to_source_on_mermaid_navigation(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -33,7 +32,7 @@ fn active_search_switches_to_source_on_mermaid_navigation(cx: &mut gpui::TestApp
         });
         // Let the model observer publish the new snapshot before probing it.
         cx.update(|_, app| {
-            view.read(app).main_pane.clone().update(app, |pane, cx| {
+            view.read(app).diff_renderer.clone().update(app, |pane, cx| {
                 assert!(
                     matches!(pane.rendered_file_diff_loadable(), Some(Loadable::Ready(Some(file)))
                     if file.new.as_deref() == Some(source))
@@ -59,7 +58,7 @@ fn active_search_switches_to_source_on_mermaid_navigation(cx: &mut gpui::TestApp
     };
     select(cx, "ordinary.rs", "let signal = 1;");
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, _| {
+        view.read(app).diff_renderer.clone().update(app, |pane, _| {
             pane.diff_search_active = true;
             pane.diff_search_query = "wave".into();
         });
@@ -67,7 +66,7 @@ fn active_search_switches_to_source_on_mermaid_navigation(cx: &mut gpui::TestApp
     // Search stays active across navigation to Mermaid.
     select(cx, "graph.mmd", "flowchart LR;A-->B");
     cx.update(|_, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert!(pane.diff_search_active);
         assert_eq!(
             pane.rendered_preview_modes
@@ -81,7 +80,6 @@ fn active_search_switches_to_source_on_mermaid_navigation(cx: &mut gpui::TestApp
 fn mermaid_file_modes_follow_current_target_and_removed_formats_stay_code(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -105,7 +103,7 @@ fn mermaid_file_modes_follow_current_target_and_removed_formats_stay_code(
                     ))));
                 let state = app_state_with_repo(repo, repo_id);
                 push_test_state(view, state, cx);
-                view.main_pane.update(cx, |pane, cx| {
+                view.diff_renderer.update(cx, |pane, cx| {
                     pane.diff_content_mode = DiffContentMode::Full;
                     pane.rendered_preview_modes
                         .set(RenderedPreviewKind::Diagram, RenderedPreviewMode::Rendered);
@@ -141,9 +139,9 @@ A -> B
         cx.update(|_, app| {
             assert_eq!(
                 view.read(app)
-                    .main_pane
+                    .diff_renderer
                     .read(app)
-                    .main_pane_surface()
+                    .diff_surface()
                     .toggle_kind,
                 expected,
                 "{path}"
@@ -159,9 +157,9 @@ A -> B
     cx.update(|_, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
-                .main_pane_surface()
+                .diff_surface()
                 .toggle_kind,
             None
         )
@@ -176,10 +174,13 @@ A -> B
     assert!(cx.debug_bounds("diagram_copy_source").is_none());
     assert!(cx.debug_bounds("diff_inline").is_none());
     cx.update(|_, app| {
-        view.read(app).main_pane.clone().update(app, |pane, cx| {
-            pane.diff_content_mode = DiffContentMode::Collapsed;
-            cx.notify();
-        });
+        view.read(app)
+            .diff_renderer
+            .clone()
+            .update(app, |pane, cx| {
+                pane.diff_content_mode = DiffContentMode::Collapsed;
+                cx.notify();
+            });
     });
     crate::view::test_support::redraw(cx);
     assert!(cx.debug_bounds("diff_diagram_left").is_some());
@@ -192,7 +193,7 @@ A -> B
     cx.update(|_, app| {
         assert_eq!(
             view.read(app)
-                .main_pane
+                .diff_renderer
                 .read(app)
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Diagram),

@@ -277,9 +277,9 @@ checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 
 [[package]]
 name = "arc-swap"
-version = "1.9.2"
+version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+checksum = "380962b3d93b99642e50b9febf72c071e97e8b32d86eae9cf4ef582bb960ae6e"
 dependencies = [
  "rustversion",
 ]
@@ -1489,18 +1489,18 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "defmt"
-version = "0.3.100"
+version = "0.3.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0963443817029b2024136fc4dd07a5107eb8f977eaf18fcd1fdeb11306b64ad"
+checksum = "4deef977660e373c458df605a913d4ab121db0ccd18d1ad6976dff7d37cddb53"
 dependencies = [
- "defmt 1.1.1",
+ "defmt 1.2.0",
 ]
 
 [[package]]
 name = "defmt"
-version = "1.1.1"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1"
+checksum = "e4a0795ac740cb54d7b3775c9c17345f6aaecf884c01733b39d6017738e0e3e1"
 dependencies = [
  "bitflags 1.3.2",
  "defmt-macros",
@@ -1508,21 +1508,21 @@ dependencies = [
 
 [[package]]
 name = "defmt-macros"
-version = "1.1.1"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8"
+checksum = "840bb056bd99c495c9188198a258ab787c79f306d864db3e6e8451442d6d8366"
 dependencies = [
  "defmt-parser",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.9",
 ]
 
 [[package]]
 name = "defmt-parser"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
+checksum = "71958f69fb2de856c5dd51ac9377e986ca1aa5919f931bf5395a807277f889a0"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1576,6 +1576,96 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "diff"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
+
+[[package]]
+name = "difftastic"
+version = "0.71.0"
+dependencies = [
+ "bumpalo",
+ "glob",
+ "hashbrown 0.17.1",
+ "humansize",
+ "imara-diff",
+ "lazy_static",
+ "line-numbers",
+ "log",
+ "pretty_assertions",
+ "radix-heap",
+ "regex",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "streaming-iterator",
+ "strsim",
+ "strum 0.28.0",
+ "tree-sitter",
+ "tree-sitter-ada",
+ "tree-sitter-asm",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-clojure-orchard",
+ "tree-sitter-cmake",
+ "tree-sitter-commonlisp",
+ "tree-sitter-containerfile",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-dart",
+ "tree-sitter-devicetree",
+ "tree-sitter-elisp",
+ "tree-sitter-elixir",
+ "tree-sitter-elm",
+ "tree-sitter-erlang",
+ "tree-sitter-fish",
+ "tree-sitter-fsharp",
+ "tree-sitter-gleam",
+ "tree-sitter-go",
+ "tree-sitter-haskell",
+ "tree-sitter-hcl",
+ "tree-sitter-html",
+ "tree-sitter-janet-simple",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-julia",
+ "tree-sitter-kotlin-sg",
+ "tree-sitter-latex",
+ "tree-sitter-lua",
+ "tree-sitter-make",
+ "tree-sitter-newick",
+ "tree-sitter-nix",
+ "tree-sitter-objc",
+ "tree-sitter-ocaml",
+ "tree-sitter-pascal",
+ "tree-sitter-perl",
+ "tree-sitter-php",
+ "tree-sitter-proto",
+ "tree-sitter-python",
+ "tree-sitter-qmljs",
+ "tree-sitter-r",
+ "tree-sitter-racket",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-scala",
+ "tree-sitter-scheme",
+ "tree-sitter-sequel",
+ "tree-sitter-sfapex",
+ "tree-sitter-smali",
+ "tree-sitter-solidity",
+ "tree-sitter-swift",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-vhdl",
+ "tree-sitter-xml",
+ "tree-sitter-yaml",
+ "tree-sitter-zig",
+ "typed-arena",
 ]
 
 [[package]]
@@ -1887,7 +1977,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04839bdf9d8c10f66806fad16b852fc72aab80873aebc3cb69d85b4fa41543ed"
 dependencies = [
  "autocfg",
- "defmt 0.3.100",
+ "defmt 0.3.101",
  "heapless 0.8.0",
  "serde",
 ]
@@ -1898,7 +1988,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d8d873f78e1d3e1998ed2084da9147e3cd2bb34b67814cd49a3902b970eb124"
 dependencies = [
- "defmt 0.3.100",
+ "defmt 0.3.101",
  "serde",
 ]
 
@@ -2043,9 +2133,9 @@ dependencies = [
 
 [[package]]
 name = "font-types"
-version = "0.12.6"
+version = "0.12.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c92d9081c7ab3bd83ef1eecdfad090f3d966e3ce74106779664114cfe1a6274"
+checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
 dependencies = [
  "bytemuck",
 ]
@@ -2360,6 +2450,7 @@ dependencies = [
  "gitcomet-app",
  "gitcomet-core",
  "gitcomet-git-gix",
+ "gitcomet-perf",
  "gitcomet-ui-gpui",
  "process-wrap",
  "rustfs-mimalloc",
@@ -2394,6 +2485,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-base"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-base",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+]
+
+[[package]]
+name = "gitcomet-conflict-resolver"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-core",
+ "gitcomet-text",
+ "gpui_ce_shared_string",
+ "gpui_ce_sum_tree",
+ "memchr",
+ "rustc-hash 2.1.3",
+ "smallvec",
+]
+
+[[package]]
 name = "gitcomet-core"
 version = "0.3.0"
 dependencies = [
@@ -2402,6 +2517,7 @@ dependencies = [
  "faster-hex 1.0.0",
  "filetime",
  "fnv",
+ "gitcomet-base",
  "gitcomet-core",
  "gitcomet-filesystem-native",
  "gix-quote",
@@ -2428,6 +2544,7 @@ name = "gitcomet-diagrams"
 version = "0.3.0"
 dependencies = [
  "criterion",
+ "gitcomet-base",
  "gitcomet-fonts",
  "image",
  "mermaid-rs-renderer",
@@ -2435,6 +2552,16 @@ dependencies = [
  "roxmltree 0.21.1",
  "serde_json",
  "yaml-rust2",
+]
+
+[[package]]
+name = "gitcomet-difftastic"
+version = "0.3.0"
+dependencies = [
+ "difftastic",
+ "gitcomet-core",
+ "log",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2508,6 +2635,7 @@ dependencies = [
  "flate2",
  "fnv",
  "gitcomet-core",
+ "gitcomet-git-gix",
  "gitcomet-win32-window-utils",
  "gix",
  "itertools 0.15.0",
@@ -2524,9 +2652,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-markdown"
+version = "0.3.0"
+dependencies = [
+ "gitcomet-core",
+ "gitcomet-diagrams",
+ "gitcomet-syntax",
+ "gpui_ce_shared_string",
+ "memchr",
+ "pulldown-cmark",
+ "rustc-hash 2.1.3",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "gitcomet-perf"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "gitcomet-state"
 version = "0.3.0"
 dependencies = [
+ "gitcomet-base",
  "gitcomet-core",
  "gitcomet-fs-watch",
  "gitcomet-git-gix",
@@ -2540,6 +2692,128 @@ dependencies = [
  "strum 0.28.0",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "gitcomet-syntax"
+version = "0.3.0"
+dependencies = [
+ "dekobon-tree-sitter-groovy",
+ "gitcomet-base",
+ "gitcomet-core",
+ "gitcomet-text",
+ "gitcomet-tree-sitter-alloc",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "gpui_ce_shared_string",
+ "memchr",
+ "rustc-hash 2.1.3",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-ada",
+ "tree-sitter-asm",
+ "tree-sitter-bash",
+ "tree-sitter-bicep",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-caddyfile",
+ "tree-sitter-cil",
+ "tree-sitter-clojure-orchard",
+ "tree-sitter-cmake",
+ "tree-sitter-coffee",
+ "tree-sitter-commonlisp",
+ "tree-sitter-containerfile",
+ "tree-sitter-cpp",
+ "tree-sitter-crontab",
+ "tree-sitter-css",
+ "tree-sitter-csv",
+ "tree-sitter-cue",
+ "tree-sitter-dart",
+ "tree-sitter-devicetree",
+ "tree-sitter-dhall",
+ "tree-sitter-diff",
+ "tree-sitter-ebnf",
+ "tree-sitter-elisp",
+ "tree-sitter-elixir",
+ "tree-sitter-elm",
+ "tree-sitter-erlang",
+ "tree-sitter-fish",
+ "tree-sitter-fsharp",
+ "tree-sitter-gitcommit",
+ "tree-sitter-gitignore",
+ "tree-sitter-gleam",
+ "tree-sitter-go",
+ "tree-sitter-gomod",
+ "tree-sitter-gowork",
+ "tree-sitter-haskell",
+ "tree-sitter-hcl",
+ "tree-sitter-html",
+ "tree-sitter-ini",
+ "tree-sitter-janet-simple",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-jinja-dialects",
+ "tree-sitter-jsdoc",
+ "tree-sitter-json",
+ "tree-sitter-jsonnet",
+ "tree-sitter-julia",
+ "tree-sitter-just",
+ "tree-sitter-kdl",
+ "tree-sitter-kotlin-sg",
+ "tree-sitter-latex",
+ "tree-sitter-llvm",
+ "tree-sitter-lua",
+ "tree-sitter-make",
+ "tree-sitter-md",
+ "tree-sitter-newick",
+ "tree-sitter-nix",
+ "tree-sitter-objc",
+ "tree-sitter-ocaml",
+ "tree-sitter-pascal",
+ "tree-sitter-perl",
+ "tree-sitter-php",
+ "tree-sitter-powershell",
+ "tree-sitter-properties",
+ "tree-sitter-proto",
+ "tree-sitter-python",
+ "tree-sitter-qmljs",
+ "tree-sitter-r",
+ "tree-sitter-racket",
+ "tree-sitter-regex",
+ "tree-sitter-ron",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-scala",
+ "tree-sitter-scheme",
+ "tree-sitter-sequel",
+ "tree-sitter-sfapex",
+ "tree-sitter-smali",
+ "tree-sitter-solidity",
+ "tree-sitter-spirv",
+ "tree-sitter-svelte-ng",
+ "tree-sitter-swift",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-v",
+ "tree-sitter-vhdl",
+ "tree-sitter-vue",
+ "tree-sitter-wat",
+ "tree-sitter-xml",
+ "tree-sitter-yaml",
+ "tree-sitter-zig",
+]
+
+[[package]]
+name = "gitcomet-text"
+version = "0.3.0"
+dependencies = [
+ "gpui_ce_shared_string",
+ "gpui_ce_sum_tree",
+ "jiff",
+ "lru",
+ "memchr",
+ "rustc-hash 2.1.3",
+ "smallvec",
 ]
 
 [[package]]
@@ -2559,19 +2833,25 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "criterion",
- "dekobon-tree-sitter-groovy",
  "fast_image_resize",
  "fontdb 0.24.0",
  "futures",
+ "gitcomet-conflict-resolver",
  "gitcomet-core",
  "gitcomet-diagrams",
+ "gitcomet-difftastic",
  "gitcomet-extension-api",
  "gitcomet-extension-example",
  "gitcomet-git-gix",
+ "gitcomet-markdown",
+ "gitcomet-perf",
  "gitcomet-state",
+ "gitcomet-syntax",
+ "gitcomet-text",
  "gitcomet-tree-sitter-alloc",
  "gitcomet-ui-kit",
- "gitcomet-win32-window-utils",
+ "gitcomet-ui-media",
+ "gitcomet-ui-terminal",
  "gpui-ce",
  "gpui_ce_platform",
  "gpui_ce_wgpu",
@@ -2598,83 +2878,6 @@ dependencies = [
  "stats_alloc",
  "sysinfo",
  "tempfile",
- "tree-sitter",
- "tree-sitter-asm",
- "tree-sitter-bash",
- "tree-sitter-bicep",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-caddyfile",
- "tree-sitter-cil",
- "tree-sitter-clojure-orchard",
- "tree-sitter-cmake",
- "tree-sitter-coffee",
- "tree-sitter-containerfile",
- "tree-sitter-cpp",
- "tree-sitter-crontab",
- "tree-sitter-css",
- "tree-sitter-csv",
- "tree-sitter-cue",
- "tree-sitter-dart",
- "tree-sitter-dhall",
- "tree-sitter-diff",
- "tree-sitter-ebnf",
- "tree-sitter-elixir",
- "tree-sitter-erlang",
- "tree-sitter-fsharp",
- "tree-sitter-gitcommit",
- "tree-sitter-gitignore",
- "tree-sitter-gleam",
- "tree-sitter-go",
- "tree-sitter-gomod",
- "tree-sitter-gowork",
- "tree-sitter-haskell",
- "tree-sitter-hcl",
- "tree-sitter-html",
- "tree-sitter-ini",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-jinja-dialects",
- "tree-sitter-jsdoc",
- "tree-sitter-json",
- "tree-sitter-jsonnet",
- "tree-sitter-julia",
- "tree-sitter-just",
- "tree-sitter-kdl",
- "tree-sitter-kotlin-sg",
- "tree-sitter-llvm",
- "tree-sitter-lua",
- "tree-sitter-make",
- "tree-sitter-md",
- "tree-sitter-nix",
- "tree-sitter-objc",
- "tree-sitter-ocaml",
- "tree-sitter-pascal",
- "tree-sitter-perl",
- "tree-sitter-php",
- "tree-sitter-powershell",
- "tree-sitter-properties",
- "tree-sitter-proto",
- "tree-sitter-python",
- "tree-sitter-r",
- "tree-sitter-regex",
- "tree-sitter-ron",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-scala",
- "tree-sitter-sequel",
- "tree-sitter-solidity",
- "tree-sitter-spirv",
- "tree-sitter-svelte-ng",
- "tree-sitter-swift",
- "tree-sitter-toml-ng",
- "tree-sitter-typescript",
- "tree-sitter-v",
- "tree-sitter-vue",
- "tree-sitter-wat",
- "tree-sitter-xml",
- "tree-sitter-yaml",
- "tree-sitter-zig",
  "unicode-normalization",
  "unicode-segmentation",
  "ureq",
@@ -2687,8 +2890,9 @@ name = "gitcomet-ui-kit"
 version = "0.3.0"
 dependencies = [
  "fontdb 0.24.0",
- "gitcomet-core",
+ "gitcomet-base",
  "gitcomet-fonts",
+ "gitcomet-text",
  "gitcomet-win32-window-utils",
  "gpui-ce",
  "gpui_ce_parley",
@@ -2696,6 +2900,7 @@ dependencies = [
  "lru",
  "memchr",
  "palette",
+ "raw-window-handle",
  "regex",
  "rustc-hash 2.1.3",
  "serde",
@@ -2706,6 +2911,36 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "x11-clipboard",
+]
+
+[[package]]
+name = "gitcomet-ui-media"
+version = "0.3.0"
+dependencies = [
+ "fast_image_resize",
+ "gitcomet-base",
+ "gitcomet-diagrams",
+ "gitcomet-markdown",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "image",
+ "lru",
+ "resvg",
+ "rustc-hash 2.1.3",
+ "tempfile",
+]
+
+[[package]]
+name = "gitcomet-ui-terminal"
+version = "0.3.0"
+dependencies = [
+ "alacritty_terminal",
+ "gitcomet-base",
+ "gitcomet-ui-kit",
+ "gpui-ce",
+ "palette",
+ "rustc-hash 2.1.3",
+ "smol",
 ]
 
 [[package]]
@@ -3644,7 +3879,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3720,7 +3955,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_apple"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "anyhow",
  "block",
@@ -3746,7 +3981,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3756,7 +3991,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3766,7 +4001,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3814,7 +4049,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3863,7 +4098,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3874,7 +4109,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -3888,7 +4123,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_parley"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "anyhow",
  "fontique",
@@ -3903,7 +4138,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -3917,7 +4152,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -3925,11 +4160,12 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
  "naga 29.0.4",
+ "smallvec",
  "wgsl-rs",
  "windows-core 0.100.0",
  "windows-link 0.100.0",
@@ -3938,7 +4174,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "async-task",
  "backtrace",
@@ -3953,7 +4189,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "schemars",
  "serde",
@@ -3963,7 +4199,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "heapless 0.9.3",
  "log",
@@ -3974,7 +4210,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.6"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "anyhow",
  "log",
@@ -3984,7 +4220,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4008,7 +4244,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -4039,7 +4275,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4072,7 +4308,7 @@ dependencies = [
 [[package]]
 name = "gpui_xim"
 version = "0.4.0-gpui"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "ahash",
  "hashbrown 0.17.1",
@@ -4267,6 +4503,15 @@ name = "human_format"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaec953f16e5bcf6b8a3cb3aa959b17e5577dbd2693e94554c462c08be22624b"
+
+[[package]]
+name = "humansize"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cb51c9a029ddc91b07a787f1d86b53ccfa49b0e86688c946ebe8d3555685dd7"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "hybrid-array"
@@ -4497,6 +4742,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65b27460c2c92b037f3f94c538ed9a3342f3fdf923606781629ccb35f82d042a"
 
 [[package]]
+name = "imara-diff"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f01d462f766df78ab820dd06f5eb700233c51f0f4c2e846520eaf4ba6aa5c5c"
+dependencies = [
+ "hashbrown 0.15.5",
+ "memchr",
+]
+
+[[package]]
 name = "imgref"
 version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4628,7 +4883,7 @@ version = "0.2.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2b005715dcbeb0089a3c0dab99f2ff1cc3b2525323552703d648585d342a383"
 dependencies = [
- "defmt 1.1.1",
+ "defmt 1.2.0",
  "jiff-core",
  "jiff-static",
  "jiff-tzdb-platform",
@@ -4645,7 +4900,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e52fe76043ccecc9005d2305ebaadf7d7fc0cc89ca6baa10a94d6bc68c7128c"
 dependencies = [
- "defmt 1.1.1",
+ "defmt 1.2.0",
  "log",
 ]
 
@@ -4798,9 +5053,9 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -4848,6 +5103,12 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+[[package]]
+name = "line-numbers"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20cb02b1f7cf0c1da53c7bc8686223e492cefdba080086ecdd7f20315c6e2edd"
 
 [[package]]
 name = "linebender_resource_handle"
@@ -5277,9 +5538,9 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "notify"
-version = "9.0.0-rc.5"
+version = "9.0.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7768eb7201a1964d8eb10224e850df046ab584ee3c3d26e340a993d81f748148"
+checksum = "bb94cf3583e1483c23ceb47a5f7d56b3e8d7309b3e3727698a8c52a96993355e"
 dependencies = [
  "bitflags 2.13.2",
  "inotify",
@@ -6226,6 +6487,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6426,6 +6697,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "radix-heap"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59ffec9df464013295b499298811e6a3de31bf8128092135826517db12dee601"
+
+[[package]]
 name = "rand"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6596,11 +6873,12 @@ dependencies = [
 
 [[package]]
 name = "read-fonts"
-version = "0.45.0"
+version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a5b7bed3d16ab428d8fa533640ab805ff50e7ad8a4d00649de1259e70023282"
+checksum = "4edc8db0d972de88e53a085b1f01fb3fbdae7bb0cb7a0ce2b2f8285a412fe3ef"
 dependencies = [
  "bytemuck",
+ "foldhash 0.2.0",
  "font-types",
  "once_cell",
  "yoke",
@@ -6771,18 +7049,18 @@ dependencies = [
 
 [[package]]
 name = "rustfs-mimalloc"
-version = "0.5.6"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95bb29aa7aee255a84d956b4f5309a3f98993ae6e10836ae5e4e8519e960780f"
+checksum = "f40353bb1b86c737dd68a403ae2fb4ca0c9917f8f54b1dad3a14f4d6be61ecc3"
 dependencies = [
  "rustfs-mimalloc-sys",
 ]
 
 [[package]]
 name = "rustfs-mimalloc-sys"
-version = "0.5.6"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e6571957abe93757f0c6dd99182589054ace7da4102af4296ffcc8297eb3524"
+checksum = "291d2eabf67ff4fcc9e630e8644d0f503a41d016a8adb2d41853538b2bda71e9"
 dependencies = [
  "cc",
 ]
@@ -7141,7 +7419,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5213b4825bac3587046330052d61bfac7bd3bd0d203c758d7c2ef726fcea034"
 dependencies = [
  "bytemuck",
- "read-fonts 0.45.0",
+ "read-fonts 0.45.1",
 ]
 
 [[package]]
@@ -7761,6 +8039,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-ada"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d9fcdd64359c98fcc99d72f6d3d6ca5d6d76ce325ac39430b1d283a0fb61ca1"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-asm"
 version = "0.24.0"
 dependencies = [
@@ -7858,6 +8146,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-commonlisp"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36c662ae95eee8c5ada519d4fe87261c5fbcc3ffaac4b10c03d460154cd6a9b2"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-containerfile"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7918,6 +8216,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-devicetree"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1e6874b59d8252cbaf9750f7152166e17ed162921a5f6d4e8bd2a2bc2aed46b"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-dhall"
 version = "0.1.0"
 dependencies = [
@@ -7944,10 +8252,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-elisp"
+version = "1.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b8b82ab7474028f20d2119285566f219209ebdbeec767fa28025b70f94f8cf3"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-elixir"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66dd064a762ed95bfc29857fa3cb7403bb1e5cb88112de0f6341b7e47284ba40"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-elm"
+version = "5.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "807f387a83c88d894b978edeff024f26a2935505de83237f57c77f9aa2de4ee7"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -7961,6 +8289,16 @@ checksum = "8079a9cfe733c3b6749bb3c683c0e997ee68a2305f7a210800bbbc53e82d3f64"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-fish"
+version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "014e3b299f251e9c2e372e3b5e1b0323ef21196e9aa2e90a5bc1f6130cbe8b18"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]
@@ -8063,6 +8401,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-janet-simple"
+version = "0.0.3"
+dependencies = [
+ "tree-sitter-build",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-java"
 version = "0.23.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8159,6 +8505,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
 
 [[package]]
+name = "tree-sitter-latex"
+version = "0.4.0"
+dependencies = [
+ "tree-sitter-build",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-llvm"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8192,6 +8546,16 @@ dependencies = [
 name = "tree-sitter-md"
 version = "0.3.2"
 source = "git+https://github.com/tree-sitter-grammars/tree-sitter-markdown?rev=9a23c1a96c0513d8fc6520972beedd419a973539#9a23c1a96c0513d8fc6520972beedd419a973539"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-newick"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c5785bcf2ade84e16242b1a8d1f574334ddd26032c15a5d9bcc012e013f4e1"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -8261,10 +8625,8 @@ dependencies = [
 [[package]]
 name = "tree-sitter-properties"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a6c2f38dea68abd782573bb6ec3dbd14175cce2953f693055743925d785ceeb"
 dependencies = [
- "cc",
+ "tree-sitter-build",
  "tree-sitter-language",
 ]
 
@@ -8289,10 +8651,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-qmljs"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6ed3a7040df54fed1183801ad482139622bf9b9ec1c5f7ee36c5ece25806c58"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-r"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffc9954ec870dcad6cffdd302b405306c68cf031ed79a78cd9746f6740d9fe20"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-racket"
+version = "0.24.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8395b6a054e6264c67e1ef915f239c4f86575b7d7c69638bdbf3c336c58f128"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -8341,6 +8723,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-scheme"
+version = "0.24.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a7e7f156bdf38145f26705d1733185698845307d3e9d9c071ecce4375575131"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-sequel"
 version = "0.3.11"
 dependencies = [
@@ -8349,12 +8741,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-solidity"
-version = "1.2.13"
+name = "tree-sitter-sfapex"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4eacf8875b70879f0cb670c60b233ad0b68752d9e1474e6c3ef168eea8a90b25"
+checksum = "7b97637acb3bcfc2518162ecf9b02a18b28a502cd7631bec5c2a26f4e5ea024b"
 dependencies = [
  "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-smali"
+version = "1.0.0"
+dependencies = [
+ "tree-sitter-build",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-solidity"
+version = "1.2.13"
+dependencies = [
+ "tree-sitter-build",
  "tree-sitter-language",
 ]
 
@@ -8407,6 +8815,16 @@ name = "tree-sitter-v"
 version = "0.0.4"
 dependencies = [
  "tree-sitter-build",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-vhdl"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0feb025ddf87c45bb98335ef2a2493cac08ec6b74d33201d1bf75df2be08de23"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 
@@ -8464,6 +8882,12 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
 ]
+
+[[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "typeid"
@@ -8535,9 +8959,9 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.25"
+version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
 dependencies = [
  "tinyvec",
 ]
@@ -8603,9 +9027,9 @@ dependencies = [
 
 [[package]]
 name = "ureq-proto"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f86fd172ccca569e458f61b6bdd6220965a9ef36e672a6852953b51a0e1583be"
+checksum = "841583fc36089d7d59419568ae157f43a5a03a2e5a81ba87c77d1596ef46e922"
 dependencies = [
  "base64 0.23.1",
  "http",
@@ -9659,7 +10083,7 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "encoding_rs",
 ]
@@ -9667,7 +10091,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=020fb167b57bfd743e4b86208c42490d0dbdd216#020fb167b57bfd743e4b86208c42490d0dbdd216"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -9723,6 +10147,12 @@ dependencies = [
  "arraydeque",
  "hashlink",
 ]
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yazi"
@@ -9840,9 +10270,9 @@ dependencies = [
 
 [[package]]
 name = "zbus_names"
-version = "4.3.4"
+version = "4.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8bf88b4a3ff53e883001e0e0115b297a9d53c31b9c1edd2bfdd853e3428624e"
+checksum = "812a12be4ead7a59e18ea8f047d08add0066b73bc62fc1467066a2472ae088dd"
 dependencies = [
  "serde",
  "winnow",
@@ -10010,9 +10440,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant"
-version = "5.15.0"
+version = "5.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1d34c27cc6cdd1f458427519dd6b8612f7b7e3f7b9a0b2355d041dda9869147"
+checksum = "80bf6d6cd6a4b601acb64cfb8284cdc643fcfa75ef26ae3c46ec8aa4e8a1fbb7"
 dependencies = [
  "endi",
  "enumflags2",
@@ -10026,9 +10456,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant_derive"
-version = "5.15.0"
+version = "5.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "864155e69b4352db0c7f374917bf45d1e0c8d17659c8b3dbf9795f3673f8c497"
+checksum = "ef2672456ba1cb54b5eaec136e63135b3c7495fb938e53b28a62e633496d486d"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

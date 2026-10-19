@@ -3,8 +3,9 @@
 #[cfg(test)]
 mod tests {
     use gitcomet_ui_kit::test_support::source_guards::{
-        DiscreteControlAllowlist, direct_clipboard_access, discrete_control_violations,
-        unresolved_menu_icons, unscaled_icon_sizes,
+        DiscreteControlAllowlist, ELEMENT_OPACITY_HINT, direct_clipboard_access,
+        discrete_control_violations, opacity_uses, production_text, unresolved_menu_icons,
+        unscaled_icon_sizes,
     };
 
     fn src_dir() -> std::path::PathBuf {
@@ -22,46 +23,43 @@ mod tests {
                 // shared SubtargetClick because their input owns pointer selection.
                 release_gestures: &[
                     "view/components/commit_link_menu.rs",
-                    "view/gitcomet_view.rs",
+                    "view/gitcomet_view_render.rs",
                     "view/chrome.rs",
                     "view/settings_window/render.rs",
                     "view/terminal_panel.rs",
-                    "view/terminal_panel/viewport.rs",
                     "view/panels/layout/status_view.rs",
                     "view/panels/repo_tabs_bar.rs",
                     "view/panes/history/history_panel.rs",
                     "view/rows/diff_text/build.rs",
                     "view/panels/main/conflict_resolver_view.rs",
                     "view/panels/main/diff.rs",
+                    "view/panels/main/diff_text.rs",
                     "view/panels/main/diff_view.rs",
                 ],
-                context_press: &["view/terminal_panel/viewport.rs"],
+                context_press: &[],
                 // Selection, resizing, dragging, focus, and propagation only.
                 // Discrete controls (including hosted group headers) use on_activate.
                 primary_press: &[
-                    // Diagram and image panning start continuous drags.
-                    "view/diagram_preview/surface.rs",
-                    "view/image_preview/surface.rs",
                     "view/chrome.rs",
                     "view/diff_text_selection.rs",
-                    "view/gitcomet_view.rs",
                     "view/gitcomet_view_render.rs",
-                    "view/hosted/diff_pane.rs",
                     "view/panels/layout/status_view.rs",
                     "view/panels/main/conflict_resolver_view.rs",
                     "view/panels/main/diff.rs",
+                    "view/panels/main/diff_text.rs",
                     "view/panels/main/diff_view.rs",
                     "view/panels/popover/context_menu.rs",
                     "view/panels/popover/mod.rs",
                     "view/panels/repo_tabs_bar.rs",
                     "view/panes/details.rs",
+                    "view/panes/file_history.rs",
                     "view/panes/history/history_panel.rs",
                     "view/rows/conflict_resolver.rs",
+                    "view/rows/conflict_resolver/three_way_rows.rs",
                     "view/rows/diff_text/build.rs",
                     "view/rows/markdown_document.rs",
                     "view/settings_window/render.rs",
                     "view/terminal_panel.rs",
-                    "view/terminal_panel/viewport.rs",
                 ],
             },
         );
@@ -95,15 +93,13 @@ mod tests {
         );
     }
 
-    /// An icon path the context menu does not list renders an empty, still
-    /// indented slot, so every menu icon literal must resolve to itself.
     #[test]
     fn every_menu_icon_literal_in_the_crate_resolves() {
         let (seen, unresolved) = unresolved_menu_icons(&src_dir());
         assert!(seen > 100, "the scan found only {seen} menu icons");
         assert!(
             unresolved.is_empty(),
-            "add these to context_menu_icon_path:\n{}",
+            "menu icons must name an existing asset:\n{}",
             unresolved.join("\n")
         );
     }
@@ -117,10 +113,9 @@ mod tests {
         for entry in std::fs::read_dir(dir).expect("read src") {
             let path = entry.expect("dir entry").path();
             if path.is_dir() {
-                if path
-                    .file_name()
-                    .is_some_and(|name| name == "tests" || name == "benchmarks")
-                {
+                if path.file_name().is_some_and(|name| {
+                    name == "tests" || name == "smoke_tests" || name == "benchmarks"
+                }) {
                     continue;
                 }
                 production_lines(&path, visit);
@@ -135,21 +130,32 @@ mod tests {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("read source");
-            // Stop at the inline test module. Any other `#[cfg(test)]` marks a
-            // single item (a test-only field, helper or `mod tests;`), and
-            // production code continues after it.
-            let lines: Vec<&str> = source.lines().collect();
-            for (ix, line) in lines.iter().enumerate() {
-                let opens_test_module = line.starts_with("#[cfg(test)]")
-                    && lines.get(ix + 1).is_some_and(|next| {
-                        next.starts_with("mod ") && next.trim_end().ends_with('{')
-                    });
-                if opens_test_module {
-                    break;
-                }
+            for (ix, line) in production_text(&source).lines().enumerate() {
                 visit(&path, ix + 1, line);
             }
         }
+    }
+
+    #[test]
+    fn production_line_scan_skips_smoke_modules_but_keeps_similarly_named_sources() {
+        let sources = tempfile::tempdir().unwrap();
+        for directory in ["smoke_tests", "smoke_tests_extra", "production"] {
+            let directory = sources.path().join(directory);
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("fixture.rs"), "AppTheme::gitcomet_dark()\n").unwrap();
+        }
+        let mut visited = Vec::new();
+        production_lines(sources.path(), &mut |path, _, _| {
+            visited.push(path.strip_prefix(sources.path()).unwrap().to_path_buf());
+        });
+        visited.sort();
+        assert_eq!(
+            visited,
+            [
+                std::path::PathBuf::from("production/fixture.rs"),
+                std::path::PathBuf::from("smoke_tests_extra/fixture.rs"),
+            ]
+        );
     }
 
     /// An `icons/…` path the assets lack draws nothing (`svg()` of a missing
@@ -198,11 +204,7 @@ mod tests {
     fn render_code_never_builds_its_own_theme() {
         let mut offenders = Vec::new();
         production_lines(std::path::Path::new("src"), &mut |path, line_no, line| {
-            if path.ends_with("theme.rs")
-                // TextInput's constructor supplies a default until set_theme is called.
-                // Match path components before formatting platform-specific diagnostics.
-                || path.ends_with(std::path::Path::new("kit/text_input/editing.rs"))
-            {
+            if path.ends_with("theme.rs") {
                 return;
             }
             if line.contains("AppTheme::gitcomet_") {
@@ -227,8 +229,7 @@ mod tests {
                 relative.starts_with("history")
                     || relative.to_string_lossy().starts_with("history_")
             });
-            let round = line.contains("corner_radii(") || line.contains("gpui::quad(");
-            if history && !path.ends_with("history_shapes.rs") && round {
+            if history && !path.ends_with("history_shapes.rs") && line.contains("corner_radii(") {
                 offenders.push(format!("{}:{line_no}", path.display()));
             }
         });
@@ -242,7 +243,7 @@ mod tests {
     /// `window_bounds()` reports the *restore* size while the window is
     /// maximized or fullscreen, and includes the client-side decoration inset, so
     /// anything sized or placed from it misfits the visible window. Views use
-    /// `chrome::window_surface_bounds`.
+    /// `crate::kit::window_chrome::window_surface_bounds`.
     #[test]
     fn view_code_sizes_against_the_visible_surface_not_restore_bounds() {
         let mut offenders = Vec::new();
@@ -254,7 +255,34 @@ mod tests {
 
         assert!(
             offenders.is_empty(),
-            "use chrome::window_surface_bounds instead: {offenders:#?}"
+            "use crate::kit::window_chrome::window_surface_bounds instead: {offenders:#?}"
+        );
+    }
+
+    /// The remaining element opacity uses, so a new one, or an entry nothing
+    /// needs any more, fails here.
+    #[test]
+    fn element_opacity_stays_on_its_allowlist() {
+        let mut allowed: Vec<(String, usize)> = [
+            // A panel, popover or toast fading while it mounts or leaves.
+            ("view/panels/main/diff_view.rs", 1),
+            ("view/panes/history/find.rs", 1),
+            ("view/splash.rs", 1),
+            ("view/toast_host.rs", 1),
+            // Rebase rows: the dropped row's dim and the drag source's fade both
+            // stay on; the reordered pair fades in.
+            ("view/panes/main/interactive_rebase.rs", 3),
+            // History rows dimmed by a find miss or an extension annotation.
+            ("view/rows/history/mod.rs", 3),
+        ]
+        .into_iter()
+        .map(|(path, count): (&str, usize)| (path.to_string(), count))
+        .collect();
+        allowed.sort();
+        assert_eq!(
+            opacity_uses(&src_dir()),
+            allowed,
+            "{ELEMENT_OPACITY_HINT}, or update this list when a use goes away"
         );
     }
 }

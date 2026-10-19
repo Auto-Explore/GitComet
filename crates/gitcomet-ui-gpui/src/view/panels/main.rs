@@ -5,6 +5,7 @@ mod conflict_resolver_view;
 mod decision_conflict;
 mod diff;
 mod diff_bar;
+mod diff_text;
 mod diff_view;
 mod diff_view_helpers;
 mod history;

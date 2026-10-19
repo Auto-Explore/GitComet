@@ -1,4 +1,5 @@
-use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
+use super::send_diagnostics::{SendFailureKind, send_or_log};
+use gitcomet_core::panic::payload_message;
 use gitcomet_core::{mergetool_trace, op_trace};
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
@@ -67,11 +68,14 @@ pub(super) struct TaskExecutor {
     _threads: Vec<thread::JoinHandle<()>>,
 }
 
-/// One submission queue across windows for disk writes and explorer mutations.
-pub(super) fn filesystem_executor() -> &'static TaskExecutor {
-    static EXECUTOR: std::sync::OnceLock<TaskExecutor> = std::sync::OnceLock::new();
-    EXECUTOR.get_or_init(|| TaskExecutor::named("gitcomet-filesystem", 1))
+/// Disk writes and explorer mutations run on one thread, in submission order.
+pub(super) fn filesystem_queue() -> TaskExecutor {
+    TaskExecutor::named("gitcomet-filesystem", 1)
 }
+
+/// The queue every window's store shares.
+pub(super) static FILESYSTEM_QUEUE: std::sync::LazyLock<TaskExecutor> =
+    std::sync::LazyLock::new(filesystem_queue);
 
 /// A panicking task must not take its worker thread with it. These pools are
 /// small — [`repo_load_worker_threads`] caps at two — so a thread lost to an
@@ -110,7 +114,7 @@ fn record_worker_task_panic(payload: &(dyn Any + Send)) {
     let count = WORKER_TASK_PANICS.fetch_add(1, Ordering::Relaxed) + 1;
     let thread = thread::current();
     let thread = thread.name().unwrap_or("<unnamed>");
-    let message = panic_payload_to_string(payload);
+    let message = payload_message(payload);
     gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: executor task panicked on worker thread {thread}: {message}; total_panics={count}"
     ));

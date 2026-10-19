@@ -76,6 +76,7 @@ pub(super) struct DiffPreferences {
     pub(super) scroll_sync: DiffScrollSync,
     pub(super) content_mode: DiffContentMode,
     pub(super) whitespace_mode: DiffWhitespaceMode,
+    pub(super) engine: DiffEngine,
     pub(super) view_mode: DiffViewMode,
     pub(super) annotate_enabled: bool,
     pub(super) reveal_whitespace_chars: bool,
@@ -91,6 +92,7 @@ impl Default for DiffPreferences {
             scroll_sync: DiffScrollSync::default(),
             content_mode: DiffContentMode::default(),
             whitespace_mode: DiffWhitespaceMode::default(),
+            engine: DiffEngine::default(),
             view_mode: DiffViewMode::Split,
             annotate_enabled: false,
             reveal_whitespace_chars: false,
@@ -216,6 +218,7 @@ impl HistoryBranchNamesMode {
 pub(super) struct HistoryPreferences {
     pub(super) branch_names: HistoryBranchNamesMode,
     pub(super) show_graph: bool,
+    pub(super) show_graph_gradient: bool,
     pub(super) show_author: bool,
     pub(super) show_date: bool,
     pub(super) show_sha: bool,
@@ -234,6 +237,7 @@ impl Default for HistoryPreferences {
         Self {
             branch_names: HistoryBranchNamesMode::default(),
             show_graph: true,
+            show_graph_gradient: true,
             show_author: true,
             show_date: true,
             show_sha: false,
@@ -373,6 +377,11 @@ impl UiPreferences {
                     .as_deref()
                     .and_then(DiffWhitespaceMode::from_key)
                     .unwrap_or_default(),
+                engine: session
+                    .diff_engine
+                    .as_deref()
+                    .and_then(DiffEngine::from_key)
+                    .unwrap_or_default(),
                 view_mode: session
                     .diff_view_mode
                     .as_deref()
@@ -416,6 +425,7 @@ impl UiPreferences {
                     .and_then(HistoryBranchNamesMode::from_key)
                     .unwrap_or_default(),
                 show_graph: session.history_show_graph.unwrap_or(true),
+                show_graph_gradient: session.history_show_graph_gradient.unwrap_or(true),
                 show_author: session.history_show_author.unwrap_or(true),
                 show_date: session.history_show_date.unwrap_or(true),
                 show_sha: session.history_show_sha.unwrap_or(false),
@@ -491,8 +501,10 @@ mod tests {
         let preferences = UiPreferences::from_session(&session::UiSession::default());
         assert_eq!(preferences, UiPreferences::default());
         assert_eq!(preferences.diff.view_mode, DiffViewMode::Split);
+        assert_eq!(preferences.diff.engine, DiffEngine::LineByLine);
         assert!(preferences.diff.show_line_numbers);
         assert!(preferences.history.show_graph);
+        assert!(preferences.history.show_graph_gradient);
         // The store carries its own default for the reducer; the two must agree
         // or the Files tab would follow the selection until the first sync.
         assert_eq!(
@@ -514,6 +526,17 @@ mod tests {
             RemoteUrlPolicy::default()
         );
         assert!(preferences.security.check_for_updates_on_startup);
+    }
+
+    #[test]
+    fn graph_gradient_restores_explicit_preferences() {
+        for enabled in [false, true] {
+            let preferences = UiPreferences::from_session(&session::UiSession {
+                history_show_graph_gradient: Some(enabled),
+                ..Default::default()
+            });
+            assert_eq!(preferences.history.show_graph_gradient, enabled);
+        }
     }
 
     #[test]

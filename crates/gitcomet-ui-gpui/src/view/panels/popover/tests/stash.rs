@@ -168,7 +168,7 @@ fn stash_prompt_escape_cancels(cx: &mut gpui::TestAppContext) {
         let main_focus = root
             .popover_host
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();

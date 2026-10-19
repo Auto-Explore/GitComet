@@ -300,7 +300,7 @@ impl DetailsPaneView {
                     this.active_context_menu_invoker.as_ref() == Some(&invoker)
                 };
                 let selected = match &multi_selected {
-                    Some(paths) => paths.contains(&f.path),
+                    Some(paths) => paths.contains(f.path.as_path()),
                     None => repo
                         .diff_state
                         .diff_target
@@ -691,7 +691,7 @@ impl DetailsPaneView {
                 let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
                 let target = DiffTarget::commit_range(from.clone(), to.clone(), None).for_change(f);
                 let selected = match &multi_selected {
-                    Some(paths) => paths.contains(&f.path),
+                    Some(paths) => paths.contains(f.path.as_path()),
                     None => repo.diff_state.diff_target.as_ref() == Some(&target),
                 };
                 let display_position = plan.display_position(ordinal);
@@ -801,9 +801,9 @@ fn multi_selected_paths(
     this: &DetailsPaneView,
     repo_id: RepoId,
     list: crate::view::rows::FileListId,
-) -> Option<rustc_hash::FxHashSet<std::path::PathBuf>> {
+) -> Option<rustc_hash::FxHashSet<&std::path::Path>> {
     let paths = this.commit_list_selected_paths(repo_id, list);
-    (paths.len() > 1).then(|| paths.iter().cloned().collect())
+    (paths.len() > 1).then(|| paths.iter().map(std::path::PathBuf::as_path).collect())
 }
 
 /// Records a click in a commit or comparison list's selection. Returns true
@@ -862,3 +862,6 @@ fn worktree_file_menu_invoker(
     )
     .into()
 }
+
+#[cfg(test)]
+mod tests;

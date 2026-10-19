@@ -30,7 +30,8 @@ UI = "gitcomet-ui-gpui"
 # Packages whose tests mount GPUI windows. GPUI test contexts share
 # process-global platform state, so each of these harnesses runs as one libtest
 # process on every platform instead of nextest's process per test.
-GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-extension-example")
+GPUI_PACKAGES = (UI, "gitcomet-ui-kit", "gitcomet-ui-media", "gitcomet-ui-terminal",
+                 "gitcomet-extension-example")
 NEXTEST_PROFILES = ("ci", "ci-git-limited", "ci-watch-first", "ci-watch-limited-4", "ci-watch-limited-8", "ci-throughput")
 WATCHER_FILTER = ('package(=gitcomet-fs-watch) | (package(=gitcomet-state) & '
                   '(test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | '
@@ -40,8 +41,8 @@ WATCHER_FILTER = ('package(=gitcomet-fs-watch) | (package(=gitcomet-state) & '
 # Audited in-memory tests: no process-global environment, filesystem, or native
 # resources. Keep this an explicit binary/prefix allowlist, not all unit tests.
 PURE_BATCHES = {
-    "gitcomet-core": ("conflict_session::", "text_search::", "text_format::"),
-    UI: ("view::word_diff::tests::", "view::history_graph::walk::tests::"),
+    "gitcomet-core": ("conflict_session::", "text_search::", "text_format::", "word_diff::"),
+    UI: ("view::history_graph::walk::tests::",),
 }
 # The example product builds alone, so it never relies on (or leaks) the
 # workspace's feature unification: it enables the application's GUI, which the
@@ -460,6 +461,18 @@ def feature_args(selection):
     return args
 
 
+def split_binary_list(messages):
+    """nextest prints cargo's messages, which the cache prunes units by, beside its own binary list."""
+    cargo, listing = [], []
+    for line in messages.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            (cargo if "reason" in json.loads(line) else listing).append(line)
+    if len(listing) != 1:
+        raise RuntimeError(f"expected one nextest binary list in {messages}, found {len(listing)}")
+    messages.write_text("".join(f"{line}\n" for line in cargo), encoding="utf-8")
+    (messages.parent / "binaries.json").write_text(listing[0] + "\n", encoding="utf-8")
+
+
 def compile_tests(context, profile, test_targets=()):
     directory = paths(context)
     selection = CONTEXTS[context]
@@ -471,10 +484,13 @@ def compile_tests(context, profile, test_targets=()):
     run(f"{context}-features", ["cargo", "tree", "--locked", *selection,
         "--edges", "normal,build,dev", "--prefix", "none", "--format", "{p}|{f}"],
         output=directory / "features.txt")
+    messages = directory / "cargo-messages.jsonl"
     run(f"{context}-compile", ["cargo", "nextest", "list", *selection, *targets,
         "--locked", "--cargo-profile", profile, "--timings",
-        "--list-type", "binaries-only", "--message-format", "json"],
-        output=directory / "binaries.json", env=windows_linker_environment())
+        "--list-type", "binaries-only", "--message-format", "json",
+        "--cargo-message-format", "json-render-diagnostics"],
+        output=messages, env=windows_linker_environment())
+    split_binary_list(messages)
     prepare_runtime_binaries(context)
     run(f"{context}-inventory", ["cargo", "nextest", "list", *reuse_args(context),
         "--message-format", "json", "--ignore-default-filter"], output=directory / "tests.json")
@@ -1003,7 +1019,7 @@ def main():
             # UI's default features and its complete test suite.
             for target in ("mergetool_git_integration", "difftool_git_integration"):
                 smoke("app", target, "gui_default", env=env)
-            smoke("workspace", "gitcomet_ui_gpui", "smoke_tests::smoke_view_renders_without_panicking", exact=True, env=env)
+            smoke("workspace", "gitcomet_ui_gpui", "smoke_tests::component_rendering::smoke_view_renders_without_panicking", exact=True, env=env)
     elif args.phase == "cmd-smoke":
         smoke("app", "standalone_tool_mode_integration", "help_flag_exits_zero", exact=True)
     else:

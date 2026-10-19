@@ -57,7 +57,7 @@ fn context_menu_entry_disabled_by_label_prefix(model: &ContextMenuModel, prefix:
 /// Platform-aware label for `secondary`-modifier shortcuts, matching what the
 /// context menus declare.
 fn sec(suffix: &str) -> String {
-    crate::view::shortcut_labels::secondary_shortcut(suffix)
+    crate::kit::components::secondary_shortcut(suffix)
 }
 
 fn context_menu_model_for(
@@ -74,8 +74,87 @@ fn context_menu_model_for(
 }
 
 #[gpui::test]
+fn snapshot_diff_selection_copies_without_repository_menu_actions(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{DiffLayout, DiffPaneOptions, DiffSnapshot, Registry};
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(
+                gitcomet_extension_example::review::ReviewExtension,
+            )])
+            .unwrap(),
+            app,
+        );
+    });
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.run_until_parked();
+    let pane = cx.update(|_, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        host.create_snapshot_pane(
+            DiffSnapshot::new("selection.txt", "before\n", "selected\n"),
+            DiffPaneOptions {
+                layout: DiffLayout::Inline,
+                ..Default::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let hosted = pane
+            .view()
+            .downcast::<crate::view::hosted::diff_pane::DiffPaneView>()
+            .unwrap();
+        let renderer = hosted.read(app).renderer().unwrap().clone();
+        renderer.update(app, |renderer, cx| {
+            assert!(renderer.active_repo().is_none());
+            renderer.ensure_diff_visible_indices();
+            let anchor = DiffTextPos {
+                source_visible_ix: 1,
+                region: DiffTextRegion::Inline,
+                offset: 0,
+            };
+            renderer.diff_text_anchor = Some(anchor);
+            renderer.diff_text_head = Some(DiffTextPos {
+                offset: "selected".len(),
+                ..anchor
+            });
+            renderer.open_diff_editor_context_menu(
+                1,
+                DiffTextRegion::Inline,
+                point(px(40.0), px(40.0)),
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let popover = view.read(app).popover_host.clone();
+        popover.update(app, |host, cx| {
+            let kind = host
+                .popover_kind_for_tests()
+                .expect("snapshot selection context menu");
+            assert!(matches!(&kind, PopoverKind::DiffEditorMenu { repo_id: None, copy_text: Some(text), .. } if text == "selected"));
+            let model = host.context_menu_model(&kind, cx).unwrap();
+            let mut entries = model.items.into_iter().filter_map(|item| match item {
+                ContextMenuItem::Entry { label, disabled, action, .. } => Some((label, disabled, action)),
+                _ => None,
+            });
+            let (label, disabled, action) = entries.next().expect("copy action");
+            assert_eq!(label.as_ref(), "Copy");
+            assert!(!disabled);
+            assert!(entries.next().is_none(), "a snapshot has no repository actions");
+            host.context_menu_activate_action(*action, window, cx);
+            assert_eq!(crate::clipboard::read_text(cx).as_deref(), Some("selected"));
+        });
+    });
+}
+
+#[gpui::test]
 fn recent_repository_shortcut_does_not_select_diff_content(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -248,7 +327,6 @@ fn author_filter_repo_with_many_authors(repo_id: RepoId, count: usize) -> RepoSt
 /// to — but they do exist, rather than being cut off the end of the list.
 #[gpui::test]
 fn history_author_filter_scrolls_to_every_author(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -295,7 +373,6 @@ fn history_author_filter_scrolls_to_every_author(cx: &mut gpui::TestAppContext) 
 /// keeping the invoker active explicitly.
 #[gpui::test]
 fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -328,7 +405,6 @@ fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppCont
 /// the sibling column menus (which sit at 220 design px).
 #[gpui::test]
 fn history_author_filter_is_wide_enough_for_full_names(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -353,7 +429,6 @@ fn history_author_filter_is_wide_enough_for_full_names(cx: &mut gpui::TestAppCon
 /// Enter applies the highlighted suggestion, and closes the popover.
 #[gpui::test]
 fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -404,7 +479,6 @@ fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppConte
 /// typed rather than being a dead end.
 #[gpui::test]
 fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -446,7 +520,6 @@ fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
 /// query — which would apply a filter the user never highlighted.
 #[gpui::test]
 fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -890,9 +963,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         commit_file_model,
         "H",
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &commit_file_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &commit_file_path
     );
     assert_shortcut_action!(
         commit_file_model,
@@ -924,9 +995,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         unstaged_status_model,
         &sec("H"),
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &unstaged_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &unstaged_path
     );
     assert_shortcut_action!(
         unstaged_status_model,
@@ -976,9 +1045,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         staged_status_model,
         &sec("H"),
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &staged_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &staged_path
     );
     assert_shortcut_action!(
         staged_status_model,
@@ -1028,9 +1095,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         conflicted_status_model,
         &sec("H"),
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::FileHistory { repo_id: rid, path }
-        } if *rid == repo_id && path == &conflicted_path
+        ContextMenuAction::OpenFileHistory { repo_id: rid, path } if *rid == repo_id && path == &conflicted_path
     );
     assert_shortcut_action!(
         conflicted_status_model,
@@ -1114,7 +1179,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             &view,
             app,
             PopoverKind::DiffEditorMenu {
-                repo_id,
+                repo_id: Some(repo_id),
                 area: DiffArea::Unstaged,
                 path: Some(unstaged_path.clone()),
                 hunk_patch: Some("hunk patch".into()),
@@ -1157,7 +1222,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             &view,
             app,
             PopoverKind::DiffEditorMenu {
-                repo_id,
+                repo_id: Some(repo_id),
                 area: DiffArea::Staged,
                 path: Some(staged_path.clone()),
                 hunk_patch: Some("staged hunk".into()),
@@ -1372,7 +1437,7 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -1520,7 +1585,6 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
 fn open_workspace_shortcut_opens_the_workspace_chooser_with_nothing_focused(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)

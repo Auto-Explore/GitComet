@@ -211,6 +211,18 @@ pub enum RepoCommandKind {
 }
 
 impl RepoCommandKind {
+    pub(crate) fn finished(
+        self,
+        repo_id: crate::model::RepoId,
+        result: gitcomet_core::services::Result<gitcomet_core::services::CommandOutput>,
+    ) -> super::InternalMsg {
+        super::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: self,
+            result,
+        }
+    }
+
     /// Whether the command can rewrite files in the checkout, so a file that
     /// changed under the view when it finished was GitComet's doing. Our own
     /// editor save is not here: the view recognizes those bytes itself.
@@ -274,6 +286,73 @@ impl RepoCommandKind {
             | Self::StageHunk
             | Self::UnstageHunk => false,
             Self::LargeFile { command } => command.writes_worktree(),
+        }
+    }
+
+    /// Whether the command holds off prepared patch applies while it runs.
+    /// Only commands that never write the index, the worktree, or what a
+    /// prepared patch checks (attributes, `core.*`/`filter.*` config), and can
+    /// wait minutes on the network or a credential prompt, let them through.
+    pub(crate) fn holds_mutation_gate(&self) -> bool {
+        match self {
+            Self::FetchAll
+            | Self::FetchRefspecs { .. }
+            | Self::PruneMergedBranches
+            | Self::Push
+            | Self::PushWithTags { .. }
+            | Self::PushAfterCommit { .. }
+            | Self::ForcePush
+            | Self::ForcePushWithLease { .. }
+            | Self::PushSetUpstream { .. }
+            | Self::DeleteRemoteBranch { .. }
+            | Self::DeleteRemoteBranches { .. }
+            | Self::PushTag { .. }
+            | Self::DeleteRemoteTag { .. } => false,
+            Self::Pull { .. }
+            | Self::PullBranch { .. }
+            | Self::MergeRef { .. }
+            | Self::SquashRef { .. }
+            | Self::Reset { .. }
+            | Self::SquashCommits { .. }
+            | Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. }
+            | Self::InteractiveCherryPick { .. }
+            | Self::CherryPick { .. }
+            | Self::Revert { .. }
+            | Self::ApplyFileChange { .. }
+            | Self::MergeAbort
+            | Self::CheckoutConflict { .. }
+            | Self::AcceptConflictDeletion { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::LaunchMergetool { .. }
+            | Self::AppendGitignorePatterns { .. }
+            | Self::AppendGitattributesRule { .. }
+            | Self::ExportPatch { .. }
+            | Self::ApplyPatch { .. }
+            | Self::AddSubmodule { .. }
+            | Self::UpdateSubmodules { .. }
+            | Self::LoadSubmodule { .. }
+            | Self::ChangeSubmodulePointer { .. }
+            | Self::RemoveSubmodule { .. }
+            | Self::ApplyWorktreePatch { .. }
+            | Self::PruneLocalTags
+            | Self::RunMaintenance
+            | Self::SetUpstreamBranch { .. }
+            | Self::UnsetUpstreamBranch { .. }
+            | Self::CreateTag { .. }
+            | Self::DeleteTag { .. }
+            | Self::AddRemote { .. }
+            | Self::RemoveRemote { .. }
+            | Self::SetRemoteUrl { .. }
+            | Self::SaveWorktreeFile { .. }
+            | Self::AddWorktree { .. }
+            | Self::RemoveWorktree { .. }
+            | Self::ForceRemoveWorktree { .. }
+            | Self::StageHunk
+            | Self::UnstageHunk
+            | Self::LargeFile { .. } => true,
         }
     }
 

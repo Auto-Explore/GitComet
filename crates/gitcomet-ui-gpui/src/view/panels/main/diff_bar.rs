@@ -49,7 +49,7 @@ pub(in crate::view) fn position_label(index: usize, count: usize) -> String {
     gitcomet_extension_api::DiffFilePosition::new(index, count).label()
 }
 
-impl MainPaneView {
+impl DiffRenderer {
     /// The file arrows' state for the open diff. `None` when the diff came
     /// from no list, so there is nothing to step through.
     pub(in crate::view) fn diff_bar_nav(
@@ -61,7 +61,7 @@ impl MainPaneView {
         if !self.store.policy.file_navigation || !show_diff_file_navigation(self.view_mode) {
             return None;
         }
-        if self.store.binding.is_some() {
+        if self.hosted_decor.is_some() {
             // A hosted pane steps through its owner's list, and the owner
             // says where in it the file is.
             let options = &self.hosted_decor.as_ref()?.options;
@@ -96,7 +96,7 @@ impl MainPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) -> Option<StageAction> {
-        if self.store.binding.is_some()
+        if self.hosted_decor.is_some()
             || !self.store.policy.allow_stage
             || !matches!(self.view_mode, GitCometViewMode::Normal)
             || self.is_inline_submodule_diff_active()
@@ -116,17 +116,11 @@ impl MainPaneView {
         };
         let (area, path) = (*area, path.clone());
         let files = self
-            .root_view
-            .update(cx, |root, cx| {
-                let (paths, used_selection) = root
-                    .details_pane
-                    .read(cx)
-                    .status_selected_paths_for_action(repo_id, area, &path);
-                used_selection.then_some(paths.len())
-            })
-            .ok()
-            .flatten()
-            .unwrap_or(1);
+            .commands
+            .navigation
+            .as_ref()
+            .and_then(|nav| nav.selected_paths(repo_id, area, &path, cx))
+            .map_or(1, |paths| paths.len());
         Some(StageAction { area, files })
     }
 

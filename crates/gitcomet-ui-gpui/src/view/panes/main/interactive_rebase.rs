@@ -1,5 +1,5 @@
 use super::super::super::*;
-use super::helpers::{ICommitEditorMode, IRebaseDragState, IRebaseViewState};
+use super::{ICommitEditorMode, IRebaseDragState, IRebaseViewState, MainPaneView};
 use crate::kit::click::PointerClickExt as _;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};

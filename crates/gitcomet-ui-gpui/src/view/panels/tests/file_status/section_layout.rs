@@ -728,7 +728,6 @@ fn split_unstaged_scroll_viewport_updates_after_outer_resize_shrink(cx: &mut gpu
 /// same advance, so a label with fewer characters is reliably narrower.
 #[gpui::test]
 fn stage_selected_label_shrinks_when_the_details_pane_is_narrow(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -841,7 +840,6 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
             .collect()
     }
 
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -940,7 +938,6 @@ fn comfortable_stage_and_commit_targets_fit_rows_at_laptop_and_4k_sizes(
 ) {
     use crate::appearance::{Appearance, UiDensity};
     use gitcomet_core::domain::{FileStatus, FileStatusKind, RepoStatus};
-    let _guard = lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1018,7 +1015,6 @@ fn comfortable_stage_and_commit_targets_fit_rows_at_laptop_and_4k_sizes(
 
 #[gpui::test]
 fn commit_details_signature_icon_follows_ui_scale(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (_view, cx) = commit_details_signature_fixture(
         cx,
         Some(test_signature(gitcomet_core::domain::SignatureStatus::Good)),
@@ -1049,7 +1045,6 @@ fn commit_details_signature_icon_follows_ui_scale(cx: &mut gpui::TestAppContext)
 /// only zooms through the pane's UI scale rather than the window's rem size.
 #[gpui::test]
 fn commit_details_close_icon_follows_ui_scale(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (view, cx) = commit_details_signature_fixture(cx, None);
     let normal = cx
         .debug_bounds("commit_details_close_icon")

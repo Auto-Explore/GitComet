@@ -21,6 +21,10 @@ use std::str;
 
 const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
 
+/// Uncoloured output for the diffstat a pull, merge or squash prints:
+/// `color.ui` alone loses to a user's `color.diff=always`.
+const NO_COLOR_CONFIG: [&str; 4] = ["-c", "color.ui=false", "-c", "color.diff=false"];
+
 struct FetchAllRemotes {
     names: Vec<String>,
     /// Name the eligible remotes explicitly when --all would contact annex.
@@ -201,7 +205,7 @@ fn safe_push_ref_display(remote: &str, branch: &str) -> String {
     format!("{remote}/{branch}")
 }
 
-fn output_mentions_missing_remote_ref(output: &std::process::Output) -> bool {
+fn output_mentions_missing_remote_ref(output: &crate::util::GitOutput) -> bool {
     let mut text = bytes_to_text_preserving_utf8(&output.stderr);
     text.push('\n');
     text.push_str(&bytes_to_text_preserving_utf8(&output.stdout));
@@ -504,7 +508,10 @@ impl GixRepo {
     fn reference_exists(&self, ref_name: &str) -> Result<bool> {
         let repo = self.reopen_repo()?;
         Ok(crate::refs::find(&repo, ref_name)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+                    .with_source(e)
+            })?
             .is_some())
     }
 
@@ -641,16 +648,18 @@ impl GixRepo {
         scope: UpstreamCleanupScope<'_>,
     ) -> Result<Vec<ConfiguredRemoteUpstream>> {
         let repo = self.reopen_repo()?;
-        let refs = crate::refs::view(&repo)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
-        let iter = refs
-            .local_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?;
+        let refs = crate::refs::view(&repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        let iter = refs.local_branches().map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))).with_source(e)
+        })?;
         let mut upstreams = Vec::new();
 
         for reference in iter {
-            let reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
             let Some(upstream) = configured_remote_upstream_of(&reference) else {
                 continue;
             };
@@ -685,6 +694,7 @@ impl GixRepo {
                     Error::new(ErrorKind::Backend(format!(
                         "gix try_find upstream reference: {e}"
                     )))
+                    .with_source(e)
                 })?
                 .is_some();
             if tracking_exists && upstream.pending {
@@ -821,8 +831,9 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let ref_name = format!("refs/heads/{branch_name}");
-        let Some(reference) = crate::refs::find(&repo, ref_name.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+        let Some(reference) = crate::refs::find(&repo, ref_name.as_str()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))).with_source(e)
+        })?
         else {
             return Ok(None);
         };
@@ -842,8 +853,9 @@ impl GixRepo {
 
         let repo = self.reopen_repo()?;
         let ref_name = format!("refs/heads/{branch_name}");
-        let Some(reference) = crate::refs::find(&repo, ref_name.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+        let Some(reference) = crate::refs::find(&repo, ref_name.as_str()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))).with_source(e)
+        })?
         else {
             return Ok(None);
         };
@@ -861,6 +873,7 @@ impl GixRepo {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find upstream reference: {e}"
                 )))
+                .with_source(e)
             })?
         else {
             return Ok(None);
@@ -933,10 +946,6 @@ impl GixRepo {
         Ok(remotes)
     }
 
-    pub(super) fn list_remote_branches_impl(&self) -> Result<Vec<RemoteBranch>> {
-        self.list_remote_branches_cancellable_impl(&CancellationToken::new())
-    }
-
     pub(super) fn list_remote_branches_cancellable_impl(
         &self,
         cancellation: &CancellationToken,
@@ -947,11 +956,12 @@ impl GixRepo {
         // before the command and resurrect already-pruned tracking branches in
         // the UI.
         let repo = self.reopen_repo()?;
-        let refs = crate::refs::view(&repo)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
-        let iter = refs
-            .remote_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))))?;
+        let refs = crate::refs::view(&repo).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix references: {e}"))).with_source(e)
+        })?;
+        let iter = refs.remote_branches().map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))).with_source(e)
+        })?;
         let remotes = repo
             .remote_names()
             .into_iter()
@@ -968,8 +978,9 @@ impl GixRepo {
         let mut tracking_refs = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {
             cancellation.check_cancelled()?;
-            let mut reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let mut reference = reference.map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))).with_source(e)
+            })?;
 
             let target = match reference.try_id() {
                 Some(id) => id.detach(),
@@ -1228,11 +1239,6 @@ impl GixRepo {
         Ok(append_unlinked_upstreams(output, &unlinked))
     }
 
-    pub(super) fn fetch_all_impl(&self, prune: bool) -> Result<()> {
-        self.fetch_all_with_optional_output_impl(prune, false)
-            .map(|_| ())
-    }
-
     pub(super) fn fetch_all_with_output_impl(&self, prune: bool) -> Result<CommandOutput> {
         self.fetch_all_with_optional_output_impl(prune, true)
     }
@@ -1475,15 +1481,6 @@ impl GixRepo {
             format!("git fetch {remote} --prune --no-prune-tags && {pull_label}"),
             &outputs,
         ))
-    }
-
-    pub(super) fn pull_impl(&self, mode: PullMode) -> Result<()> {
-        self.pull_with_optional_output_impl(mode, true, false)
-            .map(|_| ())
-    }
-
-    pub(super) fn pull_with_output_impl(&self, mode: PullMode) -> Result<CommandOutput> {
-        self.pull_with_optional_output_impl(mode, true, true)
     }
 
     pub(super) fn pull_with_output_prune_impl(
@@ -2010,14 +2007,6 @@ impl GixRepo {
         self.push_head_to_branch_with_oid_lease_with_output_impl(lease)
     }
 
-    pub(super) fn pull_branch_with_output_impl(
-        &self,
-        remote: &str,
-        branch: &str,
-    ) -> Result<CommandOutput> {
-        self.pull_branch_with_output_prune_impl(remote, branch, false)
-    }
-
     pub(super) fn pull_branch_with_output_prune_impl(
         &self,
         remote: &str,
@@ -2074,8 +2063,7 @@ impl GixRepo {
 
         let command_str = format!("git pull --no-rebase --ff --no-prune {remote} {branch}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("-c")
             .arg("fetch.pruneTags=false");
         if remote_name_is_config_key_safe(remote) {
@@ -2099,8 +2087,7 @@ impl GixRepo {
 
         let command_str = format!("git merge --ff --no-edit {reference}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("--no-pager")
             .arg("merge")
             .arg("--ff")
@@ -2198,14 +2185,18 @@ impl GixRepo {
         } else {
             format!("{lead}\n\n{output}")
         };
-        Error::new(ErrorKind::Git(GitFailure::new(
+        let mut conflict_failure = GitFailure::new(
             failure.command(),
             GitFailureId::StoppedAtConflicts,
             failure.exit_code(),
             failure.stdout().to_vec(),
             failure.stderr().to_vec(),
             Some(detail),
-        )))
+        );
+        if let Some(auth_outcome) = failure.auth_outcome() {
+            conflict_failure = conflict_failure.with_auth_outcome(auth_outcome.clone());
+        }
+        Error::new(ErrorKind::Git(conflict_failure))
     }
 
     pub(super) fn squash_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
@@ -2213,8 +2204,7 @@ impl GixRepo {
 
         let command_str = format!("git merge --squash --no-commit {reference}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("--no-pager")
             .arg("merge")
             .arg("--squash")
@@ -2293,7 +2283,10 @@ impl GixRepo {
         let repo = self.reopen_repo()?;
         let local_ref = format!("refs/heads/{branch}");
         if crate::refs::find(&repo, local_ref.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+                    .with_source(e)
+            })?
             .is_none()
         {
             return Err(Error::new(ErrorKind::Backend(format!(
@@ -2313,17 +2306,19 @@ impl GixRepo {
                 upstream.remote, upstream.branch
             ))));
         };
-        let tracking_ref_exists = match crate::refs::find(&repo, tracking_ref.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
-        {
-            Some(mut reference) => reference.peel_to_id().map(|_| true).map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "resolve remote branch {}/{}: {e}",
-                    upstream.remote, upstream.branch
-                )))
-            })?,
-            None => false,
-        };
+        let tracking_ref_exists =
+            match crate::refs::find(&repo, tracking_ref.as_str()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+                    .with_source(e)
+            })? {
+                Some(mut reference) => reference.peel_to_id().map(|_| true).map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "resolve remote branch {}/{}: {e}",
+                        upstream.remote, upstream.branch
+                    )))
+                })?,
+                None => false,
+            };
         // The mapping, rather than a local tracking ref's existence, is the
         // authority here. Git permits branch.<name>.remote/merge to name a
         // branch that will be created by a later push. Existing-target picker

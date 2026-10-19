@@ -144,7 +144,6 @@ fn assert_inside_window(menu: Bounds<Pixels>, window_h: Pixels) {
 /// stay below and be cut to that space even though the room above held it.
 #[gpui::test]
 fn a_long_menu_flips_above_the_pointer_when_only_above_fits(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = window_with_commit_menu_repo(cx, 12);
     let natural = natural_menu_height(&view, cx);
     let below = px(250.0);
@@ -169,7 +168,6 @@ fn a_long_menu_flips_above_the_pointer_when_only_above_fits(cx: &mut gpui::TestA
 /// slides over the pointer rather than hiding rows behind a scroll.
 #[gpui::test]
 fn a_menu_that_fits_neither_side_slides_into_the_window_whole(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = window_with_commit_menu_repo(cx, 12);
     let natural = natural_menu_height(&view, cx);
 
@@ -188,7 +186,6 @@ fn a_menu_that_fits_neither_side_slides_into_the_window_whole(cx: &mut gpui::Tes
 /// all of that height.
 #[gpui::test]
 fn a_menu_taller_than_the_window_scrolls_inside_the_margins(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = window_with_commit_menu_repo(cx, 12);
     let natural = natural_menu_height(&view, cx);
 
@@ -258,7 +255,6 @@ fn expand_group(view: &Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
 /// only fit on the other side of the pointer.
 #[gpui::test]
 fn expanding_a_ref_group_does_not_move_the_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = window_with_commit_menu_repo(cx, 4);
     let collapsed = natural_menu_height(&view, cx);
     open_commit_menu_at(&view, cx, point(px(100.0), px(40.0)));
@@ -299,7 +295,6 @@ fn expanding_a_ref_group_does_not_move_the_menu(cx: &mut gpui::TestAppContext) {
 /// Shrinking the window under a latched menu moves it back inside.
 #[gpui::test]
 fn a_latched_menu_follows_a_shrinking_window(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = window_with_commit_menu_repo(cx, 2);
     resize(cx, px(1400.0));
     open_commit_menu_at(&view, cx, point(px(100.0), px(700.0)));
@@ -314,7 +309,6 @@ fn a_latched_menu_follows_a_shrinking_window(cx: &mut gpui::TestAppContext) {
 /// At 200% the margins double with everything else.
 #[gpui::test]
 fn menu_margins_follow_the_ui_scale(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = window_with_commit_menu_repo(cx, 12);
     crate::view::panels::tests::set_ui_scale_percent_for_test(cx, &view, 200);
     let window_h = px(600.0);
@@ -406,7 +400,6 @@ fn open_overflowing_menu(
 /// leave the selection out of sight.
 #[gpui::test]
 fn keyboard_selection_is_revealed_with_the_least_scroll(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = open_overflowing_menu(cx);
     let viewport = cx.update(|_window, app| {
         view.read(app)
@@ -450,7 +443,6 @@ fn keyboard_selection_is_revealed_with_the_least_scroll(cx: &mut gpui::TestAppCo
 /// including for a short menu opened right after a scrolled long one.
 #[gpui::test]
 fn scroll_arrows_mark_only_the_edges_with_hidden_rows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = open_overflowing_menu(cx);
     let (up, down) = arrows(cx);
     assert!(up.is_none(), "nothing is hidden above at first");
@@ -474,7 +466,6 @@ fn scroll_arrows_mark_only_the_edges_with_hidden_rows(cx: &mut gpui::TestAppCont
 /// still scrolls through it, and pressing it leaves the menu open.
 #[gpui::test]
 fn hovering_a_scroll_arrow_scrolls_the_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (view, cx) = open_overflowing_menu(cx);
     let down = arrows(cx).1.expect("a down arrow");
     let max = menu_max_scroll(&view, cx);

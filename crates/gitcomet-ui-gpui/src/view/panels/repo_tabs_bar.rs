@@ -79,9 +79,9 @@ struct RepoTabDragCarrier;
 
 impl Render for RepoTabDragCarrier {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        // GPUI's drag machinery requires a preview entity. Keep that carrier
-        // invisible: the real tab remains in the strip and is what reorders.
-        div().size(px(1.0)).opacity(0.0)
+        // GPUI's drag machinery requires a preview entity. This empty one
+        // paints nothing: the real tab remains in the strip and is what reorders.
+        div().size(px(1.0))
     }
 }
 
@@ -351,9 +351,7 @@ impl RepoTabsBarView {
 
     fn is_repo_busy(repo: &RepoState) -> bool {
         matches!(repo.open, Loadable::Loading)
-            || repo
-                .loads_in_flight
-                .is_in_flight(!gitcomet_state::model::RepoLoadsInFlight::WORKTREE_DIRTY)
+            || repo.loads_in_flight.any_foreground_in_flight()
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0
@@ -877,7 +875,6 @@ impl Render for RepoTabsBarView {
                 // Fully cover any label ink beneath the button; the sibling
                 // ramp transitions into this exact background.
                 .bg(label_bg)
-                .cursor_pointer()
                 .control_interaction(
                     controls::InteractionStyle::destructive(theme).on_surface(label_bg),
                     controls::InteractionState::default(),
@@ -1458,7 +1455,7 @@ mod tests {
     #[test]
     fn repo_tab_tooltip_reports_missing_repository() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert_eq!(
             RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
             "Repository not found!\n/tmp/missing-repo"
@@ -1468,7 +1465,7 @@ mod tests {
     #[test]
     fn missing_repo_warning_icon_yields_to_spinner() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.feedback.missing_on_disk = true;
+        repo.feedback_mut().missing_on_disk = true;
         assert!(RepoTabsBarView::repo_tab_shows_missing_warning(
             &repo, false
         ));

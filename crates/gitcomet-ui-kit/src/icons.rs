@@ -26,12 +26,11 @@ pub fn svg_icon(path: impl Into<gpui::SharedString>, color: gpui::Rgba, size: Pi
 const SPINNER_MAX_FPS: f32 = 30.0;
 
 pub fn svg_spinner(id: impl Into<ElementId>, color: gpui::Rgba, size: Pixels) -> impl IntoElement {
-    gpui::svg()
-        .path("icons/spinner.svg")
-        .w(size)
-        .h(size)
-        .text_color(color)
-        .flex_shrink_0()
+    let spinner = svg_icon("icons/spinner.svg", color, size);
+    if !crate::ui_runtime::current().uses_spinner_animation() {
+        return spinner.into_any_element();
+    }
+    spinner
         .with_animation(
             id,
             Animation::new(std::time::Duration::from_millis(850))
@@ -43,11 +42,50 @@ pub fn svg_spinner(id: impl Into<ElementId>, color: gpui::Rgba, size: Pixels) ->
                 )))
             },
         )
+        .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
+    use super::svg_spinner;
     use crate::test_support::source_guards::{icon_size_args, unscaled_icon_sizes};
+    use crate::ui_runtime::{UiRuntime, with_override};
+    use gpui::{Context, IntoElement, Render, Window, px, rgba};
+    use std::time::Duration;
+
+    struct SpinnerView {
+        renders: usize,
+    }
+
+    impl Render for SpinnerView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            self.renders += 1;
+            svg_spinner("spinner", rgba(0xffffffff), px(16.0))
+        }
+    }
+
+    fn spinner_renders_during_one_second(cx: &mut gpui::TestAppContext) -> usize {
+        let (view, cx) = cx.add_window_view(|_window, _cx| SpinnerView { renders: 0 });
+        crate::test_support::redraw(cx);
+        let before = cx.update(|_window, app| view.read(app).renders);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        cx.update(|_window, app| view.read(app).renders) - before
+    }
+
+    #[gpui::test]
+    fn deterministic_spinner_does_not_redraw_as_the_clock_advances(cx: &mut gpui::TestAppContext) {
+        assert_eq!(spinner_renders_during_one_second(cx), 0);
+    }
+
+    #[gpui::test]
+    fn live_spinner_redraws_as_the_clock_advances(cx: &mut gpui::TestAppContext) {
+        let renders = with_override(UiRuntime::live(), || spinner_renders_during_one_second(cx));
+        assert!(
+            renders >= 10,
+            "a live spinner animates; got {renders} renders"
+        );
+    }
 
     #[test]
     fn icon_size_args_finds_the_last_argument() {

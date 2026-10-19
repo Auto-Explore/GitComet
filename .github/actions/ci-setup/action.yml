@@ -7,31 +7,12 @@ inputs:
   cold-cache:
     description: Bypass cache restore and save for baseline measurements
     default: "false"
-  compiled:
-    description: Restore compiled external dependencies for this context
-    default: "true"
   nextest:
     description: Install the pinned native test runner
     default: "true"
   python:
-    description: Install Python 3.14.7 (Fedora supplies a recent system Python)
+    description: Set up Python 3.14 (Fedora supplies a recent system Python)
     default: "true"
-outputs:
-  cache-key:
-    value: ${{ steps.key.outputs.key }}
-    description: Exact dependency cache key
-  cache-hit:
-    value: ${{ steps.cache.outputs.cache-hit }}
-    description: Whether the exact dependency key was restored
-  cache-restored:
-    value: ${{ steps.cache.outputs.cache-matched-key != '' }}
-    description: Whether any compatible dependency bundle was restored
-  source-key:
-    value: ${{ steps.key.outputs.source-key }}
-    description: Shared source cache key
-  source-hit:
-    value: ${{ steps.sources.outputs.cache-hit }}
-    description: Whether the exact shared source cache was restored
 runs:
   using: composite
   steps:
@@ -39,32 +20,32 @@ runs:
       if: inputs.python == 'true'
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
-        python-version: "3.14.7"
+        python-version: "3.14"
     - name: Install repository Rust toolchain
       shell: bash
       run: |
         rustup show active-toolchain
         rustc -vV
     - uses: ./.github/actions/setup-mold
-    - name: Compute dependency cache key
+    - name: Compute cache keys
       id: key
       shell: bash
       env:
         CI_CACHE_CONTEXT: ${{ inputs.context }}
       run: python3 scripts/ci/cache.py key --context "$CI_CACHE_CONTEXT"
-    - name: Restore dependency cache
-      if: inputs.cold-cache != 'true' && inputs.compiled == 'true'
+    - name: Restore compiled dependency cache
+      if: inputs.cold-cache != 'true' && steps.key.outputs.compiled == 'true'
       id: cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ${{ runner.temp }}/gitcomet-ci-cache.tar.gz
+        path: ${{ runner.temp }}/gitcomet-ci-compiled.tar.gz
         key: ${{ steps.key.outputs.key }}
         restore-keys: ${{ steps.key.outputs.restore-key }}
-    - name: Unpack dependency cache
+    - name: Unpack compiled dependency cache
       if: steps.cache.outputs.cache-matched-key != ''
       shell: bash
-      run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-cache.tar.gz"
-    - name: Restore shared sources after dependency miss (otherwise lookup only)
+      run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-compiled.tar.gz"
+    - name: Restore shared sources after a compiled miss (otherwise lookup only)
       if: inputs.cold-cache != 'true'
       id: sources
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -77,18 +58,25 @@ runs:
       if: steps.sources.outputs.cache-matched-key != '' && steps.cache.outputs.cache-matched-key == ''
       shell: bash
       run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-sources.tar.gz"
-    - name: Report cache state
+    # ci-finish reads this state from the job environment, so no caller forwards it.
+    - name: Report and export cache state
       shell: bash
       env:
         CI_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         CI_CACHE_RESTORED: ${{ steps.cache.outputs.cache-matched-key != '' }}
         CI_COLD_CACHE: ${{ inputs.cold-cache }}
         CI_CACHE_CONTEXT: ${{ inputs.context }}
+        CI_CACHE_COMPILED: ${{ steps.key.outputs.compiled }}
         CI_CACHE_KEY: ${{ steps.key.outputs.key }}
         CI_CACHE_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
         CI_SOURCE_KEY: ${{ steps.key.outputs.source-key }}
+        CI_SOURCE_HIT: ${{ steps.sources.outputs.cache-hit }}
         CI_SOURCE_MATCHED_KEY: ${{ steps.sources.outputs.cache-matched-key }}
-      run: python3 scripts/ci/cache.py state
+      run: |
+        python3 scripts/ci/cache.py state
+        for name in CI_COLD_CACHE CI_CACHE_CONTEXT CI_CACHE_COMPILED CI_CACHE_KEY CI_CACHE_HIT CI_SOURCE_KEY CI_SOURCE_HIT; do
+          echo "$name=${!name}" >> "$GITHUB_ENV"
+        done
     - name: Install pinned nextest
       if: inputs.nextest == 'true'
       shell: bash

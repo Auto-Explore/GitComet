@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Prove the crate layering with Cargo's resolved dependency graph.
 
-Each rule names a package, a feature selection, and packages that must not be
-reachable through normal or build dependencies on any target. Development
-dependencies are exempt: a test may use GPUI's test support. A rule whose
-package is not in the workspace yet is reported and skipped, so the check can
-land before the crate it guards.
+Each rule names a package, a feature selection, and packages (names or glob
+patterns) that must not be reachable through normal or build dependencies on
+any target. Development dependencies are exempt: a test may use GPUI's test
+support. A rule whose package is not in the workspace yet is reported and
+skipped, so the check can land before the crate it guards.
 """
 
 import json
 import subprocess
 import sys
+from fnmatch import fnmatchcase
 
 GPUI = ("gpui-ce", "gpui_ce_platform")
 UI_HOST = ("gitcomet-ui-gpui",)
@@ -18,9 +19,28 @@ APPLICATION = ("gitcomet", "gitcomet-app")
 
 RULES = (
     ("gitcomet-diagrams", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Shared foundations: no workspace crate below or beside them.
+    ("gitcomet-base", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Text foundations: GPUI's standalone string and tree crates, never GPUI.
+    ("gitcomet-text", (), ("gitcomet-base", "gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Syntax highlighting: tree-sitter and its grammars, never GPUI or the kit.
+    ("gitcomet-syntax", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    ("gitcomet-difftastic", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Vendored upstream source: GitComet adapts it from the outside.
+    ("difftastic", (), ("gitcomet", "gitcomet-*")),
+    # The conflict resolver's model: no state, GPUI or UI kit.
+    ("gitcomet-conflict-resolver", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # The markdown preview model: parsing, flattening and wrapping, never GPUI or the kit.
+    ("gitcomet-markdown", (), ("gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
+    # Measurement records and their report: serde only.
+    ("gitcomet-perf", (), ("gitcomet-core", "gitcomet-state", *GPUI, "gitcomet-ui-kit", *UI_HOST, *APPLICATION)),
     ("gitcomet-core", (), ("gitcomet-state", *GPUI, *UI_HOST, *APPLICATION)),
     ("gitcomet-state", (), (*GPUI, "gitcomet-ui-kit", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
-    ("gitcomet-ui-kit", (), ("gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    ("gitcomet-ui-kit", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    # The embedded terminal widget builds on the kit, like any downstream component.
+    ("gitcomet-ui-terminal", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
+    # Image and diagram previews: the kit and the diagram renderer, never Git or state.
+    ("gitcomet-ui-media", (), ("gitcomet-core", "gitcomet-state", "gitcomet-extension-api", *UI_HOST, *APPLICATION)),
     ("gitcomet-extension-api", (), (*UI_HOST, *APPLICATION)),
     # A downstream product library reaches the host only through the API.
     ("gitcomet-extension-example", (), (*UI_HOST, *APPLICATION)),
@@ -49,7 +69,8 @@ def parse_tree(output):
 
 
 def violations(package, reached, forbidden):
-    return sorted(name for name in reached if name in forbidden and name != package)
+    return sorted(name for name in reached
+                  if name != package and any(fnmatchcase(name, pattern) for pattern in forbidden))
 
 
 def main():

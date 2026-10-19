@@ -1,8 +1,10 @@
 use super::*;
+use crate::msg::ControlEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
 fn clone_repo_sets_running_state_and_emits_effect() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 
@@ -28,7 +30,7 @@ fn clone_repo_sets_running_state_and_emits_effect() {
 fn configured_remote_url_policy_is_carried_to_clone_effects() {
     use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let policy = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Http, true);
@@ -64,7 +66,7 @@ fn configured_remote_url_policy_is_carried_to_clone_effects() {
 
 #[test]
 fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
@@ -111,7 +113,7 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
 
 #[test]
 fn clone_repo_progress_tracks_loading_and_remote_object_phases() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
@@ -158,7 +160,7 @@ fn clone_repo_progress_tracks_loading_and_remote_object_phases() {
 
 #[test]
 fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
@@ -221,7 +223,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
 
 #[test]
 fn abort_clone_repo_marks_operation_cancelling_and_emits_effect() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
@@ -247,13 +249,13 @@ fn abort_clone_repo_marks_operation_cancelling_and_emits_effect() {
     assert!(matches!(op.status, CloneOpStatus::Cancelling));
     assert_eq!(op.seq, 1);
     assert!(
-        matches!(effects.as_slice(), [Effect::AbortCloneRepo { dest: effect_dest }] if effect_dest == &dest)
+        matches!(effects.as_slice(), [Effect::Control(ControlEffect::AbortCloneRepo { dest: effect_dest })] if effect_dest == &dest)
     );
 }
 
 #[test]
 fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
@@ -310,7 +312,7 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
 
 #[test]
 fn clone_repo_finished_maps_cancelling_error_to_cancelled() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
@@ -349,7 +351,7 @@ fn clone_repo_finished_maps_cancelling_error_to_cancelled() {
 
 #[test]
 fn clone_repo_finished_preserves_cleanup_failure_when_cancelling() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
@@ -397,7 +399,7 @@ fn clone_repo_finished_preserves_cleanup_failure_when_cancelling() {
 
 #[test]
 fn clone_repo_finished_replaces_state_when_destination_differs() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repos: RepositoryRuntimes = Default::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::test_default();
 

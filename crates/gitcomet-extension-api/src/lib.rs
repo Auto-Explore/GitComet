@@ -14,6 +14,10 @@
 //! Core and state types (snapshots, `Msg` dispatch) are available as
 //! revision-pinned integration APIs: extensions may read existing state and
 //! dispatch existing messages, but reducers stay the host's.
+//!
+//! Tests can run extension code against `fake_host::FakeWindowHost`
+//! (`test-support` feature), which keeps workspace state in memory and records
+//! the dialogs, notifications and messages an extension asks for.
 
 mod annotations;
 pub mod bars;
@@ -32,6 +36,8 @@ pub use markdown::{MarkdownView, MarkdownViewImpl};
 pub mod panes;
 pub mod presentation;
 pub use presentation::{HostedAction, HostedMenuItem, NotificationKind};
+#[cfg(feature = "test-support")]
+pub mod fake_host;
 pub mod registry;
 pub mod services;
 pub mod storage;

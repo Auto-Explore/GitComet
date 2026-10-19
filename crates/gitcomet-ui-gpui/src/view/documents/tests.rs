@@ -1,6 +1,21 @@
 use super::*;
 use crate::view::test_support::TestBackend;
 
+fn adopt_edit(
+    docs: &mut DocumentsView,
+    identity: DocumentIdentity,
+    text: SharedString,
+    cursor: usize,
+    version: Option<DiskVersion>,
+    cx: &mut gpui::Context<DocumentsView>,
+) {
+    let document = docs.owner.create(identity, None);
+    document.set_disk_version(version, cx);
+    document.seat_text(1, Some(2), cx);
+    document.retain_text(text, cursor, 1);
+    docs.adopt(document, cx);
+}
+
 // Standalone fixtures must stay outside repository routing even when an
 // ancestor of the temporary directory contains a .git entry.
 struct StandaloneBackend;
@@ -20,7 +35,6 @@ impl gitcomet_core::services::GitBackend for StandaloneBackend {
 fn background_document_opens_defer_loading_and_clean_navigation_releases_buffers(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
@@ -87,7 +101,6 @@ fn background_document_opens_defer_loading_and_clean_navigation_releases_buffers
 fn document_eviction_preserves_dirty_and_saving_buffers_until_acknowledged_clean(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
@@ -128,12 +141,12 @@ fn document_eviction_preserves_dirty_and_saving_buffers_until_acknowledged_clean
                     cx,
                 );
             }
-            assert!(docs.buffers.contains_key(&dirty.entity_id()));
-            assert!(dirty.read(cx).dirty);
+            assert!(docs.buffers.contains_key(&dirty.read(cx).document.id()));
+            assert!(dirty.read(cx).dirty());
             let id = docs.active.unwrap();
             let buffer = docs.buffers[&id].clone();
             buffer.update(cx, |buffer, cx| buffer.save(Some(copy.clone()), false, cx));
-            assert!(!buffer.read(cx).dirty && buffer.read(cx).saving.is_some());
+            assert!(!buffer.read(cx).dirty() && buffer.read(cx).saving().is_some());
             docs.open(third.clone(), true, cx);
             assert!(
                 docs.buffers.contains_key(&id),
@@ -165,8 +178,12 @@ fn document_eviction_preserves_dirty_and_saving_buffers_until_acknowledged_clean
     });
     drain(&root, cx);
     cx.update(|_, app| {
-        assert!(dirty.read(app).dirty);
-        assert!(docs.read(app).buffers.contains_key(&dirty.entity_id()));
+        assert!(dirty.read(app).dirty());
+        assert!(
+            docs.read(app)
+                .buffers
+                .contains_key(&dirty.read(app).document.id())
+        );
         dirty.update(app, |buffer, cx| buffer.save(None, false, cx));
     });
     drain(&root, cx);
@@ -185,7 +202,6 @@ fn adopted_documents_keep_their_line_endings_when_enter_is_pressed(cx: &mut gpui
 }
 
 fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
@@ -211,25 +227,18 @@ fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
         let buffer = cx.update(|_, app| {
             root.read(app).documents.clone().update(app, |docs, cx| {
                 if adopted {
-                    docs.adopt(
+                    adopt_edit(
+                        docs,
                         DocumentIdentity(path.clone()),
-                        StashedFileEdit {
-                            text: text.clone().into(),
-                            cursor: text.len(),
-                            text_fingerprint: 1,
-                            saved_fingerprint: 2,
-                            first_dirty_line: None,
-                            disk: Default::default(),
-                            text_format: None,
-                            source_text_format: None,
-                        },
+                        text.clone().into(),
+                        text.len(),
                         Some(DiskVersion::read(&path).unwrap()),
                         cx,
                     );
                     let id = docs
                         .buffers
                         .iter()
-                        .find(|(_, buffer)| buffer.read(cx).identity.0 == path)
+                        .find(|(_, buffer)| buffer.read(cx).identity().0 == path)
                         .unwrap()
                         .0;
                     docs.activate_buffer(*id, cx);
@@ -257,7 +266,7 @@ fn check_document_line_endings(cx: &mut gpui::TestAppContext, adopted: bool) {
         cx.update(|_, app| {
             buffer.update(app, |buffer, cx| {
                 assert_eq!(buffer.input.read(cx).text(), expected);
-                assert!(buffer.dirty);
+                assert!(buffer.dirty());
                 buffer.save(None, false, cx);
             })
         });
@@ -284,7 +293,6 @@ fn pending_document_reads_wait_for_all_filesystem_pauses_before_restarting(
 }
 
 fn rename_during_document_load(cx: &mut gpui::TestAppContext, parent: bool, overlapping: bool) {
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
@@ -306,7 +314,7 @@ fn rename_during_document_load(cx: &mut gpui::TestAppContext, parent: bool, over
         docs.update(app, |docs, cx| {
             docs.open(original.clone(), true, cx);
             let buffer = docs.buffers[&docs.active.unwrap()].clone();
-            assert!(buffer.read(cx).loading);
+            assert!(buffer.read(cx).loading());
             let request = Request::new(Operation::Rename {
                 source: if parent {
                     original.parent().unwrap().into()
@@ -315,34 +323,34 @@ fn rename_during_document_load(cx: &mut gpui::TestAppContext, parent: bool, over
                 },
                 name: if parent { "after" } else { "renamed.txt" }.into(),
             });
-            docs.filesystem_pause(request.id, cx);
+            docs.pause_presented(request.id, cx);
             if overlapping {
-                docs.filesystem_pause(other_pause, cx);
+                docs.pause_presented(other_pause, cx);
             }
             let result = gitcomet_core::filesystem::Filesystem::default().execute(request, |_| {});
             assert!(result.succeeded(), "{:?}", result.items);
             // A successful read of the obsolete path must also be rejected.
             std::fs::create_dir_all(original.parent().unwrap()).unwrap();
             std::fs::write(&original, "obsolete contents").unwrap();
-            docs.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
-            assert_eq!(buffer.read(cx).identity.0, renamed);
+            docs.finish_presented(result.id, &result.changes, &result.moved_versions, cx);
+            assert_eq!(buffer.read(cx).identity().0, renamed);
             buffer
         })
     });
     cx.run_until_parked();
     if overlapping {
         cx.update(|_, app| {
-            assert!(buffer.read(app).loading);
+            assert!(buffer.read(app).loading());
             assert!(buffer.read(app).input.read(app).text().is_empty());
             docs.update(app, |docs, cx| {
-                docs.filesystem_finish(other_pause, &[], &BTreeMap::new(), cx);
+                docs.finish_presented(other_pause, &[], &BTreeMap::new(), cx);
             });
         });
     }
     drain(&root, cx);
     cx.update(|_, app| {
         buffer.update(app, |b, cx| {
-            assert!(!b.loading && !b.dirty && b.error.is_none());
+            assert!(!b.loading() && !b.dirty() && b.error().is_none());
             assert_eq!(b.input.read(cx).text(), "document contents");
             b.editing = true;
             b.input.update(cx, |input, cx| {
@@ -405,7 +413,6 @@ enum TransferOutcome {
 
 fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOutcome) {
     use gitcomet_core::filesystem::TransferIntent;
-    let _guard = crate::test_support::lock_visual_test();
     cx.skip_drawing();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (other, _) =
@@ -482,13 +489,16 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
                 cx,
             );
             if outcome != TransferOutcome::Cancelled {
-                for view in [&root.main_pane, &other.read(cx).main_pane] {
-                    assert!(view.read(cx).filesystem_pauses.contains(&id));
+                for view in [&root.diff_renderer, &other.read(cx).diff_renderer] {
+                    assert!(view.read(cx).editor_documents.paused_by(id));
                 }
                 other_buffer.update(cx, |buffer, cx| {
-                    assert!(buffer.dirty && buffer.pauses.contains(&id));
+                    assert!(buffer.dirty() && buffer.document.read().pauses().contains(&id));
                     buffer.save(None, false, cx);
-                    assert!(buffer.saving.is_none(), "saves must wait for the transfer");
+                    assert!(
+                        buffer.saving().is_none(),
+                        "saves must wait for the transfer"
+                    );
                 });
             }
         })
@@ -531,11 +541,12 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
             root.update(app, |root, cx| {
                 crate::view::test_support::sync_store_snapshot(root, cx)
             });
-            root.read(app)
-                .main_pane
+            !root
                 .read(app)
-                .filesystem_pauses
-                .is_empty()
+                .diff_renderer
+                .read(app)
+                .editor_documents
+                .paused()
         });
         if released {
             break;
@@ -545,18 +556,21 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
     cx.update(|_, app| {
         for view in [&root, &other] {
             let view = view.read(app);
-            assert!(view.main_pane.read(app).filesystem_pauses.is_empty());
+            assert!(!view.diff_renderer.read(app).editor_documents.paused());
             let docs = view.documents.read(app);
             assert!(
-                docs.buffers
-                    .values()
-                    .all(|buffer| buffer.read(app).pauses.is_empty())
+                docs.buffers.values().all(|buffer| buffer
+                    .read(app)
+                    .document
+                    .read()
+                    .pauses()
+                    .is_empty())
             );
         }
         let docs = root.read(app).documents.read(app);
         let buffer = docs.buffers[&docs.active.unwrap()].read(app);
         assert_eq!(
-            buffer.identity.0,
+            buffer.identity().0,
             if outcome == TransferOutcome::Completed {
                 destination.join("source.txt")
             } else {
@@ -591,7 +605,7 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
         other_buffer.update(app, |buffer, cx| {
             buffer.save(None, false, cx);
             assert!(
-                buffer.saving.is_some(),
+                buffer.saving().is_some(),
                 "the other window must be able to save without rendering the origin"
             );
         })
@@ -606,7 +620,6 @@ fn transfer_without_rendering(cx: &mut gpui::TestAppContext, outcome: TransferOu
 #[gpui::test]
 fn replace_asks_about_unsaved_edits_in_a_themed_dialog(cx: &mut gpui::TestAppContext) {
     use gitcomet_core::filesystem::TransferIntent;
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -720,7 +733,6 @@ fn replace_asks_about_unsaved_edits_in_a_themed_dialog(cx: &mut gpui::TestAppCon
 fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -732,7 +744,7 @@ fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
     let buffer = cx.update(|_, app| {
         let docs = docs.read(app);
         let buffer = docs.buffers[&docs.active.unwrap()].clone();
-        assert!(buffer.read(app).error.is_some());
+        assert!(buffer.read(app).error().is_some());
         buffer
     });
     for contents in ["file is now available", "changed by another application"] {
@@ -741,10 +753,10 @@ fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
         drain(&root, cx);
         cx.update(|_, app| {
             assert_eq!(docs.read(app).buffers.len(), 1);
-            assert_eq!(docs.read(app).active, Some(buffer.entity_id()));
+            assert_eq!(docs.read(app).active, Some(buffer.read(app).document.id()));
             assert_eq!(buffer.read(app).input.read(app).text(), contents);
-            assert!(buffer.read(app).error.is_none());
-            assert!(!buffer.read(app).dirty);
+            assert!(buffer.read(app).error().is_none());
+            assert!(!buffer.read(app).dirty());
         });
     }
     cx.update(|_, app| {
@@ -762,7 +774,7 @@ fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
     drain(&root, cx);
     cx.update(|_, app| {
         assert_eq!(buffer.read(app).input.read(app).text(), "unsaved edits");
-        assert!(buffer.read(app).dirty);
+        assert!(buffer.read(app).dirty());
     });
 }
 
@@ -770,7 +782,6 @@ fn reopening_documents_refreshes_clean_buffers_and_retries_failed_reads(
 fn reopening_a_clean_document_during_save_as_preserves_the_pending_buffer(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -784,13 +795,13 @@ fn reopening_a_clean_document_during_save_as_preserves_the_pending_buffer(
     cx.update(|_, app| {
         docs.update(app, |docs, cx| {
             let buffer = docs.buffers[&docs.active.unwrap()].clone();
-            let generation = buffer.read(cx).load_generation;
+            let generation = buffer.read(cx).document.read().generation();
             buffer.update(cx, |b, cx| b.save(Some(destination.clone()), false, cx));
-            assert!(buffer.read(cx).saving.is_some());
-            assert!(!buffer.read(cx).dirty);
+            assert!(buffer.read(cx).saving().is_some());
+            assert!(!buffer.read(cx).dirty());
             docs.open(source.clone(), true, cx);
-            assert_eq!(buffer.read(cx).load_generation, generation);
-            assert!(!buffer.read(cx).loading);
+            assert_eq!(buffer.read(cx).document.read().generation(), generation);
+            assert!(!buffer.read(cx).loading());
         })
     });
     drain(&root, cx);
@@ -799,7 +810,6 @@ fn reopening_a_clean_document_during_save_as_preserves_the_pending_buffer(
 
 #[gpui::test]
 fn clean_save_as_offers_replacement_and_preserves_source(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -829,9 +839,9 @@ fn clean_save_as_offers_replacement_and_preserves_source(cx: &mut gpui::TestAppC
     );
     cx.update(|_, app| {
         let b = buffer.read(app);
-        assert!(!b.dirty);
-        assert!(b.error.is_some());
-        assert_eq!(b.failed_destination.as_ref(), Some(&destination));
+        assert!(!b.dirty());
+        assert!(b.error().is_some());
+        assert_eq!(b.failed_destination().as_ref(), Some(&destination));
     });
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -852,9 +862,9 @@ fn clean_save_as_offers_replacement_and_preserves_source(cx: &mut gpui::TestAppC
     );
     cx.update(|_, app| {
         let b = buffer.read(app);
-        assert_eq!(b.identity.0, destination);
-        assert!(!b.dirty);
-        assert!(b.error.is_none() && b.failed_destination.is_none());
+        assert_eq!(b.identity().0, destination);
+        assert!(!b.dirty());
+        assert!(b.error().is_none() && b.failed_destination().is_none());
     });
 }
 
@@ -862,7 +872,6 @@ fn clean_save_as_offers_replacement_and_preserves_source(cx: &mut gpui::TestAppC
 fn repository_document_routes_record_absolute_paths_for_foreground_and_background_opens(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -913,7 +922,6 @@ fn repository_document_routes_record_absolute_paths_for_foreground_and_backgroun
 fn oversized_documents_show_the_size_error_without_loading_a_baseline(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -934,9 +942,9 @@ fn oversized_documents_show_the_size_error_without_loading_a_baseline(
         cx.update(|_, app| {
             let docs = root.read(app).documents.read(app);
             let b = docs.buffers[&docs.active.unwrap()].read(app);
-            assert!(b.error.as_ref().is_some_and(|e| e.contains("32 MB")));
-            assert!(b.version.is_none());
-            assert!(!b.dirty);
+            assert!(b.error().as_ref().is_some_and(|e| e.contains("32 MB")));
+            assert!(b.version().is_none());
+            assert!(!b.dirty());
         });
     }
 }
@@ -951,7 +959,7 @@ fn drain(root: &Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
             let docs = root.read(app).documents.read(app);
             docs.buffers
                 .values()
-                .all(|b| !b.read(app).loading && b.read(app).saving.is_none())
+                .all(|b| !b.read(app).loading() && b.read(app).saving().is_none())
         });
         if done {
             cx.run_until_parked();
@@ -966,7 +974,6 @@ fn drain(root: &Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
 fn standalone_edits_detect_other_writes_and_save_as_preserves_both_files(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1001,7 +1008,7 @@ fn standalone_edits_detect_other_writes_and_save_as_preserves_both_files(
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "other window");
     cx.update(|_, app| {
         let b = buffer.read(app);
-        assert!(b.dirty && b.error.is_some());
+        assert!(b.dirty() && b.error().is_some());
         assert_eq!(b.input.read(app).text(), "my edits");
     });
     let destination = directory.path().join("saved as.txt");
@@ -1010,8 +1017,8 @@ fn standalone_edits_detect_other_writes_and_save_as_preserves_both_files(
     assert_eq!(std::fs::read_to_string(&destination).unwrap(), "my edits");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "other window");
     cx.update(|_, app| {
-        assert!(!buffer.read(app).dirty);
-        assert_eq!(buffer.read(app).identity.0, destination);
+        assert!(!buffer.read(app).dirty());
+        assert_eq!(buffer.read(app).identity().0, destination);
     });
 }
 
@@ -1019,7 +1026,6 @@ fn standalone_edits_detect_other_writes_and_save_as_preserves_both_files(
 fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1029,18 +1035,11 @@ fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
         let docs = root.read(app).documents.clone();
         docs.update(app, |docs, cx| {
             for text in ["first buffer", "second buffer"] {
-                docs.adopt(
+                adopt_edit(
+                    docs,
                     DocumentIdentity(missing.clone()),
-                    StashedFileEdit {
-                        text: text.into(),
-                        cursor: 0,
-                        text_fingerprint: 1,
-                        saved_fingerprint: 2,
-                        first_dirty_line: None,
-                        disk: Default::default(),
-                        text_format: None,
-                        source_text_format: None,
-                    },
+                    text.into(),
+                    0,
                     None,
                     cx,
                 );
@@ -1068,7 +1067,6 @@ fn detached_buffers_survive_missing_files_history_removal_and_path_collisions(
 fn document_history_is_shared_and_opening_another_view_retains_edits(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1081,25 +1079,17 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
             DocumentsView::new(
                 docs.read(cx).theme,
                 root.downgrade(),
-                docs.read(cx).store.clone(),
                 docs.read(cx).ui_model.clone(),
                 cx,
             )
         });
         docs.update(app, |docs, cx| {
             update_recent(file.clone(), false, cx);
-            docs.adopt(
+            adopt_edit(
+                docs,
                 DocumentIdentity(file.clone()),
-                StashedFileEdit {
-                    text: "unsaved".into(),
-                    cursor: 0,
-                    text_fingerprint: 1,
-                    saved_fingerprint: 2,
-                    first_dirty_line: None,
-                    disk: Default::default(),
-                    text_format: None,
-                    source_text_format: None,
-                },
+                "unsaved".into(),
+                0,
                 None,
                 cx,
             );
@@ -1119,7 +1109,6 @@ fn document_history_is_shared_and_opening_another_view_retains_edits(
 
 #[gpui::test]
 fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1128,18 +1117,11 @@ fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui:
     let buffer = cx.update(|_, app| {
         let docs = root.read(app).documents.clone();
         docs.update(app, |docs, cx| {
-            docs.adopt(
+            adopt_edit(
+                docs,
                 DocumentIdentity(path.clone()),
-                StashedFileEdit {
-                    text: "<svg/>".into(),
-                    cursor: 0,
-                    text_fingerprint: 1,
-                    saved_fingerprint: 2,
-                    first_dirty_line: None,
-                    disk: Default::default(),
-                    text_format: None,
-                    source_text_format: None,
-                },
+                "<svg/>".into(),
+                0,
                 None,
                 cx,
             );
@@ -1148,7 +1130,7 @@ fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui:
     });
     cx.update(|_, app| {
         buffer.update(app, |b, cx| {
-            assert!(b.dirty && b.editing);
+            assert!(b.dirty() && b.editing);
             assert!(!b.image, "an adopted SVG buffer contains editable text");
             b.discard(cx);
         })
@@ -1156,8 +1138,8 @@ fn unsaved_svg_is_editable_and_discarded_missing_files_stay_clean(cx: &mut gpui:
     drain(&root, cx);
     cx.update(|_, app| {
         let b = buffer.read(app);
-        assert!(!b.dirty && !b.editing);
-        assert!(b.error.is_some());
+        assert!(!b.dirty() && !b.editing);
+        assert!(b.error().is_some());
     });
     assert!(!path.exists());
 }
@@ -1182,7 +1164,6 @@ fn document_picker_open(root: &Entity<GitCometView>, cx: &mut gpui::VisualTestCo
 fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(StandaloneBackend));
     let (root, cx) = cx.add_window_view(|window, cx| {
         // Text input only accepts typing in the active window.
@@ -1224,7 +1205,7 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
     cx.update(|_, app| {
         let docs = root.read(app).documents.read(app);
         let buffer = docs.buffers[&docs.active.expect("Enter opens the typed path")].read(app);
-        assert_eq!(buffer.identity.0, path);
+        assert_eq!(buffer.identity().0, path);
         assert_eq!(buffer.input.read(app).text(), "# Notes");
         assert!(buffer.wrap, "prose wraps by default");
     });
@@ -1243,7 +1224,6 @@ fn status_bar_documents_button_opens_a_picker_that_opens_typed_paths(
 fn repository_windows_keep_their_panes_around_documents_until_the_repository_navigates(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (root, cx) = cx.add_window_view({
         let store = store.clone();
@@ -1314,4 +1294,108 @@ fn repository_windows_keep_their_panes_around_documents_until_the_repository_nav
         !cx.update(|_, app| root.read(app).documents_active),
         "opening a file in the repository takes the main slot back"
     );
+}
+
+/// Caret blinks and moves notify the editor's input as often as typing does;
+/// only a change to the text may fingerprint the whole document again.
+#[gpui::test]
+fn standalone_caret_notifies_do_not_refingerprint_the_document(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("caret.txt");
+    std::fs::write(&path, "original").unwrap();
+    cx.update(|_, app| {
+        let docs = root.read(app).documents.clone();
+        docs.update(app, |docs, cx| docs.open(path.clone(), true, cx));
+    });
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = root.read(app).documents.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| {
+            b.editing = true;
+            b.input.update(cx, |input, cx| {
+                input.set_read_only(false, cx);
+                input.set_text("first edit", cx);
+            });
+        })
+    });
+    cx.run_until_parked();
+
+    let _ = super::text::take_text_fingerprints_for_tests();
+    for _ in 0..5 {
+        cx.update(|_, app| buffer.update(app, |b, cx| b.input.update(cx, |_, cx| cx.notify())));
+        cx.run_until_parked();
+    }
+    assert_eq!(super::text::take_text_fingerprints_for_tests(), 0);
+
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| {
+            b.input
+                .update(cx, |input, cx| input.set_text("original", cx));
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        !buffer.read_with(cx, |b, _| b.dirty()),
+        "typing back the saved text is still reported"
+    );
+}
+
+/// A theme change resets the syntax provider, which a loading buffer defers.
+/// A reload that brings back the same text emits no text change, so the end
+/// of the read itself has to apply the new provider.
+#[gpui::test]
+fn a_theme_change_during_a_reload_restyles_unchanged_text(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (root, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("restyle.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let docs = cx.update(|_, app| root.read(app).documents.clone());
+    cx.update(|_, app| docs.update(app, |docs, cx| docs.open(path.clone(), true, cx)));
+    drain(&root, cx);
+    let buffer = cx.update(|_, app| {
+        let docs = docs.read(app);
+        docs.buffers[&docs.active.unwrap()].clone()
+    });
+
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| b.reload(cx));
+        docs.update(app, |docs, cx| {
+            docs.set_theme(crate::theme::AppTheme::gitcomet_light(), cx)
+        });
+    });
+    drain(&root, cx);
+
+    let assert_restyled = |cx: &mut gpui::VisualTestContext, case: &str| {
+        cx.update(|_, app| {
+            let b = buffer.read(app);
+            let snapshot = b.input.read(app).text_snapshot();
+            assert_eq!(b.input.read(app).text(), "fn main() {}\n", "{case}");
+            assert_eq!(
+                b.syntax_key,
+                Some((snapshot.model_id(), snapshot.revision())),
+                "{case}: the restyle waits for the read and must happen once it ends"
+            );
+        });
+    };
+    assert_restyled(cx, "read the same text");
+
+    // A read that fails keeps the text on screen, which still needs restyling.
+    cx.update(|_, app| {
+        buffer.update(app, |b, cx| b.reload(cx));
+        docs.update(app, |docs, cx| {
+            docs.set_theme(crate::theme::AppTheme::gitcomet_dark(), cx)
+        });
+    });
+    std::fs::remove_file(&path).unwrap();
+    drain(&root, cx);
+    assert!(cx.update(|_, app| buffer.read(app).error().is_some()));
+    assert_restyled(cx, "read failed");
 }

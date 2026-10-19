@@ -48,33 +48,46 @@ pub(crate) fn credentials_without_prompts(cmd: &mut Command) {
     cmd.env("GCM_INTERACTIVE", "Never");
 }
 
-pub(crate) fn install_test_git_command_environment(env: TestGitCommandEnvironment) {
-    if let Some(existing) = TEST_GIT_COMMAND_ENVIRONMENT.get() {
-        assert_eq!(
-            existing, &env,
-            "test git command environment already initialized"
-        );
-        return;
-    }
-    let _ = TEST_GIT_COMMAND_ENVIRONMENT.set(env);
+/// Appends `--` and a user's file paths. Paths after `--` are still
+/// pathspecs, so without literal pathspecs `[a].txt` also matches `a.txt`
+/// and `*` matches everything: every git pathspec built from a user's file
+/// goes through here or [`push_literal_pathspec_file`].
+pub(crate) fn push_literal_paths<P: AsRef<std::ffi::OsStr>>(
+    cmd: &mut Command,
+    paths: impl IntoIterator<Item = P>,
+) {
+    cmd.env("GIT_LITERAL_PATHSPECS", "1").arg("--").args(paths);
 }
 
-pub(super) fn apply_test_git_command_environment(cmd: &mut Command) {
-    let Some(env) = TEST_GIT_COMMAND_ENVIRONMENT.get() else {
-        return;
-    };
+/// A path for `git submodule`, a shell script on Git for Windows. Git starts
+/// its MSYS2 `sh` without quoting `[`, and the runtime globs unquoted
+/// arguments against the working tree, so `[z]` reached Git as a tracked `z`.
+/// A `\` gets the argument quoted, and Git normalizes `.\[z]` back to `[z]`.
+/// (`MSYS=noglob` would also drop the runtime's `\"` unescaping.)
+pub(crate) fn submodule_script_path(path: &Path) -> std::borrow::Cow<'_, std::ffi::OsStr> {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    if cfg!(windows) && path.is_relative() && bytes.contains(&b'[') && !bytes.contains(&b'\\') {
+        let mut quoted = std::ffi::OsString::from(".\\");
+        quoted.push(path);
+        std::borrow::Cow::Owned(quoted)
+    } else {
+        std::borrow::Cow::Borrowed(path.as_os_str())
+    }
+}
 
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
-    cmd.env("HOME", &env.home_dir);
-    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
-    cmd.env("GNUPGHOME", &env.gnupg_home);
-    cmd.arg("-c").arg("protocol.file.allow=always");
+/// [`push_literal_paths`] for a NUL-separated `--pathspec-from-file` list.
+pub(crate) fn push_literal_pathspec_file(cmd: &mut Command, pathspec_file: &Path) {
+    let mut arg = std::ffi::OsString::from("--pathspec-from-file=");
+    arg.push(pathspec_file);
+    cmd.env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("--pathspec-file-nul")
+        .arg(arg);
 }
 
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = git_command();
-    apply_test_git_command_environment(&mut cmd);
+    #[cfg(any(test, feature = "test-support"))]
+    crate::test_support::apply_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd
 }
@@ -114,17 +127,20 @@ pub(super) fn git_timeout_error(
     stdout: Vec<u8>,
     stderr: Vec<u8>,
 ) -> Error {
-    Error::new(ErrorKind::Git(GitFailure::new(
-        label,
-        GitFailureId::Timeout,
-        exit_code,
-        stdout,
-        stderr,
-        Some(format!(
-            "after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
-            timeout.as_secs()
-        )),
-    )))
+    Error::new(ErrorKind::Git(
+        GitFailure::new(
+            label,
+            GitFailureId::Timeout,
+            exit_code,
+            stdout,
+            stderr,
+            Some(format!(
+                "after {} seconds without output (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+                timeout.as_secs()
+            )),
+        )
+        .with_auth_outcome(AuthOutcome::Unknown),
+    ))
 }
 
 /// "a.txt", "a.txt and b.txt", or "a.txt, b.txt and 3 more" for messages.
@@ -147,11 +163,12 @@ pub(crate) fn describe_path_list<P: AsRef<[u8]>>(paths: &[P]) -> String {
     }
 }
 
-pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
-    let Output {
+pub(crate) fn git_command_failed_error(label: &str, output: GitOutput) -> Error {
+    let GitOutput {
         status,
         stdout,
         stderr,
+        auth_outcome,
     } = output;
     let detail = [stderr.as_slice(), stdout.as_slice()]
         .into_iter()
@@ -161,14 +178,10 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
         .map(add_git_failure_hint);
     let id = classify_git_failure(&String::from_utf8_lossy(&stderr));
     let detail = detail.map(|detail| add_lfs_failure_hint(detail, id));
-    Error::new(ErrorKind::Git(GitFailure::new(
-        label,
-        id,
-        status.code(),
-        stdout,
-        stderr,
-        detail,
-    )))
+    Error::new(ErrorKind::Git(
+        GitFailure::new(label, id, status.code(), stdout, stderr, detail)
+            .with_auth_outcome(auth_outcome),
+    ))
 }
 
 pub(super) fn add_git_failure_hint(mut detail: String) -> String {
@@ -200,7 +213,11 @@ pub(super) fn classify_git_failure(stderr: &str) -> GitFailureId {
                         || line.contains("cannot spawn git-lfs"))
                         && line.contains("no such file or directory"))))
     });
-    if lfs_binary_missing {
+    if lower.contains("your local changes to the following files would be overwritten")
+        || lower.contains("the following untracked working tree files would be overwritten")
+    {
+        GitFailureId::WorktreeWouldBeOverwritten
+    } else if lfs_binary_missing {
         GitFailureId::LfsNotInstalled
     } else if lower.contains("unable to push locked files")
         || lower.contains("lock exists")
@@ -345,7 +362,7 @@ pub(super) fn wait_for_child_with_timeout(
                     cancelled = true;
                     match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
+                        Err(e) => return Err(Error::from(e)),
                     }
                 }
                 let idle = liveness.idle();
@@ -353,7 +370,7 @@ pub(super) fn wait_for_child_with_timeout(
                     timed_out = true;
                     match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
+                        Err(e) => return Err(Error::from(e)),
                     }
                 }
                 if let Some(poll) =
@@ -362,7 +379,7 @@ pub(super) fn wait_for_child_with_timeout(
                     thread::sleep(poll);
                 }
             }
-            Err(e) => return Err(io_err(e)),
+            Err(e) => return Err(Error::from(e)),
         }
     };
     Ok(ChildWaitOutcome {
@@ -392,14 +409,14 @@ pub(super) fn wait_for_output_workers(
 ) -> Result<OutputDrainOutcome> {
     while !workers_finished() {
         if command_cancellation_requested(cancellation, operation_cancellation) {
-            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            terminate_process_tree_and_wait(child).map_err(Error::from)?;
             return Ok(OutputDrainOutcome {
                 cancelled: true,
                 timed_out: false,
             });
         }
         if liveness.idle() >= timeout {
-            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            terminate_process_tree_and_wait(child).map_err(Error::from)?;
             return Ok(OutputDrainOutcome {
                 cancelled: false,
                 timed_out: true,
@@ -544,7 +561,7 @@ pub(super) fn run_command_with_timeout(
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth(cmd, label, timeout, cancellation, true)
 }
 
@@ -554,7 +571,7 @@ pub(crate) fn run_git_preview_output(
     cmd: Command,
     label: &str,
     cancellation: &CancellationToken,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth(
         cmd,
         label,
@@ -603,7 +620,7 @@ pub(crate) fn run_git_background_output(
     cmd: Command,
     label: &str,
     cancellation: &CancellationToken,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth(cmd, label, git_command_timeout(), Some(cancellation), false)
 }
 
@@ -613,7 +630,7 @@ pub(super) fn run_command_with_timeout_auth(
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     run_command_with_timeout_auth_stdin(cmd, label, timeout, cancellation, allow_auth, None)
 }
 
@@ -624,7 +641,7 @@ fn run_command_with_timeout_auth_stdin(
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
     stdin: Option<Stdio>,
-) -> Result<Output> {
+) -> Result<GitOutput> {
     let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
@@ -642,7 +659,8 @@ fn run_command_with_timeout_auth_stdin(
     let lfs_progress = LfsProgressMonitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = if allow_auth { command_git_auth() } else { None };
-        let script = create_askpass_script().map_err(io_err)?;
+        let script = create_askpass_script()
+            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
     } else {
@@ -654,7 +672,9 @@ fn run_command_with_timeout_auth_stdin(
     let strip_progress = cmd.get_args().any(|arg| arg == "--progress");
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
 
     let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
@@ -715,9 +735,19 @@ fn run_command_with_timeout_auth_stdin(
     drop(lfs_progress);
     timing.stage("trace-finish");
 
+    let auth_outcome = askpass_context
+        .as_ref()
+        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
+            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+        });
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        if !status.success() {
+        // The trailer explains a request for a passphrase. On a failure with
+        // another cause, such as a pull refused for local changes, it misleads.
+        if matches!(
+            auth_outcome,
+            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+        ) {
             append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
         }
     }
@@ -736,20 +766,15 @@ fn run_command_with_timeout_auth_stdin(
         ));
     }
 
-    if let Some((askpass_script, auth)) = askpass_context.as_ref()
-        && status.success()
-    {
-        remember_successful_prompt_auth(auth.as_ref(), askpass_script);
-    }
-
-    Ok(Output {
+    Ok(GitOutput {
         status,
         stdout,
         stderr,
+        auth_outcome,
     })
 }
 
-pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
+pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<GitOutput> {
     run_command_with_timeout(cmd, label, git_command_timeout(), None)
 }
 
@@ -782,7 +807,9 @@ pub(crate) fn run_git_with_stdin_capture(
         .stderr(Stdio::piped());
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
 
     let stdin = child.stdin.take();
@@ -863,10 +890,11 @@ pub(crate) fn run_git_with_stdin_capture(
     if !status.success() {
         return Err(git_command_failed_error(
             label,
-            Output {
+            GitOutput {
                 status,
                 stdout,
                 stderr,
+                auth_outcome: AuthOutcome::NotRequested,
             },
         ));
     }
@@ -953,7 +981,8 @@ where
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref(), &liveness);
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = command_git_auth();
-        let script = create_askpass_script().map_err(io_err)?;
+        let script = create_askpass_script()
+            .map_err(|error| Error::from(error).with_context("create Git askpass helper", None))?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
     } else {
@@ -962,7 +991,9 @@ where
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     timing.stage("prepare");
-    let mut child = cmd.spawn().map_err(io_err)?;
+    let mut child = cmd.spawn().map_err(|error| {
+        Error::from(error).with_context(label, Some(Path::new(cmd.get_program())))
+    })?;
     timing.stage("spawn");
     let stdout = child.stdout.take().ok_or_else(|| {
         Error::new(ErrorKind::Backend(format!(
@@ -1022,9 +1053,19 @@ where
     }
     timing.stage("trace-finish");
 
+    let auth_outcome = askpass_context
+        .as_ref()
+        .map_or(AuthOutcome::NotRequested, |(script, auth)| {
+            resolve_auth_outcome(auth.as_ref(), script, &stderr, status.success())
+        });
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
-        if !status.success() {
+        // The trailer explains a request for a passphrase. On a failure with
+        // another cause, such as a pull refused for local changes, it misleads.
+        if matches!(
+            auth_outcome,
+            AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_)
+        ) {
             append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
         }
     }
@@ -1047,22 +1088,19 @@ where
     if !ok_exit {
         return Err(git_command_failed_error(
             label,
-            Output {
+            GitOutput {
                 status,
                 stdout: Vec::new(),
                 stderr,
+                auth_outcome,
             },
         ));
-    }
-
-    if let Some((askpass_script, auth)) = askpass_context.as_ref() {
-        remember_successful_prompt_auth(auth.as_ref(), askpass_script);
     }
 
     parsed_result
 }
 
-pub(super) fn run_git_checked_output(cmd: Command, label: &str) -> Result<Output> {
+pub(super) fn run_git_checked_output(cmd: Command, label: &str) -> Result<GitOutput> {
     let output = run_git_raw_output(cmd, label)?;
     if output.status.success() {
         Ok(output)
@@ -1109,10 +1147,7 @@ pub(crate) fn run_git_simple_with_paths(
         let mut cmd = git_workdir_cmd_for(workdir);
         cmd.args(args);
         if !batch.is_empty() {
-            cmd.arg("--");
-            for p in batch {
-                cmd.arg(p);
-            }
+            push_literal_paths(&mut cmd, batch);
         }
         run_git_simple(cmd, label)
     };
@@ -1173,7 +1208,7 @@ pub(crate) fn run_git_with_output_and_timeout(
     Ok(command_output(label, output))
 }
 
-fn command_output(label: &str, output: Output) -> CommandOutput {
+fn command_output(label: &str, output: GitOutput) -> CommandOutput {
     let exit_code = output.status.code();
     let stdout = bytes_to_text_preserving_utf8(&output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);

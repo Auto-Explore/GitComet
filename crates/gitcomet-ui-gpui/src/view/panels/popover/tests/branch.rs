@@ -87,11 +87,18 @@ impl GitRepository for TrackingRepo {
         &self,
         _limit: usize,
         _cursor: Option<&gitcomet_core::domain::LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<std::sync::Arc<LogPage>> {
-        Ok(std::sync::Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        }))
+        cancellation.check_cancelled()?;
+        let result: Result<std::sync::Arc<LogPage>> = {
+            Ok(std::sync::Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -104,40 +111,79 @@ impl GitRepository for TrackingRepo {
         Ok(Vec::new())
     }
 
-    fn current_branch(&self) -> Result<String> {
-        Ok(self
-            .current_branch
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone())
+    fn current_branch(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let result: Result<String> = {
+            Ok(self
+                .current_branch
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_branches(&self) -> Result<Vec<Branch>> {
-        Ok(self
-            .branches
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .cloned()
-            .map(|name| Branch {
-                name,
-                target: CommitId("HEAD".into()),
-                upstream: None,
-                divergence: None,
-            })
-            .collect())
+    fn list_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<Branch>> = {
+            Ok(self
+                .branches
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .cloned()
+                .map(|name| Branch {
+                    name,
+                    target: CommitId("HEAD".into()),
+                    upstream: None,
+                    divergence: None,
+                })
+                .collect())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remotes(&self) -> Result<Vec<gitcomet_core::domain::Remote>> {
-        Ok(Vec::new())
+    fn list_remotes(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Remote>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<gitcomet_core::domain::Remote>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn list_remote_branches(&self) -> Result<Vec<gitcomet_core::domain::RemoteBranch>> {
-        Ok(Vec::new())
+    fn list_remote_branches(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<gitcomet_core::domain::RemoteBranch>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
-    fn status(&self) -> Result<RepoStatus> {
-        Ok(RepoStatus::default())
+    fn status(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let result: Result<RepoStatus> = { Ok(RepoStatus::default()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn diff_unified(&self, _target: &gitcomet_core::domain::DiffTarget) -> Result<String> {
@@ -286,12 +332,21 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn list_worktrees(&self) -> Result<Vec<gitcomet_core::domain::Worktree>> {
-        Ok(self
-            .worktrees
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone())
+    fn list_worktrees(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Worktree>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<gitcomet_core::domain::Worktree>> = {
+            Ok(self
+                .worktrees
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
+        };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
@@ -321,8 +376,15 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn stash_list(&self) -> Result<Vec<StashEntry>> {
-        Ok(Vec::new())
+    fn stash_list(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let result: Result<Vec<StashEntry>> = { Ok(Vec::new()) };
+        let result = result?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn stash_apply(&self, _index: usize) -> Result<()> {
@@ -345,12 +407,18 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn fetch_all(&self) -> Result<()> {
-        Ok(())
+    fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn pull(&self, _mode: PullMode) -> Result<()> {
-        Ok(())
+    fn pull(
+        &self,
+        _mode: PullMode,
+        _prune: bool,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        let result: Result<()> = { Ok(()) };
+        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
     }
 
     fn push(&self) -> Result<()> {
@@ -677,7 +745,7 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
         let main_focus = root
             .popover_host
             .read(app)
-            .main_pane
+            .diff_renderer
             .read(app)
             .diff_panel_focus_handle
             .clone();

@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::view::hosted::file_list::{FileListView, HostedFileList};
-use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
+use gitcomet_core::domain::{CommitFileChange, FileStatusKind, LineStats};
 use gitcomet_extension_api::panes::FileListImpl;
 use gitcomet_extension_api::{
     FileListFilterChip, FileListGroups, FileListMarks, FileListMode, FileListVisible, Registry,
@@ -95,9 +95,13 @@ fn mount_changes(
 fn edited(path: &str, text: &str) -> CommitFileChange {
     let mut edit = gitcomet_core::edit_signature::EditSignatureBuilder::default();
     edit.added(text.as_bytes());
-    CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified)
-        .with_line_counts(Some(1), Some(0))
-        .with_edit(edit.finish())
+    CommitFileChange::new(PathBuf::from(path), FileStatusKind::Modified).with_line_stats(
+        LineStats {
+            additions: Some(1),
+            deletions: Some(0),
+            edit: edit.finish(),
+        },
+    )
 }
 
 /// The shell window, drawn, for the menus a hosted list opens there.
@@ -128,7 +132,6 @@ fn shell_popover(
 /// its layout icon then steps through the layouts in its own shape.
 #[gpui::test]
 fn a_hosted_list_starts_from_the_defaults_and_steps_its_layout(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let defaults = crate::view::FileListDefaults {
         layout: crate::view::FileListLayout::Groups,
         sort: crate::view::rows::CommitFileSort::Edits,
@@ -174,7 +177,6 @@ fn a_hosted_list_starts_from_the_defaults_and_steps_its_layout(cx: &mut gpui::Te
 /// through the host, and an entry applies to this list.
 #[gpui::test]
 fn a_hosted_lists_menus_choose_its_sort_and_layout(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let changes = vec![
         edited("a.rs", "x"),
         edited("b.rs", "y"),
@@ -251,7 +253,6 @@ fn shown(cx: &mut gpui::VisualTestContext, list: &HostedFileList) -> Vec<String>
 /// has one; a label alone adds no column.
 #[gpui::test]
 fn mark_glyphs_draw_in_their_own_column(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (list, entity, cx) = mount_list(cx, ["a.rs", "b.rs"].map(String::from));
     let id = list_id(cx, &entity);
     let glyph = |path: &str| selector(format!("hosted_file_list_{id}_glyph_{path}"));
@@ -287,7 +288,6 @@ fn mark_glyphs_draw_in_their_own_column(cx: &mut gpui::TestAppContext) {
 /// replacement of the same label applies while it is active.
 #[gpui::test]
 fn visible_chips_filter_and_follow_their_replacements(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (list, entity, cx) = mount_list(cx, ["a.rs", "b.rs", "c.rs"].map(String::from));
     let id = list_id(cx, &entity);
     let chip = |revision, paths: &[&str]| {
@@ -332,7 +332,6 @@ fn visible_chips_filter_and_follow_their_replacements(cx: &mut gpui::TestAppCont
 /// and only a new grouping revision regroups.
 #[gpui::test]
 fn scrolling_a_grouped_100k_list_never_regroups(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let paths = (0..100_000).map(|n| format!("src/group_{}/file_{n}.rs", n / 100));
     let (list, entity, cx) = mount_list(cx, paths);
     let id = list_id(cx, &entity);
@@ -377,7 +376,6 @@ fn scrolling_a_grouped_100k_list_never_regroups(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn programmatic_selection_reveals_and_scrolls_a_folded_file(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (list, entity, cx) = mount_list(cx, (0..200).map(|n| format!("dir_{n:03}/file.rs")));
     let id = list_id(cx, &entity);
     cx.update(|_, app| {
@@ -414,7 +412,6 @@ fn programmatic_selection_reveals_and_scrolls_a_folded_file(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn file_rows_open_the_native_context_menu(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (list, entity, shell, cx) = mount_changes(
         cx,
         vec![CommitFileChange::new(

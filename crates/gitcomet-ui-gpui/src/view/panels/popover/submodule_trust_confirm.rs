@@ -179,28 +179,23 @@ pub(super) fn panel(
                     name,
                     force,
                 } => {
-                    let theme = this.theme;
                     let restored_branch = branch.unwrap_or_default();
                     let restored_branch_for_input = restored_branch.clone();
                     let restored_name = name.unwrap_or_default();
                     let restored_name_for_input = restored_name.clone();
                     this.submodule_url_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(&url, cx);
                         cx.notify();
                     });
                     this.submodule_path_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(path.display().to_string(), cx);
                         cx.notify();
                     });
                     this.submodule_branch_input.update(cx, move |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(&restored_branch_for_input, cx);
                         cx.notify();
                     });
                     this.submodule_name_input.update(cx, move |input, cx| {
-                        input.set_theme(theme, cx);
                         input.set_text(&restored_name_for_input, cx);
                         cx.notify();
                     });

@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{App, Bounds, Pixels, Window, fill, point, px, size};
+use gpui::{App, Bounds, PaintQuad, Pixels, Window, point, px, size};
 use smallvec::SmallVec;
 
 /// Keep the last winner for each displayed geometry, visiting the selected
@@ -440,23 +440,24 @@ pub(super) fn paint_graph_fade(
     color: gpui::Rgba,
     graph_bounds: Bounds<Pixels>,
     fade_width: Pixels,
+    opacity: f32,
     window: &mut Window,
 ) {
-    if graph_bounds.size.width <= px(0.0) {
+    if graph_bounds.size.width <= px(0.0) || opacity <= 0.0 {
         return;
     }
     let fade_w = graph_bounds.size.width.min(fade_width);
-    window.paint_quad(fill(
-        Bounds::new(
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(
             point(graph_bounds.right() - fade_w, graph_bounds.top()),
             size(fade_w, graph_bounds.size.height),
-        ),
-        gpui::linear_gradient(
+        ))
+        .background(gpui::linear_gradient(
             90.0,
             gpui::linear_color_stop(with_alpha(color, 0.0), 0.0),
-            gpui::linear_color_stop(with_alpha(color, HISTORY_GRAPH_FADE_ALPHA), 1.0),
-        ),
-    ));
+            gpui::linear_color_stop(with_alpha(color, opacity), 1.0),
+        )),
+    );
 }
 
 /// The column the row directly above draws its connector down from, or `None`
@@ -816,6 +817,7 @@ pub(super) fn paint_history_graph_band(
     selected_lane: Option<SelectedLane>,
     node: BandNodePaint,
     show_graph_color_marker: bool,
+    graph_fade_opacity: f32,
     // What the row is painted over, so the node's middle -- which has to be
     // opaque, or the lane through its column shows inside it -- matches. The
     // caller resolves the row state and hover with the common interaction policy.
@@ -852,6 +854,7 @@ pub(super) fn paint_history_graph_band(
             node.color,
             bounds,
             scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+            graph_fade_opacity,
             window,
         );
     }
@@ -1031,13 +1034,13 @@ pub(super) fn paint_vertical_segment(
     window: &mut Window,
 ) {
     gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
-    window.paint_quad(fill(
-        Bounds::new(
+    window.paint_quad(
+        PaintQuad::new(Bounds::new(
             point(x - stroke_width * 0.5, y_from),
             size(stroke_width, y_to - y_from),
-        ),
-        color,
-    ));
+        ))
+        .background(color),
+    );
 }
 
 /// Pixel-aligned straight connectors are rectangles. Avoid a path scratch
@@ -1084,7 +1087,9 @@ pub(super) fn paint_straight_connector(
     }) {
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
         // Its own layer keeps the stroke's painter order, as a path's would.
-        window.paint_layer(bounds, |window| window.paint_quad(fill(bounds, color)));
+        window.paint_layer(bounds, |window| {
+            window.paint_quad(PaintQuad::new(bounds).background(color))
+        });
     } else {
         let mut path = gpui::PathBuilder::stroke(width);
         path.move_to(from);
@@ -2106,7 +2111,6 @@ mod coalescing_regressions {
     #[gpui::test]
     fn straight_connectors_and_node_exits_do_not_tessellate(cx: &mut gpui::TestAppContext) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         for scale in [1.0, 1.25, 1.5, 2.0] {
             let _capture = history_perf::capture();
@@ -2174,7 +2178,6 @@ mod coalescing_regressions {
     #[gpui::test]
     fn connectors_off_the_pixel_grid_or_at_a_mask_edge_stay_paths(cx: &mut gpui::TestAppContext) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         let canvas = Bounds::new(point(px(0.0), px(0.0)), size(px(60.0), px(40.0)));
         let unmasked = gpui::ContentMask {
@@ -2233,7 +2236,6 @@ mod coalescing_regressions {
     #[gpui::test]
     fn nearly_collinear_connectors_keep_their_endpoints(cx: &mut gpui::TestAppContext) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         let _capture = history_perf::capture();
         cx.draw(
@@ -2272,7 +2274,6 @@ mod coalescing_regressions {
         cx: &mut gpui::TestAppContext,
     ) {
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let cx = cx.add_empty_window();
         for pixels in [32.0, 80.0, 240.0] {
             for band in [false, true] {
@@ -2328,6 +2329,7 @@ mod coalescing_regressions {
                                                 exit_col: None,
                                             },
                                             false,
+                                            theme.graph_fade_opacity,
                                             background,
                                             0.0,
                                             bounds,
@@ -2678,7 +2680,6 @@ mod author_node_geometry_tests {
     fn history_nodes_paint_as_round_quads_centred_on_their_lane(cx: &mut gpui::TestAppContext) {
         use crate::appearance::{Appearance, UiDensity};
         use gitcomet_core::history_perf::{self, Work};
-        let _guard = crate::test_support::lock_visual_test();
         let (view, cx) = cx.add_window_view(|_, _| GraphPaintView(Rc::new(|_, _| {})));
         for (device_scale, ring) in [(1.0, 2.0), (1.25, 2.0), (1.5, 2.0), (2.0, 3.0)] {
             for (ui_font_size_px, density) in [14, 15]

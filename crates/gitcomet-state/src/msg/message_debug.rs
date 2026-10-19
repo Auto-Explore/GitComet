@@ -3,6 +3,13 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::AuthPromptValidated {
+                generation, result, ..
+            } => f
+                .debug_struct("AuthPromptValidated")
+                .field("generation", generation)
+                .field("result", result)
+                .finish_non_exhaustive(),
             InternalMsg::TagPushPreviewLoaded {
                 repo_id,
                 mode,
@@ -266,12 +273,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("result", result)
                 .finish(),
             InternalMsg::FileHistoryLoaded {
+                request,
                 repo_id,
                 path,
                 cursor,
                 result,
             } => f
                 .debug_struct("FileHistoryLoaded")
+                .field("request", request)
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .field("cursor", cursor)
@@ -290,12 +299,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("result", result)
                 .finish(),
             InternalMsg::ConflictFileLoaded {
+                request,
                 repo_id,
                 path,
                 result,
                 conflict_session,
             } => f
                 .debug_struct("ConflictFileLoaded")
+                .field("request", request)
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .field("result", result)

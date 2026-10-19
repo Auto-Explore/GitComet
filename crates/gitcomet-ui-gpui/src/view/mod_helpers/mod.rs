@@ -3,8 +3,6 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::InteractiveRebaseAction;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
-
 pub(super) fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
 }
@@ -407,117 +405,6 @@ impl DiffViewMode {
         match self {
             Self::Inline => "Inline",
             Self::Split => "Split",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) enum RenderedPreviewKind {
-    Svg,
-    Markdown,
-    Diagram,
-}
-
-impl RenderedPreviewKind {
-    pub(super) fn rendered_label(self) -> &'static str {
-        match self {
-            Self::Svg => "Image",
-            Self::Markdown | Self::Diagram => "Preview",
-        }
-    }
-
-    pub(super) fn source_label(self) -> &'static str {
-        match self {
-            Self::Svg | Self::Diagram => "Code",
-            Self::Markdown => "Text",
-        }
-    }
-
-    pub(super) fn rendered_button_id(self) -> &'static str {
-        match self {
-            Self::Svg => "svg_diff_view_image",
-            Self::Markdown => "markdown_diff_view_preview",
-            Self::Diagram => "diagram_diff_view_preview",
-        }
-    }
-
-    pub(super) fn toggle_id(self) -> &'static str {
-        match self {
-            Self::Svg => "svg_diff_view_toggle",
-            Self::Markdown => "markdown_diff_view_toggle",
-            Self::Diagram => "diagram_diff_view_toggle",
-        }
-    }
-
-    pub(super) fn source_button_id(self) -> &'static str {
-        match self {
-            Self::Svg => "svg_diff_view_code",
-            Self::Markdown => "markdown_diff_view_text",
-            Self::Diagram => "diagram_diff_view_code",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RenderedPreviewMode {
-    Rendered,
-    Source,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct RenderedPreviewModes {
-    pub(super) svg: RenderedPreviewMode,
-    pub(super) markdown: RenderedPreviewMode,
-    pub(super) diagram: RenderedPreviewMode,
-    /// Markdown shows Source because a file's diff was too big to render, not
-    /// because the reader chose it; the next file gets Rendered back.
-    markdown_budget_fallback: bool,
-}
-
-impl Default for RenderedPreviewModes {
-    fn default() -> Self {
-        Self {
-            svg: RenderedPreviewMode::Rendered,
-            markdown: RenderedPreviewMode::Rendered,
-            diagram: RenderedPreviewMode::Rendered,
-            markdown_budget_fallback: false,
-        }
-    }
-}
-
-impl RenderedPreviewModes {
-    pub(super) fn get(self, kind: RenderedPreviewKind) -> RenderedPreviewMode {
-        match kind {
-            RenderedPreviewKind::Svg => self.svg,
-            RenderedPreviewKind::Markdown => self.markdown,
-            RenderedPreviewKind::Diagram => self.diagram,
-        }
-    }
-
-    pub(super) fn set(&mut self, kind: RenderedPreviewKind, mode: RenderedPreviewMode) {
-        match kind {
-            RenderedPreviewKind::Svg => self.svg = mode,
-            RenderedPreviewKind::Diagram => self.diagram = mode,
-            RenderedPreviewKind::Markdown => {
-                self.markdown = mode;
-                self.markdown_budget_fallback = false;
-            }
-        }
-    }
-
-    /// Show this markdown file as source because its diff is too big to
-    /// render, leaving the reader's own choice to come back with the next file.
-    pub(super) fn fall_back_to_markdown_source(&mut self) {
-        if self.markdown == RenderedPreviewMode::Rendered {
-            self.markdown = RenderedPreviewMode::Source;
-            self.markdown_budget_fallback = true;
-        }
-    }
-
-    /// The file that needed the fallback is gone.
-    pub(super) fn end_markdown_budget_fallback(&mut self) {
-        if std::mem::take(&mut self.markdown_budget_fallback) {
-            self.markdown = RenderedPreviewMode::Rendered;
         }
     }
 }
@@ -1022,6 +909,22 @@ impl DiffTextOffsetMap {
     }
 }
 
+/// A command result this window took from the store's queue. The store drops
+/// results once the window acknowledges them, so anything waiting for one
+/// subscribes to these instead of polling the command log.
+pub(crate) struct CommandResultShown {
+    pub(crate) repo_id: RepoId,
+    pub(crate) entry: gitcomet_state::model::CommandLogEntry,
+}
+
+impl gpui::EventEmitter<CommandResultShown> for GitCometView {}
+
+#[derive(Clone)]
+pub(super) struct FocusedDiffPane {
+    pub(super) pane: gitcomet_extension_api::DiffPane,
+    pub(super) labels: [SharedString; 2],
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -1037,7 +940,7 @@ pub struct GitCometView {
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
     pub(super) _toast_errors_subscription: gpui::Subscription,
     pub(super) _open_repo_input_subscription: gpui::Subscription,
-    pub(super) _home_search_input_subscription: gpui::Subscription,
+    pub(super) _home_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
     pub(super) workspace_id: Option<gitcomet_state::session::WorkspaceId>,
     pub(super) persisted_workspace_repo_paths: Vec<std::path::PathBuf>,
@@ -1053,6 +956,7 @@ pub struct GitCometView {
     pub(super) theme: AppTheme,
     pub(super) title_bar: Entity<TitleBarView>,
     pub(super) sidebar_pane: Entity<SidebarPaneView>,
+    pub(super) diff_renderer: Entity<DiffRenderer>,
     pub(super) main_pane: Entity<MainPaneView>,
     pub(super) details_pane: Entity<DetailsPaneView>,
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,
@@ -1087,7 +991,7 @@ pub struct GitCometView {
     /// Focus to hand back when an overlay opened from a background window
     /// closes. Shared by the command palette and the Reveal Commit dialog.
     pub(super) pre_palette_focus: Option<FocusHandle>,
-    pub(super) focused_diff_pane: Option<gitcomet_extension_api::DiffPane>,
+    pub(super) focused_diff_pane: Option<FocusedDiffPane>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
@@ -1127,15 +1031,11 @@ pub struct GitCometView {
     pub(super) terminal_panel_height: Pixels,
     pub(super) terminal_panel_resize: Option<TerminalPanelResizeState>,
     pub(super) next_terminal_session_seq: u64,
-    pub(super) terminal_cursor_blink_visible: bool,
-    pub(super) terminal_cursor_blink_hold_until: Instant,
-    pub(super) terminal_cursor_blink_active: bool,
-    pub(super) terminal_cursor_blink_task_scheduled: bool,
-    pub(super) terminal_cursor_blink_seq: u64,
     /// The reflog panel. It owns its own per-repository state (filter text,
     /// scroll, selection) — a separate entity so that hovering one of its rows
     /// repaints the panel instead of the whole application window.
     pub(super) reflog_pane: Entity<ReflogPaneView>,
+    pub(super) file_history_pane: Entity<panes::file_history::FileHistoryPaneView>,
     /// Which of the bottom panel's contents is currently visible for a repo,
     /// when more than one is open. Absent (and single-panel repos) fall back
     /// to whichever panel is actually open.
@@ -1158,18 +1058,11 @@ pub struct GitCometView {
     pub(super) update_check_in_flight: bool,
     pub(super) update_check_manual_feedback_requested: bool,
     pub(super) ui_scale_percent: u32,
+    pub(super) zoom_wheel: super::zoom_wheel::ZoomWheel,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,
-    pub(super) home_search_input: Entity<components::TextInput>,
-    pub(super) home_search_query: String,
-    pub(super) home_rows: super::home::HomeRows,
-    /// Index into `home_rows` in keyboard order (workspaces, then repositories).
-    pub(super) home_selected: Option<usize>,
-    pub(super) home_workspaces_scroll: gpui::UniformListScrollHandle,
-    pub(super) home_repositories_scroll: gpui::UniformListScrollHandle,
-    pub(super) home_pinned_repos: Vec<std::path::PathBuf>,
-    pub(super) home_recent_repos: Vec<std::path::PathBuf>,
+    pub(super) home: Entity<super::home::HomeView>,
     pub(super) external_drag_paths: Option<gpui::ExternalPaths>,
     pub(super) file_operations: file_operations::FileOperationsUi,
     pub(super) documents: Entity<documents::DocumentsView>,
@@ -1249,7 +1142,12 @@ pub struct GitCometView {
 
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,
-    pub(super) auth_prompt_key: Option<String>,
+    pub(super) auth_prompt_key: Option<u64>,
+    pub(super) auth_prompt_submitted_generation: Option<u64>,
+    pub(super) auth_prompt_input_error: Option<String>,
+    /// Where the keyboard was before a prompt focused itself (`Some(None)`:
+    /// nothing was focused), returned when the prompt goes away.
+    pub(super) auth_prompt_focus_return: Option<Option<FocusHandle>>,
     pub(super) active_context_menu_invoker: Option<SharedString>,
 }
 

@@ -1,0 +1,25 @@
+[package]
+name = "gitcomet-conflict-resolver"
+description = "The conflict resolver's model: marker parsing, two- and three-way projections, navigation, provenance, autosolve summaries and word highlights."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+test-support = []
+benchmarks = []
+
+[dependencies]
+gitcomet-core = { workspace = true }
+gitcomet-text = { workspace = true }
+gpui_shared_string = { workspace = true }
+gpui_sum_tree = { workspace = true }
+memchr = { workspace = true }
+rustc-hash = { workspace = true }
+smallvec = { workspace = true }

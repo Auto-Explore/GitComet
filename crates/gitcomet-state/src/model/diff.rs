@@ -320,8 +320,12 @@ pub struct InlineSubmoduleDiffState {
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictLoadRequestId(pub(crate) u64);
+
 #[derive(Clone, Debug)]
 pub struct ConflictState {
+    load_request: ConflictLoadRequestId,
     pub conflict_file_path: Option<PathBuf>,
     pub conflict_file_load_mode: ConflictFileLoadMode,
     pub conflict_file: Loadable<Option<ConflictFile>>,
@@ -334,9 +338,24 @@ pub struct ConflictState {
     pub conflict_rev: u64,
 }
 
+impl ConflictState {
+    pub(crate) fn load_request(&self) -> ConflictLoadRequestId {
+        self.load_request
+    }
+
+    pub(crate) fn accepts_load(
+        &self,
+        request: ConflictLoadRequestId,
+        path: &std::path::Path,
+    ) -> bool {
+        self.load_request == request && self.conflict_file_path.as_deref() == Some(path)
+    }
+}
+
 impl Default for ConflictState {
     fn default() -> Self {
         Self {
+            load_request: ConflictLoadRequestId::default(),
             conflict_file_path: None,
             conflict_file_load_mode: ConflictFileLoadMode::CurrentOnly,
             conflict_file: Loadable::NotLoaded,
@@ -432,6 +451,54 @@ pub enum ConflictFileLoadMode {
 }
 
 impl RepoState {
+    pub(crate) fn matches_diff_origin(
+        &self,
+        lifetime: u64,
+        view: Option<crate::diff_session::DiffViewId>,
+        file_rev: u64,
+        generation: u64,
+        target: &DiffTarget,
+    ) -> bool {
+        if self.lifetime() != lifetime {
+            return false;
+        }
+        let diff = match view {
+            Some(view) => self
+                .diff_sessions
+                .get(&view)
+                .filter(|session| session.generation == generation)
+                .map(|session| &session.diff_state),
+            None => (self.diff_state.diff_target_rev == generation).then_some(&self.diff_state),
+        };
+        diff.is_some_and(|diff| {
+            diff.diff_file_rev == file_rev
+                && diff.diff_target.as_ref() == Some(target)
+                && !diff.diff_reload_in_flight
+        })
+    }
+
+    pub(crate) fn begin_conflict_load(
+        &mut self,
+        mode: ConflictFileLoadMode,
+        same_path: bool,
+    ) -> ConflictLoadRequestId {
+        self.conflict_state.load_request =
+            ConflictLoadRequestId(self.conflict_state.load_request.0.wrapping_add(1));
+        self.set_conflict_file_load_mode(mode);
+        self.set_conflict_file(Loadable::Loading);
+        if !same_path {
+            self.conflict_state.session_pending_restore = None;
+        }
+        if let Some(session) = self.conflict_state.conflict_session.take() {
+            if same_path {
+                self.conflict_state.session_pending_restore = Some(session);
+            }
+            self.bump_conflict_rev();
+        }
+        self.set_conflict_hide_resolved(false);
+        self.conflict_state.load_request
+    }
+
     pub(crate) fn set_conflict_file_path(&mut self, v: Option<PathBuf>) {
         self.conflict_state.conflict_file_path = v;
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);

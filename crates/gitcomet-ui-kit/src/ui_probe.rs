@@ -23,7 +23,7 @@
 //!   events and interval input-to-submission histograms. Timestamps are relative
 //!   to the `start` record's Unix clock anchor, for external scenario alignment.
 //!
-//! With JSONL on, the probe also enables [`gitcomet_core::op_trace`] on the
+//! With JSONL on, the probe also enables [`gitcomet_base::op_trace`] on the
 //! same clock and writes its `stage` records (input, store queue, reducer,
 //! worker tasks, publication, UI application) with `thread` records naming
 //! each traced thread. On Linux every interval adds a `threads` record with
@@ -35,7 +35,7 @@
 //! Everything here is inert unless the env var is set: the pinger thread is
 //! never started and gpui's profiler tracing stays off.
 
-use gitcomet_core::process::write_stderr_line;
+use gitcomet_base::write_stderr_line;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -100,7 +100,7 @@ enum ProbeRecord {
     Json(Value),
     /// One interval's operation trace, serialized on the writer thread: one
     /// queue slot however many records it holds.
-    Traced(gitcomet_core::op_trace::Drained),
+    Traced(gitcomet_base::op_trace::Drained),
     /// Sample every thread's CPU time on the writer thread, off the UI thread.
     SampleThreads {
         at_ms: f64,
@@ -310,16 +310,16 @@ fn frame_record(event: &gpui::profiler::FrameEvent, origin: Instant) -> Value {
     }
 }
 
-fn thread_record(thread: &gitcomet_core::op_trace::ThreadInfo) -> Value {
+fn thread_record(thread: &gitcomet_base::op_trace::ThreadInfo) -> Value {
     json!({"event": "thread", "thread": thread.thread, "name": thread.name, "tid": thread.os_tid})
 }
 
 /// Queues one interval's operation trace for the writer.
-fn enqueue_trace(log: &ProbeLog, traced: gitcomet_core::op_trace::Drained) {
+fn enqueue_trace(log: &ProbeLog, traced: gitcomet_base::op_trace::Drained) {
     log.enqueue(ProbeRecord::Traced(traced));
 }
 
-fn stage_record(record: &gitcomet_core::op_trace::Record) -> Value {
+fn stage_record(record: &gitcomet_base::op_trace::Record) -> Value {
     json!({"event": "stage", "at_ms": record.at_ns as f64 / 1e6, "thread": record.thread,
         "op": record.op, "stage": record.stage.as_str(), "label": record.label,
         "a": record.a, "b": record.b})
@@ -348,7 +348,7 @@ pub fn time_section<R>(label: &str, f: impl FnOnce() -> R) -> R {
     result
 }
 
-pub fn environment(snapshot: &gitcomet_core::environment::EnvironmentSnapshot) {
+pub fn environment(snapshot: &gitcomet_base::environment::EnvironmentSnapshot) {
     if LOG.get().is_none() {
         return;
     }
@@ -437,13 +437,13 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
     // pinger that drives it are both guaranteed to exist.
     gpui::profiler::set_trace_enabled(true);
     if jsonl_enabled {
-        gitcomet_core::op_trace::enable(started);
+        gitcomet_base::op_trace::enable(started);
     }
     write_json(&[json!({"event": "start", "version": 3, "unix_ms": unix_ms,
         "pid": std::process::id(), "os": std::env::consts::OS,
         "debug_assertions": cfg!(debug_assertions), "interval_ms": interval.as_millis(),
         "run_id": std::env::var("GITCOMET_PERF_RUN_ID").ok().filter(|id| !id.is_empty()),
-        "main_tid": gitcomet_core::op_trace::current_os_tid()})]);
+        "main_tid": gitcomet_base::op_trace::current_os_tid()})]);
 
     log_line(&format!(
         "ui-probe start os={} debug_assertions={} interval={}ms ping={}ms main_cpu={}",
@@ -490,10 +490,10 @@ pub fn start_if_enabled(cx: &mut gpui::App) {
             let frames = frame_collector.collect_unseen();
             if LOG.get().is_some_and(|log| log.jsonl) {
                 let mut records: Vec<_> = frames.iter().map(|frame| frame_record(frame, started)).collect();
-                let traced = gitcomet_core::op_trace::drain();
-                let work = gitcomet_core::history_perf::snapshot();
+                let traced = gitcomet_base::op_trace::drain();
+                let work = gitcomet_base::history_perf::snapshot();
                 let work_units: serde_json::Map<String, serde_json::Value> =
-                    gitcomet_core::history_perf::Work::ALL.iter().enumerate()
+                    gitcomet_base::history_perf::Work::ALL.iter().enumerate()
                         .map(|(index, kind)| (kind.name().into(), json!(work[index])))
                         .collect();
                 records.push(json!({"event": "interval", "at_ms": milliseconds(now.duration_since(started)),
@@ -723,7 +723,7 @@ impl MainThreadCpu {
             #[cfg(target_os = "windows")]
             clock: gitcomet_win32_window_utils::ThreadCpuClock::for_current_thread(),
             #[cfg(target_os = "linux")]
-            tid: gitcomet_core::op_trace::current_os_tid(),
+            tid: gitcomet_base::op_trace::current_os_tid(),
         }
     }
 
@@ -793,7 +793,7 @@ mod tests {
 
     #[test]
     fn one_interval_of_trace_records_fits_the_probe_queue() {
-        use gitcomet_core::op_trace::{Drained, Record, Stage};
+        use gitcomet_base::op_trace::{Drained, Record, Stage};
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trace.jsonl");
         // The live queue, with the writer not draining it yet.

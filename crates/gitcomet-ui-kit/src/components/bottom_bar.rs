@@ -3,7 +3,7 @@
 //! buttons that show their shortcut as keycaps. Shared so every bar, the
 //! host's and an extension's own, looks the same.
 
-use super::{Button, ButtonStyle, shortcut_keys_compact};
+use super::{Button, ButtonSlot, ButtonStyle};
 use crate::icons::svg_icon;
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
@@ -114,7 +114,7 @@ impl BarButton {
             button = button.start_slot(svg_icon(icon, text, scale.px(14.0)));
         }
         if let Some(shortcut) = self.shortcut {
-            button = button.end_slot(shortcut_keys_compact(&shortcut, text, scale));
+            button = button.end_slot(ButtonSlot::keys(shortcut, text, scale));
         }
         button
     }

@@ -293,6 +293,47 @@ fn repository_saves_recheck_symlinks_when_the_queued_request_executes() {
     assert_eq!(fs::read(outside.join("file.txt")).unwrap(), b"replacement");
 }
 
+/// Filesystems that reject the no-replace flag itself (NFS, 9p, FUSE without
+/// rename2) answer EINVAL; every save and explorer move failed there.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn exclusive_rename_without_kernel_no_replace_still_refuses_to_replace() {
+    let unsupported = |_: &Path, _: &Path| Err(rustix::io::Errno::INVAL);
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source");
+    let target = directory.path().join("target");
+    fs::write(&source, b"source").unwrap();
+    fs::write(&target, b"existing").unwrap();
+    let identity = entry_identity(&source).unwrap();
+
+    assert_eq!(
+        rename_exclusive_with(&source, &target, unsupported)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"source");
+    assert_eq!(fs::read(&target).unwrap(), b"existing");
+
+    let renamed = directory.path().join("renamed");
+    rename_exclusive_with(&source, &renamed, unsupported).unwrap();
+    assert!(!source.exists());
+    assert_eq!(entry_identity(&renamed).unwrap(), identity);
+
+    let folder = directory.path().join("folder");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("inside"), b"kept").unwrap();
+    assert_eq!(
+        rename_exclusive_with(&folder, &target, unsupported)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    let moved = directory.path().join("moved");
+    rename_exclusive_with(&folder, &moved, unsupported).unwrap();
+    assert_eq!(fs::read(moved.join("inside")).unwrap(), b"kept");
+}
+
 #[cfg(windows)]
 #[test]
 fn exclusive_rename_preserves_identity_and_existing_destinations() {

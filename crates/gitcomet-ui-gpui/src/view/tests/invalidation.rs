@@ -4,7 +4,6 @@ use super::*;
 
 #[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -27,7 +26,6 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn collapsed_rail_offers_git_annex_only_in_annex_repos(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -109,7 +107,6 @@ fn rail_has_annex_icon(cx: &mut gpui::VisualTestContext) -> bool {
 
 #[gpui::test]
 fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -153,7 +150,7 @@ fn full_chrome_layout_caches_the_pane_subviews() {
 
     assert!(
         normalized_root.contains(
-            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::TITLE_BAR_HEIGHT"
+            "stable_cached_fixed_height_view(self.title_bar.clone(),crate::kit::window_chrome::TITLE_BAR_HEIGHT"
         ),
         "expected the title bar (hosting the repo tabs bar) to stay behind the stable cache boundary"
     );
@@ -188,6 +185,20 @@ fn full_chrome_layout_caches_the_pane_subviews() {
         normalized.contains("stable_cached_fill_view(self.main_pane.clone())"),
         "expected the focused-layout main pane mount to stay cached"
     );
+    let (_, main_render) = include_str!("../panes/main.rs")
+        .split_once("impl Render for MainPaneView")
+        .expect("the main pane composes its retained child views");
+    let normalized_main: String = main_render.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        normalized_main
+            .contains("MainPaneContent::History=>self.history_view.clone().into_any_element()"),
+        "expected the cached compositor to render its retained history view"
+    );
+    assert!(
+        normalized_main
+            .contains("MainPaneContent::Diff=>self.diff_renderer.clone().into_any_element()"),
+        "expected the cached compositor to render its retained diff renderer"
+    );
     assert!(
         normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
         "expected the expanded sidebar pane to mount behind the stable cache boundary"
@@ -200,7 +211,6 @@ fn full_chrome_layout_caches_the_pane_subviews() {
 
 #[gpui::test]
 fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let _cache_guard = enable_stable_cached_views_for_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -230,7 +240,6 @@ fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext)
 fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -246,24 +255,34 @@ fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
     cx.run_until_parked();
 }
 
+/// Untracked rows carry counts too, so every section reading the unstaged
+/// lane moves with its line stats.
 #[test]
-fn untracked_content_revision_ignores_line_stats() {
+fn unstaged_lane_sections_follow_their_line_stats() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
             workdir: PathBuf::new(),
         },
     );
-    let untracked = status_section_content_rev(&repo, StatusSection::Untracked);
-    let unstaged = status_section_content_rev(&repo, StatusSection::Unstaged);
+    let sections = [
+        StatusSection::CombinedUnstaged,
+        StatusSection::Untracked,
+        StatusSection::Unstaged,
+    ];
+    let before = sections.map(|section| status_section_content_rev(&repo, section));
+    let staged = status_section_content_rev(&repo, StatusSection::Staged);
     repo.unstaged_line_stats_rev += 1;
+    for (section, before) in sections.into_iter().zip(before) {
+        assert_ne!(
+            status_section_content_rev(&repo, section),
+            before,
+            "{section:?}"
+        );
+    }
     assert_eq!(
-        status_section_content_rev(&repo, StatusSection::Untracked),
-        untracked
-    );
-    assert_ne!(
-        status_section_content_rev(&repo, StatusSection::Unstaged),
-        unstaged
+        status_section_content_rev(&repo, StatusSection::Staged),
+        staged
     );
 }
 
@@ -276,7 +295,6 @@ fn review_regression_unchanged_snapshots_do_not_notify_workspace_observers(
     use std::cell::Cell;
     use std::rc::Rc;
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(|app| crate::workspaces::initialize_for_test(app, Vec::new()));
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
@@ -332,34 +350,33 @@ fn review_regression_unchanged_snapshots_do_not_notify_workspace_observers(
 
 #[gpui::test]
 fn pr530_home_rows_reuse_data_until_an_input_changes(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let workspace = named_saved_workspace("Saved", "/tmp/pr530-home");
     let id = workspace.id;
     let (view, cx) = home_view_with(cx, vec![workspace], Vec::new());
     cx.update(|_, app| {
-        view.update(app, |view, cx| {
-            view.sync_home_rows(cx);
-            let rows = view.home_rows.workspaces.as_ptr();
-            view.sync_home_rows(cx);
+        let home = view.read(app).home.clone();
+        home.update(app, |view, cx| {
+            view.sync_rows(cx);
+            let rows = view.rows.workspaces.as_ptr();
+            view.sync_rows(cx);
             assert_eq!(
                 rows,
-                view.home_rows.workspaces.as_ptr(),
+                view.rows.workspaces.as_ptr(),
                 "a repaint rebuilt Home rows"
             );
         });
         crate::workspaces::set_workspace_name(app, id, "Renamed");
-        view.update(app, |view, cx| {
-            view.sync_home_rows(cx);
-            assert_eq!(view.home_rows.workspaces[0].display_name(), "Renamed");
-            view.home_search_query = "missing".to_string();
-            view.sync_home_rows(cx);
-            assert!(view.home_rows.workspaces.is_empty());
-            view.home_search_query.clear();
-            view.home_recent_repos
-                .push(PathBuf::from("/tmp/pr530-recent"));
-            view.sync_home_rows(cx);
+        home.update(app, |view, cx| {
+            view.sync_rows(cx);
+            assert_eq!(view.rows.workspaces[0].display_name(), "Renamed");
+            view.search_query = "missing".to_string();
+            view.sync_rows(cx);
+            assert!(view.rows.workspaces.is_empty());
+            view.search_query.clear();
+            view.recent_repos.push(PathBuf::from("/tmp/pr530-recent"));
+            view.sync_rows(cx);
             assert_eq!(
-                view.home_rows.repositories,
+                view.rows.repositories,
                 vec![PathBuf::from("/tmp/pr530-recent")]
             );
         });

@@ -27,12 +27,46 @@ impl ErrorReport {
         self.actions.push(action);
         self
     }
+
+    pub(crate) fn command_failure(
+        repo_id: RepoId,
+        entry: &gitcomet_state::model::CommandLogEntry,
+    ) -> Self {
+        if entry.failure_id != Some(gitcomet_core::error::GitFailureId::WorktreeWouldBeOverwritten)
+            || !entry.command.trim_start().starts_with("git pull")
+        {
+            return Self::message(Some(repo_id), entry.summary.clone());
+        }
+
+        let mut message = format!(
+            "Pull blocked by local changes:\n\n    {}\n\nCommit or stash your changes, then pull again.",
+            entry.command
+        );
+        for output in [&entry.stdout, &entry.stderr] {
+            if !output.trim().is_empty() {
+                message.push_str("\n\n");
+                for (index, line) in output.lines().enumerate() {
+                    if index != 0 {
+                        message.push('\n');
+                    }
+                    message.push_str("    ");
+                    message.push_str(line);
+                }
+            }
+        }
+        Self::message(Some(repo_id), message)
+            .with_action(ErrorAction::ReviewLocalChanges { repo_id })
+    }
 }
 
 /// Something the details dialog can do about an error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorAction {
     Hosted(gitcomet_extension_api::HostedAction),
+    /// Open this repository's working changes without changing any files.
+    ReviewLocalChanges {
+        repo_id: RepoId,
+    },
     /// Write the editor's buffer of `path` in `format`.
     SaveEditorAs {
         repo_id: RepoId,
@@ -57,6 +91,7 @@ impl ErrorAction {
     pub(crate) fn label(&self) -> String {
         match self {
             Self::Hosted(action) => action.label().to_string(),
+            Self::ReviewLocalChanges { .. } => "Review local changes".to_string(),
             Self::SaveEditorAs { format, .. } => {
                 let bom = if format.bom && !format.encoding.is_utf16() {
                     " with BOM"

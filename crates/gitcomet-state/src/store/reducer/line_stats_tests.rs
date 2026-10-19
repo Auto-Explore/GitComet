@@ -1,6 +1,9 @@
 use super::*;
-use crate::model::{RepoLoadsInFlight, RepoState};
+use crate::model::LoadKind;
+use crate::model::RepoState;
 use crate::msg::RepoCommandKind;
+use crate::msg::StatusEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{RepoSpec, RepoStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::PathBuf;
@@ -28,13 +31,13 @@ fn snapshot() -> RepoStatus {
     }
 }
 
-fn stats_job(effects: &[Effect]) -> (u64, Arc<RepoStatus>) {
+fn stats_job(effects: &[Effect]) -> (crate::model::LineStatsGeneration, Arc<RepoStatus>) {
     let jobs: Vec<_> = effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::LoadUncommittedLineStats {
+            Effect::Status(StatusEffect::LoadUncommittedLineStats {
                 generation, status, ..
-            } => Some((*generation, Arc::clone(status))),
+            }) => Some((*generation, Arc::clone(status))),
             _ => None,
         })
         .collect();
@@ -43,11 +46,10 @@ fn stats_job(effects: &[Effect]) -> (u64, Arc<RepoStatus>) {
 }
 
 fn no_stats(effects: &[Effect]) {
-    assert!(
-        !effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
-    );
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Status(StatusEffect::LoadUncommittedLineStats { .. })
+    )));
 }
 
 #[test]
@@ -63,21 +65,21 @@ fn initial_refresh_publishes_status_before_counts_and_reuses_its_arcs() {
         assert_eq!(
             requested
                 .iter()
-                .filter(|e| matches!(e, Effect::LoadStatus { .. }))
+                .filter(|e| matches!(e, Effect::Status(StatusEffect::LoadStatus { .. })))
                 .count(),
             1
         );
         let status = snapshot();
-        let (generation, supplied) =
-            stats_job(&effects::status_loaded(&mut state, id, Ok(status.clone())));
+        let (generation, supplied) = stats_job(&effects::status_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            id,
+            Ok(status.clone()),
+        ));
         assert_eq!(supplied.as_ref(), &status);
         assert!(Arc::ptr_eq(&supplied.unstaged, &status.unstaged));
         assert!(matches!(state.repos[0].worktree_status, Loadable::Ready(_)));
-        assert!(
-            state.repos[0]
-                .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
-        );
+        assert!(state.repos[0].loads_in_flight.line_stats_in_flight());
         assert!(
             effects::uncommitted_line_stats_loaded(
                 &mut state,
@@ -88,11 +90,7 @@ fn initial_refresh_publishes_status_before_counts_and_reuses_its_arcs() {
             )
             .is_empty()
         );
-        assert!(
-            !state.repos[0]
-                .loads_in_flight
-                .is_in_flight(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
-        );
+        assert!(!state.repos[0].loads_in_flight.line_stats_in_flight());
     }
 }
 
@@ -102,15 +100,26 @@ fn changes_during_status_wait_for_both_replays_even_when_paths_are_unchanged() {
     let mut requested = Vec::new();
     util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
     util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
-    let replay = effects::status_loaded(&mut state, id, Ok(snapshot()));
+    let replay = effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    );
     no_stats(&replay);
     assert_eq!(replay.len(), 2);
     no_stats(&effects::worktree_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         id,
         Ok(snapshot().unstaged.as_ref().clone()),
     ));
-    let (generation, _) = stats_job(&effects::staged_status_loaded(&mut state, id, Ok(vec![])));
+    let (generation, _) = stats_job(&effects::staged_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(vec![]),
+    ));
     effects::uncommitted_line_stats_loaded(
         &mut state,
         id,
@@ -126,11 +135,21 @@ fn same_paths_new_content_discards_old_counts_and_coalesces_the_latest_snapshot(
     let (mut state, id) = fixture();
     let mut requested = Vec::new();
     util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
-    let (old_generation, _) = stats_job(&effects::status_loaded(&mut state, id, Ok(snapshot())));
+    let (old_generation, _) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    ));
     let revision = state.repos[0].worktree_status_rev;
     for _ in 0..2 {
         util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
-        no_stats(&effects::status_loaded(&mut state, id, Ok(snapshot())));
+        no_stats(&effects::status_loaded(
+            &crate::store::reducer::test_inputs::clock(),
+            &mut state,
+            id,
+            Ok(snapshot()),
+        ));
     }
     assert_eq!(state.repos[0].worktree_status_rev, revision);
     let (new_generation, _) = stats_job(&effects::uncommitted_line_stats_loaded(
@@ -174,7 +193,7 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
     state.repos[0].set_status(Loadable::Ready(Arc::new(snapshot())));
     let previous_counts = Arc::new(gitcomet_core::domain::UncommittedLineStats::default());
     state.repos[0].set_uncommitted_line_stats(Loadable::Ready(Arc::clone(&previous_counts)));
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let ids = AtomicU64::new(902);
     let change = crate::msg::RepoExternalChange {
         worktree: true,
@@ -193,9 +212,10 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
     assert!(
         requested
             .iter()
-            .any(|e| matches!(e, Effect::LoadWorktreeStatus { .. }))
+            .any(|e| matches!(e, Effect::Status(StatusEffect::LoadWorktreeStatus { .. })))
     );
     no_stats(&effects::worktree_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         id,
         Err(Error::new(ErrorKind::Backend("failed".into()))),
@@ -204,7 +224,12 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
     // Full success with an unchanged combined payload must restore the failed lane.
     let mut requested = Vec::new();
     util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
-    let (generation, _) = stats_job(&effects::status_loaded(&mut state, id, Ok(snapshot())));
+    let (generation, _) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    ));
     effects::uncommitted_line_stats_loaded(
         &mut state,
         id,
@@ -226,6 +251,7 @@ fn worktree_only_change_updates_counts_and_failed_lane_never_uses_combined_fallb
     );
     no_stats(&requested);
     stats_job(&effects::worktree_status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         id,
         Ok(snapshot().unstaged.as_ref().clone()),
@@ -237,7 +263,12 @@ fn cancellation_clears_queued_counts_and_old_completion_cannot_release_new_job()
     let (mut state, id) = fixture();
     let mut requested = Vec::new();
     util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
-    let (old, _) = stats_job(&effects::status_loaded(&mut state, id, Ok(snapshot())));
+    let (old, _) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    ));
     state.repos[0].loads_in_flight.invalidate_line_stats();
     state.repos[0].loads_in_flight.clear();
     no_stats(&effects::uncommitted_line_stats_loaded(
@@ -249,7 +280,12 @@ fn cancellation_clears_queued_counts_and_old_completion_cannot_release_new_job()
     ));
     assert!(!state.repos[0].loads_in_flight.any_in_flight());
     util::append_requested_status_refresh_effects(&mut state.repos[0], &mut requested);
-    let (new, _) = stats_job(&effects::status_loaded(&mut state, id, Ok(snapshot())));
+    let (new, _) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    ));
     no_stats(&effects::uncommitted_line_stats_loaded(
         &mut state,
         id,
@@ -268,7 +304,7 @@ fn already_up_to_date_pull_still_refreshes_once_and_counts_settle_after_status()
     let (mut state, id) = fixture();
     state.repos[0].pull_in_flight = 1;
     state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
-    let mut repos = FxHashMap::default();
+    let mut repos = RepositoryRuntimes::default();
     let ids = AtomicU64::new(902);
     let mut output = CommandOutput::empty_success("git pull");
     output.stdout = "Already up to date.\n".into();
@@ -290,11 +326,12 @@ fn already_up_to_date_pull_still_refreshes_once_and_counts_settle_after_status()
     assert_eq!(
         requested
             .iter()
-            .filter(|e| matches!(e, Effect::LoadStatus { .. }))
+            .filter(|e| matches!(e, Effect::Status(StatusEffect::LoadStatus { .. })))
             .count(),
         1
     );
     let (generation, supplied) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         id,
         Ok(RepoStatus::default()),
@@ -307,11 +344,10 @@ fn already_up_to_date_pull_still_refreshes_once_and_counts_settle_after_status()
         Ok(Default::default()),
         None,
     );
-    assert!(!state.repos[0].loads_in_flight.is_in_flight(
-        RepoLoadsInFlight::WORKTREE_STATUS
-            | RepoLoadsInFlight::STAGED_STATUS
-            | RepoLoadsInFlight::UNCOMMITTED_LINE_STATS
-    ));
+    let loads = &state.repos[0].loads_in_flight;
+    assert!(!loads.is_in_flight(LoadKind::WorktreeStatus));
+    assert!(!loads.is_in_flight(LoadKind::StagedStatus));
+    assert!(!loads.line_stats_in_flight());
 }
 
 fn lfs_support() -> gitcomet_core::large_files::LargeFileSupport {
@@ -341,7 +377,9 @@ fn stats_job_large_files(effects: &[Effect]) -> bool {
     effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::LoadUncommittedLineStats { large_files, .. } => Some(*large_files),
+            Effect::Status(StatusEffect::LoadUncommittedLineStats { large_files, .. }) => {
+                Some(*large_files)
+            }
             _ => None,
         })
         .expect("a line-stats job")
@@ -353,7 +391,12 @@ fn stats_job_large_files(effects: &[Effect]) -> bool {
 fn becoming_active_recounts_rows_with_large_files() {
     let (mut state, id) = fixture();
     util::refresh_primary_effects(&mut state.repos[0]);
-    let (generation, _) = stats_job(&effects::status_loaded(&mut state, id, Ok(snapshot())));
+    let (generation, _) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    ));
     effects::uncommitted_line_stats_loaded(
         &mut state,
         id,
@@ -362,13 +405,19 @@ fn becoming_active_recounts_rows_with_large_files() {
         None,
     );
 
-    let recount = effects::large_file_support_loaded(&mut state, id, Ok(lfs_support()));
+    let recount = effects::large_file_support_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(lfs_support()),
+    );
     assert!(state.repos[0].large_file_support_active());
     assert!(stats_job_large_files(&recount), "{recount:?}");
 
     // A second identical load changes nothing and schedules nothing.
     let rev = state.repos[0].large_file_support_rev;
     no_stats(&effects::large_file_support_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         id,
         Ok(lfs_support()),
@@ -379,9 +428,19 @@ fn becoming_active_recounts_rows_with_large_files() {
 #[test]
 fn large_file_rows_follow_the_line_stats_generation() {
     let (mut state, id) = fixture();
-    effects::large_file_support_loaded(&mut state, id, Ok(lfs_support()));
+    effects::large_file_support_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(lfs_support()),
+    );
     util::refresh_primary_effects(&mut state.repos[0]);
-    let (stale, _) = stats_job(&effects::status_loaded(&mut state, id, Ok(snapshot())));
+    let (stale, _) = stats_job(&effects::status_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(snapshot()),
+    ));
     // Invalidated mid-scan: the stale reply must not publish its rows.
     state.repos[0].loads_in_flight.invalidate_line_stats();
     let replay = effects::uncommitted_line_stats_loaded(
@@ -415,10 +474,16 @@ fn large_file_rows_follow_the_line_stats_generation() {
 #[test]
 fn losing_support_clears_rows_and_failures_keep_what_was_known() {
     let (mut state, id) = fixture();
-    effects::large_file_support_loaded(&mut state, id, Ok(lfs_support()));
+    effects::large_file_support_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(lfs_support()),
+    );
     state.repos[0].set_uncommitted_large_files(Arc::new(large_files_for("a.bin")));
 
     effects::large_file_support_loaded(
+        &crate::store::reducer::test_inputs::clock(),
         &mut state,
         id,
         Err(Error::new(ErrorKind::Backend("config unreadable".into()))),
@@ -432,7 +497,12 @@ fn losing_support_clears_rows_and_failures_keep_what_was_known() {
         "detection never raises a banner"
     );
 
-    effects::large_file_support_loaded(&mut state, id, Ok(Default::default()));
+    effects::large_file_support_loaded(
+        &crate::store::reducer::test_inputs::clock(),
+        &mut state,
+        id,
+        Ok(Default::default()),
+    );
     assert!(!state.repos[0].large_file_support_active());
     assert!(state.repos[0].uncommitted_large_files.is_empty());
 }

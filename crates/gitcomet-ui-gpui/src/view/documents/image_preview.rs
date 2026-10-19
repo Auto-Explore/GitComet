@@ -47,8 +47,8 @@ fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Resu
         return Ok(Input::default());
     };
     let preview = match source.svg() {
-        Some(tree) => panes::main::diff_cache::render_svg_image_diff_preview(tree),
-        None => panes::main::diff_cache::render_raster_image_diff_preview(format, bytes),
+        Some(tree) => panes::diff::diff_cache::render_svg_image_diff_preview(tree),
+        None => panes::diff::diff_cache::render_raster_image_diff_preview(format, bytes),
     };
     Ok(Input {
         source: Some(source),
@@ -59,7 +59,7 @@ fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Resu
 
 impl StandaloneBuffer {
     pub(super) fn image_ready(&self) -> bool {
-        self.image && !self.loading && self.error.is_none()
+        self.image && !self.loading() && self.error().is_none()
     }
 
     pub(super) fn render_image(
@@ -71,7 +71,7 @@ impl StandaloneBuffer {
             if let Some(group) = self.image_group.as_ref() {
                 group.update(cx, |group, cx| {
                     group.set_inputs(
-                        self.identity.0.to_string_lossy().into_owned(),
+                        self.identity().0.to_string_lossy().into_owned(),
                         Default::default(),
                         false,
                         cx,
@@ -80,7 +80,7 @@ impl StandaloneBuffer {
             }
             let theme = self.theme;
             return (
-                gpui::img(self.identity.0.clone())
+                gpui::img(self.identity().0.clone())
                     .id("document_image_fallback")
                     .debug_selector(|| "document_image_fallback".into())
                     .size_full()
@@ -97,10 +97,13 @@ impl StandaloneBuffer {
             group.clone()
         } else {
             // Documents share the main pane's tiles; one of them shows at a time.
-            let owner = self
-                .root
-                .upgrade()
-                .map(|root| root.read(cx).main_pane.read(cx).image_preview_group.clone());
+            let owner = self.root.upgrade().map(|root| {
+                root.read(cx)
+                    .diff_renderer
+                    .read(cx)
+                    .image_preview_group
+                    .clone()
+            });
             let group = cx.new(|cx| match owner {
                 Some(owner) => Group::shared(&owner, cx),
                 None => Group::new(cx),
@@ -114,7 +117,7 @@ impl StandaloneBuffer {
             self.image_animation.frame_started_at = None;
             None
         } else {
-            MainPaneView::advance_file_image_preview_side(
+            DiffRenderer::advance_file_image_preview_side(
                 &mut self.image_animation,
                 self.image_input.preview.as_ref(),
                 std::time::Instant::now(),
@@ -124,8 +127,8 @@ impl StandaloneBuffer {
         self.image_timer
             .schedule(deadline, |this: &mut Self| &mut this.image_timer, cx);
         self.image_input.frame = self.image_animation.frame_index;
-        let target = self.identity.0.to_string_lossy().into_owned();
-        let cap = preview_path_uses_scale_down(&self.identity.0);
+        let target = self.identity().0.to_string_lossy().into_owned();
+        let cap = preview_path_uses_scale_down(&self.identity().0);
         group.update(cx, |group, cx| {
             group.set_inputs(
                 target,
@@ -138,7 +141,8 @@ impl StandaloneBuffer {
             group.clone(),
             self.theme,
             cx,
-            |this, request, position, window, cx| {
+            |this, menu, invoker, position, window, cx| {
+                let request = crate::view::panes::diff::image_menu_request(menu, invoker);
                 let _ = this.root.update(cx, |root, cx| {
                     root.open_popover_at(request, position, window, cx)
                 });
@@ -183,7 +187,6 @@ mod tests {
     fn image_preview_lifecycle_document_keeps_legacy_decoders_for_mislabeled_files(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -201,9 +204,9 @@ mod tests {
         cx.update(|_, app| {
             let buffer = buffer.read(app);
             assert!(
-                buffer.error.is_none(),
+                buffer.error().is_none(),
                 "a format supported by gpui::img must stay viewable: {:?}",
-                buffer.error
+                buffer.error()
             );
             assert!(buffer.image_ready());
         });
@@ -306,7 +309,7 @@ mod tests {
         loop {
             cx.run_until_parked();
             crate::view::test_support::redraw(cx);
-            if cx.update(|_, app| !buffer.read(app).loading) {
+            if cx.update(|_, app| !buffer.read(app).loading()) {
                 return;
             }
             assert!(
@@ -319,7 +322,6 @@ mod tests {
 
     #[gpui::test]
     fn failed_image_preview_reload_releases_window_zoom(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -341,7 +343,7 @@ mod tests {
         assert!(!contains(cx), "loading documents have no image viewport");
         wait_for_load(&buffer, cx);
         cx.update(|_, app| {
-            assert!(buffer.read(app).error.is_some());
+            assert!(buffer.read(app).error().is_some());
             assert!(
                 buffer.read(app).image_group.is_some(),
                 "a retained image group must not claim the wheel"
@@ -403,7 +405,6 @@ mod tests {
     fn standalone_image_preview_has_sampling_zoom_and_pause_controls(
         cx: &mut gpui::TestAppContext,
     ) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -472,7 +473,6 @@ mod tests {
     /// viewport still treated the image as playing and never drew detail.
     #[gpui::test]
     fn frozen_animation_gets_detail_tiles(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -504,7 +504,6 @@ mod tests {
     /// scrim kept the wheel from the image too, so Ctrl+scroll did nothing.
     #[gpui::test]
     fn window_zoom_reaches_an_image_covered_by_a_menu(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
         let (root, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

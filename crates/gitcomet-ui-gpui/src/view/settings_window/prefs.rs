@@ -47,6 +47,7 @@ impl SettingsWindowView {
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
+            diff_engine: Some(self.diff_engine.key().to_string()),
             diff_view_mode: Some(self.diff_view_mode.key().to_string()),
             // Annotate is toggled from the diff toolbar, not the settings window,
             // so leave it untouched here (None never overwrites the stored value).
@@ -75,6 +76,7 @@ impl SettingsWindowView {
             untracked_height: None,
             history_branch_names: Some(self.history_branch_names.key().to_string()),
             history_show_graph: Some(self.history_show_graph),
+            history_show_graph_gradient: Some(self.history_show_graph_gradient),
             history_show_author: Some(self.history_show_author),
             history_show_date: Some(self.history_show_date),
             history_show_sha: Some(self.history_show_sha),
@@ -115,9 +117,7 @@ impl SettingsWindowView {
 
         self.terminal_preferences = next.clone();
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.apply_terminal_preferences(next.clone(), cx);
-        });
+        self.broadcast_preference(PreferenceChange::Terminal(next), cx);
         cx.notify();
     }
 
@@ -315,9 +315,7 @@ impl SettingsWindowView {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.push_toast(kind, message.clone(), cx);
-        });
+        self.broadcast_preference(PreferenceChange::Toast(kind, message), cx);
     }
 
     pub(super) fn open_custom_theme_folder(&mut self, cx: &mut gpui::Context<Self>) {
@@ -365,10 +363,11 @@ impl SettingsWindowView {
         cx.notify();
     }
 
-    pub(super) fn update_main_windows(
+    /// Applies `change` to every main window after the current update.
+    pub(super) fn broadcast_preference(
         &self,
+        change: PreferenceChange,
         cx: &mut gpui::Context<Self>,
-        f: impl FnMut(&mut GitCometView, &mut Window, &mut gpui::Context<GitCometView>) + 'static,
     ) {
         let handles: Vec<_> = cx
             .windows()
@@ -378,9 +377,10 @@ impl SettingsWindowView {
         cx.spawn(
             async move |_view: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
                 cx.update(move |cx| {
-                    let mut f = f;
                     for handle in handles {
-                        let _ = handle.update(cx, |view, window, cx| f(view, window, cx));
+                        let _ = handle.update(cx, |view, window, cx| {
+                            view.apply_preference_change(&change, window, cx)
+                        });
                     }
                 });
             },
@@ -546,7 +546,7 @@ impl SettingsWindowView {
 
     pub(super) fn set_window_controls_mode(
         &mut self,
-        mode: crate::window_controls::WindowControlsMode,
+        mode: crate::kit::window_chrome::controls::WindowControlsMode,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.window_controls_mode == mode {
@@ -555,7 +555,7 @@ impl SettingsWindowView {
 
         self.window_controls_mode = mode;
         self.expanded_section = None;
-        crate::window_controls::set_current(cx, mode);
+        crate::kit::window_chrome::controls::set_current(cx, mode);
         self.persist_preferences(cx);
         cx.defer(|cx| cx.refresh_windows());
         cx.notify();
@@ -592,9 +592,7 @@ impl SettingsWindowView {
             .with_appearance(self.appearance_metrics);
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, root_window, cx| {
-            view.set_theme_mode(mode.clone(), root_window.appearance(), cx);
-        });
+        self.broadcast_preference(PreferenceChange::ThemeMode(mode.clone()), cx);
         cx.notify();
     }
 
@@ -612,9 +610,7 @@ impl SettingsWindowView {
             self.use_font_ligatures,
         );
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.notify_font_preferences_changed(cx);
-        });
+        self.broadcast_preference(PreferenceChange::Fonts, cx);
         cx.notify();
     }
 
@@ -632,9 +628,7 @@ impl SettingsWindowView {
             self.use_font_ligatures,
         );
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.notify_font_preferences_changed(cx);
-        });
+        self.broadcast_preference(PreferenceChange::Fonts, cx);
         cx.notify();
     }
 
@@ -651,9 +645,7 @@ impl SettingsWindowView {
             self.use_font_ligatures,
         );
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.notify_font_preferences_changed(cx);
-        });
+        self.broadcast_preference(PreferenceChange::Fonts, cx);
         cx.notify();
     }
 
@@ -669,9 +661,7 @@ impl SettingsWindowView {
         self.date_time_format = format;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_date_time_format_preference(format, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DateTimeFormat(format), cx);
         cx.notify();
     }
 
@@ -683,9 +673,7 @@ impl SettingsWindowView {
         self.timezone = timezone;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_timezone_preference(timezone, cx);
-        });
+        self.broadcast_preference(PreferenceChange::Timezone(timezone), cx);
         cx.notify();
     }
 
@@ -696,9 +684,7 @@ impl SettingsWindowView {
 
         self.show_timezone = enabled;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_show_timezone_preference(enabled, cx);
-        });
+        self.broadcast_preference(PreferenceChange::ShowTimezone(enabled), cx);
         cx.notify();
     }
 
@@ -714,9 +700,7 @@ impl SettingsWindowView {
         self.change_tracking_view = next;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_change_tracking_view(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::ChangeTrackingView(next), cx);
         cx.notify();
     }
 
@@ -732,9 +716,7 @@ impl SettingsWindowView {
         self.file_list_layout = next;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_file_list_layout(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::FileListLayout(next), cx);
         cx.notify();
     }
 
@@ -750,9 +732,7 @@ impl SettingsWindowView {
         self.file_list_sort = next;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_file_list_sort(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::FileListSort(next), cx);
         cx.notify();
     }
 
@@ -768,9 +748,7 @@ impl SettingsWindowView {
         self.diff_scroll_sync = next;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_scroll_sync(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffScrollSync(next), cx);
         cx.notify();
     }
 
@@ -786,9 +764,7 @@ impl SettingsWindowView {
         self.diff_content_mode = next;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_content_mode(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffContentMode(next), cx);
         cx.notify();
     }
 
@@ -803,9 +779,7 @@ impl SettingsWindowView {
 
         self.diff_whitespace_mode = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_whitespace_mode(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffWhitespaceMode(next), cx);
         cx.notify();
     }
 
@@ -817,9 +791,18 @@ impl SettingsWindowView {
         self.diff_view_mode = next;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_view_mode(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffViewMode(next), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_diff_engine(&mut self, next: DiffEngine, cx: &mut gpui::Context<Self>) {
+        if self.diff_engine == next {
+            return;
+        }
+        self.diff_engine = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.broadcast_preference(PreferenceChange::DiffEngine(next), cx);
         cx.notify();
     }
 
@@ -834,9 +817,7 @@ impl SettingsWindowView {
 
         self.diff_reveal_whitespace_chars = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_reveal_whitespace_chars(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffRevealWhitespaceChars(next), cx);
         cx.notify();
     }
 
@@ -847,9 +828,7 @@ impl SettingsWindowView {
 
         self.diff_word_wrap = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_word_wrap(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffWordWrap(next), cx);
         cx.notify();
     }
 
@@ -860,9 +839,7 @@ impl SettingsWindowView {
 
         self.diff_tab_size = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_tab_size(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffTabSize(next), cx);
         cx.notify();
     }
 
@@ -873,9 +850,7 @@ impl SettingsWindowView {
 
         self.diff_show_line_numbers = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_diff_show_line_numbers(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DiffShowLineNumbers(next), cx);
         cx.notify();
     }
 
@@ -886,9 +861,7 @@ impl SettingsWindowView {
 
         self.auto_save_file_edits = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_auto_save_file_edits(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::AutoSaveFileEdits(next), cx);
         cx.notify();
     }
 
@@ -903,9 +876,7 @@ impl SettingsWindowView {
         self.remote_markdown_image_policy = next;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_remote_markdown_image_policy(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::RemoteMarkdownImagePolicy(next), cx);
         cx.notify();
     }
 
@@ -918,9 +889,7 @@ impl SettingsWindowView {
         self.remote_url_policy.set_allowed(protocol, allowed);
         let next = self.remote_url_policy;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_remote_url_policy(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::RemoteUrlPolicy(next), cx);
         cx.notify();
     }
 
@@ -936,9 +905,7 @@ impl SettingsWindowView {
         }
         self.check_for_updates_on_startup = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_check_for_updates_on_startup(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::CheckForUpdatesOnStartup(next), cx);
         cx.notify();
     }
 
@@ -952,9 +919,7 @@ impl SettingsWindowView {
         }
         self.history_branch_names = next;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_history_branch_names(next, cx);
-        });
+        self.broadcast_preference(PreferenceChange::HistoryBranchNames(next), cx);
         cx.notify();
     }
 
@@ -979,9 +944,15 @@ impl SettingsWindowView {
         self.history_show_date = show_date;
         self.history_show_sha = show_sha;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
-        });
+        self.broadcast_preference(
+            PreferenceChange::HistoryColumns {
+                graph: show_graph,
+                author: show_author,
+                date: show_date,
+                sha: show_sha,
+            },
+            cx,
+        );
         cx.notify();
     }
 
@@ -995,9 +966,21 @@ impl SettingsWindowView {
         }
         self.history_highlight_commit_chain = enabled;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_history_highlight_commit_chain(enabled, cx);
-        });
+        self.broadcast_preference(PreferenceChange::HistoryHighlightCommitChain(enabled), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_history_show_graph_gradient(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_show_graph_gradient == enabled {
+            return;
+        }
+        self.history_show_graph_gradient = enabled;
+        self.persist_preferences(cx);
+        self.broadcast_preference(PreferenceChange::HistoryShowGraphGradient(enabled), cx);
         cx.notify();
     }
 
@@ -1011,9 +994,7 @@ impl SettingsWindowView {
         }
         self.files_follow_selected_commit = enabled;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_files_follow_selected_commit_preference(enabled, cx);
-        });
+        self.broadcast_preference(PreferenceChange::FilesFollowSelectedCommit(enabled), cx);
         cx.notify();
     }
 
@@ -1028,9 +1009,7 @@ impl SettingsWindowView {
 
         self.history_relative_dates = enabled;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_history_relative_dates(enabled, cx);
-        });
+        self.broadcast_preference(PreferenceChange::HistoryRelativeDates(enabled), cx);
         cx.notify();
     }
 
@@ -1045,9 +1024,13 @@ impl SettingsWindowView {
         }
         let tag_fetch_mode = self.history_tag_fetch_mode;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_history_tag_preferences(enabled, tag_fetch_mode, cx);
-        });
+        self.broadcast_preference(
+            PreferenceChange::HistoryTags {
+                show: enabled,
+                fetch_mode: tag_fetch_mode,
+            },
+            cx,
+        );
         cx.notify();
     }
 
@@ -1067,9 +1050,7 @@ impl SettingsWindowView {
             self.cancel_signing_tools_probe();
         }
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_verify_commit_signatures_preference(enabled, cx);
-        });
+        self.broadcast_preference(PreferenceChange::VerifyCommitSignatures(enabled), cx);
         cx.notify();
     }
 
@@ -1086,9 +1067,13 @@ impl SettingsWindowView {
         self.expanded_section = None;
         let show_tags = self.history_show_tags;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_history_tag_preferences(show_tags, mode, cx);
-        });
+        self.broadcast_preference(
+            PreferenceChange::HistoryTags {
+                show: show_tags,
+                fetch_mode: mode,
+            },
+            cx,
+        );
         cx.notify();
     }
 
@@ -1104,9 +1089,7 @@ impl SettingsWindowView {
         self.default_history_mode = mode;
         self.expanded_section = None;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_default_history_mode_preference(mode, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DefaultHistoryMode(mode), cx);
         cx.notify();
     }
 
@@ -1121,9 +1104,7 @@ impl SettingsWindowView {
 
         self.default_tag_type = tag_type;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_default_tag_type_preference(tag_type, cx);
-        });
+        self.broadcast_preference(PreferenceChange::DefaultTagType(tag_type), cx);
         cx.notify();
     }
 
@@ -1137,9 +1118,7 @@ impl SettingsWindowView {
         }
         self.large_file_settings = settings;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_large_file_settings_preference(settings, cx);
-        });
+        self.broadcast_preference(PreferenceChange::LargeFileSettings(settings), cx);
         cx.notify();
     }
 
@@ -1154,9 +1133,7 @@ impl SettingsWindowView {
 
         self.prune_deleted_remote_branches_on_fetch = enabled;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_remote_prune_preference(enabled, cx);
-        });
+        self.broadcast_preference(PreferenceChange::RemotePrune(enabled), cx);
         cx.notify();
     }
 
@@ -1171,9 +1148,7 @@ impl SettingsWindowView {
 
         self.recommend_repo_maintenance = enabled;
         self.persist_preferences(cx);
-        self.update_main_windows(cx, move |view, _window, cx| {
-            view.set_maintenance_recommendation_preference(enabled, cx);
-        });
+        self.broadcast_preference(PreferenceChange::MaintenanceRecommendations(enabled), cx);
         cx.notify();
     }
 }
@@ -1183,9 +1158,7 @@ impl SettingsWindowView {
         self.theme = self.theme.with_appearance(self.appearance_metrics);
         cx.set_global(self.appearance_metrics);
         self.persist_preferences(cx);
-        self.update_main_windows(cx, |view, _window, cx| {
-            view.notify_font_preferences_changed(cx);
-        });
+        self.broadcast_preference(PreferenceChange::Fonts, cx);
         cx.refresh_windows();
         cx.notify();
     }

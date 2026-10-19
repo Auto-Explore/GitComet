@@ -2,7 +2,6 @@ use super::*;
 
 #[gpui::test]
 fn refresh_keeps_the_top_visible_commit_at_the_same_pixel(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -127,7 +126,6 @@ fn selecting_the_working_tree_preserves_a_file_preview_when_following(
     use gitcomet_core::domain::{DiffTarget, FileSource};
     use gitcomet_state::model::{FileBrowserSettings, RemoteSettings, SidebarMode};
 
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
@@ -211,7 +209,6 @@ fn selecting_the_working_tree_preserves_a_file_preview_when_following(
 /// `neighbour + 1` and lands back on the commit itself.
 #[gpui::test]
 fn a_worktree_reveal_caches_the_commits_row_not_the_worktree_row(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -318,7 +315,6 @@ fn a_worktree_reveal_caches_the_commits_row_not_the_worktree_row(cx: &mut gpui::
 fn arrowing_off_a_worktree_row_with_no_index_does_not_jump_to_the_end(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -405,7 +401,6 @@ fn arrowing_off_a_worktree_row_with_no_index_does_not_jump_to_the_end(
 /// blank gap wherever the stale index ran past the end of `graph_rows`.
 #[gpui::test]
 fn a_stash_list_arriving_replans_the_worktree_rows(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -551,7 +546,6 @@ fn a_stash_list_arriving_replans_the_worktree_rows(cx: &mut gpui::TestAppContext
 /// that colour index before the branch appeared.
 #[gpui::test]
 fn a_new_branch_recolours_the_selected_lane(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -668,7 +662,6 @@ fn a_new_branch_recolours_the_selected_lane(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn switching_same_graph_workspaces_highlights_the_new_heads_lane(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -776,7 +769,6 @@ fn switching_same_graph_workspaces_highlights_the_new_heads_lane(cx: &mut gpui::
 
 #[gpui::test]
 fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -950,7 +942,6 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
     cx: &mut gpui::TestAppContext,
     mode: HistoryBranchNamesMode,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1519,7 +1510,6 @@ fn cached_history_row_selection_requires_a_completed_click(cx: &mut gpui::TestAp
 }
 
 fn history_row_click_and_drag(cx: &mut gpui::TestAppContext, cached: bool) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1659,7 +1649,6 @@ fn cached_history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext) {
 }
 
 fn history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext, cached: bool) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1780,7 +1769,6 @@ fn history_rows_ignore_overlay_clicks(cx: &mut gpui::TestAppContext, cached: boo
 fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1886,7 +1874,6 @@ fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
 
 #[gpui::test]
 fn history_refs_hover_does_not_open_while_overlay_is_open(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1985,7 +1972,6 @@ fn history_refs_hover_does_not_open_while_overlay_is_open(cx: &mut gpui::TestApp
 fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_move(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2086,7 +2072,6 @@ fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_mov
 
 #[gpui::test]
 fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2227,7 +2212,6 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
 fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mouse_move(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2428,7 +2412,6 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
 
 #[gpui::test]
 fn history_refs_hover_closes_when_history_scrolls_programmatically(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2550,11 +2533,110 @@ fn history_refs_hover_closes_when_history_scrolls_programmatically(cx: &mut gpui
     assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
 }
 
+/// A full-history build reports progress every 100 ms for as long as it runs.
+#[gpui::test]
+fn history_refs_hover_survives_index_build_progress(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
+    let store_for_test = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let page = Arc::new(log_page(vec![commit("c00", &[], "commit 00")], None));
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-refs-hover-index-progress"),
+        },
+    );
+    repo.history_state.history_scope = LogScope::AllBranches;
+    repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+    repo.branches_rev = 1;
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_branches_rev = 1;
+    repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.tags_rev = 1;
+    repo.log = Loadable::Ready(Arc::clone(&page));
+    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page);
+    repo.history_state.log_rev = 1;
+    repo.history_state.indexed.loading = true;
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    });
+    store_for_test.replace_snapshot_for_test(Arc::clone(&state));
+    cx.update(|_window, app| {
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| model.set_state(Arc::clone(&state), cx));
+    });
+    ensure_history_cache_for_tests(cx, &view, state);
+    wait_until(cx, "history row with displayed refs", |cx| {
+        cx.debug_bounds("history_row_0").is_some()
+    });
+
+    let row = cx
+        .debug_bounds("history_row_0")
+        .expect("history row should be rendered");
+    cx.simulate_mouse_move(
+        point(row.left() + px(24.0), row.center().y),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let hover_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        })
+    };
+    assert!(hover_open(cx));
+
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _observer = cx.update(|_, app| {
+        let notified = notified.clone();
+        app.observe(&history, move |_, _| notified.set(notified.get() + 1))
+    });
+    store_for_test.dispatch(Msg::IndexedHistory(
+        gitcomet_state::indexed_history::IndexedHistoryMsg::Progress {
+            repo_id,
+            seq: 0,
+            progress: gitcomet_core::history_index::HistoryIndexProgress {
+                scanned: 2048,
+                matched: 2048,
+            },
+        },
+    ));
+    wait_for_store(cx, &view, "index build progress", || {
+        store_for_test.snapshot().repos[0]
+            .history_state
+            .indexed
+            .progress
+            .is_some()
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        hover_open(cx),
+        "a progress report changes no row, so the refs hover must stay open"
+    );
+    assert!(
+        notified.get() > 0,
+        "the history header repaints its commit count"
+    );
+}
+
 #[gpui::test]
 fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2706,7 +2788,6 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
 fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2857,7 +2938,6 @@ fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
 fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3056,7 +3136,6 @@ fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
 fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3188,7 +3267,6 @@ fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
 fn filtered_modes_do_not_infer_detached_head_target_from_first_visible_row(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3251,7 +3329,6 @@ fn filtered_modes_do_not_infer_detached_head_target_from_first_visible_row(
 
 #[gpui::test]
 fn retained_history_rows_support_keyboard_navigation_while_loading(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -3350,7 +3427,6 @@ fn retained_history_rows_support_keyboard_navigation_while_loading(cx: &mut gpui
 fn a_date_cell_tooltip_is_retracted_when_the_pointer_leaves_the_cell(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -3455,7 +3531,6 @@ fn a_date_cell_tooltip_is_retracted_when_the_pointer_leaves_the_cell(
 
 #[gpui::test]
 fn history_bounds_belong_to_the_active_repository(cx: &mut gpui::TestAppContext) {
-    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

@@ -31,10 +31,8 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let theme = self.theme;
         input.update(cx, |input, cx| {
             input.clear_transient_key_presses();
-            input.set_theme(theme, cx);
             input.set_text("", cx);
         });
         self.picker_prompt_scroll
@@ -83,9 +81,9 @@ impl PopoverHost {
             .as_ref()
             .map(|input| input.read(cx).text().trim().to_string())
             .unwrap_or_default();
-        let (items, layout) = author_filter::rendered_rows(self, repo_id, &query);
+        let rows = author_filter::cached(self, repo_id, &query);
         self.scroll_picker_prompt_to_row(
-            &components::PickerPromptGeometry::new(&items, &layout, super::popover_ui_scale(cx)),
+            &rows.geometry(super::popover_ui_scale(cx)),
             sel,
             components::PICKER_LIST_MAX_HEIGHT_PX,
             cx,
@@ -112,15 +110,31 @@ impl PopoverHost {
         on_enter: impl Fn(&mut Self, Option<R::Item>, String, &mut Window, &mut gpui::Context<Self>)
         + 'static,
     ) -> gpui::Subscription {
-        cx.observe_in(input, window, move |this, input, window, cx| {
+        let items = std::rc::Rc::new(items);
+        // A new query changes what the picker shows; a caret blink or move,
+        // which notifies the input as well, does not.
+        let query_items = std::rc::Rc::clone(&items);
+        let query_changes = cx.subscribe(
+            input,
+            move |this, input, _: &crate::kit::TextInputChanged, cx| {
+                if !is_active(this) {
+                    return;
+                }
+                let query = input.read(cx).text().trim().to_string();
+                if (*query_items)(this, &query, cx).is_some() {
+                    cx.notify();
+                }
+            },
+        );
+        let navigation = cx.observe_in(input, window, move |this, input, window, cx| {
             let keys = input.update(cx, |i, _| PickerNavKeys::take(i));
 
-            if !is_active(this) {
+            if !is_active(this) || keys == PickerNavKeys::default() {
                 return;
             }
 
             let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-            let Some(list) = items(this, &query, cx) else {
+            let Some(list) = (*items)(this, &query, cx) else {
                 // Data not ready yet — still let Esc dismiss the picker.
                 if keys.escape {
                     on_escape(this, cx);
@@ -132,8 +146,7 @@ impl PopoverHost {
                 let ui_scale = super::popover_ui_scale(cx);
                 let two_line = branch_picker::is_checkout_picker(this)
                     || worktree_badge_picker_state(this).is_some()
-                    || upstream_picker_state(this).is_some()
-                    || matches!(this.popover, Some(PopoverKind::FileHistory { .. }));
+                    || upstream_picker_state(this).is_some();
                 let row_height = components::picker_row_height(ui_scale, two_line);
                 let viewport = this.picker_prompt_scroll.bounds().size.height;
                 let viewport: f32 = viewport.into();
@@ -169,7 +182,8 @@ impl PopoverHost {
                 PickerNavOutcome::Idle => {}
             }
             cx.notify();
-        })
+        });
+        gpui::Subscription::join(query_changes, navigation)
     }
 
     pub(super) fn ensure_repo_picker_search_input(
@@ -751,76 +765,72 @@ impl PopoverHost {
         input
     }
 
-    pub(super) fn ensure_file_history_search_input(
+    pub(super) fn ensure_file_history_file_picker_search_input(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Entity<components::TextInput> {
         let input = Self::ensure_search_input_entity(
-            &mut self.file_history_search_input,
-            "Filter commits",
+            &mut self.file_history_file_picker_search_input,
+            "Filter files",
             window,
             cx,
         );
-        if self._file_history_search_input_subscription.is_none() {
-            self._file_history_search_input_subscription = Some(Self::picker_search_subscription(
-                &input,
-                window,
-                cx,
-                |this| matches!(this.popover, Some(PopoverKind::FileHistory { .. })),
-                |this| &mut this.file_history_selected_index,
-                |this, query, cx| {
-                    picker_row_menu::close_on_query_change(this, query, cx);
-                    if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
-                        return Some(super::picker_nav::IndexedNavRows {
-                            len: actions.len(),
-                            resolve: Box::new(move |ix| {
-                                (ix < actions.len())
-                                    .then_some(file_history::NavTarget::RowAction(ix))
-                            }),
-                        });
-                    }
-                    Some(file_history::nav_targets(this, query))
-                },
-                |this, cx| {
-                    if this.picker_row_menu.is_some() {
-                        picker_row_menu::close(this, cx);
-                    } else {
-                        this.close_popover(cx);
-                    }
-                },
-                |this, sel, cx| {
-                    if this.picker_row_menu.is_some() {
-                        return;
-                    }
-                    let query = this
-                        .file_history_search_input
-                        .as_ref()
-                        .map(|input| input.read(cx).text().trim().to_string())
-                        .unwrap_or_default();
-                    let rows = file_history::cached(this, &query);
-                    this.scroll_picker_prompt_to_row(
-                        &rows.geometry(super::popover_ui_scale(cx)),
-                        sel,
-                        file_history::FILE_HISTORY_LIST_MAX_HEIGHT_PX,
-                        cx,
-                    );
-                },
-                |this, payload, _query, window, cx| {
-                    if let Some(file_history::NavTarget::RowAction(ix)) = payload {
-                        picker_row_menu::activate_nth(this, ix, window, cx);
-                        return;
-                    }
-                    let Some(file_history::NavTarget::Commit(commit_id)) = payload else {
-                        return;
-                    };
-                    let Some(PopoverKind::FileHistory { repo_id, path }) = this.popover.clone()
-                    else {
-                        return;
-                    };
-                    file_history::open_at_commit(this, repo_id, commit_id, path, cx);
-                },
-            ));
+        if self
+            ._file_history_file_picker_search_input_subscription
+            .is_none()
+        {
+            self._file_history_file_picker_search_input_subscription =
+                Some(Self::picker_search_subscription(
+                    &input,
+                    window,
+                    cx,
+                    |this| {
+                        matches!(
+                            this.popover,
+                            Some(PopoverKind::FileHistoryFilePicker { .. })
+                        )
+                    },
+                    |this| &mut this.file_history_file_picker_selected_index,
+                    |this, query, _cx| {
+                        let targets = file_history_file_picker::nav_targets(this, query);
+                        if this.file_history_file_picker_query != query {
+                            this.file_history_file_picker_query = query.to_string();
+                            // A new search starts at its first match, scrolled to the top.
+                            this.file_history_file_picker_selected_index =
+                                (!targets.is_empty()).then_some(0);
+                            this.picker_prompt_scroll
+                                .set_offset(point(px(0.0), px(0.0)));
+                        }
+                        Some(targets)
+                    },
+                    |this, cx| this.close_popover(cx),
+                    |this, sel, cx| {
+                        let query = this
+                            .file_history_file_picker_search_input
+                            .as_ref()
+                            .map(|input| input.read(cx).text().trim().to_string())
+                            .unwrap_or_default();
+                        let rows = file_history_file_picker::cached(this, &query);
+                        this.scroll_picker_prompt_to_row(
+                            &rows.geometry(super::popover_ui_scale(cx)),
+                            sel,
+                            file_history_file_picker::LIST_MAX_HEIGHT_PX,
+                            cx,
+                        );
+                    },
+                    |this, payload, _query, window, cx| {
+                        let Some(path) = payload else {
+                            return;
+                        };
+                        let Some(PopoverKind::FileHistoryFilePicker { repo_id }) =
+                            this.popover.clone()
+                        else {
+                            return;
+                        };
+                        file_history_file_picker::activate(this, repo_id, path, window, cx);
+                    },
+                ));
         }
         self.reset_picker_search_input(&input, window, cx);
         input

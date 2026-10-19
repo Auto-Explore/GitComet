@@ -22,6 +22,7 @@ gitcomet-ui-kit = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+gitcomet-extension-api = { workspace = true, features = ["test-support"] }
 gitcomet-ui-kit = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 # `#[gpui::test]` names the crate; the version is the kit's re-export.

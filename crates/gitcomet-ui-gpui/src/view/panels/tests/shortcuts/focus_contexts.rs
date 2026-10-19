@@ -6,14 +6,19 @@ fn diff_view_mode(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::super::GitCometView>,
 ) -> DiffViewMode {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_view)
+    cx.update(|_window, app| view.read(app).diff_renderer.read(app).diff_view)
 }
 
 fn reveal_whitespace_chars(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::super::GitCometView>,
 ) -> bool {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).reveal_whitespace_chars)
+    cx.update(|_window, app| {
+        view.read(app)
+            .diff_renderer
+            .read(app)
+            .reveal_whitespace_chars
+    })
 }
 
 /// The diff pane is a selection owner like any other: once another surface
@@ -65,7 +70,6 @@ fn another_surface_taking_the_selection_clears_the_diff_text_selection(
 fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selection(
     cx: &mut gpui::TestAppContext,
 ) {
-    let _clipboard_guard = crate::test_support::lock_clipboard_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -126,7 +130,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -150,7 +154,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.select_all_diff_text(window, cx);
                 cx.notify();
             });
@@ -250,7 +254,6 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
 /// `px()` holds them at 100% while the buttons around them grow.
 #[gpui::test]
 fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppContext) {
-    let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::super::GitCometView::new(store, events, None, window, cx)
@@ -278,7 +281,7 @@ fn diff_toolbar_and_commit_box_icons_follow_ui_scale(cx: &mut gpui::TestAppConte
     cx.simulate_resize(gpui::size(px(2400.0), px(1400.0)));
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
                 cx.notify();
@@ -335,7 +338,7 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_word_wrap = true;
                 pane.diff_wrap_visible_cache_key = Some(DiffWrapVisibleCacheKey {
                     source_len: 1,
@@ -365,7 +368,7 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
     draw_and_drain_test_window(cx);
 
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        let pane = view.read(app).diff_renderer.read(app);
         assert_eq!(
             pane.diff_wrap_visible_cache_key, None,
             "expected reveal-whitespace changes to invalidate wrapped-row cache keys"
@@ -407,7 +410,7 @@ fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppCont
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.rebuild_diff_cache(cx);
                 pane.ensure_diff_visible_indices();
@@ -503,7 +506,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.reveal_whitespace_chars = false;
                 cx.notify();
@@ -521,7 +524,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 cx.notify();
             });
@@ -538,7 +541,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
@@ -649,7 +652,7 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.reveal_whitespace_chars = false;
                 pane.diff_search_active = false;
@@ -784,4 +787,87 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
         diff_panel_is_focused(cx, &view),
         "expected dismissing change-tracking settings to restore diff-panel focus"
     );
+}
+
+#[gpui::test]
+fn authentication_prompt_waits_while_the_commit_message_is_being_typed(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_state::model::{
+        AuthPromptKind, AuthPromptState, AuthPromptStatus, AuthRetryOperation,
+    };
+
+    for kind in [AuthPromptKind::Passphrase, AuthPromptKind::UsernamePassword] {
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+        // Typing reaches only an active window.
+        cx.update(|window, _app| window.activate());
+        cx.run_until_parked();
+        let repo_id = RepoId(7062);
+        let commit_id = CommitId("1111222233338888".into());
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_auth_prompt_while_typing",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("src/lib.rs");
+        let repo = simple_worktree_repo(
+            repo_id,
+            &workdir,
+            &commit_id,
+            std::slice::from_ref(&path),
+            &path,
+        );
+        apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+        focus_commit_message_input(cx, &view);
+        cx.simulate_input("half a commit mess");
+        assert!(
+            cx.update(|window, _app| window
+                .context_stack()
+                .iter()
+                .any(|context| context.contains("TextInput"))),
+            "the commit box is on screen and holds the keyboard"
+        );
+
+        // A pull started earlier now needs credentials.
+        let mut state = (*app_state_with_active_repo(repo)).clone();
+        state.auth_prompt = Some(AuthPromptState {
+            generation: 1,
+            challenge: None,
+            status: AuthPromptStatus::AwaitingInput,
+            kind,
+            reason: "authentication required".into(),
+            operation: AuthRetryOperation::RepoCommand {
+                repo_id,
+                command: gitcomet_state::msg::RepoCommandKind::Pull {
+                    mode: gitcomet_core::services::PullMode::Default,
+                },
+            },
+        });
+        apply_state(cx, &view, Arc::new(state));
+        cx.simulate_input("age");
+
+        assert!(
+            commit_message_input_is_focused(cx, &view),
+            "a new {kind:?} prompt must not interrupt typing in another field"
+        );
+        cx.update(|_window, app| {
+            let view = view.read(app);
+            let commit_message = view
+                .details_pane
+                .read(app)
+                .commit_message_input
+                .read(app)
+                .text()
+                .to_string();
+            assert!(
+                commit_message.ends_with("age"),
+                "keystrokes after the {kind:?} prompt arrived stay in the commit box: \
+                 {commit_message:?}"
+            );
+            assert!(view.auth_prompt_username_input.read(app).text().is_empty());
+            assert!(view.auth_prompt_secret_input.read(app).text().is_empty());
+        });
+    }
 }

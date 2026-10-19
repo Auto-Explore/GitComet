@@ -3,8 +3,8 @@
 //! the action bar), and read-only selectable fields.
 
 use super::{
-    Button, ControlInteractionExt, InteractionState, InteractionStyle, content_header_height,
-    control_height,
+    Button, ButtonSlot, ControlInteractionExt, InteractionState, InteractionStyle,
+    content_header_height, control_height,
 };
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
@@ -137,7 +137,7 @@ impl NavTab {
         }
         if let Some(badge) = self.badge {
             let selector = format!("{id}_badge");
-            button = button.end_slot(
+            button = button.end_slot(ButtonSlot::custom(move |_| {
                 div()
                     .debug_selector(move || selector)
                     .flex_none()
@@ -146,8 +146,8 @@ impl NavTab {
                     .bg(theme.colors.surface.raised)
                     .text_size(theme.ui_text(11.0))
                     .text_color(theme.colors.foreground.secondary)
-                    .child(badge),
-            );
+                    .child(badge)
+            }));
         }
         navigation_tab_metrics(button.render(theme, scale), theme, scale)
             .border_b_2()
@@ -332,7 +332,6 @@ mod nav_tab_tests {
     /// underlined with the accent.
     #[gpui::test]
     fn nav_tabs_name_their_parts_and_underline_the_selected_tab(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_, _| Tabs { theme });
         crate::test_support::redraw(cx);
@@ -407,7 +406,6 @@ mod nav_tab_tests {
     /// icon only.
     #[gpui::test]
     fn bar_tabs_fill_the_bar_and_underline_the_selected_tab(cx: &mut gpui::TestAppContext) {
-        let _guard = crate::test_support::lock_visual_test();
         let theme = AppTheme::gitcomet_dark();
         let (_view, cx) = cx.add_window_view(|_, _| Bar { theme });
         crate::test_support::redraw(cx);

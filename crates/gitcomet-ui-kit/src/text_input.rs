@@ -10,7 +10,7 @@ use gpui::{
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ScrollHandle,
     SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, actions, anchored, deferred,
-    div, fill, point, px, relative, size,
+    div, point, px, relative, size,
 };
 use rustc_hash::FxHashMap;
 #[cfg(any(test, feature = "benchmarks"))]
@@ -24,7 +24,6 @@ use std::hash::Hasher;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use unicode_segmentation::UnicodeSegmentation as _;
 
 actions!(
     text_input,
@@ -93,10 +92,16 @@ const TEXT_INPUT_INLINE_TEXT_RUN_CAPACITY: usize = 32;
 mod drag;
 mod editor_line;
 use editor_line::EditorLine;
+mod clipboard;
+mod configuration;
 mod editing;
 mod element;
 mod highlight;
+mod highlight_provider;
+mod layout_cache;
+mod platform_input;
 mod render;
+mod selection;
 mod shaping;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use shaping::take_wrapped_lines_shaped_for_tests;

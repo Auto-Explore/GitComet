@@ -2,10 +2,12 @@
 
 use super::*;
 use crate::model::{FileBrowserSettings, SidebarMode};
+use crate::msg::ControlEffect;
+use crate::store::repository_runtime::RepositoryRuntimes;
 use gitcomet_core::domain::{FileEntry, FileEntryKind, FileSource};
 use std::sync::atomic::AtomicU64;
 
-type Repos = FxHashMap<RepoId, Arc<dyn GitRepository>>;
+type Repos = RepositoryRuntimes;
 
 #[test]
 fn opening_a_background_document_preserves_the_active_repository_and_its_loads() {
@@ -20,11 +22,10 @@ fn opening_a_background_document_preserves_the_active_repository_and_its_loads()
         },
     );
     assert_eq!(state.active_repo, Some(repo_id));
-    assert!(
-        !effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::CancelRepoLoads { .. }))
-    );
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Control(ControlEffect::CancelRepoLoads { .. })
+    )));
     assert!(
         effects
             .iter()
@@ -163,6 +164,66 @@ fn a_complete_listing_drops_selected_paths_that_are_gone() {
 }
 
 #[test]
+fn file_repository_discovery_retains_path_resolution_error_details() {
+    use std::error::Error as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct DiscoveryBackend {
+        opened: AtomicBool,
+    }
+
+    impl GitBackend for DiscoveryBackend {
+        fn open(&self, _path: &Path) -> Result<Arc<dyn GitRepository>> {
+            self.opened.store(true, Ordering::Relaxed);
+            Err(Error::new(ErrorKind::NotARepository))
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::create_dir(directory.path().join(".git")).unwrap();
+    let missing_parent = directory.path().join("missing-parent");
+    #[cfg(unix)]
+    let name = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(b"document-\xff.txt".to_vec())
+    };
+    #[cfg(not(unix))]
+    let name = std::ffi::OsString::from("document.txt");
+    let file = missing_parent.join(name);
+    let expected = fs::canonicalize(&missing_parent).unwrap_err();
+    assert_eq!(expected.kind(), std::io::ErrorKind::NotFound);
+    assert!(expected.raw_os_error().is_some());
+    let backend = Arc::new(DiscoveryBackend {
+        opened: AtomicBool::new(false),
+    });
+    let (store, _) = AppStore::new_test(backend.clone());
+
+    let error = store.discover_file_repository(&file).unwrap_err();
+    store.shutdown_for_test().recv().unwrap();
+
+    assert!(!backend.opened.load(Ordering::Relaxed));
+    assert!(matches!(
+        error.kind(),
+        ErrorKind::Io(std::io::ErrorKind::NotFound)
+    ));
+    let source = error
+        .source()
+        .expect("path resolution keeps its original I/O error")
+        .downcast_ref::<std::io::Error>()
+        .unwrap();
+    assert_eq!(source.kind(), expected.kind());
+    assert_eq!(source.raw_os_error(), expected.raw_os_error());
+    assert_eq!(source.to_string(), expected.to_string());
+    let context = error.context().unwrap();
+    assert_eq!(
+        context.operation(),
+        "resolve file path for repository discovery"
+    );
+    assert_eq!(context.path(), Some(file.as_path()));
+    assert!(error.to_string().contains(&expected.to_string()));
+}
+
+#[test]
 fn file_repository_discovery_honors_nested_repositories_and_linked_worktrees() {
     let directory = tempfile::tempdir().unwrap();
     let outer = directory.path().join("outer");
@@ -274,7 +335,7 @@ fn ready_state(sidebar_mode: SidebarMode) -> (Repos, AtomicU64, AppState, RepoId
         .file_browser
         .expanded_dirs
         .insert(Arc::new(PathBuf::from("src")));
-    (FxHashMap::default(), AtomicU64::new(1), state, repo_id)
+    (Default::default(), AtomicU64::new(1), state, repo_id)
 }
 
 fn select(
@@ -857,7 +918,7 @@ fn activating_a_repo_tab_enters_it_live_with_one_walk() {
     // Coming back clears the selection, so the tab enters at its live tip and
     // the activation's own listing request already names the live tree.
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(
+    crate::store::tests::fill_set_active_repo_inline(
         &repos,
         &mut state,
         repo_id,

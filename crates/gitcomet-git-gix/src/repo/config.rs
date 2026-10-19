@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn config_refresh_keeps_the_shared_index() {
-        use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+        use crate::test_support::{git_success, init_test_repo, open_repo, write_file};
         let dir = tempfile::tempdir().unwrap();
         init_test_repo(dir.path());
         write_file(dir.path(), "file.txt", "content\n");

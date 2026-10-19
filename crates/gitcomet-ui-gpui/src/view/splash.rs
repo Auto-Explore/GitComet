@@ -531,7 +531,6 @@ impl GitCometView {
                 .justify_center()
                 .size(slot)
                 .rounded(px(theme.radii.control))
-                .cursor(CursorStyle::PointingHand)
                 .control_interaction(
                     InteractionStyle::new(theme),
                     InteractionState::default().open(is_active),
@@ -670,11 +669,40 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let home_active = self.is_home_screen_active();
+        self.home.update(cx, |home, _| home.set_active(home_active));
         if let Some(pane) = &self.focused_diff_pane {
             return div()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .child(pane.view())
+                .child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(self.theme.colors.foreground.secondary)
+                        .child(
+                            div()
+                                .debug_selector(|| "focused_diff_left_label".to_string())
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .child(format!("Before: {}", pane.labels[0])),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "focused_diff_right_label".to_string())
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .child(format!("After: {}", pane.labels[1])),
+                        ),
+                )
+                .child(div().flex_1().min_h(px(0.0)).child(pane.pane.view()))
                 .into_any_element();
         }
 

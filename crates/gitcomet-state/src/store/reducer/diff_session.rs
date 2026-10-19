@@ -374,31 +374,9 @@ pub(super) fn reload_worktree_sessions(
 ) -> Vec<Effect> {
     let (repo_id, lifetime) = (repo.id, repo.lifetime());
     let affected = |session: &DiffSession| {
-        if !session.follows_worktree() || session.worktree() != worktree {
-            return false;
-        }
-        if change.index || change.git_state || change.text_attributes {
-            return true;
-        }
-        if !change.worktree
-            || matches!(
-                session.target,
-                gitcomet_core::domain::DiffTarget::WorkingTree {
-                    area: gitcomet_core::domain::DiffArea::Staged,
-                    ..
-                }
-            )
-        {
-            return false;
-        }
-        session
-            .target
-            .file_path()
-            .is_none_or(|path| change.paths.may_contain(path))
-            || session
-                .target
-                .old_file_path()
-                .is_some_and(|path| change.paths.may_contain(path))
+        session.follows_worktree()
+            && session.worktree() == worktree
+            && super::external_and_history::external_change_reloads_diff(&session.target, change)
     };
     let mut effects = refresh_affected(&mut repo.diff_sessions, affected, |view, session| {
         refresh(repo_id, lifetime, view, session)
