@@ -288,3 +288,142 @@ mod gitlinks;
 mod preview_loading;
 mod submodules;
 mod worktree_navigation;
+
+#[test]
+fn prepared_patch_admission_rejects_stale_origins_without_mutation_effects() {
+    use crate::diff_session::{DiffSession, DiffViewId};
+    use gitcomet_core::patch_action::{DiffActionSnapshot, PatchOperation, SourceLineSelection};
+    use std::collections::BTreeSet;
+    let target = DiffTarget::working_tree("file.rs".into(), DiffArea::Unstaged);
+    let prepared = Arc::new(gitcomet_core::patch_action::prepare(DiffActionSnapshot {
+        diff: gitcomet_core::domain::Diff::from_unified(target.clone(), "diff --git a/file.rs b/file.rs\n--- a/file.rs\n+++ b/file.rs\n@@ -1 +1 @@\n-old\n+new\n"),
+        old: "old\n".into(), new: "new\n".into(), policy: Arc::from([]),
+    }, PatchOperation::Stage, &SourceLineSelection { old: BTreeSet::from([1]), new: BTreeSet::from([1]) }, "old\n", "new\n").unwrap());
+    for hosted in [false, true] {
+        for stale in [
+            "current",
+            "closed_repo",
+            "reopened_repo",
+            "closed_view",
+            "target",
+            "generation",
+            "file_rev",
+            "reload",
+            "busy",
+        ] {
+            if !hosted && stale == "closed_view" {
+                continue;
+            }
+            let mut repos = RepositoryRuntimes::default();
+            let mut state = AppState::test_default();
+            let mut repo = RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: "/tmp/repo".into(),
+                },
+            );
+            let lifetime = repo.lifetime();
+            let view = hosted.then_some(DiffViewId(91));
+            let diff = if let Some(view) = view {
+                let session = Arc::make_mut(&mut repo.diff_sessions)
+                    .entry(view)
+                    .or_insert_with(|| DiffSession::new(target.clone()));
+                session.generation = 3;
+                &mut session.diff_state
+            } else {
+                &mut repo.diff_state
+            };
+            diff.diff_target = Some(target.clone());
+            diff.diff_target_rev = 3;
+            diff.diff_file_rev = 7;
+            match stale {
+                "target" => {
+                    diff.diff_target = Some(DiffTarget::working_tree(
+                        "other.rs".into(),
+                        DiffArea::Unstaged,
+                    ))
+                }
+                "file_rev" => diff.diff_file_rev += 1,
+                "reload" => diff.diff_reload_in_flight = true,
+                "generation" if !hosted => diff.diff_target_rev += 1,
+                _ => {}
+            }
+            if stale == "generation"
+                && let Some(view) = view
+            {
+                Arc::make_mut(&mut repo.diff_sessions)
+                    .get_mut(&view)
+                    .unwrap()
+                    .generation += 1;
+            }
+            if stale == "busy" {
+                repo.local_actions_in_flight = 1;
+            }
+            if stale == "closed_view" {
+                Arc::make_mut(&mut repo.diff_sessions).clear();
+            }
+            if stale == "reopened_repo" {
+                let mut reopened = RepoState::new_opening(RepoId(1), repo.spec.clone());
+                reopened.diff_state = repo.diff_state;
+                reopened.diff_sessions = repo.diff_sessions;
+                repo = reopened;
+            }
+            if stale != "closed_repo" {
+                state.repos.push(repo);
+            }
+            state.active_repo = Some(RepoId(1));
+            let effects = reduce(
+                &mut repos,
+                &AtomicU64::new(2),
+                &mut state,
+                Msg::ApplyPreparedDiffPatch {
+                    repo_id: RepoId(1),
+                    lifetime,
+                    view,
+                    file_rev: 7,
+                    generation: 3,
+                    prepared: prepared.clone(),
+                },
+            );
+            if stale == "current" {
+                assert!(
+                    matches!(
+                        effects.as_slice(),
+                        [Effect::RepoCommand(
+                            crate::msg::RepoCommandEffect::ApplyPreparedDiffPatch { .. }
+                        )]
+                    ),
+                    "hosted={hosted} {effects:?}"
+                );
+                assert_eq!(state.repos[0].local_actions_in_flight, 1);
+                let duplicate = reduce(
+                    &mut repos,
+                    &AtomicU64::new(2),
+                    &mut state,
+                    Msg::ApplyPreparedDiffPatch {
+                        repo_id: RepoId(1),
+                        lifetime,
+                        view,
+                        file_rev: 7,
+                        generation: 3,
+                        prepared: prepared.clone(),
+                    },
+                );
+                assert!(duplicate.is_empty());
+            } else {
+                assert!(effects.is_empty(), "hosted={hosted} stale={stale}");
+                assert_eq!(
+                    state
+                        .notifications
+                        .last()
+                        .map(|notice| notice.message.as_str()),
+                    Some("The comparison changed. Try again on the current diff."),
+                    "hosted={hosted} stale={stale}"
+                );
+                if let Some(repo) = state.repos.first() {
+                    assert_eq!(repo.local_actions_in_flight, u32::from(stale == "busy"));
+                }
+            }
+        }
+    }
+}

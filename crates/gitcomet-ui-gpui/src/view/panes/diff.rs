@@ -7,6 +7,7 @@ mod actions_impl;
 mod conflict_actions;
 mod core_impl;
 pub(in crate::view) mod diff_cache;
+mod diff_patch;
 pub(in crate::view) mod diff_search;
 mod diff_stage;
 mod diff_text;
@@ -116,6 +117,15 @@ impl Render for DiffRenderer {
 
 impl Drop for DiffRenderer {
     fn drop(&mut self) {
+        self.file_diff_cancellation.cancel();
+        if let Some(cache) = self
+            .hosted_decor
+            .as_ref()
+            .and_then(|decor| decor.file_cache.as_ref())
+        {
+            cache.cancel();
+        }
+        self.patch_cancellation.cancel();
         if let Some(token) = &self.diff_search_cancellation {
             token.cancel();
         }

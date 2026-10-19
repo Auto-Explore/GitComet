@@ -71,6 +71,7 @@ mod mergetool;
 mod mergetool_builtin;
 pub(crate) mod object_store;
 mod patch;
+mod patch_action;
 mod porcelain;
 mod remotes;
 mod shared;
@@ -638,6 +639,13 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 }
 
 impl GitRepository for GixRepo {
+    fn diff_action_snapshot(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::patch_action::DiffActionSnapshot> {
+        self.diff_action_snapshot_impl(target, cancellation)
+    }
     fn rebase_range_with_output(
         &self,
         range: &gitcomet_core::services::RebaseRange,

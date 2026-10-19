@@ -476,7 +476,7 @@ pub(super) fn schedule_load_worktree_dirty(
                 release_worktree_scan_handles(lifetime);
                 Err(Error::new(ErrorKind::Backend(format!(
                     "Worktree scan panicked: {}",
-                    super::super::send_diagnostics::panic_payload_to_string(payload.as_ref()),
+                    gitcomet_core::panic::payload_message(payload.as_ref()),
                 ))))
             });
             send_or_log(

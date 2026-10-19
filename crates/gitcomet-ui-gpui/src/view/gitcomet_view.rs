@@ -778,14 +778,18 @@ impl GitCometView {
             let path = config
                 .display_path
                 .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
-            // A raw patch can span files and has no commit: a pathless range.
-            let snapshot = gitcomet_core::domain::CommitId("snapshot".into());
-            let target = gitcomet_core::domain::DiffTarget::commit_range(
-                snapshot.clone(),
-                Some(snapshot),
-                None,
-            );
-            let patch = gitcomet_core::domain::Diff::from_unified_owned(target, config.diff_text);
+            let snapshot = match config.input {
+                crate::FocusedDiffInput::FilePair { path, old, new } => {
+                    gitcomet_extension_api::DiffSnapshot::new(path, old, new)
+                }
+                crate::FocusedDiffInput::Patch(text) => {
+                    let id = gitcomet_core::domain::CommitId("snapshot".into());
+                    let target =
+                        gitcomet_core::domain::DiffTarget::commit_range(id.clone(), Some(id), None);
+                    let patch = gitcomet_core::domain::Diff::from_unified_owned(target, text);
+                    gitcomet_extension_api::DiffSnapshot::from_patch(path, patch)
+                }
+            };
             let mut policy = gitcomet_extension_api::DiffPanePolicy::default();
             policy.allow_edit = false;
             policy.allow_stage = false;
@@ -794,7 +798,7 @@ impl GitCometView {
             policy.escape_clears_target = false;
             policy.file_navigation = false;
             host.create_snapshot_pane(
-                gitcomet_extension_api::DiffSnapshot::from_patch(path, patch),
+                snapshot,
                 gitcomet_extension_api::DiffPaneOptions {
                     policy,
                     ..Default::default()
@@ -802,6 +806,10 @@ impl GitCometView {
                 cx,
             )
             .ok()
+            .map(|pane| FocusedDiffPane {
+                pane,
+                labels: [config.label_left.into(), config.label_right.into()],
+            })
         });
         if !initial_state.repos.is_empty() {
             startup_repo_bootstrap_pending = false;

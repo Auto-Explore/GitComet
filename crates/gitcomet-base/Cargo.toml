@@ -1,6 +1,6 @@
 [package]
 name = "gitcomet-base"
-description = "Product identity, per-user directories, platform detection and instrumentation shared by every GitComet layer."
+description = "Product identity, per-user directories, platform detection, panic containment and instrumentation shared by every GitComet layer."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,6 +13,7 @@ workspace = true
 
 [features]
 benchmarks = []
+test-support = []
 
 [dependencies]
 serde = { workspace = true }
@@ -20,4 +21,5 @@ sysinfo = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
+gitcomet-base = { path = ".", features = ["test-support"] }
 serde_json = { workspace = true }

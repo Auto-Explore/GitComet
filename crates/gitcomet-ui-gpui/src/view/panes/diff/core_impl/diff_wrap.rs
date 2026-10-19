@@ -202,6 +202,31 @@ impl DiffRenderer {
         Some(visible_ix)
     }
 
+    /// Scrolls to source row `source`. While word-wrapped rows wait to be
+    /// built its visual row is unknown, so the scroll waits for them.
+    pub(in crate::view) fn scroll_diff_to_source_row(
+        &mut self,
+        source: usize,
+        strategy: gpui::ScrollStrategy,
+    ) {
+        if self.diff_word_wrap
+            && !self.diff_wrap_projection_active()
+            && !self.is_markdown_preview_active()
+        {
+            self.diff_wrap_pending_scroll = Some((source, strategy));
+            return;
+        }
+        let visual = self.diff_visual_ix_for_source_visible_ix(source);
+        self.scroll_diff_to_item_strict(visual, strategy);
+    }
+
+    fn apply_diff_wrap_pending_scroll(&mut self) {
+        if let Some((source, strategy)) = self.diff_wrap_pending_scroll.take() {
+            let visual = self.diff_visual_ix_for_source_visible_ix(source);
+            self.scroll_diff_to_item_strict(visual, strategy);
+        }
+    }
+
     pub(in crate::view) fn diff_visual_ix_for_source_visible_ix(
         &self,
         source_visible_ix: usize,
@@ -300,6 +325,7 @@ impl DiffRenderer {
                     self.diff_search_recompute_matches_for_current_view_preserving_current();
                 }
             }
+            self.apply_diff_wrap_pending_scroll();
             return;
         }
 
@@ -329,6 +355,7 @@ impl DiffRenderer {
             reveal_whitespace_chars: self.reveal_whitespace_chars,
         };
         if self.diff_wrap_visible_cache_key == Some(key) {
+            self.apply_diff_wrap_pending_scroll();
             return;
         }
 
@@ -357,6 +384,7 @@ impl DiffRenderer {
         if self.diff_search_has_query() {
             self.diff_search_recompute_matches_for_current_view_preserving_current();
         }
+        self.apply_diff_wrap_pending_scroll();
     }
 
     /// Font the wrapped diff rows are painted in — the same family the rows

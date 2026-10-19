@@ -47,23 +47,103 @@ text-storage patch previously vendored in `gpui/`, so that crate and the Cargo
 patch are no longer needed. Platform, renderer and test text-backend crates use
 the same upstream revision.
 
+## Difftastic
+
+`difftastic/` is Difftastic 0.71.0 (MIT) as a library, for
+`crates/gitcomet-difftastic` to call in-process. The import commit is the
+pristine baseline, built by this recipe:
+
+- Source: `https://codeload.github.com/Wilfred/difftastic/tar.gz/refs/tags/0.71.0`,
+  sha256 `d6afd26103c6492a91307dc6779c7dd0ca4d4c85499f81d7dc53fdfa5107331d`.
+- Keep only `Cargo.toml`, `LICENSE`, `README.md`, `clippy.toml`, `src/**` and
+  `vendored_parsers/highlights/*.scm`; delete everything else.
+- Follow symlinks to their target files, and store `src/main.rs` as `src/lib.rs`.
+
+Unlike the other vendored crates it is a workspace member: that lets its grammars
+use `workspace = true`, so each language resolves to the one grammar crate
+GitComet links. Two crates defining the same `tree_sitter_<lang>` symbol both
+get built and the linker silently keeps one, so `scripts/ci/grammar_symbols.py`
+fails CI when that happens. Its manifest pins edition 2021, which keeps `cargo fmt`
+from rewriting upstream files, and forbids `unsafe` code.
+
+Changes against the baseline (`git log -- vendor/difftastic`):
+
+- A library: the CLI, terminal display, file reading, directory and conflict
+  modes are removed. `src/api.rs` is GitComet's entry point and
+  `src/api_tests.rs` holds GitComet's tests: rendered output per language,
+  fallbacks, stopping and nesting. `api::compare` repeats
+  the CLI's final-newline step and reports lines in the caller's numbering;
+  `diff_file_content` guesses the language from the new text unless that is
+  empty, and `api::supports` makes the same guess without parsing.
+- tree-sitter 0.27: `QueryMatch::captures()` is a method.
+- Grammars: every language uses the workspace's grammar crate. Kotlin, Perl,
+  Rust, Java and Dart replace upstream's forks; janet-simple, LaTeX and Smali
+  moved into their own crates here; Verilog and Fortran are dropped. `*.cls` is
+  Apex's, not LaTeX's, matching GitComet's highlighter. Perl's
+  config and `vendored_parsers/highlights/perl.scm` are written for GitComet's
+  Perl grammar; the other `.scm` files there are upstream's.
+- Fallback reasons are a typed `TextFallbackReason`, and `display/json.rs` builds
+  plain data instead of JSON.
+- `split_atom_words` anchors a changed string's words on the atom's first line
+  span, which `MatchedPos::new` filtered out when it was empty, so a string that
+  starts with a newline (a Perl heredoc) keeps its rows.
+- Stopping: `api::compare` takes a `should_stop` closure, checked by
+  tree-sitter's parse and query progress callbacks (embedded languages
+  included), on the graph search's first vertex and every
+  `STOP_CHECK_INTERVAL` vertices, on every edit-distance row when comparing
+  string or comment contents, and between phases; a stop returns
+  `Interrupted`. The similarity calculation preserves strsim's Unicode
+  character scores; strsim remains a test oracle. The longest stretch without
+  a check is about 0.5 s, in the syntax conversion and `mark_unchanged` of a
+  1 MB release diff.
+- Nesting: a tree deeper than the caller's limit falls back with
+  `NestingLimit` before the recursive conversion. An embedded language's tree
+  gets only the depth its host leaves, or is left to the host grammar, so one
+  limit bounds both. Diff passes recurse up to twice that limit, since a node
+  can gain a wrapper list.
+- Fallbacks skip difftastic's line diff (`line_parser.rs` is removed), and no
+  `DFT_*` environment variable is read (`clippy.toml` disallows `std::env`
+  reads). Panic messages no longer format whole syntax trees, and graph
+  vertices have no `Debug`, whose derive walked every neighbour. A panic
+  while building one grammar's config leaves the config cache usable for
+  every other language.
+- Speed: `display/json.rs` groups novel positions by line once instead of
+  rescanning them for every line, and `display/hunks.rs` scans a hunk's
+  matched lines forward from its start instead of back from the end. A 1 MB
+  release diff took 11 s before and 2.4 s after.
+
+To upgrade, rebuild the baseline for the new tag by the recipe, diff it against
+this import's tree, and apply that upstream diff to `difftastic/`. Then
+`cargo test -p difftastic`: `test_configs_valid` and
+`test_tree_sitter_node_names_exist` catch grammar drift, and the `api` tests show
+output drift.
+
 ## Tree-sitter grammars
 
 Each `tree-sitter-*` directory here is a grammar GitComet compiles from source
 rather than pulling from crates.io. Every one of them carries its reason in its
 own `Cargo.toml` header. There are three reasons in play:
 
-- **Unresolvable dependency.** The crate pins `tree-sitter ~0.20`, and the
-  `links = "tree-sitter"` key makes that unresolvable alongside the workspace's
-  0.27. Depending on `tree-sitter-language` instead drops the pin.
-- **No release, or a needed fix.** No crates.io release exists, or upstream's
+- **Unresolvable dependency.** The crate pins `tree-sitter ~0.20`
+  (`tree-sitter-smali`, among others), and the `links = "tree-sitter"` key makes
+  that unresolvable alongside the workspace's 0.27. Depending on
+  `tree-sitter-language` instead drops the pin.
+- **No release, or a needed fix.** No crates.io release exists
+  (`tree-sitter-janet-simple`, and `tree-sitter-latex`, whose crates.io namesake
+  is a different grammar), or upstream's
   grammar has a bug GitComet patches (`tree-sitter-asm`'s `mnemonic` token,
   `tree-sitter-ruby`'s `=begin` rule, `tree-sitter-properties`' process-global
-  scanner flag), or its published build wiring is not
+  scanner flag, `tree-sitter-solidity`'s highlight query, which tree-sitter
+  0.26.11+ rejects), or its published build wiring is not
   portable (`tree-sitter-v` hard-codes GNU object and archiver conventions).
 - **The small-state retune.** Fifteen grammars are upstream's own source,
   regenerated only to make the parse tables smaller. That is what the rest of
   this file is about.
+
+GitComet's highlighter keeps most of its queries in
+`crates/gitcomet-syntax/src/queries/`. A grammar vendors upstream's `queries/`
+only when something reads its query constants -- GitComet's highlighter or
+vendor/difftastic -- and its `Cargo.toml` header says which.
 
 ## The small-state retune
 
@@ -260,7 +340,8 @@ written here because upstream's published crate omits it.
 
 Confirm the result before committing: `LARGE_STATE_COUNT` in the new `parser.c`
 should have dropped, every other count should match upstream's own `parser.c`
-(see "Why this is safe"), and `cargo test -p gitcomet-ui-gpui --lib syntax`
+(see "Why this is safe"), and
+`cargo test -p gitcomet-syntax --lib vendored_grammars_keep_the_small_state_retune`
 should still pass — `vendored_grammars_keep_the_small_state_retune` holds the
 `LARGE_STATE_COUNT` bounds, so a regeneration that moves one updates that list.
 

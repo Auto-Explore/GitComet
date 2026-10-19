@@ -243,7 +243,17 @@ pub struct FocusedDiffConfig {
     pub label_left: String,
     pub label_right: String,
     pub display_path: Option<String>,
-    pub diff_text: String,
+    pub input: FocusedDiffInput,
+}
+
+#[derive(Clone, Debug)]
+pub enum FocusedDiffInput {
+    FilePair {
+        path: PathBuf,
+        old: Arc<str>,
+        new: Arc<str>,
+    },
+    Patch(String),
 }
 
 impl UiLaunch {

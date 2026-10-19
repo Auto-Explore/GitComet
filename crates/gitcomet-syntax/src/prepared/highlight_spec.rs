@@ -16,6 +16,44 @@ impl TreesitterHighlightSpec {
     }
 }
 
+/// Drops every capture inside a `@comment.discarded` node, so a discarded
+/// form reads as one comment however deep it nests. Captures arrive in start
+/// order, so only the latest discarded node can still contain the next one.
+/// Shared by both collectors. It works per pass and per layer: a line too long
+/// to query whole is queried in chunks, and a discarded form wider than its
+/// chunk keeps its colours there, as a string crossing a chunk does.
+pub(crate) struct DiscardedForms {
+    capture: Option<u32>,
+    latest: Range<usize>,
+}
+
+impl DiscardedForms {
+    pub(crate) fn new(spec: &TreesitterHighlightSpec) -> Self {
+        Self {
+            capture: spec.discarded_capture,
+            latest: 0..0,
+        }
+    }
+
+    /// Whether `capture` falls inside a discarded form; records it if it is one.
+    pub(crate) fn hides(&mut self, capture: &tree_sitter::QueryCapture<'_>) -> bool {
+        let Some(discarded) = self.capture else {
+            return false;
+        };
+        let range = capture.node.byte_range();
+        if !self.latest.is_empty()
+            && range.start >= self.latest.start
+            && range.end <= self.latest.end
+        {
+            return true;
+        }
+        if capture.index == discarded {
+            self.latest = range;
+        }
+        false
+    }
+}
+
 /// Merges the per-pattern range map both collectors build into a deterministically
 /// ordered layer list.
 ///

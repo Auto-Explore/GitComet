@@ -345,6 +345,43 @@ fn diff_unified_works_for_staged_and_unstaged() {
     assert!(staged.contains("@@"));
 }
 
+/// `-c color.ui=false` does not override `color.diff=always`, so every patch
+/// the viewer parsed came wrapped in colour escapes.
+#[test]
+fn diff_unified_is_uncoloured_under_color_diff_always() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    write(repo, "a.txt", "one\ntwo\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "two"]);
+    write(repo, "a.txt", "one\ntwo\nthree\n");
+    run_git(repo, &["config", "color.diff", "always"]);
+    let head = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).trim().into());
+    let parent = CommitId(run_git_output(repo, &["rev-parse", "HEAD~"]).trim().into());
+
+    let opened = GixBackend.open(repo).unwrap();
+    let path = PathBuf::from("a.txt");
+    for target in [
+        DiffTarget::working_tree(path.clone(), DiffArea::Unstaged),
+        DiffTarget::working_tree(path.clone(), DiffArea::Staged),
+        DiffTarget::commit(head.clone(), path.clone()),
+        DiffTarget::commit_range(parent, Some(head), Some(path.clone())),
+    ] {
+        let unified = opened.diff_unified(&target).unwrap();
+        assert!(!unified.contains('\x1b'), "{target:?}: {unified:?}");
+    }
+}
+
 #[test]
 fn diff_working_tree_unstaged_ignores_crlf_only_line_ending_changes() {
     test_git_env::ensure_initialized();

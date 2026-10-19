@@ -89,10 +89,10 @@ fn streamed_slices_resume_inside_batch_line_comments() {
     }
 }
 
-/// The two block-comment kinds the batch touched: Haskell's `{- -}` is a new
-/// `HeuristicBlockCommentKind`, and OCaml reuses the F# `(* *)` spec. Both are
-/// resumed from a checkpoint here, which is the only place the start/end byte
-/// tables are consulted rather than the per-line `starts_with`.
+/// The two block comments the batch touched: Haskell's `{- -}` is a new spec,
+/// and OCaml reuses the F# `(* *)` spec. Both are resumed from a checkpoint
+/// here, where a spec's delimiters are matched across lines rather than by the
+/// per-line `starts_with`.
 #[test]
 fn streamed_slices_resume_inside_haskell_and_ocaml_block_comments() {
     const CHECKPOINT_SPACING: usize = 32 * 1024;
@@ -131,7 +131,7 @@ fn streamed_slices_resume_inside_haskell_and_ocaml_block_comments() {
         );
 
         // …and the block has to *end*. Asserting only the line above passes even
-        // with `heuristic_block_comment_end_bytes` corrupted: an unterminated
+        // with a spec's `end` corrupted: an unterminated
         // comment swallows the rest of the line, so the slice above stays inside
         // it either way.
         let tail_start = text.find(close).expect("close should be present") + close.len();
@@ -270,4 +270,49 @@ fn every_batch_language_produces_treesitter_tokens() {
         );
         assert_token_ranges_are_utf8_safe(sample, &tokens);
     }
+}
+
+/// Every block comment a language declares also resumes from a checkpoint: a
+/// slice deep inside one is still a comment.
+#[test]
+fn every_declared_block_comment_resumes_inside_a_streamed_slice() {
+    const CHECKPOINT_SPACING: usize = 32 * 1024;
+
+    let mut broken = Vec::new();
+    let mut checked = 0;
+    for language in all_supported_languages() {
+        let Some(spec) = crate::heuristic::heuristic_comment_config(language).block_comment else {
+            continue;
+        };
+        reset_streamed_heuristic_line_cache();
+        let body = "b".repeat(CHECKPOINT_SPACING + 192);
+        let text = format!("{}{body}{} x", spec.start, spec.end);
+        let slice_start = spec.start.len() + CHECKPOINT_SPACING;
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text));
+        let (_, resolved) = raw_text
+            .slice_text_resolved(slice_start..slice_start + 96)
+            .expect("ASCII slice should resolve");
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &raw_text,
+            language,
+            slice_start..slice_start + 96,
+            resolved,
+        )
+        .expect("streamed slice should be supported");
+        checked += 1;
+        if !tokens
+            .iter()
+            .any(|token| token.kind == SyntaxTokenKind::Comment)
+        {
+            broken.push(language);
+        }
+    }
+    assert!(
+        checked > 20,
+        "only {checked} languages declare a block comment"
+    );
+    assert!(
+        broken.is_empty(),
+        "block comments that do not resume: {broken:?}"
+    );
 }

@@ -59,6 +59,12 @@ pub(in crate::view) enum DiffCommand {
         pane: Option<Entity<DiffRenderer>>,
         window: AnyWindowHandle,
     },
+    OpenHostedMenu {
+        id: u64,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+        anchor: Point<Pixels>,
+        window: AnyWindowHandle,
+    },
 }
 
 pub(in crate::view) trait DiffNavigation {

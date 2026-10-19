@@ -958,6 +958,14 @@ struct RecordingCheckoutRepo {
     other_worktree: Option<PathBuf>,
     /// Reported by `current_branch`; unsupported when `None`.
     current_branch: Option<String>,
+    prepared_barrier: Option<PreparedPatchBarrier>,
+    /// Holds `fetch_all` and `pull` until released.
+    remote_barrier: Option<PreparedPatchBarrier>,
+}
+
+struct PreparedPatchBarrier {
+    started: std::sync::mpsc::Sender<()>,
+    release: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl RecordingCheckoutRepo {
@@ -969,6 +977,8 @@ impl RecordingCheckoutRepo {
             rename_branch_already_exists: false,
             other_worktree: None,
             current_branch: None,
+            prepared_barrier: None,
+            remote_barrier: None,
         }
     }
 
@@ -977,6 +987,18 @@ impl RecordingCheckoutRepo {
             .lock()
             .expect("checkout recording mutex")
             .push(call);
+    }
+
+    fn remote_call(&self, name: &str) -> Result<gitcomet_core::services::CommandOutput> {
+        let Some(barrier) = &self.remote_barrier else {
+            return unsupported_repo_result();
+        };
+        barrier.started.send(()).unwrap();
+        wait_for_release_signal(&barrier.release);
+        self.record(name.into());
+        Ok(gitcomet_core::services::CommandOutput::empty_success(
+            format!("git {name}"),
+        ))
     }
 }
 
@@ -994,6 +1016,19 @@ fn branch_already_exists_error(command: &str, name: &str) -> Error {
 impl GitRepository for RecordingCheckoutRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn apply_prepared_diff_patch(
+        &self,
+        _prepared: &gitcomet_core::patch_action::PreparedDiffPatch,
+    ) -> Result<CommandOutput> {
+        let Some(barrier) = &self.prepared_barrier else {
+            return unsupported_repo_result();
+        };
+        barrier.started.send(()).unwrap();
+        wait_for_release_signal(&barrier.release);
+        self.record("apply reviewed".into());
+        Ok(CommandOutput::empty_success("reviewed patch"))
     }
 
     fn branch_checked_out_in_other_worktree(&self, _name: &str) -> Result<Option<PathBuf>> {
@@ -1169,16 +1204,14 @@ impl GitRepository for RecordingCheckoutRepo {
         unsupported_repo_result()
     }
     fn fetch_all(&self, _prune: bool) -> Result<gitcomet_core::services::CommandOutput> {
-        let result: Result<()> = { unsupported_repo_result() };
-        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git fetch --all"))
+        self.remote_call("fetch")
     }
     fn pull(
         &self,
         _mode: PullMode,
         _prune: bool,
     ) -> Result<gitcomet_core::services::CommandOutput> {
-        let result: Result<()> = { unsupported_repo_result() };
-        result.map(|()| gitcomet_core::services::CommandOutput::empty_success("git pull"))
+        self.remote_call("pull")
     }
     fn push(&self) -> Result<()> {
         unsupported_repo_result()
@@ -1301,5 +1334,6 @@ fn run_effect_with_fixture(
 
 mod cancellation;
 mod load_scheduling;
+mod prepared_patch;
 mod repository_operations;
 mod retries_errors;

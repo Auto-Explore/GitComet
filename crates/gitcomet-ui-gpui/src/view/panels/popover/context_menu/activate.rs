@@ -731,6 +731,13 @@ impl PopoverHost {
                     });
                 });
             }
+            ContextMenuAction::SetDiffEngineOverride { engine } => {
+                restore_diff_panel_focus_after_action = true;
+                let renderer = self.diff_renderer.clone();
+                cx.defer(move |cx| {
+                    renderer.update(cx, |pane, cx| pane.set_diff_engine_override(engine, cx));
+                });
+            }
             ContextMenuAction::SetDiffRevealWhitespaceChars { enabled } => {
                 close_after_action = false;
                 restore_diff_panel_focus_after_action = true;

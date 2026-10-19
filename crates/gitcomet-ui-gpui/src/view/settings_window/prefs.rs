@@ -47,6 +47,7 @@ impl SettingsWindowView {
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
+            diff_engine: Some(self.diff_engine.key().to_string()),
             diff_view_mode: Some(self.diff_view_mode.key().to_string()),
             // Annotate is toggled from the diff toolbar, not the settings window,
             // so leave it untouched here (None never overwrites the stored value).
@@ -791,6 +792,17 @@ impl SettingsWindowView {
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.broadcast_preference(PreferenceChange::DiffViewMode(next), cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_diff_engine(&mut self, next: DiffEngine, cx: &mut gpui::Context<Self>) {
+        if self.diff_engine == next {
+            return;
+        }
+        self.diff_engine = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.broadcast_preference(PreferenceChange::DiffEngine(next), cx);
         cx.notify();
     }
 

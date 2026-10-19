@@ -17,7 +17,8 @@
 # Regenerate from src/grammar.json using the patched CLI in vendor/README.md.
 # Shared headers come from vendor/tree-sitter-headers.
 #
-# queries/ is vendored because GitComet uses the upstream query constants.
+# queries/ is vendored because GitComet and vendor/difftastic use the upstream
+# query constants.
 [package]
 name = "tree-sitter-swift"
 description = "swift grammar for the tree-sitter parsing library"

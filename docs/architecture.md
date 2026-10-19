@@ -10,7 +10,7 @@ Products launch through [`AppLaunch`](../crates/gitcomet-app/src/lib.rs) or [`Ui
 
 The extension [`Registry`](../crates/gitcomet-extension-api/src/registry.rs) validates key chords and optional context predicates with GPUI's parsers before keymap installation. Invalid contexts join the existing registration errors, preserving declaration order and reporting all registration problems together.
 
-[Dependency checks](../scripts/ci/boundaries.py) enforce the layering across normal and build dependencies. GPUI revisions and gix features are selected in the [workspace manifest](../Cargo.toml); local dependency patches and grammar changes are documented in [vendor/README.md](../vendor/README.md).
+[Dependency checks](../scripts/ci/boundaries.py) enforce the layering across normal and build dependencies, and [a grammar check](../scripts/ci/grammar_symbols.py) fails when two linked crates define the same tree-sitter language. GPUI revisions and gix features are selected in the [workspace manifest](../Cargo.toml); local dependency patches and grammar changes are documented in [vendor/README.md](../vendor/README.md).
 
 ## Git contracts and errors
 

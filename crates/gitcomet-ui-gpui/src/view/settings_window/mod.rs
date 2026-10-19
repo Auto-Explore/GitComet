@@ -322,6 +322,7 @@ enum SettingsSection {
     FileListLayout,
     FileListSort,
     DiffContentMode,
+    DiffEngine,
     Diff,
     DiffViewMode,
     DiffTabSize,
@@ -352,9 +353,11 @@ impl SettingsSection {
             Self::TerminalExternal | Self::TerminalButton => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
             Self::FileListLayout | Self::FileListSort => SettingsCategory::ChangeTracking,
-            Self::DiffContentMode | Self::Diff | Self::DiffViewMode | Self::DiffTabSize => {
-                SettingsCategory::Diff
-            }
+            Self::DiffEngine
+            | Self::DiffContentMode
+            | Self::Diff
+            | Self::DiffViewMode
+            | Self::DiffTabSize => SettingsCategory::Diff,
             Self::GitLogDefaultMode
             | Self::GitLogColumns
             | Self::GitLogBranchNames
@@ -498,7 +501,7 @@ impl SettingsCategory {
             Self::Terminal => "terminal external terminal button opens status bar",
             Self::ChangeTracking => "change tracking untracked files",
             Self::Diff => {
-                "diff mode scroll sync show whitespace changes reveal whitespace characters \
+                "diff engine difftastic structural line by line mode scroll sync show whitespace changes reveal whitespace characters \
                  word wrap show line numbers unified split"
             }
             Self::FileEditing => {
@@ -650,6 +653,7 @@ pub(crate) struct SettingsWindowView {
     terminal_status: Option<TerminalSettingsStatus>,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
+    diff_engine: DiffEngine,
     diff_view_mode: DiffViewMode,
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
@@ -1075,6 +1079,7 @@ impl SettingsWindowView {
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
         let diff_whitespace_mode = ui_preferences.diff.whitespace_mode;
+        let diff_engine = ui_preferences.diff.engine;
         let diff_view_mode = ui_preferences.diff.view_mode;
         let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = ui_preferences.diff.word_wrap;
@@ -1423,6 +1428,7 @@ impl SettingsWindowView {
             terminal_status: None,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_engine,
             diff_view_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,

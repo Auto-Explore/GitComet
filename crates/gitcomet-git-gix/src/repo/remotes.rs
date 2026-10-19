@@ -21,6 +21,10 @@ use std::str;
 
 const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
 
+/// Uncoloured output for the diffstat a pull, merge or squash prints:
+/// `color.ui` alone loses to a user's `color.diff=always`.
+const NO_COLOR_CONFIG: [&str; 4] = ["-c", "color.ui=false", "-c", "color.diff=false"];
+
 struct FetchAllRemotes {
     names: Vec<String>,
     /// Name the eligible remotes explicitly when --all would contact annex.
@@ -2059,8 +2063,7 @@ impl GixRepo {
 
         let command_str = format!("git pull --no-rebase --ff --no-prune {remote} {branch}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("-c")
             .arg("fetch.pruneTags=false");
         if remote_name_is_config_key_safe(remote) {
@@ -2084,8 +2087,7 @@ impl GixRepo {
 
         let command_str = format!("git merge --ff --no-edit {reference}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("--no-pager")
             .arg("merge")
             .arg("--ff")
@@ -2202,8 +2204,7 @@ impl GixRepo {
 
         let command_str = format!("git merge --squash --no-commit {reference}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("color.ui=false")
+        cmd.args(NO_COLOR_CONFIG)
             .arg("--no-pager")
             .arg("merge")
             .arg("--squash")

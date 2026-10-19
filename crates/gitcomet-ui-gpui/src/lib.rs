@@ -36,7 +36,7 @@ pub use app::{
     BrowserOpenRequest, BrowserOpenTarget, FocusedMergetoolConfig, UiLaunch, UiRunOutcome,
     run_focused_mergetool,
 };
-pub use app::{FocusedDiffConfig, run_focused_diff};
+pub use app::{FocusedDiffConfig, FocusedDiffInput, run_focused_diff};
 pub use assets::{BRAND_ASSETS, GitCometAssets};
 pub use launch_guard::UiLaunchError;
 pub use view::StartupCrashReport;

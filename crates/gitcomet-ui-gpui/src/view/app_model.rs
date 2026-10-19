@@ -1,11 +1,5 @@
 use super::*;
 
-/// The model the whole view tree observes.
-///
-/// `state` is the live store snapshot: writing it notifies every observer.
-/// `preferences` is a plain field the pane constructors read once, when the
-/// window is built — no observer reads it, so keeping it current is bookkeeping
-/// for the next construction rather than a change anyone renders from.
 #[derive(Debug)]
 pub(super) struct AppUiModel {
     pub(super) state: Arc<AppState>,
@@ -46,12 +40,6 @@ impl AppUiModel {
         cx.notify();
     }
 
-    /// Deliberately does not notify. The observers all read `state`, and
-    /// `GitCometView::apply_state_snapshot` is a diff against the snapshot it
-    /// already holds: waking them for a preference write re-runs that whole pass
-    /// (plus, on macOS, a `session::load()` disk read) and always concludes that
-    /// nothing changed. Every preference setter already propagates its own value
-    /// to the panes that render it.
     pub(super) fn update_preferences(&mut self, update: impl FnOnce(&mut UiPreferences)) {
         update(&mut self.preferences);
     }

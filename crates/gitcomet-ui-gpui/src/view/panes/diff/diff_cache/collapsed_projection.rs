@@ -128,7 +128,7 @@ impl DiffRenderer {
             return;
         }
 
-        if self.has_large_file_text_diff() {
+        if self.has_large_file_text_diff() || self.structural_diff_active() {
             // The Git patch addresses pointer lines. Build payload hunks from
             // the content diff, with the usual three lines of context.
             let blocks = match self.diff_view {
@@ -163,8 +163,6 @@ impl DiffRenderer {
                     previous.has_additions |= added;
                     previous.has_removals |= removed;
                 } else {
-                    // Only a stable key for expansion state; patch actions are
-                    // unavailable on managed payloads.
                     let src_ix = block.start;
                     let reveal = self
                         .collapsed_diff_reveals

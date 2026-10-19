@@ -5,23 +5,6 @@
 //! - Interval coalescing for overlapping ranges
 //! - Newline-aware text manipulation
 
-use std::any::Any;
-
-/// Renders a `catch_unwind` / `JoinHandle::join` payload for diagnostics,
-/// using `fallback` for payloads that are not `&str` or `String`.
-///
-/// Callers keep their own fallback wording; taking a reference means a caller
-/// holding a `Box` can pass `payload.as_ref()` without giving up ownership.
-pub fn panic_payload_to_string(payload: &(dyn Any + Send), fallback: &str) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        fallback.to_string()
-    }
-}
-
 /// Wraps text in POSIX single quotes, escaping embedded single quotes with the
 /// standard `'"'"'` idiom.
 ///

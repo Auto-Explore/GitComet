@@ -528,3 +528,15 @@ fn bundled_fallback_renders_unicode_and_emoji_glyphs() {
         );
     }
 }
+
+#[test]
+fn a_renderer_panic_is_a_render_error_without_a_crash_report() {
+    let (result, uncontained) = gitcomet_base::panic::test_support::uncontained_panics(|| {
+        renderer(|| -> () { panic!("renderer bug") })
+    });
+    assert_eq!(
+        result,
+        Err("The native Mermaid renderer could not process this source.".to_owned())
+    );
+    assert_eq!(uncontained, 0);
+}

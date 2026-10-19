@@ -12,14 +12,14 @@
 # Compatibility with the workspace tree-sitter (see `tree-sitter` in the root
 # Cargo.toml) is a hard requirement, enforced by the
 # `vendored_grammars_are_abi_compatible_with_workspace_tree_sitter` test in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax.rs. Depending on
+# crates/gitcomet-syntax/src/tests/grammar_compat.rs. Depending on
 # `tree-sitter-language` rather than `tree-sitter` is what keeps that true: the
 # grammar exposes a bare `LanguageFn` bound to whichever tree-sitter the
 # workspace resolves.
 #
 # `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
 # GitComet keeps its own query in
-# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+# crates/gitcomet-syntax/src/queries/.
 [package]
 name = "tree-sitter-just"
 description = "Just grammar for the tree-sitter parsing library"

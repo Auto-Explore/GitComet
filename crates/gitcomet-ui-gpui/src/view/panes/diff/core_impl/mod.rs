@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod engine;
 mod init;
 
 pub(in crate::view) use init::DiffRendererInit;
@@ -204,6 +205,7 @@ impl DiffRenderer {
         }
         match clear_diff_selection_action(self.view_mode) {
             ClearDiffSelectionAction::ClearSelection => {
+                self.end_diff_engine_override_with_target();
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             }
             ClearDiffSelectionAction::ExitFocusedMergetool => {
@@ -1306,9 +1308,16 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind = kind.into();
+        if self.structural_diff_active()
+            && let PopoverKind::DiffHunkMenu { src_ix, .. } = &kind.kind
+        {
+            self.open_structural_block_menu(*src_ix, anchor, window, cx);
+            return;
+        }
         self.commands.defer(
             DiffCommand::OpenPopover {
-                request: Box::new(kind.into()),
+                request: Box::new(kind),
                 anchor: DiffPopoverAnchor::Point(anchor),
                 pane: self.hosted_decor.as_ref().map(|_| cx.entity()),
                 window: window.window_handle(),
@@ -1987,6 +1996,9 @@ impl DiffRenderer {
         }
 
         self.input = next;
+        if prev_diff_target != next_diff_target {
+            self.end_override_of_closed_viewer(cx);
+        }
         self.release_stale_submodule_summary_cache();
         // Absolute buffer identities survive tab closure in Documents.
         self.prune_orphaned_file_editor_stash(cx);

@@ -16,8 +16,8 @@
 # Regenerate from src/grammar.json with the patched CLI in vendor/README.md.
 # Shared headers come from vendor/tree-sitter-headers.
 #
-# queries/ is vendored for the upstream constants; GitComet's own highlight query
-# adds the scoped type-variable fix described above.
+# queries/ is vendored for the upstream constants, which vendor/difftastic reads;
+# GitComet's own highlight query adds the scoped type-variable fix described above.
 [package]
 name = "tree-sitter-haskell"
 description = "Haskell grammar for tree-sitter"

@@ -250,6 +250,10 @@ GitComet shows verification badges on signed commits. Git performs the check, us
 
 To install GnuPG, trust GitHub's signing key, and configure SSH allowed signers, see the [commit signature guide](docs/commit-signatures.md).
 
+### Difftastic
+
+Choose **Settings → Diff → Diff Engine** to make Difftastic the default, or use the diff viewer's cog for a temporary override. Both Split and Inline layouts support it. See [Difftastic](docs/difftastic.md) for partial staging and fallbacks.
+
 ### Themes
 
 GitComet supports built-in themes and user-provided custom themes.
@@ -270,7 +274,8 @@ On Linux, the directory normally is `~/.local/state/gitcomet/crashes/`.
 GitComet creates a process-specific `session-in-progress-<pid>.log` before it
 starts the GPUI runtime. A native abort, terminated UI, or GPUI event loop exit
 without an explicitly requested user shutdown leaves that marker behind; Rust
-panics also write `panic-*.log`. Error-level runtime diagnostics are mirrored to
+panics also write `panic-*.log`, except a panic GitComet contains in code it
+does not own (such as Difftastic), which falls back instead. Error-level runtime diagnostics are mirrored to
 `last-runtime-error-<pid>.log`, including their source location and a backtrace,
 so fatal errors logged and consumed by the UI runtime remain reportable.
 Recovery ignores markers owned by still-running GitComet processes, so one open

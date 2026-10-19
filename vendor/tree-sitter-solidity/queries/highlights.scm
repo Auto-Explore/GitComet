@@ -1,16 +1,3 @@
-; Derived from `queries/highlights.scm` in tree-sitter-solidity 1.2.13 (MIT).
-;
-; The crate does export this as `tree_sitter_solidity::HIGHLIGHT_QUERY`, but that
-; constant does not compile against tree-sitter 0.26: the `struct_expression`
-; pattern below carries a trailing `.` anchor inside a single-child group, which
-; the current query parser rejects outright. Vendoring is the only way to keep
-; the other 53 patterns.
-;
-; Local changes vs upstream:
-;   - `(struct_expression type: ((expression(identifier)) @type .))` rewritten as
-;     `(struct_expression type: (expression (identifier) @type))`. The anchor was
-;     a no-op on a group with one child, so this is the same match set.
-
 ; identifiers
 ; -----------
 (identifier) @variable
@@ -100,7 +87,8 @@
 
 ; Structs and members
 (member_expression property: (identifier) @property)
-(struct_expression type: (expression (identifier) @type))
+(struct_expression
+  type: (expression (identifier)) @type)
 (struct_field_assignment name: (identifier) @property)
 
 

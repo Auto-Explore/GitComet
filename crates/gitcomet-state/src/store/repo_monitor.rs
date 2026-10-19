@@ -18,8 +18,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::repo_load_trace;
-use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
+use super::send_diagnostics::{SendFailureKind, send_or_log};
 use super::worker_channel::StoreWorkerSender;
+use gitcomet_core::panic::payload_message;
 
 mod ignore_rules;
 mod monitor;
@@ -169,7 +170,7 @@ pub(super) fn join_monitor_or_log(
             context,
             format!(
                 "repo_id={repo_id:?}; join failed: {}",
-                panic_payload_to_string(error.as_ref())
+                payload_message(error.as_ref())
             ),
         );
     }

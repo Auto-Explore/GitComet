@@ -295,6 +295,261 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
     });
 }
 
+/// A Difftastic line changed on one side is one inline row drawing that side,
+/// so the other side's occurrences of a name must not land on it: their
+/// columns belong to text the row does not show.
+#[gpui::test]
+fn difftastic_occurrences_skip_a_row_drawing_the_other_side(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.set_diff_engine_override(
+                    Some(gitcomet_core::diff_engine::DiffEngine::Difftastic),
+                    cx,
+                );
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    // Line 2 gains `y, ` before `x` (new side only); line 3 loses `, 2` (old
+    // side only).
+    let old_text = "const x = 1;\nuse(x);\ncall(x, 2);\n".to_string();
+    let new_text = "const x = 1;\nuse(y, x);\ncall(x);\n".to_string();
+    let unified = concat!(
+        "@@ -1,3 +1,3 @@\n",
+        " const x = 1;\n",
+        "-use(x);\n",
+        "-call(x, 2);\n",
+        "+use(y, x);\n",
+        "+call(x);\n",
+    )
+    .to_string();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(932),
+        "difftastic_occurrences",
+        PathBuf::from("main.ts"),
+        unified,
+        old_text,
+        new_text,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "an inline Difftastic diff with prepared syntax on both sides",
+        |pane| {
+            pane.structural_diff_active()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.diff_view == DiffViewMode::Inline
+                && pane.diff_visible_len() == 3
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "structural={} rows={} status={:?}",
+                pane.structural_diff_active(),
+                pane.diff_visible_len(),
+                pane.diff_engine_status,
+            )
+        },
+    );
+    // Row 2 draws the old `call(x, 2);`; its `x` is at 5..6.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        2,
+        DiffTextRegion::Inline,
+        5..6,
+        "the old side's x",
+    );
+    simulate_counted_click(cx, click, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert_eq!(
+            pane.diff_text_occurrences_for_tests(),
+            vec![(0, 6..7), (2, 5..6)],
+            "row 1 draws the new `use(y, x);`; the old `use(x);` x at 4..5 is not on it"
+        );
+    });
+}
+
+/// The line engine took every row from a text selection's first to its last,
+/// so a drag from the end of one line to the start of another staged both of
+/// those lines, though neither had a character selected.
+#[gpui::test]
+fn line_engine_selection_edges_stage_no_untouched_line(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(938);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_line_engine_selection_edges",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = PathBuf::from("main.rs");
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    let unified = "diff --git a/main.rs b/main.rs\n--- a/main.rs\n+++ b/main.rs\n@@ -1,3 +1,3 @@\n-a1\n-b1\n-c1\n+a2\n+b2\n+c2\n";
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = 1;
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target.clone(), unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some("a1\nb1\nc1\n".into()),
+                    Some("a2\nb2\nc2\n".into()),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the line engine's six inline rows",
+        |pane| pane.file_diff_cache_target == Some(target.clone()) && pane.diff_visible_len() == 6,
+        |pane| pane.diff_visible_len(),
+    );
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                assert_eq!(
+                    pane.diff_text_full_line_for_region(0, DiffTextRegion::Inline)
+                        .as_ref(),
+                    "a1"
+                );
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    source_visible_ix: 0,
+                    region: DiffTextRegion::Inline,
+                    offset: 2,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    source_visible_ix: 2,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                });
+                pane.open_diff_editor_context_menu(
+                    1,
+                    DiffTextRegion::Inline,
+                    gpui::point(px(24.0), px(24.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        match view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+        {
+            Some(PopoverKind::DiffEditorMenu { lines_count, .. }) => {
+                assert_eq!(lines_count, 1, "only +a2 has selected text")
+            }
+            other => panic!("expected the diff editor menu, got {other:?}"),
+        }
+    });
+}
+
+/// Difftastic marks changed tokens, not lines: a changed row paints the same
+/// background as an unchanged one in both layouts, and its changed token keeps
+/// its highlight.
+#[gpui::test]
+fn difftastic_rows_mark_their_tokens_not_their_lines(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.diff_renderer.update(cx, |pane, cx| {
+                pane.set_diff_engine_override(
+                    Some(gitcomet_core::diff_engine::DiffEngine::Difftastic),
+                    cx,
+                );
+            });
+        });
+    });
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(933),
+        "difftastic_token_marks",
+        PathBuf::from("main.ts"),
+        "@@ -1,2 +1,2 @@\n const x = 1;\n-use(x);\n+use(y, x);\n".to_string(),
+        "const x = 1;\nuse(x);\n".to_string(),
+        "const x = 1;\nuse(y, x);\n".to_string(),
+    );
+    for (layout, region) in [
+        (DiffViewMode::Split, DiffTextRegion::SplitRight),
+        (DiffViewMode::Inline, DiffTextRegion::Inline),
+    ] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.diff_renderer.update(cx, |pane, cx| {
+                    pane.diff_view = layout;
+                    pane.clear_diff_text_style_caches();
+                    cx.notify();
+                });
+            });
+        });
+        wait_for_main_pane_condition(
+            cx,
+            &view,
+            "a Difftastic diff of two rows",
+            |pane| {
+                pane.structural_diff_active()
+                    && pane.file_diff_cache_target == Some(target.clone())
+                    && pane.diff_view == layout
+                    && pane.diff_visible_len() == 2
+            },
+            |pane| {
+                format!(
+                    "structural={} rows={}",
+                    pane.structural_diff_active(),
+                    pane.diff_visible_len()
+                )
+            },
+        );
+        let unchanged = draw_paint_record_for_visible_ix(cx, &view, 0, region);
+        let changed = draw_paint_record_for_visible_ix(cx, &view, 1, region);
+        assert_eq!(changed.row_bg, unchanged.row_bg, "{layout:?}");
+        assert!(
+            changed
+                .highlights
+                .iter()
+                .any(|(range, _, background)| background.is_some() && range.contains(&4)),
+            "{layout:?}: the added `y` keeps its highlight: {:?}",
+            changed.highlights
+        );
+    }
+}
+
 /// Collapsed mode renders the same file-diff rows as Full, so a click in it must
 /// pair too. Gating on `is_file_diff_view_active()` (which demands
 /// `DiffContentMode::Full`) silently excluded this whole mode.

@@ -5,6 +5,28 @@ use crate::kit::text_model::TextModelSnapshot;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
+/// The viewer's own diff engine, and what ends with it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffEngineOverride {
+    pub(in crate::view) engine: DiffEngine,
+    /// The whitespace mode to return to: "Show line changes" shows whitespace
+    /// for as long as its override lasts, unless the user picks one meanwhile.
+    pub(in crate::view) restores_whitespace: Option<DiffWhitespaceMode>,
+    /// Set by closing the viewer: the override ends with its target, so the
+    /// closing file is not rebuilt with the default engine first.
+    pub(in crate::view) ends_with_target: bool,
+}
+
+impl DiffEngineOverride {
+    pub(in crate::view) fn new(engine: DiffEngine) -> Self {
+        Self {
+            engine,
+            restores_whitespace: None,
+            ends_with_target: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct VersionedCachedDiffStyledText {
     pub(in crate::view) syntax_epoch: u64,
@@ -471,6 +493,14 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) diff_content_mode: DiffContentMode,
     pub(in crate::view) diff_whitespace_mode: DiffWhitespaceMode,
     pub(in crate::view) diff_split_ratio: f32,
+    pub(in crate::view) diff_engine_default: DiffEngine,
+    pub(in crate::view) diff_engine_override: Option<DiffEngineOverride>,
+    pub(in crate::view) diff_engine_status: DiffEngineStatus,
+    /// Cancels patches still being prepared when the renderer goes away.
+    pub(in crate::view::panes::diff) patch_cancellation: gitcomet_core::services::CancellationToken,
+    pub(in crate::view) diff_engine_anchor: Option<gitcomet_extension_api::DiffScrollAnchor>,
+    /// A scroll to a source row, waiting for word-wrapped rows to be built.
+    pub(in crate::view) diff_wrap_pending_scroll: Option<(usize, gpui::ScrollStrategy)>,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
     pub(in crate::view) diff_split_last_synced_x: [Pixels; 2],
     pub(in crate::view) diff_split_last_synced_y: [Pixels; 2],
@@ -634,6 +664,8 @@ pub(crate) struct DiffRenderer {
     pub(in crate::view) file_diff_cache_rev: u64,
     pub(in crate::view) file_diff_cache_content_signature: Option<u64>,
     pub(in crate::view) file_diff_cache_whitespace_mode: DiffWhitespaceMode,
+    pub(in crate::view) file_diff_cache_engine: DiffEngine,
+    pub(in crate::view) file_diff_cancellation: gitcomet_core::services::CancellationToken,
     pub(in crate::view) file_diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) file_diff_cache_error:
         Option<crate::view::panes::diff::diff_cache::FileDiffCacheError>,

@@ -8,16 +8,6 @@ const STREAMED_HEURISTIC_CHECKPOINT_SPACING_BYTES: usize = 32 * 1024;
 const STREAMED_HEURISTIC_SCAN_CHUNK_BYTES: usize = 256 * 1024;
 const STREAMED_HEURISTIC_SCAN_CHUNK_LOOKAHEAD_BYTES: usize = 4;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum HeuristicBlockCommentKind {
-    Html,
-    FSharp,
-    Lua,
-    C,
-    PowerShell,
-    Haskell,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum HeuristicOpenState {
     #[default]
@@ -28,7 +18,7 @@ enum HeuristicOpenState {
     },
     LineComment,
     BlockComment {
-        kind: HeuristicBlockCommentKind,
+        spec: HeuristicBlockCommentSpec,
     },
 }
 
@@ -109,7 +99,7 @@ thread_local! {
     > = RefCell::new(new_fx_lru_cache(STREAMED_HEURISTIC_LINE_CACHE_MAX_ENTRIES));
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct HeuristicBlockCommentSpec {
     pub(super) start: &'static str,
     pub(super) end: &'static str,
@@ -226,7 +216,6 @@ impl HeuristicCommentConfig {
 #[derive(Clone, Copy)]
 struct HeuristicOpenStateScanConfig {
     comment: HeuristicCommentConfig,
-    block_comment_kind: Option<HeuristicBlockCommentKind>,
     allow_backtick_strings: bool,
     single_quote: HeuristicSingleQuote,
 }
@@ -235,7 +224,6 @@ impl HeuristicOpenStateScanConfig {
     fn for_language(language: DiffSyntaxLanguage) -> Self {
         Self {
             comment: heuristic_comment_config(language),
-            block_comment_kind: heuristic_block_comment_kind(language),
             allow_backtick_strings: heuristic_allows_backtick_strings(language),
             single_quote: heuristic_single_quote_role(language),
         }
@@ -261,6 +249,10 @@ const HEURISTIC_HASKELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBloc
 const HEURISTIC_C_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "/*",
     end: "*/",
+};
+const HEURISTIC_LISP_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "#|",
+    end: "|#",
 };
 const HEURISTIC_POWERSHELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "<#",
@@ -288,7 +280,7 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // `#`. That also lands on Jinja's own `{# … #}`, one byte late.
         DiffSyntaxLanguage::JinjaText => HeuristicCommentConfig::hash(),
         // Pascal's block comment is `(* ... *)`, which is F#'s and OCaml's too.
-        // Its other form, `{ ... }`, has no `HeuristicBlockCommentKind` and would
+        // Its other form, `{ ... }`, has no block-comment spec and would
         // swallow every record and set literal if it did.
         // EBNF's comment is `(* ... *)`, the same as Pascal's and F#'s.
         DiffSyntaxLanguage::Ebnf
@@ -301,7 +293,22 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // `line_comment` stays None: `haskell_dashes_line_comment` replaces the
         // plain `--` prefix with a rule that knows `-->` is an operator.
         DiffSyntaxLanguage::Haskell => HeuristicCommentConfig::haskell(),
+        // Elm and Dhall took Haskell's comments but not its user-defined
+        // operators, so a plain `--` prefix is always a comment here. Dhall's `//`
+        // merges records; it is code.
+        DiffSyntaxLanguage::Elm | DiffSyntaxLanguage::Dhall => {
+            HeuristicCommentConfig::line_block("--", HEURISTIC_HASKELL_BLOCK_COMMENT)
+        }
         DiffSyntaxLanguage::Erlang => HeuristicCommentConfig::line("%"),
+        // LaTeX has no block comment. `\%` is an escaped percent this fallback
+        // cannot tell from a comment; the tree-sitter path can.
+        DiffSyntaxLanguage::Latex => HeuristicCommentConfig::line("%"),
+        // No Ada operator starts with `--`, unlike Haskell's.
+        DiffSyntaxLanguage::Ada => HeuristicCommentConfig::line("--"),
+        // VHDL-2008 adds C's block comments to `--`.
+        DiffSyntaxLanguage::Vhdl => {
+            HeuristicCommentConfig::line_block("--", HEURISTIC_C_BLOCK_COMMENT)
+        }
         // `.properties` takes `!` as well as `#`, and only at the head of a line;
         // `line_comment` carries the second marker.
         DiffSyntaxLanguage::JavaProperties => HeuristicCommentConfig::line_and_hash("!"),
@@ -318,7 +325,16 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // only the first is expressible here.
         DiffSyntaxLanguage::Wat => HeuristicCommentConfig::line(";;"),
         DiffSyntaxLanguage::Llvm | DiffSyntaxLanguage::Spirv => HeuristicCommentConfig::line(";"),
-        DiffSyntaxLanguage::Clojure => HeuristicCommentConfig::line(";"),
+        // `#` is not a comment in these Lisps (`#'f`, `#t`, `#\a`). Common Lisp,
+        // Racket and Scheme also take `#| ... |#` blocks; they nest, which this
+        // fallback does not track.
+        DiffSyntaxLanguage::Clojure | DiffSyntaxLanguage::EmacsLisp => {
+            HeuristicCommentConfig::line(";")
+        }
+        DiffSyntaxLanguage::CommonLisp | DiffSyntaxLanguage::Racket | DiffSyntaxLanguage::Scheme => {
+            HeuristicCommentConfig::line_block(";", HEURISTIC_LISP_BLOCK_COMMENT)
+        }
+        DiffSyntaxLanguage::Janet => HeuristicCommentConfig::hash(),
         // Assembly takes `;` (MASM/NASM) and `/* */` (GAS, every target).
         //
         // Neither GAS line-comment spelling is here. `#` is out because ARM writes
@@ -351,6 +367,8 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Toml
         | DiffSyntaxLanguage::Yaml
         | DiffSyntaxLanguage::Bash
+        | DiffSyntaxLanguage::Fish
+        | DiffSyntaxLanguage::Smali
         | DiffSyntaxLanguage::Makefile
         | DiffSyntaxLanguage::Ruby
         | DiffSyntaxLanguage::R
@@ -385,7 +403,10 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Groovy
         | DiffSyntaxLanguage::Solidity
         | DiffSyntaxLanguage::Gleam
-        | DiffSyntaxLanguage::Dhall
+        // Not `#`: `#include` and the `#address-cells` property both start with it.
+        | DiffSyntaxLanguage::DeviceTree
+        | DiffSyntaxLanguage::Apex
+        | DiffSyntaxLanguage::Qml
         | DiffSyntaxLanguage::Kdl
         | DiffSyntaxLanguage::Ron
         | DiffSyntaxLanguage::Cue
@@ -394,7 +415,10 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Bicep => HeuristicCommentConfig {
             line_comment: Some("//"),
             block_comment: match language {
-                DiffSyntaxLanguage::GoMod | DiffSyntaxLanguage::GoWork => None,
+                DiffSyntaxLanguage::GoMod
+                | DiffSyntaxLanguage::GoWork
+                | DiffSyntaxLanguage::Gleam
+                | DiffSyntaxLanguage::Cue => None,
                 _ => Some(HEURISTIC_C_BLOCK_COMMENT),
             },
             ..HeuristicCommentConfig::base()
@@ -408,8 +432,11 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // of the line. Nix comments are `#` and `/* */` only.
         DiffSyntaxLanguage::Nix => HeuristicCommentConfig::hash_block(HEURISTIC_C_BLOCK_COMMENT),
         DiffSyntaxLanguage::VisualBasic => HeuristicCommentConfig::visual_basic(),
-        // CSV has no comment syntax at all -- every byte is data.
+        // CSV has no comment syntax at all -- every byte is data. Newick allows
+        // `[...]` comments but the grammar rejects them, and a `[`/`]` spec would
+        // grey every `[&&NHX ...]` annotation too.
         DiffSyntaxLanguage::Csv
+        | DiffSyntaxLanguage::Newick
         | DiffSyntaxLanguage::Markdown
         | DiffSyntaxLanguage::MarkdownInline
         | DiffSyntaxLanguage::Css
@@ -417,71 +444,6 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Json
         | DiffSyntaxLanguage::Diff
         | DiffSyntaxLanguage::Regex => HeuristicCommentConfig::none(),
-    }
-}
-
-fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<HeuristicBlockCommentKind> {
-    match language {
-        DiffSyntaxLanguage::Html
-        | DiffSyntaxLanguage::Xml
-        | DiffSyntaxLanguage::Vue
-        | DiffSyntaxLanguage::Svelte
-        | DiffSyntaxLanguage::Jinja => Some(HeuristicBlockCommentKind::Html),
-        // EBNF's comment is `(* ... *)`, the same as Pascal's and F#'s.
-        DiffSyntaxLanguage::Ebnf
-        | DiffSyntaxLanguage::Pascal
-        | DiffSyntaxLanguage::FSharp
-        | DiffSyntaxLanguage::OCaml
-        | DiffSyntaxLanguage::OCamlInterface => Some(HeuristicBlockCommentKind::FSharp),
-        DiffSyntaxLanguage::Haskell => Some(HeuristicBlockCommentKind::Haskell),
-        DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
-        DiffSyntaxLanguage::PowerShell => Some(HeuristicBlockCommentKind::PowerShell),
-        DiffSyntaxLanguage::Sql
-        | DiffSyntaxLanguage::Rust
-        | DiffSyntaxLanguage::JavaScript
-        | DiffSyntaxLanguage::TypeScript
-        | DiffSyntaxLanguage::Tsx
-        | DiffSyntaxLanguage::Go
-        | DiffSyntaxLanguage::C
-        | DiffSyntaxLanguage::Cpp
-        | DiffSyntaxLanguage::ObjectiveC
-        | DiffSyntaxLanguage::CSharp
-        | DiffSyntaxLanguage::Java
-        | DiffSyntaxLanguage::Kotlin
-        | DiffSyntaxLanguage::Swift
-        | DiffSyntaxLanguage::Dart
-        | DiffSyntaxLanguage::Scala
-        | DiffSyntaxLanguage::Zig
-        | DiffSyntaxLanguage::Bicep
-        | DiffSyntaxLanguage::Groovy
-        | DiffSyntaxLanguage::Solidity
-        | DiffSyntaxLanguage::Assembly
-        | DiffSyntaxLanguage::Hcl
-        | DiffSyntaxLanguage::Nix
-        | DiffSyntaxLanguage::Php => Some(HeuristicBlockCommentKind::C),
-        _ => None,
-    }
-}
-
-fn heuristic_block_comment_start_bytes(kind: HeuristicBlockCommentKind) -> &'static [u8] {
-    match kind {
-        HeuristicBlockCommentKind::Html => b"<!--",
-        HeuristicBlockCommentKind::FSharp => b"(*",
-        HeuristicBlockCommentKind::Lua => b"--[[",
-        HeuristicBlockCommentKind::C => b"/*",
-        HeuristicBlockCommentKind::PowerShell => b"<#",
-        HeuristicBlockCommentKind::Haskell => b"{-",
-    }
-}
-
-fn heuristic_block_comment_end_bytes(kind: HeuristicBlockCommentKind) -> &'static [u8] {
-    match kind {
-        HeuristicBlockCommentKind::Html => b"-->",
-        HeuristicBlockCommentKind::FSharp => b"*)",
-        HeuristicBlockCommentKind::Lua => b"]]",
-        HeuristicBlockCommentKind::C => b"*/",
-        HeuristicBlockCommentKind::PowerShell => b"#>",
-        HeuristicBlockCommentKind::Haskell => b"-}",
     }
 }
 
@@ -560,11 +522,10 @@ fn comment_prefix_state_at_ascii(
     bytes: &[u8],
     start: usize,
 ) -> Option<(usize, HeuristicOpenState)> {
-    if let Some(kind) = config.block_comment_kind {
-        let start_bytes = heuristic_block_comment_start_bytes(kind);
-        if matches_ascii_bytes_at(bytes, start, start_bytes) {
-            return Some((start_bytes.len(), HeuristicOpenState::BlockComment { kind }));
-        }
+    if let Some(spec) = config.comment.block_comment
+        && matches_ascii_bytes_at(bytes, start, spec.start.as_bytes())
+    {
+        return Some((spec.start.len(), HeuristicOpenState::BlockComment { spec }));
     }
     line_comment_start_len(bytes, start, config.comment)
         .map(|len| (len, HeuristicOpenState::LineComment))
@@ -584,9 +545,11 @@ fn potential_open_state_lead(config: HeuristicOpenStateScanConfig, byte: u8) -> 
     {
         return true;
     }
-    if config.block_comment_kind.is_some_and(|kind| {
-        heuristic_block_comment_start_bytes(kind).first().copied() == Some(byte)
-    }) {
+    if config
+        .comment
+        .block_comment
+        .is_some_and(|spec| spec.start.as_bytes().first().copied() == Some(byte))
+    {
         return true;
     }
     if config.comment.haskell_dashes_line_comment && byte == b'-' {
@@ -676,8 +639,8 @@ fn consume_open_state_ascii_prefix(
             }
             (bytes.len(), HeuristicOpenState::String { quote, escaped })
         }
-        HeuristicOpenState::BlockComment { kind } => {
-            let end_bytes = heuristic_block_comment_end_bytes(kind);
+        HeuristicOpenState::BlockComment { spec } => {
+            let end_bytes = spec.end.as_bytes();
             let end_first = end_bytes[0];
             let mut ix = 0usize;
             while ix < bytes.len() {
@@ -692,7 +655,7 @@ fn consume_open_state_ascii_prefix(
                     break;
                 }
             }
-            (bytes.len(), HeuristicOpenState::BlockComment { kind })
+            (bytes.len(), HeuristicOpenState::BlockComment { spec })
         }
     }
 }
@@ -839,8 +802,8 @@ fn advance_streamed_heuristic_open_state_ascii(
                 };
                 record_constant!(*abs, *state);
             }
-            HeuristicOpenState::BlockComment { kind } => {
-                let end_bytes = heuristic_block_comment_end_bytes(kind);
+            HeuristicOpenState::BlockComment { spec } => {
+                let end_bytes = spec.end.as_bytes();
                 let end_first = end_bytes[0];
                 let remainder = &bytes[local..process_len];
                 let Some(found) = memchr::memchr(end_first, remainder) else {
@@ -865,7 +828,7 @@ fn advance_streamed_heuristic_open_state_ascii(
                         *state = if end_ix + 1 == end_bytes.len() {
                             HeuristicOpenState::Normal
                         } else {
-                            HeuristicOpenState::BlockComment { kind }
+                            HeuristicOpenState::BlockComment { spec }
                         };
                         record_constant!(*abs, *state);
                     }
@@ -1137,7 +1100,14 @@ pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> Heuri
         | DiffSyntaxLanguage::Haskell
         | DiffSyntaxLanguage::OCaml
         | DiffSyntaxLanguage::OCamlInterface
-        | DiffSyntaxLanguage::Clojure => HeuristicSingleQuote::Identifier,
+        | DiffSyntaxLanguage::Clojure
+        | DiffSyntaxLanguage::CommonLisp
+        | DiffSyntaxLanguage::Racket
+        | DiffSyntaxLanguage::Scheme
+        | DiffSyntaxLanguage::EmacsLisp
+        | DiffSyntaxLanguage::Janet
+        // LaTeX has no quoted strings: `'` is an apostrophe or a closing quote.
+        | DiffSyntaxLanguage::Latex => HeuristicSingleQuote::Identifier,
         // Julia's postfix `'` is the adjoint operator: `A'` transposes, `'c'` is a
         // character. The two are told apart by what precedes the quote, which is
         // what ValuePositionOnly already tests for.
@@ -1157,9 +1127,13 @@ pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> Heuri
         // dotenv loader, and treating it as a quote runs a string to the end of
         // the file. That is exactly what mapping `.env` to Bash used to do, and
         // the dedicated dotenv grammars error on the same line.
-        DiffSyntaxLanguage::Julia | DiffSyntaxLanguage::Assembly | DiffSyntaxLanguage::Dotenv => {
-            HeuristicSingleQuote::ValuePositionOnly
-        }
+        // Ada's and VHDL's attribute tick follows a name (`X'First`, `clk'event`);
+        // a character literal (`'A'`) never does.
+        DiffSyntaxLanguage::Julia
+        | DiffSyntaxLanguage::Assembly
+        | DiffSyntaxLanguage::Dotenv
+        | DiffSyntaxLanguage::Ada
+        | DiffSyntaxLanguage::Vhdl => HeuristicSingleQuote::ValuePositionOnly,
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
@@ -1187,12 +1161,27 @@ fn heuristic_single_quote_opens_string(
     }
 }
 
+/// Lisp names run over hyphens (`do-something`, `when-let`); elsewhere `-` is
+/// an operator.
+fn heuristic_identifiers_take_hyphens(language: DiffSyntaxLanguage) -> bool {
+    matches!(
+        language,
+        DiffSyntaxLanguage::Clojure
+            | DiffSyntaxLanguage::CommonLisp
+            | DiffSyntaxLanguage::Racket
+            | DiffSyntaxLanguage::Scheme
+            | DiffSyntaxLanguage::EmacsLisp
+            | DiffSyntaxLanguage::Janet
+    )
+}
+
 fn heuristic_allows_backtick_strings(language: DiffSyntaxLanguage) -> bool {
     matches!(
         language,
         DiffSyntaxLanguage::JavaScript
             | DiffSyntaxLanguage::TypeScript
             | DiffSyntaxLanguage::Tsx
+            | DiffSyntaxLanguage::Qml
             | DiffSyntaxLanguage::Go
             | DiffSyntaxLanguage::Bash
             | DiffSyntaxLanguage::Sql
@@ -1412,8 +1401,12 @@ pub fn syntax_tokens_for_line_heuristic_into(
     let is_ident_start = |byte: u8| byte == b'_' || byte.is_ascii_alphabetic();
     // `'` continues an identifier only where it is not a quote -- Nix's `foldl'`.
     let ident_tick = single_quote == HeuristicSingleQuote::Identifier;
+    let ident_hyphen = heuristic_identifiers_take_hyphens(language);
     let is_ident_continue = move |byte: u8| {
-        byte == b'_' || byte.is_ascii_alphanumeric() || (ident_tick && byte == b'\'')
+        byte == b'_'
+            || byte.is_ascii_alphanumeric()
+            || (ident_tick && byte == b'\'')
+            || (ident_hyphen && byte == b'-')
     };
     let is_comment_lead = |byte: u8| {
         comment_config

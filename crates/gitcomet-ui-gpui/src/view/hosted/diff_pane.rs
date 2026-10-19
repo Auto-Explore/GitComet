@@ -1,8 +1,8 @@
 use super::*;
-use crate::view::hosted::environment::DiffPaneEnvironment;
-use crate::view::panes::diff::DiffRendererInit;
+use crate::view::hosted::environment::{DiffPaneEnvironment, DiffPreferences};
 use crate::view::panes::diff::diff_cache::SharedFileDiffCache;
 use crate::view::panes::diff::input::DiffPaneInput;
+use crate::view::panes::diff::{DiffBody, DiffRendererInit};
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::text_format::TextEncoding;
 use gitcomet_extension_api::{
@@ -35,6 +35,9 @@ pub(crate) struct DiffPaneView {
     focus_window: Option<gpui::WindowId>,
     renderer: Option<Entity<DiffRenderer>>,
     renderer_subscription: Option<gpui::Subscription>,
+    preferences_subscription: Option<gpui::Subscription>,
+    #[cfg(test)]
+    rendered_statuses: Vec<Option<SharedString>>,
     source: PaneSource,
     view_id: DiffViewId,
     options: DiffPaneOptions,
@@ -48,6 +51,9 @@ pub(crate) struct DiffPaneView {
     loading: bool,
     pending_target: Option<DiffTarget>,
     error: Option<SharedString>,
+    /// A patch that failed while its file loaded. The renderer shows it only
+    /// when its body is the patch.
+    patch_error: Option<SharedString>,
     insets: Arc<[DiffInset]>,
     annotations: Arc<DiffAnnotations>,
     legend: Vec<DiffLegendItem>,
@@ -87,6 +93,9 @@ impl DiffPaneView {
             focus_window: None,
             renderer: None,
             renderer_subscription: None,
+            preferences_subscription: None,
+            #[cfg(test)]
+            rendered_statuses: Vec::new(),
             file_cache: None,
             raw: [None, None],
             raw_task: None,
@@ -97,6 +106,7 @@ impl DiffPaneView {
             loading: true,
             pending_target: None,
             error: None,
+            patch_error: None,
             insets: Arc::from([]),
             annotations: Arc::default(),
             legend: Vec::new(),
@@ -159,6 +169,19 @@ impl DiffPaneView {
 
     fn preferred_view_mode(&self, cx: &App) -> DiffViewMode {
         self.environment.preferences.read(cx).diff.view_mode
+    }
+
+    fn effective_engine(&self, cx: &App) -> DiffEngine {
+        self.options
+            .engine_override
+            .unwrap_or_else(|| self.environment.preferences.read(cx).diff.engine)
+    }
+
+    fn whitespace_mode(&self, cx: &App) -> DiffWhitespaceMode {
+        self.renderer
+            .as_ref()
+            .map(|pane| pane.read(cx).diff_whitespace_mode)
+            .unwrap_or_else(|| self.environment.preferences.read(cx).diff.whitespace_mode)
     }
 
     fn binding(&self) -> Option<crate::view::pane_store::DiffBinding> {
@@ -253,6 +276,10 @@ impl DiffPaneView {
                 pane.hosted_decor.as_mut().unwrap().file_cache = self.file_cache.clone();
                 pane.annotate_enabled = self.options.policy.blame;
                 pane.diff_view = diff_view_mode(self.options.layout, preferred);
+                pane.diff_engine_override = self
+                    .options
+                    .engine_override
+                    .map(crate::view::panes::diff::helpers::state::DiffEngineOverride::new);
                 pane.hosted_content_width = Some(
                     self.options
                         .content_width
@@ -264,6 +291,20 @@ impl DiffPaneView {
                 pane
             });
             self.renderer_subscription = Some(cx.observe(&renderer, |this, renderer, cx| {
+                this.options.engine_override = renderer.read(cx).diff_engine_override();
+                let cache = renderer
+                    .read(cx)
+                    .hosted_decor
+                    .as_ref()
+                    .and_then(|decor| decor.file_cache.clone());
+                if cache.as_ref().is_some_and(|cache| {
+                    this.file_cache
+                        .as_ref()
+                        .is_none_or(|shown| !Arc::ptr_eq(shown, cache))
+                }) {
+                    this.revision = this.revision.wrapping_add(1);
+                    this.set_file_cache(cache, cx);
+                }
                 let selection = renderer.read(cx).hosted_selection();
                 if this.selection != selection {
                     this.selection = selection;
@@ -279,6 +320,16 @@ impl DiffPaneView {
                 this.notify_loaded(cx);
                 cx.notify();
             }));
+            if let DiffPreferences::Window(model) = &self.environment.preferences
+                && let Some(model) = model.upgrade()
+            {
+                self.preferences_subscription = Some(cx.observe(&model, |this, model, cx| {
+                    let engine = model.read(cx).preferences.diff.engine;
+                    if let Some(renderer) = &this.renderer {
+                        renderer.update(cx, |pane, cx| pane.set_diff_engine_default(engine, cx));
+                    }
+                }));
+            }
             self.renderer = Some(renderer);
             self.set_search(self.search.clone(), cx);
             self.notify_loaded(cx);
@@ -339,11 +390,14 @@ impl DiffPaneView {
     fn reset(&mut self) {
         self.engaged = next_engaged();
         self.revision = self.revision.wrapping_add(1);
-        self.file_cache = None;
+        if let Some(cache) = self.file_cache.take() {
+            cache.cancel();
+        }
         self.raw = [None, None];
         self.raw_task = None;
         self.loading = true;
         self.error = None;
+        self.patch_error = None;
         self.selection = None;
         self.pending_reveal = None;
     }
@@ -358,6 +412,9 @@ impl DiffPaneView {
             (None, None) => false,
             _ => true,
         };
+        if changed && let Some(previous) = &self.file_cache {
+            previous.cancel();
+        }
         self.file_cache = cache;
         if let Some(renderer) = &self.renderer {
             renderer.update(cx, |pane, _| {
@@ -402,7 +459,7 @@ impl DiffPaneView {
         self.snapshot_rev = self.snapshot_rev.wrapping_add(1);
         self.reset();
         let cache = snapshot.patch.is_none().then(|| {
-            Arc::new(SharedFileDiffCache::new(
+            Arc::new(SharedFileDiffCache::with_engine(
                 Arc::new(gitcomet_core::domain::FileDiffText::new_shared(
                     snapshot.path.clone(),
                     Some(snapshot.old),
@@ -410,6 +467,8 @@ impl DiffPaneView {
                 )),
                 None,
                 std::path::PathBuf::new(),
+                self.effective_engine(cx),
+                self.whitespace_mode(cx),
             ))
         });
         self.set_file_cache(cache, cx);
@@ -459,10 +518,24 @@ impl DiffPaneView {
         let cache = file.zip(workdir).map(|(file, workdir)| {
             self.file_cache
                 .as_ref()
-                .filter(|cache| cache.matches(&file, patch.as_ref(), &workdir))
+                .filter(|cache| {
+                    cache.matches_engine(
+                        &file,
+                        patch.as_ref(),
+                        &workdir,
+                        self.effective_engine(cx),
+                        self.whitespace_mode(cx),
+                    )
+                })
                 .cloned()
                 .unwrap_or_else(|| {
-                    Arc::new(SharedFileDiffCache::new(file, patch.as_ref(), workdir))
+                    Arc::new(SharedFileDiffCache::with_engine(
+                        file,
+                        patch.as_ref(),
+                        workdir,
+                        self.effective_engine(cx),
+                        self.whitespace_mode(cx),
+                    ))
                 })
         });
         self.set_file_cache(cache, cx);
@@ -478,6 +551,12 @@ impl DiffPaneView {
             self.emit(DiffPaneEvent::Error(error.clone()), cx);
         }
         self.error = error;
+        self.patch_error = match (&session.diff, &session.diff_file) {
+            (Loadable::Error(error), file) if !matches!(file, Loadable::Error(_)) => {
+                Some(SharedString::from(error.clone()))
+            }
+            _ => None,
+        };
         self.loading = session.is_loading();
         if session.diff_target.is_none() {
             self.emit(DiffPaneEvent::TargetChanged(None), cx);
@@ -743,6 +822,10 @@ impl DiffPaneView {
             .and_then(|renderer| renderer.read(cx).hosted_decor.as_ref())
             .map_or(0, |decor| decor.marker_builds)
     }
+    #[cfg(test)]
+    pub(crate) fn rendered_statuses(&self) -> &[Option<SharedString>] {
+        &self.rendered_statuses
+    }
 }
 
 impl Render for DiffPaneView {
@@ -751,21 +834,14 @@ impl Render for DiffPaneView {
         let theme = self.host.theme(cx);
         let ui_scale = ui_scale::UiScale::current(cx);
         let pane_id = self.view_id.0;
-        let status = if let Some(error) = &self.error {
-            Some(error.clone())
-        } else if self
-            .renderer
-            .as_ref()
-            .is_none_or(|renderer| renderer.read(cx).diff_visible_len() == 0)
-        {
-            Some(if self.loading {
-                "Loading…".into()
-            } else {
-                "No changes".into()
-            })
-        } else {
-            None
-        };
+        // The renderer shows its own loading, empty and file error states.
+        let status = self.patch_error.clone().filter(|_| {
+            self.renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.read(cx).diff_surface().body != DiffBody::Patch)
+        });
+        #[cfg(test)]
+        self.rendered_statuses.push(status.clone());
         let legend = (!self.legend.is_empty()).then(|| {
             div()
                 .id(("hosted_diff_legend", pane_id))
@@ -904,6 +980,9 @@ impl Render for DiffPaneView {
 
 impl Drop for DiffPaneView {
     fn drop(&mut self) {
+        if let Some(cache) = &self.file_cache {
+            cache.cancel();
+        }
         if let PaneSource::Session {
             store, repository, ..
         } = &self.source
@@ -1066,6 +1145,15 @@ impl DiffPaneImpl for HostedDiffPane {
                 renderer.update(cx, |pane, cx| {
                     pane.set_diff_view_mode(diff_view_mode(layout, preferred), cx)
                 });
+            }
+            cx.notify();
+        });
+    }
+    fn set_engine_override(&self, engine: Option<DiffEngine>, cx: &mut App) {
+        self.entity.update(cx, |pane, cx| {
+            pane.options.engine_override = engine;
+            if let Some(renderer) = &pane.renderer {
+                renderer.update(cx, |pane, cx| pane.set_diff_engine_override(engine, cx));
             }
             cx.notify();
         });

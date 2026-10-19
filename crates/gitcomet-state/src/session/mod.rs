@@ -59,6 +59,7 @@ pub struct UiSession {
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
+    pub diff_engine: Option<String>,
     pub diff_view_mode: Option<String>,
     pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
@@ -225,6 +226,8 @@ pub(crate) struct UiSessionFile {
     diff_content_mode: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     diff_whitespace_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    diff_engine: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     diff_view_mode: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
@@ -511,6 +514,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_scroll_sync: file.diff_scroll_sync,
         diff_content_mode: file.diff_content_mode,
         diff_whitespace_mode: file.diff_whitespace_mode,
+        diff_engine: file.diff_engine,
         diff_view_mode: file.diff_view_mode,
         annotate_enabled: file.annotate_enabled,
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,

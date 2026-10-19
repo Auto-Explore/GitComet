@@ -112,11 +112,15 @@ jobs:
           cold-cache: ${{ inputs.cold-cache }}
           nextest: "false"
       - name: Clippy (libraries)
-        run: cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
+        run: cargo clippy --locked -p gitcomet-core -p gitcomet-diagrams -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -p difftastic -- -D warnings
       - name: Clippy (headless app)
         run: cargo clippy --locked -p gitcomet -p gitcomet-app --no-default-features --features gix -- -D warnings
       - name: Check crate dependency boundaries
         run: python3 scripts/ci/boundaries.py
+      - name: Check each grammar symbol has one definition
+        run: python3 scripts/ci/grammar_symbols.py
+      - name: Check the open-source licence list matches Cargo.lock
+        run: bash scripts/generate-open-source-licenses.sh --check
       - uses: ./.github/actions/ci-finish
         if: always()
         with:

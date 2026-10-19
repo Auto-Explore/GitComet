@@ -6,6 +6,7 @@
 use gitcomet_text::SyntaxTokenKind;
 use gitcomet_text::cache::{FxLruCache, new_fx_lru_cache};
 use gpui_shared_string::SharedString;
+use query_catch::catch_treesitter_query_panic;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -45,7 +46,7 @@ const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.sc
 const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
 const ASM_HIGHLIGHTS_QUERY: &str = include_str!("queries/asm_highlights.scm");
-const CMAKE_SUPPLEMENT_QUERY: &str = include_str!("queries/cmake_supplement.scm");
+const CMAKE_HIGHLIGHTS_QUERY: &str = include_str!("queries/cmake_highlights.scm");
 const CADDYFILE_HIGHLIGHTS_QUERY: &str = include_str!("queries/caddyfile_highlights.scm");
 const CSV_HIGHLIGHTS_QUERY: &str = include_str!("queries/csv_highlights.scm");
 const KDL_HIGHLIGHTS_QUERY: &str = include_str!("queries/kdl_highlights.scm");
@@ -55,6 +56,21 @@ const EBNF_HIGHLIGHTS_QUERY: &str = include_str!("queries/ebnf_highlights.scm");
 const DHALL_HIGHLIGHTS_QUERY: &str = include_str!("queries/dhall_highlights.scm");
 const COFFEE_HIGHLIGHTS_QUERY: &str = include_str!("queries/coffee_highlights.scm");
 const CIL_HIGHLIGHTS_QUERY: &str = include_str!("queries/cil_highlights.scm");
+const SMALI_HIGHLIGHTS_QUERY: &str = include_str!("queries/smali_highlights.scm");
+const ELM_HIGHLIGHTS_QUERY: &str = include_str!("queries/elm_highlights.scm");
+const DEVICETREE_HIGHLIGHTS_QUERY: &str = include_str!("queries/devicetree_highlights.scm");
+const FISH_HIGHLIGHTS_QUERY: &str = include_str!("queries/fish_highlights.scm");
+const NEWICK_HIGHLIGHTS_QUERY: &str = include_str!("queries/newick_highlights.scm");
+const LATEX_HIGHLIGHTS_QUERY: &str = include_str!("queries/latex_highlights.scm");
+const APEX_HIGHLIGHTS_QUERY: &str = include_str!("queries/apex_highlights.scm");
+const QML_SUPPLEMENT_QUERY: &str = include_str!("queries/qml_supplement.scm");
+const VHDL_HIGHLIGHTS_QUERY: &str = include_str!("queries/vhdl_highlights.scm");
+const ADA_HIGHLIGHTS_QUERY: &str = include_str!("queries/ada_highlights.scm");
+const COMMONLISP_HIGHLIGHTS_QUERY: &str = include_str!("queries/commonlisp_highlights.scm");
+const RACKET_HIGHLIGHTS_QUERY: &str = include_str!("queries/racket_highlights.scm");
+const SCHEME_HIGHLIGHTS_QUERY: &str = include_str!("queries/scheme_highlights.scm");
+const ELISP_HIGHLIGHTS_QUERY: &str = include_str!("queries/elisp_highlights.scm");
+const JANET_HIGHLIGHTS_QUERY: &str = include_str!("queries/janet_highlights.scm");
 const CRONTAB_HIGHLIGHTS_QUERY: &str = include_str!("queries/crontab_highlights.scm");
 const CRONTAB_INJECTIONS_QUERY: &str = include_str!("queries/crontab_injections.scm");
 const GITIGNORE_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitignore_highlights.scm");
@@ -72,6 +88,7 @@ const HCL_INJECTIONS_QUERY: &str = include_str!("queries/hcl_injections.scm");
 const JAVA_SUPPLEMENT_QUERY: &str = include_str!("queries/java_supplement.scm");
 const MAKEFILE_INJECTIONS_QUERY: &str = include_str!("queries/makefile_injections.scm");
 const MAKEFILE_SUPPLEMENT_QUERY: &str = include_str!("queries/makefile_supplement.scm");
+const OBJC_HIGHLIGHTS_QUERY: &str = include_str!("queries/objc_highlights.scm");
 const OBJC_SUPPLEMENT_QUERY: &str = include_str!("queries/objc_supplement.scm");
 const PASCAL_HIGHLIGHTS_QUERY: &str = include_str!("queries/pascal_highlights.scm");
 const PROTO_HIGHLIGHTS_QUERY: &str = include_str!("queries/proto_highlights.scm");
@@ -118,7 +135,8 @@ const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
 const CLOJURE_HIGHLIGHTS_QUERY: &str = include_str!("queries/clojure_highlights.scm");
 const JULIA_HIGHLIGHTS_QUERY: &str = include_str!("queries/julia_highlights.scm");
 const OCAML_HIGHLIGHTS_QUERY: &str = tree_sitter_ocaml::HIGHLIGHTS_QUERY;
-const SOLIDITY_HIGHLIGHTS_QUERY: &str = include_str!("queries/solidity_highlights.scm");
+const SOLIDITY_HIGHLIGHTS_QUERY: &str = tree_sitter_solidity::HIGHLIGHT_QUERY;
+const SOLIDITY_SUPPLEMENT_QUERY: &str = include_str!("queries/solidity_supplement.scm");
 const SVELTE_HIGHLIGHTS_QUERY: &str = include_str!("queries/svelte_highlights.scm");
 const SVELTE_INJECTIONS_QUERY: &str = include_str!("queries/svelte_injections.scm");
 
@@ -230,22 +248,6 @@ thread_local! {
 
 fn invalidate_ts_parser_language_fast_path() {
     TS_PARSER_REQUIRES_LANGUAGE_RESET.with(|needs_reset| needs_reset.set(true));
-}
-
-fn catch_treesitter_query_panic<R>(f: impl FnOnce() -> R) -> Option<R> {
-    // Upstream tree-sitter can panic during query predicate evaluation when a
-    // recovered node reports a byte range that extends past the provided text.
-    // Treat those as syntax-miss fallbacks instead of crashing the UI.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Ok(result) => Some(result),
-        Err(_) => {
-            TS_CURSOR.with(|cursor| {
-                *cursor.borrow_mut() = tree_sitter::QueryCursor::new();
-            });
-            invalidate_ts_parser_language_fast_path();
-            None
-        }
-    }
 }
 
 fn ascii_lowercase_for_match(s: &str) -> Cow<'_, str> {
@@ -418,6 +420,38 @@ pub enum DiffSyntaxLanguage {
     Pascal,
     /// CIL / MSIL (`.il`). The grammar is written in-tree: there is none anywhere.
     Cil,
+    /// `.smali` -- Dalvik bytecode assembly, as baksmali writes it.
+    Smali,
+    /// `.elm`.
+    Elm,
+    /// Devicetree source (`.dts`, `.dtsi`, `.dtso`) and U-Boot FIT image source
+    /// (`.its`), which shares its syntax.
+    DeviceTree,
+    /// `.fish` -- the fish shell.
+    Fish,
+    /// Newick / New Hampshire X phylogenetic trees (`.nwk`, `.nh`, `.nhx`).
+    Newick,
+    /// `.tex`, `.sty`, `.aux`. Not `.cls`, which is Apex's.
+    Latex,
+    /// Salesforce Apex (`.cls`, `.trigger`, `.apex`), with SOQL and SOSL inside
+    /// `[...]`.
+    Apex,
+    /// `.qml` -- Qt's QML, a TypeScript grammar with object declarations.
+    Qml,
+    /// `.vhd`, `.vhdl`.
+    Vhdl,
+    /// `.adb`, `.ads`, `.ada`.
+    Ada,
+    /// `.lisp`, `.lsp`, `.asd`. Not `.cl`, which is OpenCL.
+    CommonLisp,
+    /// `.rkt`.
+    Racket,
+    /// `.scm`, `.sch`, `.ss` -- which makes tree-sitter query files Scheme too.
+    Scheme,
+    /// `.el`, `.emacs`, `Cask`.
+    EmacsLisp,
+    /// `.janet`, `.jdn`.
+    Janet,
     Rust,
     Python,
     JavaScript,
@@ -632,6 +666,7 @@ mod live;
 mod occurrences;
 mod pairs;
 mod prepared;
+mod query_catch;
 
 pub use heuristic::*;
 pub use language::*;

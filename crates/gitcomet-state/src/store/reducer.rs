@@ -281,6 +281,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::GlobalNavBack { .. }
             | Msg::GlobalNavForward { .. }
             | Msg::StageHunk { .. }
+            | Msg::ApplyPreparedDiffPatch { .. }
             | Msg::UnstageHunk { .. }
             | Msg::ApplyWorktreePatch { .. }
             | Msg::CheckoutBranch { .. }
@@ -1243,6 +1244,49 @@ fn reduce_inner(
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
             diff_selection::stage_hunk(repo_id, patch)
+        }
+        Msg::ApplyPreparedDiffPatch {
+            repo_id,
+            lifetime,
+            view,
+            file_rev,
+            generation,
+            prepared,
+        } => {
+            let valid = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| {
+                    repo.local_actions_in_flight == 0
+                        && repo.matches_diff_origin(
+                            lifetime,
+                            view,
+                            file_rev,
+                            generation,
+                            prepared.target(),
+                        )
+                });
+            if !valid {
+                util::push_notification(
+                    inputs,
+                    state,
+                    crate::model::AppNotificationKind::Error,
+                    gitcomet_core::patch_action::PatchActionError::Stale.to_string(),
+                );
+                return Vec::new();
+            }
+            begin_local_action(state, repo_id);
+            vec![Effect::RepoCommand(
+                crate::msg::RepoCommandEffect::ApplyPreparedDiffPatch {
+                    repo_id,
+                    lifetime,
+                    view,
+                    file_rev,
+                    generation,
+                    prepared,
+                },
+            )]
         }
         Msg::UnstageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);

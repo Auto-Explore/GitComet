@@ -119,7 +119,7 @@ impl DiffRenderer {
         self.diff_surface().wants_file_diff
     }
 
-    pub(super) fn rendered_patch_diff_cache_is_current(&self) -> bool {
+    pub(in crate::view) fn rendered_patch_diff_cache_is_current(&self) -> bool {
         self.diff_source_id().is_some_and(|repo_id| {
             self.diff_cache_repo_id == Some(repo_id)
                 && self.diff_cache_rev == self.rendered_patch_diff_rev()
@@ -138,6 +138,7 @@ impl DiffRenderer {
             && self.file_diff_cache_rev == diff_file_rev
             && self.file_diff_cache_target == Some(diff_target)
             && self.file_diff_cache_whitespace_mode == self.diff_whitespace_mode
+            && self.file_diff_cache_engine == self.effective_diff_engine()
             && self.file_diff_cache_path.as_ref() == Some(&abs_path)
     }
 
@@ -226,9 +227,7 @@ impl DiffRenderer {
         next: DiffWhitespaceMode,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.diff_whitespace_mode != next {
-            self.set_diff_whitespace_mode(next, cx);
-        }
+        self.choose_diff_whitespace_mode(next, cx);
         self.commands.send(
             DiffCommand::Preference(DiffPreference::Whitespace(next)),
             cx,

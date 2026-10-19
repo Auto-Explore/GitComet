@@ -1,4 +1,5 @@
 pub(super) use super::*;
+use gitcomet_base::panic::test_support::uncontained_panics;
 
 #[test]
 fn prepared_syntax_pair_is_none_outside_the_document() {
@@ -674,6 +675,7 @@ fn document_collector_reports_host_query_failure_after_collecting_injections() {
         ts_language: ts_language.clone(),
         query,
         capture_kinds,
+        discarded_capture: None,
         injection_query: Some(injection_query),
         injection_combined_patterns: vec![false],
         has_combined_injections: false,
@@ -756,7 +758,7 @@ fn parser_fast_path_reconfigures_after_recovered_query_panic() {
     assert!(!baseline.is_empty());
     assert_eq!(ts_parser_set_language_call_count(), 1);
 
-    let recovered: Option<()> = catch_treesitter_query_panic(|| panic!("simulate query panic"));
+    let recovered: Option<()> = catch_treesitter_query_panic(|_| panic!("simulate query panic"));
     assert!(recovered.is_none());
 
     let reparsed =
@@ -1146,4 +1148,35 @@ fn single_line_syntax_cache_isolated_by_language_for_same_markup_text() {
 
     let html_again = syntax_tokens_for_line(text, DiffSyntaxLanguage::Html, DiffSyntaxMode::Auto);
     assert_eq!(html_again, html);
+}
+
+struct PanickingQuery;
+
+impl tree_sitter::StreamingIterator for PanickingQuery {
+    type Item = ();
+
+    fn advance(&mut self) {
+        panic!("query predicate past the text");
+    }
+
+    fn get(&self) -> Option<&()> {
+        None
+    }
+}
+
+#[test]
+fn an_upstream_query_panic_is_recovered_without_a_crash_report() {
+    let (recovered, uncontained) = uncontained_panics(|| {
+        catch_treesitter_query_panic(|catch| catch.advance(&mut PanickingQuery))
+    });
+    assert_eq!(recovered, None);
+    assert_eq!(uncontained, 0);
+}
+
+#[test]
+fn a_panic_in_the_query_loop_keeps_its_crash_report() {
+    let (recovered, uncontained) =
+        uncontained_panics(|| catch_treesitter_query_panic(|_| panic!("loop bug")));
+    assert_eq!(recovered, None::<()>);
+    assert_eq!(uncontained, 1);
 }
