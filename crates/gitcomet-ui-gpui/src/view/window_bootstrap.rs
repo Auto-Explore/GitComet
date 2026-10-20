@@ -1,5 +1,58 @@
 //! Prepare repository work before native window/renderer initialization.
 use super::*;
+use gitcomet_core::process::GitRuntimeState;
+use std::sync::{Mutex, Weak};
+
+enum GitBootstrapState {
+    Waiting(DeferredRepoBootstrap),
+    Dispatched(GitRuntimeState),
+    Attached,
+}
+
+/// The worker can consume a restore only until the native window attaches.
+/// Queueing both messages under this lock makes that ownership transfer exact,
+/// even if the store has not reduced either message when the view is created.
+struct GitBootstrapHandoff {
+    store: AppStore,
+    expected_runtime: GitRuntimeState,
+    state: Mutex<GitBootstrapState>,
+}
+
+impl GitBootstrapHandoff {
+    fn complete(&self, runtime: GitRuntimeState, current_runtime: &GitRuntimeState) {
+        let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        if !matches!(*state, GitBootstrapState::Waiting(_))
+            || !runtime.is_available()
+            || runtime != *current_runtime
+            || runtime.preference != self.expected_runtime.preference
+            || self.store.snapshot().git_runtime != self.expected_runtime
+        {
+            return;
+        }
+        let GitBootstrapState::Waiting(bootstrap) =
+            std::mem::replace(&mut *state, GitBootstrapState::Dispatched(runtime.clone()))
+        else {
+            unreachable!();
+        };
+        self.store.dispatch(Msg::SetGitRuntimeState(runtime));
+        match bootstrap {
+            DeferredRepoBootstrap::RestoreSession {
+                open_repos,
+                active_repo,
+            } => self.store.dispatch(Msg::RestoreSession {
+                open_repos,
+                active_repo,
+            }),
+            DeferredRepoBootstrap::OpenRepos(paths) => {
+                for path in paths {
+                    self.store.dispatch(Msg::OpenRepo(path));
+                }
+            }
+        }
+        drop(state);
+        gitcomet_core::startup_trace::mark("repository_bootstrap_dispatched_after_git_probe");
+    }
+}
 
 /// Owns the bootstrap decision until the view attaches. An empty store snapshot
 /// does not mean a second restore is needed: the first may still be queued.
@@ -18,11 +71,55 @@ pub(crate) struct PreparedWindowBootstrap {
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
     pub(super) pending_repo_open_reservations: FxHashMap<std::path::PathBuf, PendingRepoOpen>,
     pub(super) pending_repo_open_active: Option<std::path::PathBuf>,
+    git_probe_handoff: Option<Arc<GitBootstrapHandoff>>,
 }
 
 impl PreparedWindowBootstrap {
     pub(crate) fn new(store: &AppStore, config: GitCometViewConfig, cx: &mut App) -> Self {
-        Self::from_session(store, config, session::load(), cx)
+        let mut bootstrap = Self::from_session(store, config, session::load(), cx);
+        if !cfg!(test)
+            && let Some(handoff) = bootstrap.begin_git_probe_handoff(store)
+        {
+            cx.background_executor()
+                .spawn(async move {
+                    // Wait only for discovery already started by the browser.
+                    // Missing Git and abandoned probes keep the usual UI recovery.
+                    let runtime =
+                        gitcomet_core::process::wait_for_git_runtime_probe(Duration::from_secs(10));
+                    if let Some(runtime) = runtime
+                        && let Some(handoff) = handoff.upgrade()
+                    {
+                        handoff.complete(runtime, &gitcomet_core::process::current_git_runtime());
+                    }
+                })
+                .detach();
+        }
+        bootstrap
+    }
+
+    fn begin_git_probe_handoff(&mut self, store: &AppStore) -> Option<Weak<GitBootstrapHandoff>> {
+        let bootstrap = self.deferred_repo_bootstrap.take()?;
+        let handoff = Arc::new(GitBootstrapHandoff {
+            store: store.clone(),
+            expected_runtime: store.snapshot().git_runtime.clone(),
+            state: Mutex::new(GitBootstrapState::Waiting(bootstrap)),
+        });
+        let worker = Arc::downgrade(&handoff);
+        self.git_probe_handoff = Some(handoff);
+        Some(worker)
+    }
+
+    pub(super) fn attach_git_probe_handoff(&mut self) -> Option<GitRuntimeState> {
+        let handoff = self.git_probe_handoff.take()?;
+        let mut state = handoff.state.lock().unwrap_or_else(|err| err.into_inner());
+        match std::mem::replace(&mut *state, GitBootstrapState::Attached) {
+            GitBootstrapState::Waiting(bootstrap) => {
+                self.deferred_repo_bootstrap = Some(bootstrap);
+                None
+            }
+            GitBootstrapState::Dispatched(runtime) => Some(runtime),
+            GitBootstrapState::Attached => None,
+        }
     }
 
     fn from_session(
@@ -240,6 +337,7 @@ impl PreparedWindowBootstrap {
             deferred_repo_bootstrap,
             pending_repo_open_reservations,
             pending_repo_open_active,
+            git_probe_handoff: None,
         }
     }
 }
@@ -350,6 +448,329 @@ mod tests {
     }
 
     #[gpui::test]
+    fn git_probe_handoff_loads_before_attachment_and_dispatches_only_once(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events, opens) = store(false, false);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let mut bootstrap = prepare(
+            &store,
+            restored_config(vec![path.clone()]),
+            session::UiSession::default(),
+            cx,
+        );
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let runtime = AppState::test_default().git_runtime;
+        // Run completion on a worker without advancing the UI executor. This is
+        // the interval in which the real main thread is initializing DX12.
+        std::thread::scope(|scope| {
+            scope.spawn(|| handoff.complete(runtime.clone(), &runtime));
+        });
+        wait_for_state(&store, |state| {
+            state.repos.first().is_some_and(|repo| {
+                repo.spec.workdir == path && matches!(repo.open, Loadable::Ready(()))
+            })
+        });
+        let repo_id = store.snapshot().active_repo;
+        handoff.complete(runtime.clone(), &runtime);
+        let store_for_assert = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_bootstrap(store, events, bootstrap, window, cx)
+        });
+        cx.update(|_, app| {
+            let view = view.read(app);
+            assert_eq!(view.state.active_repo, repo_id);
+            assert!(view.deferred_repo_bootstrap.is_none());
+            assert!(view.startup_repo_runtime_adoption.is_none());
+        });
+        handoff.complete(runtime.clone(), &runtime);
+        shutdown(&store_for_assert);
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+    }
+
+    #[gpui::test]
+    fn git_probe_handoff_attachment_wins_and_late_completion_leaves_recovery_to_view(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events, opens) = store(false, true);
+        let path = PathBuf::from("/repos/late-bootstrap-probe");
+        let mut bootstrap = prepare(
+            &store,
+            restored_config(vec![path.clone()]),
+            session::UiSession::default(),
+            cx,
+        );
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let store_for_assert = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_bootstrap(store, events, bootstrap, window, cx)
+        });
+        let runtime = AppState::test_default().git_runtime;
+        handoff.complete(runtime.clone(), &runtime);
+        store_for_assert
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert!(!store_for_assert.snapshot().git_runtime.is_available());
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+        store_for_assert.dispatch(Msg::SetGitRuntimeState(runtime));
+        store_for_assert
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.apply_state_snapshot(store_for_assert.snapshot(), cx);
+                assert!(view.deferred_repo_bootstrap.is_none());
+            });
+        });
+        wait_for_state(&store_for_assert, |state| {
+            state.repo_open_failure_revision != 0
+        });
+        shutdown(&store_for_assert);
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+    }
+
+    #[gpui::test]
+    fn git_probe_handoff_rejects_missing_or_stale_results_and_keeps_restore(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, _events, opens) = store(false, false);
+        let path = PathBuf::from("/repos/bootstrap-stale-git");
+        let mut bootstrap = prepare(
+            &store,
+            restored_config(vec![path]),
+            session::UiSession::default(),
+            cx,
+        );
+        let deferred = bootstrap.deferred_repo_bootstrap.clone();
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let runtime = AppState::test_default().git_runtime;
+        let mut missing = runtime.clone();
+        missing.availability = GitExecutableAvailability::Unavailable {
+            detail: "Git is unavailable".into(),
+        };
+        handoff.complete(missing.clone(), &missing);
+        handoff.complete(runtime.clone(), &missing);
+        let mut another = runtime.clone();
+        another.preference = GitExecutablePreference::Custom(PathBuf::from("/other/git"));
+        handoff.complete(another.clone(), &another);
+        // An already-reported store change must not be overwritten either.
+        store.dispatch(Msg::SetGitRuntimeState(another.clone()));
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        handoff.complete(runtime.clone(), &runtime);
+        assert!(bootstrap.attach_git_probe_handoff().is_none());
+        assert_eq!(bootstrap.deferred_repo_bootstrap, deferred);
+        assert_eq!(store.snapshot().git_runtime, another);
+        shutdown(&store);
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+    }
+
+    #[gpui::test]
+    fn dropping_prepared_window_releases_git_probe_handoff(cx: &mut gpui::TestAppContext) {
+        let opens = Arc::new(AtomicUsize::new(0));
+        let backend = Arc::new(RecordingBackend {
+            opens: opens.clone(),
+            fail: false,
+        });
+        let backend_lifetime = Arc::downgrade(&backend);
+        let (store, _events) = AppStore::new_test(backend);
+        store.disable_repo_monitors_for_test();
+        let mut state = (*store.snapshot()).clone();
+        state.git_runtime.availability = GitExecutableAvailability::Checking;
+        store.replace_snapshot_for_test(Arc::new(state));
+        let mut bootstrap = prepare(
+            &store,
+            restored_config(vec![PathBuf::from("/repos/abandoned-bootstrap")]),
+            session::UiSession::default(),
+            cx,
+        );
+        let worker = bootstrap.begin_git_probe_handoff(&store).unwrap();
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .expect("store initialization and bootstrap settings are reduced");
+        drop(store);
+        assert!(worker.upgrade().is_some());
+        drop(bootstrap);
+        assert!(worker.upgrade().is_none());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while backend_lifetime.upgrade().is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "an abandoned handoff must release the store and its workers"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+    }
+
+    #[gpui::test]
+    fn independent_windows_adopt_one_probe_for_session_and_focused_open(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (session_store, _session_events, session_opens) = store(false, false);
+        let (focused_store, _focused_events, focused_opens) = store(false, false);
+        let session_directory = tempfile::tempdir().unwrap();
+        let focused_directory = tempfile::tempdir().unwrap();
+        let mut session_bootstrap = prepare(
+            &session_store,
+            restored_config(vec![session_directory.path().to_path_buf()]),
+            session::UiSession::default(),
+            cx,
+        );
+        let mut focused_bootstrap = prepare(
+            &focused_store,
+            GitCometViewConfig {
+                initial_path: Some(focused_directory.path().to_path_buf()),
+                view_mode: GitCometViewMode::FocusedMergetool,
+                ..Default::default()
+            },
+            session::UiSession {
+                open_repos: vec![session_directory.path().to_path_buf()],
+                ..Default::default()
+            },
+            cx,
+        );
+        let session_handoff = session_bootstrap
+            .begin_git_probe_handoff(&session_store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let focused_handoff = focused_bootstrap
+            .begin_git_probe_handoff(&focused_store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let runtime = AppState::test_default().git_runtime;
+        std::thread::scope(|scope| {
+            scope.spawn(|| session_handoff.complete(runtime.clone(), &runtime));
+            scope.spawn(|| focused_handoff.complete(runtime.clone(), &runtime));
+        });
+        for store in [&session_store, &focused_store] {
+            wait_for_state(store, |state| {
+                state
+                    .repos
+                    .first()
+                    .is_some_and(|repo| matches!(repo.open, Loadable::Ready(())))
+            });
+        }
+        assert_eq!(
+            session_bootstrap.attach_git_probe_handoff(),
+            Some(runtime.clone())
+        );
+        assert_eq!(focused_bootstrap.attach_git_probe_handoff(), Some(runtime));
+        assert_eq!(session_store.snapshot().repos.len(), 1);
+        assert_eq!(focused_store.snapshot().repos.len(), 1);
+        assert_eq!(
+            focused_store.snapshot().repos[0].spec.workdir,
+            focused_directory.path(),
+            "a focused tool must not restore the browser's session tabs"
+        );
+        shutdown(&session_store);
+        shutdown(&focused_store);
+        assert_eq!(session_opens.load(Ordering::SeqCst), 1);
+        assert_eq!(focused_opens.load(Ordering::SeqCst), 1);
+    }
+
+    #[gpui::test]
+    fn coalesced_bootstrap_runtime_does_not_reload_but_later_git_recovery_does(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events, _) = store(false, false);
+        let directory = tempfile::tempdir().unwrap();
+        let mut bootstrap = prepare(
+            &store,
+            restored_config(vec![directory.path().to_path_buf()]),
+            session::UiSession::default(),
+            cx,
+        );
+        let initial = store.snapshot();
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let runtime = AppState::test_default().git_runtime;
+        handoff.complete(runtime.clone(), &runtime);
+        wait_for_state(&store, |state| {
+            state.repos.first().is_some_and(|repo| {
+                matches!(repo.open, Loadable::Ready(())) && !repo.loads_in_flight.any_in_flight()
+            })
+        });
+        let mut loaded = (*store.snapshot()).clone();
+        let marker = gitcomet_state::model::ComparisonMark {
+            commit_id: CommitId("bootstrap-retained-mark".into()),
+            label: "retained mark".into(),
+        };
+        loaded.repos[0].navigation.comparison_mark = Some(marker.clone());
+        // Reproduce attachment before the queued adoption is published, followed
+        // by a coalesced snapshot containing the already-loaded repository.
+        store.replace_snapshot_for_test(initial);
+        let store_for_assert = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_bootstrap(store, events, bootstrap, window, cx)
+        });
+        store_for_assert.replace_snapshot_for_test(Arc::new(loaded.clone()));
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                assert_eq!(view.startup_repo_runtime_adoption.as_ref(), Some(&runtime));
+                view.apply_state_snapshot(store_for_assert.snapshot(), cx);
+                assert!(view.startup_repo_runtime_adoption.is_none());
+            });
+        });
+        store_for_assert
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert_eq!(
+            store_for_assert.snapshot().repos[0]
+                .navigation
+                .comparison_mark,
+            Some(marker),
+            "a duplicate ReloadRepo would clear the retained comparison"
+        );
+        let mut missing = loaded.clone();
+        missing.git_runtime.availability = GitExecutableAvailability::Unavailable {
+            detail: "Git temporarily missing".into(),
+        };
+        cx.update(|_, app| {
+            view.update(app, |view, cx| {
+                view.apply_state_snapshot(Arc::new(missing), cx);
+                view.apply_state_snapshot(Arc::new(loaded), cx);
+            });
+        });
+        store_for_assert
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert!(
+            store_for_assert.snapshot().repos[0]
+                .navigation
+                .comparison_mark
+                .is_none(),
+            "later runtime recovery must still reload the repository"
+        );
+        shutdown(&store_for_assert);
+    }
+
+    #[gpui::test]
     fn restored_repository_loads_before_window_and_attaches_without_reopening(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -416,13 +837,21 @@ mod tests {
     fn failed_prepared_open_is_not_retried_when_empty_store_attaches(
         cx: &mut gpui::TestAppContext,
     ) {
-        let (store, events, opens) = store(true, true);
-        let bootstrap = prepare(
+        let (store, events, opens) = store(false, true);
+        let mut bootstrap = prepare(
             &store,
             restored_config(vec![PathBuf::from("/repos/bootstrap-failure")]),
             session::UiSession::default(),
             cx,
         );
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let runtime = AppState::test_default().git_runtime;
+        handoff.complete(runtime.clone(), &runtime);
+        drop(handoff);
         wait_for_state(&store, |state| state.repo_open_failure_revision != 0);
         assert!(store.snapshot().repos.is_empty());
         let store_for_assert = store.clone();
@@ -507,14 +936,21 @@ mod tests {
         let denied_path = denied.path().to_path_buf();
         let allowed_directory = tempfile::tempdir().unwrap();
         let allowed = allowed_directory.path().to_path_buf();
-        let (store, _events, opens) = store(true, false);
+        let (store, _events, opens) = store(false, false);
         let mut config = restored_config(vec![denied_path.clone(), allowed.clone()]);
         config.initial_path = Some(denied_path);
-        let bootstrap = prepare(&store, config, session::UiSession::default(), cx);
+        let mut bootstrap = prepare(&store, config, session::UiSession::default(), cx);
         assert_eq!(bootstrap.entry_denials.len(), 2);
         assert!(bootstrap.config.initial_path.is_none());
         assert_eq!(bootstrap.ui_session.open_repos, vec![allowed.clone()]);
         assert!(bootstrap.ui_session.active_repo.is_none());
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let runtime = AppState::test_default().git_runtime;
+        handoff.complete(runtime.clone(), &runtime);
         wait_for_state(&store, |state| {
             state.repos.iter().any(|repo| {
                 repo.spec.workdir == allowed && matches!(repo.open, Loadable::Ready(()))
@@ -635,11 +1071,18 @@ mod tests {
             );
         });
         flush_feedback_acknowledgments(&store_for_assert);
+        let remaining_diagnostics = store_for_assert.snapshot().repos[0]
+            .feedback
+            .diagnostics
+            .clone();
+        // This synthetic preloaded repository has no actor handle, so later
+        // view requests can add unrelated diagnostics. Acknowledging the entry
+        // shown above must release that entry without assuming the queue is idle.
         assert!(
-            store_for_assert.snapshot().repos[0]
-                .feedback
-                .diagnostics
-                .is_empty()
+            !remaining_diagnostics
+                .iter()
+                .any(|entry| entry.message == "preloaded diagnostic"),
+            "preloaded diagnostic was not acknowledged: {remaining_diagnostics:?}"
         );
         shutdown(&store_for_assert);
         assert_eq!(opens.load(Ordering::SeqCst), 0);
@@ -657,7 +1100,7 @@ mod tests {
             ..Default::default()
         };
         let (store, _events, opens) = store(false, false);
-        let empty = prepare(
+        let mut empty = prepare(
             &store,
             GitCometViewConfig {
                 workspace: WorkspaceBootstrap::Empty,
@@ -669,8 +1112,9 @@ mod tests {
         assert!(empty.ui_session.open_repos.is_empty());
         assert!(empty.deferred_repo_bootstrap.is_none());
         assert!(!empty.startup_repo_bootstrap_pending);
+        assert!(empty.begin_git_probe_handoff(&store).is_none());
 
-        let focused = prepare(
+        let mut focused = prepare(
             &store,
             GitCometViewConfig {
                 initial_path: Some(focused_path.clone()),
@@ -684,6 +1128,10 @@ mod tests {
             focused.deferred_repo_bootstrap,
             Some(DeferredRepoBootstrap::OpenRepos(vec![focused_path]))
         );
+        let deferred = focused.deferred_repo_bootstrap.clone();
+        assert!(focused.begin_git_probe_handoff(&store).is_some());
+        assert!(focused.attach_git_probe_handoff().is_none());
+        assert_eq!(focused.deferred_repo_bootstrap, deferred);
         shutdown(&store);
         assert_eq!(opens.load(Ordering::SeqCst), 0);
     }

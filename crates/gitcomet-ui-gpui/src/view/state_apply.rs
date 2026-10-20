@@ -707,7 +707,15 @@ impl GitCometView {
         }
         self.sync_terminal_sessions_with_state(cx);
         self.sync_reflog_panels_with_state();
-        if !prev_git_runtime_available && self.state.git_runtime.is_available() {
+        let bootstrap_adopted_runtime = git_runtime_changed
+            && self
+                .startup_repo_runtime_adoption
+                .take()
+                .is_some_and(|runtime| runtime == self.state.git_runtime);
+        if !prev_git_runtime_available
+            && self.state.git_runtime.is_available()
+            && !bootstrap_adopted_runtime
+        {
             self.resume_after_git_runtime_recovery();
         }
         if git_runtime_changed {

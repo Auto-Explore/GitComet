@@ -494,11 +494,12 @@ impl GitCometView {
     pub(crate) fn new_with_bootstrap(
         store: AppStore,
         events: smol::channel::Receiver<StoreEvent>,
-        bootstrap: super::window_bootstrap::PreparedWindowBootstrap,
+        mut bootstrap: super::window_bootstrap::PreparedWindowBootstrap,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let _stage = gitcomet_core::startup_trace::span("view_init");
+        let mut startup_repo_runtime_adoption = bootstrap.attach_git_probe_handoff();
         let super::window_bootstrap::PreparedWindowBootstrap {
             config,
             ui_session,
@@ -514,6 +515,7 @@ impl GitCometView {
             deferred_repo_bootstrap,
             pending_repo_open_reservations,
             pending_repo_open_active,
+            ..
         } = bootstrap;
         let GitCometViewConfig {
             initial_path: _,
@@ -593,6 +595,11 @@ impl GitCometView {
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
         let initial_state = store.snapshot();
+        // The worker queued Git adoption before the restore. If it is already
+        // reflected here, no later snapshot needs to suppress that transition.
+        if startup_repo_runtime_adoption.as_ref() == Some(&initial_state.git_runtime) {
+            startup_repo_runtime_adoption = None;
+        }
         let ui_model = cx.new(|cx| {
             AppUiModel::new_with_preferences(
                 Arc::clone(&initial_state),
@@ -1207,6 +1214,7 @@ impl GitCometView {
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
+            startup_repo_runtime_adoption,
             pending_repo_open_reservations,
             pending_repo_open_active,
             startup_repo_bootstrap_pending,
