@@ -2423,6 +2423,7 @@ fn build_markdown_preview_row(
 
     MarkdownPreviewRow {
         diagram: None,
+        details: None,
         kind,
         text: text.into(),
         inline_spans,
@@ -2430,6 +2431,7 @@ fn build_markdown_preview_row(
         source_line_range: source_line..source_line.saturating_add(1),
         change_hint: MarkdownChangeHint::None,
         indent_level,
+        ordered_list_start: None,
         blockquote_level,
         footnote_label: None,
         alert_kind: None,
