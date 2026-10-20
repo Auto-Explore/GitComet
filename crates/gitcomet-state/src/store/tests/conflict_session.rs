@@ -5,6 +5,7 @@ use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy,
 use gitcomet_core::domain::{FileConflictKind, FileStatus, FileStatusKind, RepoStatus};
 use gitcomet_core::services::ConflictSide;
 
+mod region_origin;
 
 /// Helper: set up a repo state with a conflicted status entry.
 fn setup_repo_with_conflict(

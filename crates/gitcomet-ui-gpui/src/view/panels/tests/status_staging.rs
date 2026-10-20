@@ -1465,6 +1465,227 @@ fn the_resolver_bar_preserves_external_changes_during_reload(cx: &mut gpui::Test
     save_cached_resolver_during_reload(cx, Some("external edit\n"));
 }
 
+#[derive(Clone, Copy)]
+enum MixedChoiceRefresh {
+    Unchanged,
+    EditedAfterSave,
+    ExternalEdit,
+    Unresolved,
+}
+
+fn save_mixed_choices_after_refresh(cx: &mut gpui::TestAppContext, refresh: MixedChoiceRefresh) {
+    let (dir, store, view, renderer, cx) = open_text_resolver(cx);
+    wait_for(cx, &view, &store, "the full conflict payload", |repo| {
+        repo.conflict_state.conflict_file_load_mode
+            == gitcomet_state::model::ConflictFileLoadMode::Full
+            && matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+    });
+    cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(0, conflict_resolver::ConflictChoice::Ours, cx);
+        });
+    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let expected_output = cx.update(|_, app| {
+        renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_apply_pick_target(
+                ResolverPickTarget::Chunk {
+                    conflict_ix: 0,
+                    choice: conflict_resolver::ConflictChoice::Theirs,
+                    output_line_ix: Some(0),
+                },
+                cx,
+            );
+            assert_eq!(pane.conflict_resolver.conflict_region_indices, vec![0, 0]);
+            if matches!(refresh, MixedChoiceRefresh::Unresolved) {
+                pane.conflict_resolver_pick_at(1, conflict_resolver::ConflictChoice::empty(), cx);
+            }
+            pane.current_conflict_resolved_output_text(cx)
+        })
+    });
+    cx.update(|_, app| {
+        let pane = renderer.read(app);
+        assert!(pane.conflict_resolved_output_is_modified());
+        if matches!(refresh, MixedChoiceRefresh::Unresolved) {
+            assert!(expected_output.contains("<Merge Conflict>"));
+            assert!(
+                pane.conflict_resolver_resolved_count() < pane.conflict_resolver_conflict_count()
+            );
+        }
+    });
+    let original = std::fs::read(dir.path().join("a.txt")).unwrap();
+    let external = b"external edit\n";
+    let mut reloaded = store.snapshot().as_ref().clone();
+    let conflict = &mut reloaded.repos[0].conflict_state;
+    let Loadable::Ready(Some(file)) = &mut conflict.conflict_file else {
+        panic!("loaded fixture");
+    };
+    if matches!(refresh, MixedChoiceRefresh::ExternalEdit) {
+        std::fs::write(dir.path().join("a.txt"), external).unwrap();
+        file.current = Some("external edit\n".into());
+        file.current_bytes = Some(Arc::from(external.as_slice()));
+    }
+    conflict.conflict_rev += 1;
+    super::shortcuts::apply_state(cx, &view, Arc::new(reloaded));
+    cx.update(|_, app| {
+        let pane = renderer.read(app);
+        assert_eq!(
+            pane.conflict_resolver_input.read(app).text(),
+            expected_output
+        );
+        assert!(pane.conflict_resolved_output_is_modified());
+        assert_eq!(pane.conflict_resolver.conflict_region_indices, vec![0, 0]);
+    });
+    let unmerged = git_output(dir.path(), &["ls-files", "--unmerged"]);
+    assert!(!unmerged.is_empty());
+    let ops_before = store.snapshot().repos[0].ops_rev;
+    let conflict_rev_before = store.snapshot().repos[0].conflict_state.conflict_rev;
+    click(cx, "conflict_save");
+    if matches!(refresh, MixedChoiceRefresh::Unresolved) {
+        click(cx, "conflict_save_stage");
+        crate::view::test_support::drain_store_worker(&view, cx);
+        assert_eq!(store.snapshot().repos[0].ops_rev, ops_before);
+        assert_eq!(store.snapshot().repos[0].local_actions_in_flight, 0);
+        assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), original);
+    } else {
+        wait_for(
+            cx,
+            &view,
+            &store,
+            "the mixed choice save completion",
+            |repo| repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0,
+        );
+        let snapshot = store.snapshot();
+        if matches!(refresh, MixedChoiceRefresh::ExternalEdit) {
+            assert!(
+                snapshot.repos[0]
+                    .feedback
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("The file changed on disk"))
+            );
+            assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), external);
+            wait_for(
+                cx,
+                &view,
+                &store,
+                "the external bytes after the refused save",
+                |repo| {
+                    repo.conflict_state.conflict_rev > conflict_rev_before
+                        && matches!(
+                            &repo.conflict_state.conflict_file,
+                            Loadable::Ready(Some(file))
+                                if file.path.as_path() == Path::new("a.txt")
+                                    && file.current.as_deref() == Some("external edit\n")
+                        )
+                },
+            );
+            cx.update(|_, app| {
+                assert_eq!(
+                    renderer.read(app).conflict_resolver_input.read(app).text(),
+                    expected_output
+                );
+            });
+            let second_ops_before = store.snapshot().repos[0].ops_rev;
+            click(cx, "conflict_save");
+            wait_for(cx, &view, &store, "refuse the stale save again", |repo| {
+                repo.ops_rev >= second_ops_before + 2 && repo.local_actions_in_flight == 0
+            });
+            assert!(
+                store.snapshot().repos[0]
+                    .feedback
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("The file changed on disk"))
+            );
+            assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), external);
+        } else {
+            assert_eq!(snapshot.repos[0].feedback.last_error, None);
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+                expected_output
+            );
+        }
+    }
+    if matches!(refresh, MixedChoiceRefresh::EditedAfterSave) {
+        wait_for(
+            cx,
+            &view,
+            &store,
+            "the completed mixed save's reloaded bytes",
+            |repo| {
+                repo.ops_rev >= ops_before + 2
+                    && repo.local_actions_in_flight == 0
+                    && repo.conflict_state.conflict_rev > conflict_rev_before
+                    && matches!(
+                        &repo.conflict_state.conflict_file,
+                        Loadable::Ready(Some(file))
+                            if file.path.as_path() == Path::new("a.txt")
+                                && file.current.as_deref() == Some(expected_output.as_str())
+                    )
+            },
+        );
+        cx.update(|_, app| {
+            renderer.update(app, |pane, cx| {
+                assert_eq!(
+                    pane.conflict_resolver_input.read(cx).text(),
+                    expected_output
+                );
+                pane.conflict_resolver_input.update(cx, |input, cx| {
+                    input.replace_utf8_range(0..0, "second edit\n", cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        let edited_output = format!("second edit\n{expected_output}");
+        cx.update(|_, app| {
+            let pane = renderer.read(app);
+            assert!(pane.conflict_resolved_output_is_modified());
+            assert_eq!(pane.conflict_resolver_input.read(app).text(), edited_output);
+        });
+        let second_ops_before = store.snapshot().repos[0].ops_rev;
+        click(cx, "conflict_save");
+        wait_for(cx, &view, &store, "save the next local edit", |repo| {
+            repo.ops_rev >= second_ops_before + 2 && repo.local_actions_in_flight == 0
+        });
+        assert_eq!(store.snapshot().repos[0].feedback.last_error, None);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            edited_output
+        );
+    }
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--unmerged"]),
+        unmerged
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+#[gpui::test]
+fn the_resolver_bar_saves_mixed_choices_after_an_unchanged_refresh(cx: &mut gpui::TestAppContext) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::Unchanged);
+}
+
+#[gpui::test]
+fn the_resolver_bar_saves_another_edit_after_mixed_save_reload(cx: &mut gpui::TestAppContext) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::EditedAfterSave);
+}
+
+#[gpui::test]
+fn the_resolver_bar_preserves_external_bytes_under_retained_mixed_choices(
+    cx: &mut gpui::TestAppContext,
+) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::ExternalEdit);
+}
+
+#[gpui::test]
+fn the_resolver_bar_refuses_retained_unresolved_chunks_after_refresh(
+    cx: &mut gpui::TestAppContext,
+) {
+    save_mixed_choices_after_refresh(cx, MixedChoiceRefresh::Unresolved);
+}
+
 #[derive(Clone, Copy, Debug)]
 enum EditorKeyFocus {
     Panel,
