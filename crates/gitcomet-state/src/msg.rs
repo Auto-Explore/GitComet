@@ -1,3 +1,4 @@
+mod conflict_plan_origin;
 mod conflict_region_origin;
 mod control;
 mod effect;
@@ -13,6 +14,7 @@ mod repo_path_list;
 mod status;
 mod store_event;
 
+pub use conflict_plan_origin::ConflictPlanOrigin;
 pub use conflict_region_origin::ConflictRegionOrigin;
 pub use control::ControlEffect;
 pub use effect::Effect;

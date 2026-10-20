@@ -321,6 +321,9 @@ impl DiffRenderer {
                 ))
             }),
             region_resolution_baseline: None,
+            plan_origin: session
+                .and_then(|session| session.merge_plan.as_ref())
+                .map(|plan| Arc::new(gitcomet_state::msg::ConflictPlanOrigin::from_plan(plan))),
             refresh_deferred: false,
             output_is_protected,
             // A re-bootstrap means a different conflict or different file
@@ -1027,6 +1030,17 @@ impl DiffRenderer {
             .and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolver.loaded_file = Some(file.clone());
         self.conflict_resolver.conflict_rev = new_rev;
+        self.conflict_resolver.plan_origin = session
+            .and_then(|session| session.merge_plan.as_ref())
+            .map(|plan| {
+                self.conflict_resolver
+                    .plan_origin
+                    .clone()
+                    .filter(|origin| origin.matches_plan(plan))
+                    .unwrap_or_else(|| {
+                        Arc::new(gitcomet_state::msg::ConflictPlanOrigin::from_plan(plan))
+                    })
+            });
         if let Some(session) = session {
             if !self
                 .conflict_resolver

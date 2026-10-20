@@ -251,6 +251,7 @@ pub(crate) struct ConflictResolverUiState {
     pub(crate) conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(crate) source_hash: Option<u64>,
     pub(crate) region_origin: Option<Arc<gitcomet_state::msg::ConflictRegionOrigin>>,
+    pub(crate) plan_origin: Option<Arc<gitcomet_state::msg::ConflictPlanOrigin>>,
     pub(crate) region_resolution_baseline:
         Option<FxHashMap<usize, Vec<gitcomet_core::conflict_session::ConflictRegionResolution>>>,
     pub(crate) refresh_deferred: bool,
@@ -409,6 +410,7 @@ impl Default for ConflictResolverUiState {
             conflict_syntax_language: None,
             source_hash: None,
             region_origin: None,
+            plan_origin: None,
             region_resolution_baseline: None,
             refresh_deferred: false,
             output_is_protected: false,

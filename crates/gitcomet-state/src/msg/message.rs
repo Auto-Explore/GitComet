@@ -1225,6 +1225,7 @@ pub enum Msg {
     ConflictTogglePlanBlockSource {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictPlanOrigin>,
         block_id: gitcomet_core::merge::MergeBlockId,
         source: gitcomet_core::merge::MergeSource,
     },
@@ -1232,6 +1233,7 @@ pub enum Msg {
     ConflictReplacePlanBlockSelection {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictPlanOrigin>,
         block_id: gitcomet_core::merge::MergeBlockId,
         selection: gitcomet_core::merge::OrderedSelection,
     },

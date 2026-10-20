@@ -2,7 +2,7 @@ use super::util;
 use crate::model::{AppState, RepoId};
 use crate::msg::{
     ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictBulkScope,
-    ConflictRegionChoice, Effect, RepoPath,
+    ConflictPlanOrigin, ConflictRegionChoice, Effect, RepoPath,
 };
 use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::conflict_session::{
@@ -75,33 +75,50 @@ pub(super) fn toggle_plan_block_source(
     state: &mut AppState,
     repo_id: RepoId,
     path: RepoPath,
+    origin: &ConflictPlanOrigin,
     block_id: MergeBlockId,
     source: MergeSource,
 ) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches_current_conflict_path(repo_state, path.as_path()) {
-        return Vec::new();
-    }
-    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
-        return Vec::new();
-    };
-    if session.path != path.as_path() {
-        return Vec::new();
-    }
-    if session.toggle_plan_block_source(block_id, source) {
-        repo_state.bump_conflict_rev();
-    }
-    Vec::new()
+    apply_plan_choice(
+        state,
+        repo_id,
+        path,
+        origin,
+        block_id,
+        PlanChoice::Toggle(source),
+    )
 }
 
 pub(super) fn replace_plan_block_selection(
     state: &mut AppState,
     repo_id: RepoId,
     path: RepoPath,
+    origin: &ConflictPlanOrigin,
     block_id: MergeBlockId,
     selection: OrderedSelection,
+) -> Vec<Effect> {
+    apply_plan_choice(
+        state,
+        repo_id,
+        path,
+        origin,
+        block_id,
+        PlanChoice::Replace(selection),
+    )
+}
+
+enum PlanChoice {
+    Toggle(MergeSource),
+    Replace(OrderedSelection),
+}
+
+fn apply_plan_choice(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    origin: &ConflictPlanOrigin,
+    block_id: MergeBlockId,
+    choice: PlanChoice,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
         return Vec::new();
@@ -109,13 +126,38 @@ pub(super) fn replace_plan_block_selection(
     if !matches_current_conflict_path(repo_state, path.as_path()) {
         return Vec::new();
     }
-    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+    let conflict = &mut repo_state.conflict_state;
+    let Some(session) = conflict
+        .conflict_session
+        .as_mut()
+        .or(conflict.session_pending_restore.as_mut())
+        .filter(|session| session.path == path.as_path())
+    else {
         return Vec::new();
     };
-    if session.path != path.as_path() {
+    let valid = session.merge_plan.as_ref().is_some_and(|plan| {
+        origin.matches_plan(plan)
+            && origin.contains(block_id)
+            && match &choice {
+                PlanChoice::Toggle(source) => plan.source_text(*source).is_some(),
+                PlanChoice::Replace(selection) => selection
+                    .iter()
+                    .all(|source| plan.source_text(source).is_some()),
+            }
+    });
+    if !valid {
+        repo_state.feedback_mut().last_error = Some(
+            "The conflict changed while this choice was being made. Review the refreshed conflict and choose again."
+                .into(),
+        );
+        repo_state.bump_conflict_rev();
         return Vec::new();
     }
-    if session.replace_plan_block_selection(block_id, selection) {
+    let changed = match choice {
+        PlanChoice::Toggle(source) => session.toggle_plan_block_source(block_id, source),
+        PlanChoice::Replace(selection) => session.replace_plan_block_selection(block_id, selection),
+    };
+    if changed {
         repo_state.bump_conflict_rev();
     }
     Vec::new()

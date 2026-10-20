@@ -2025,18 +2025,20 @@ fn reduce_inner(
         Msg::ConflictTogglePlanBlockSource {
             repo_id,
             path,
+            origin,
             block_id,
             source,
-        } => {
-            conflict_interactions::toggle_plan_block_source(state, repo_id, path, block_id, source)
-        }
+        } => conflict_interactions::toggle_plan_block_source(
+            state, repo_id, path, &origin, block_id, source,
+        ),
         Msg::ConflictReplacePlanBlockSelection {
             repo_id,
             path,
+            origin,
             block_id,
             selection,
         } => conflict_interactions::replace_plan_block_selection(
-            state, repo_id, path, block_id, selection,
+            state, repo_id, path, &origin, block_id, selection,
         ),
         Msg::ConflictSyncRegionResolutions {
             repo_id,

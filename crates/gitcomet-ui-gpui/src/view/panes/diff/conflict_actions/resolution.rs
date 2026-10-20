@@ -243,10 +243,12 @@ impl DiffRenderer {
                     .or_else(|| self.active_repo_id()),
                 self.conflict_resolver.dispatch_path(),
             )
+            && let Some(origin) = self.conflict_resolver.plan_origin.clone()
         {
             self.store.dispatch(Msg::ConflictReplacePlanBlockSelection {
                 repo_id,
                 path,
+                origin,
                 block_id,
                 selection: gitcomet_core::merge::OrderedSelection::new(),
             });
@@ -508,17 +510,17 @@ impl DiffRenderer {
         display_conflict_index: Option<usize>,
         choice: conflict_resolver::ConflictChoice,
     ) -> bool {
-        let Some((has_base, local_source, remote_source)) =
-            self.with_conflict_resolver_session(|session| {
-                let plan = session.merge_plan.as_ref()?;
-                plan.blocks
-                    .iter()
-                    .any(|block| block.id == block_id)
-                    .then_some((plan.has_base(), plan.local_source(), plan.remote_source()))
-            })
+        let Some(origin) = self
+            .conflict_resolver
+            .plan_origin
+            .clone()
+            .filter(|origin| origin.contains(block_id))
         else {
             return false;
         };
+        let has_base = origin.has_base();
+        let local_source = origin.local_source();
+        let remote_source = origin.remote_source();
         let to_merge_source = |source| {
             use gitcomet_core::conflict_output::ConflictOutputSource as Output;
             use gitcomet_core::merge::MergeSource;
@@ -551,6 +553,7 @@ impl DiffRenderer {
             self.store.dispatch(Msg::ConflictReplacePlanBlockSelection {
                 repo_id,
                 path,
+                origin,
                 block_id,
                 selection: gitcomet_core::merge::OrderedSelection::from_sources([
                     local_source,
@@ -564,6 +567,7 @@ impl DiffRenderer {
             self.store.dispatch(Msg::ConflictTogglePlanBlockSource {
                 repo_id,
                 path,
+                origin,
                 block_id,
                 source,
             });
@@ -571,6 +575,7 @@ impl DiffRenderer {
             self.store.dispatch(Msg::ConflictReplacePlanBlockSelection {
                 repo_id,
                 path,
+                origin,
                 block_id,
                 selection: gitcomet_core::merge::OrderedSelection::from_sources(
                     choice.iter().filter_map(to_merge_source),
@@ -1003,8 +1008,7 @@ impl DiffRenderer {
             ..
         }) = target
         {
-            return self.with_conflict_resolver_session(|session| {
-                let plan = session.merge_plan.as_ref()?;
+            return self.with_displayed_conflict_plan(|plan| {
                 let block = plan.blocks.iter().find(|block| block.id == *block_id)?;
                 let selected = block
                     .selection
@@ -1026,6 +1030,37 @@ impl DiffRenderer {
                 .unwrap_or(false),
             self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
         ))
+    }
+
+    fn with_displayed_conflict_plan<T: Default>(
+        &self,
+        read: impl FnOnce(&gitcomet_core::merge::MergePlan) -> T,
+    ) -> T {
+        let (Some(path), Some(origin), Some(state)) = (
+            self.conflict_resolver.path.as_deref(),
+            self.conflict_resolver.plan_origin.as_ref(),
+            self.store.snapshot(),
+        ) else {
+            return T::default();
+        };
+        state
+            .repos
+            .iter()
+            .find(|repo| {
+                Some(repo.id) == self.conflict_resolver.repo_id
+                    && repo.conflict_state.conflict_file_path.as_deref() == Some(path)
+            })
+            .and_then(|repo| {
+                repo.conflict_state
+                    .conflict_session
+                    .as_ref()
+                    .or(repo.conflict_state.session_pending_restore.as_ref())
+            })
+            .filter(|session| session.path == path)
+            .and_then(|session| session.merge_plan.as_ref())
+            .filter(|plan| origin.matches_plan(plan))
+            .map(read)
+            .unwrap_or_default()
     }
 
     pub(in crate::view) fn conflict_resolver_has_active_pick_target(&self) -> bool {

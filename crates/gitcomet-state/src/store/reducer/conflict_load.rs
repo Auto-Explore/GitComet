@@ -167,6 +167,11 @@ fn restore_conflict_session_resolutions(existing: &ConflictSession, next: &mut C
         });
     if !same_ordered_regions {
         next.restore_plan_decisions_from(existing);
+    } else if let (Some(previous), Some(current)) =
+        (existing.merge_plan.as_ref(), next.merge_plan.as_mut())
+        && crate::msg::ConflictPlanOrigin::from_plan(previous).matches_plan(current)
+    {
+        current.restore_decisions_from(previous);
     }
     let next_has_base = !next.base.is_absent();
     for (current, correspondence) in next.regions.iter_mut().zip(correspondences) {
