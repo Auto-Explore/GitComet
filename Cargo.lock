@@ -4254,6 +4254,7 @@ dependencies = [
  "gpui_ce_collections",
  "gpui_ce_render",
  "gpui_ce_util",
+ "image",
  "js-sys",
  "log",
  "metal",

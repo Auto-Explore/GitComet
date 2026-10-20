@@ -818,26 +818,23 @@ impl GitCometView {
                                 .w(self.sidebar_render_width)
                                 .min_h(px(0.0))
                                 .bg(theme.colors.surface.chrome)
+                                .flex_none()
+                                .overflow_hidden()
                                 .when(!self.sidebar_collapsed, |d| {
-                                    // Cached so frames driven by another view's
-                                    // `notify` (a spinner tick in the title bar,
-                                    // a diff update) reuse the sidebar's layout
-                                    // and paint. The wrapper fills this div, so
-                                    // the width animation still re-lays it out.
-                                    match sidebar_sections {
-                                        None => d.child(stable_cached_fill_view(
+                                    let content = div().w(self.sidebar_width).h_full();
+                                    let content = match sidebar_sections {
+                                        None => content.child(stable_cached_fill_view(
                                             self.sidebar_pane.clone(),
                                         )),
-                                        // Extension sections sit below the
-                                        // sidebar's own, which keeps the rest.
-                                        Some(sections) => d
+                                        Some(sections) => content
                                             .flex()
                                             .flex_col()
                                             .child(div().flex_1().min_h(px(0.0)).child(
                                                 stable_cached_fill_view(self.sidebar_pane.clone()),
                                             ))
                                             .child(sections),
-                                    }
+                                    };
+                                    d.child(content)
                                 })
                                 .when(self.sidebar_collapsed, |d| {
                                     d.child(self.collapsed_sidebar_rail(theme, cx))

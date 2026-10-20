@@ -1,4 +1,9 @@
 mod contributions;
+mod header;
+
+pub(in crate::view) struct SidebarHeaderChanged;
+
+impl gpui::EventEmitter<SidebarHeaderChanged> for SidebarPaneView {}
 use super::super::branch_sidebar::{BranchSection, BranchSidebarRow};
 use super::super::caches::BranchSidebarFingerprint;
 use super::super::file_icons;
@@ -472,7 +477,10 @@ impl SidebarPaneView {
         file_history_pane: Entity<panes::file_history::FileHistoryPaneView>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let file_history_subscription = cx.observe(&file_history_pane, |_, _, cx| cx.notify());
+        let file_history_subscription = cx.observe(&file_history_pane, |_, _, cx| {
+            cx.emit(SidebarHeaderChanged);
+            cx.notify();
+        });
         let state = Arc::clone(&ui_model.read(cx).state);
         let documents = ui_model.read(cx).documents.clone();
         let documents_subscription = cx.observe(documents.changes(), |_, _, cx| cx.notify());
@@ -1379,6 +1387,7 @@ impl SidebarPaneView {
                 self.file_history_selected = false;
             }
             self.extension_tabs = tabs;
+            cx.emit(SidebarHeaderChanged);
             cx.notify();
         }
     }
@@ -1410,6 +1419,7 @@ impl SidebarPaneView {
         {
             self.select_routed_tab(None, window, cx);
         }
+        cx.emit(SidebarHeaderChanged);
         cx.notify();
     }
 
@@ -1629,260 +1639,6 @@ impl SidebarPaneView {
             | CollapsedSidebarSection::Remote
             | CollapsedSidebarSection::Annex => {}
         }
-    }
-
-    fn render_tab_bar(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let ui_scale_percent = ui_scale::current(cx).percent;
-        let ui_scale = ui_scale::UiScale::current(cx);
-        let scaled_px = ui_scale::scaler(ui_scale_percent);
-        let mode = self.state.sidebar_mode;
-        // The Files tab's list is the thing pinned to a commit, so the header
-        // above it takes the browse tint only while that list is on screen.
-        let browsing_files = mode == SidebarMode::Files
-            && self
-                .active_repo()
-                .is_some_and(|r| r.browsing_commit().is_some());
-        let bg = if browsing_files {
-            crate::theme::historical_header_bg(theme, theme.colors.surface.chrome)
-        } else {
-            theme.colors.surface.chrome
-        };
-
-        // A contributed tab, while it shows, takes the strip's selection.
-        let contributed = self
-            .extension_tabs
-            .as_ref()
-            .and_then(SidebarExtensionTabs::showing);
-        let history_shown = self.file_history_shown(cx);
-        let history_visible = self.file_history_visible(cx);
-        let history_title: SharedString = self
-            .file_history_pane
-            .read(cx)
-            .target
-            .as_ref()
-            .map(|(_, path)| path.display().to_string())
-            .unwrap_or_default()
-            .into();
-        let store = Arc::clone(&self.store);
-        let tabs = components::SegmentedControl::new("sidebar_view_toggle")
-            .segment(
-                components::Segment::new("sidebar_tab_branches", "Branches")
-                    .icon("icons/git_branch.svg")
-                    .selected(
-                        mode == SidebarMode::Branches && contributed.is_none() && !history_shown,
-                    )
-                    .tooltip("Branches", Vec::new()),
-            )
-            .segment(
-                components::Segment::new("sidebar_tab_files", "Files")
-                    .icon("icons/folder.svg")
-                    .selected(mode == SidebarMode::Files && contributed.is_none() && !history_shown)
-                    .tooltip("Files", Vec::new()),
-            )
-            .render(theme, ui_scale, cx, move |this, index, window, cx| {
-                let mode = if index == 0 {
-                    SidebarMode::Branches
-                } else {
-                    SidebarMode::Files
-                };
-                store.dispatch(Msg::SetSidebarMode { mode });
-                this.file_history_selected = false;
-                cx.notify();
-                if contributed.is_some() {
-                    this.select_routed_tab(None, window, cx);
-                }
-            });
-
-        // Each tab keeps its locate action in the same trailing slot for the
-        // whole time its tree is visible. Unavailable actions grey out instead
-        // of making the strip shift as repository data changes.
-        let active_local_branch_name = self
-            .section_locator_target(CollapsedSidebarSection::Local)
-            .and_then(|target| match target {
-                sticky::NavigationTarget::Branch(BranchMenuTarget::Local { name }) => Some(name),
-                _ => None,
-            });
-        let can_locate_active_branch = active_local_branch_name.is_some();
-        let can_locate_open_file = self
-            .active_repo()
-            .and_then(|repo| repo.open_file_path())
-            .is_some();
-        let explorer_settings = self
-            .active_repo_id()
-            .and_then(|repo_id| CollapsedSidebarSection::Files.section_menu(repo_id));
-        let explorer_settings_open = explorer_settings
-            .as_ref()
-            .is_some_and(|(invoker, _)| self.active_context_menu_invoker.as_ref() == Some(invoker));
-
-        let extension_tabs: Vec<_> = self
-            .extension_tabs
-            .iter()
-            .flat_map(|tabs| tabs.tabs.iter().cloned())
-            .map(|(index, title, icon)| {
-                let mut tab =
-                    components::NavTab::new(format!("sidebar_tab_extension_{index}"), title)
-                        .selected(contributed == Some(index) && !history_shown);
-                if let Some(icon) = icon {
-                    tab = tab.icon(icon);
-                }
-                let tab = tab.render(theme, ui_scale).on_activate(
-                    false,
-                    controls::ControlActivation::ManagedFocus,
-                    cx.listener(move |this, _, window, cx| {
-                        this.file_history_selected = false;
-                        this.select_routed_tab(Some(index), window, cx);
-                    }),
-                );
-                div()
-                    .debug_selector(move || format!("sidebar_tab_extension_{index}"))
-                    .child(tab)
-            })
-            .collect();
-
-        let host_tabs = self
-            .extension_tabs
-            .as_ref()
-            .is_none_or(|tabs| tabs.host_tabs);
-        // Per-tab tools belong to Branches and Files only.
-        let tools = contributed.is_none() && !history_shown;
-        let history_tab = history_visible.then(|| {
-            let tab = components::NavTab::new("sidebar_tab_file_history", "History")
-                .icon("icons/history.svg")
-                .selected(history_shown)
-                .render(theme, ui_scale)
-                .on_activate(
-                    false,
-                    controls::ControlActivation::ManagedFocus,
-                    cx.listener(|this, _, window, cx| this.show_file_history(window, cx)),
-                );
-            div()
-                .id("sidebar_tab_file_history_wrap")
-                .debug_selector(|| "sidebar_tab_file_history".to_string())
-                .child(tab)
-                .gitcomet_tooltip(theme, history_title)
-        });
-        components::navigation_tab_strip(bg, ui_scale)
-            .when(host_tabs, |strip| strip.child(tabs))
-            .children(history_tab)
-            .children(extension_tabs)
-            .child(div().ml_auto().when(tools, |slot| {
-                slot.child(self.render_search_toggle(
-                    mode == SidebarMode::Files,
-                    "sidebar_search_toggle",
-                    cx,
-                ))
-            }))
-            // Between search and locate: both flank it as per-tab tools, and the
-            // locate slot keeps its far-edge position across tabs.
-            .when(mode == SidebarMode::Files && tools, |strip| {
-                strip.child(
-                    components::Button::new("sidebar_explorer_settings", "")
-                        .borderless()
-                        .style(components::ButtonStyle::Subtle)
-                        .open(explorer_settings_open)
-                        .disabled(explorer_settings.is_none())
-                        .selected_bg(with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.34 } else { 0.24 },
-                        ))
-                        .start_slot(crate::view::icons::svg_icon(
-                            "icons/cog.svg",
-                            if explorer_settings_open {
-                                theme.colors.accent.foreground
-                            } else if explorer_settings.is_some() {
-                                theme.colors.foreground.secondary
-                            } else {
-                                with_alpha(theme.colors.foreground.secondary, 0.45)
-                            },
-                            scaled_px(13.0),
-                        ))
-                        .on_click(theme, cx, move |this, e, window, cx| {
-                            if let Some((invoker, kind)) = explorer_settings.clone() {
-                                this.open_popover_at(
-                                    kind.invoked_by(invoker),
-                                    e.position(),
-                                    window,
-                                    cx,
-                                );
-                            }
-                        })
-                        .w(components::control_height(ui_scale))
-                        .h(components::control_height(ui_scale))
-                        .gitcomet_tooltip(theme, "Files settings".into())
-                        .debug_selector(|| "sidebar_explorer_settings".to_string()),
-                )
-            })
-            .when(mode == SidebarMode::Branches && tools, |strip| {
-                let tooltip = active_local_branch_name.map_or_else(
-                    || SharedString::from("No active local branch to show"),
-                    |name| {
-                        SharedString::from(format!(
-                            "Show and select the active local branch: {name}"
-                        ))
-                    },
-                );
-                strip.child(
-                    components::Button::new("sidebar_locate_active_branch", "")
-                        .borderless()
-                        .style(components::ButtonStyle::Subtle)
-                        .disabled(!can_locate_active_branch)
-                        .start_slot(crate::view::icons::svg_icon(
-                            "icons/locate.svg",
-                            if can_locate_active_branch {
-                                theme.colors.foreground.secondary
-                            } else {
-                                with_alpha(theme.colors.foreground.secondary, 0.45)
-                            },
-                            scaled_px(13.0),
-                        ))
-                        .on_click(theme, cx, |this, _e, _window, cx| {
-                            this.locate_active_local_branch(cx);
-                        })
-                        // Pushed to the far edge so it reads as an action on the
-                        // strip rather than a third tab.
-                        .w(components::control_height(ui_scale))
-                        .h(components::control_height(ui_scale))
-                        .gitcomet_tooltip(theme, tooltip)
-                        .debug_selector(|| "sidebar_locate_active_branch".to_string()),
-                )
-            })
-            .when(mode == SidebarMode::Files && !history_shown, |strip| {
-                strip.child(
-                    components::Button::new("sidebar_locate_open_file", "")
-                        .borderless()
-                        .style(components::ButtonStyle::Subtle)
-                        .disabled(!can_locate_open_file)
-                        .start_slot(crate::view::icons::svg_icon(
-                            "icons/locate.svg",
-                            if can_locate_open_file {
-                                theme.colors.foreground.secondary
-                            } else {
-                                with_alpha(theme.colors.foreground.secondary, 0.45)
-                            },
-                            scaled_px(13.0),
-                        ))
-                        .on_click(theme, cx, |this, _e, _window, cx| {
-                            this.locate_open_file(cx);
-                        })
-                        // Pushed to the far edge so it reads as an action on the
-                        // strip rather than a third tab.
-                        .w(components::control_height(ui_scale))
-                        .h(components::control_height(ui_scale))
-                        .gitcomet_tooltip(
-                            theme,
-                            if can_locate_open_file {
-                                format!(
-                                    "Show the open file in the explorer ({})",
-                                    crate::kit::components::secondary_shortcut("Shift+L")
-                                )
-                                .into()
-                            } else {
-                                SharedString::from("No file is open")
-                            },
-                        )
-                        .debug_selector(|| "sidebar_locate_open_file".to_string()),
-                )
-            })
     }
 
     /// Scroll to the checked-out local branch, opening every group that hides

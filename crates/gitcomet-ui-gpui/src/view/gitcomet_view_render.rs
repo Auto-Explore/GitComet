@@ -31,6 +31,7 @@ impl Render for GitCometView {
                 | GitCometViewMode::FocusedMergetool
                 | GitCometViewMode::FocusedDiff
         ));
+        self.sync_sidebar_header_layout(window, cx);
         let next_window_size = window.viewport_size();
         let previous_window_width = self.last_window_size.width;
         let window_width_changed = previous_window_width != next_window_size.width;
@@ -950,15 +951,26 @@ impl GitCometView {
                             this.details_render_width = this.details_width;
                         }
                     }
-                    this.pane_resize = Some(PaneResizeState::new(
-                        handle,
-                        e.position.x,
-                        this.sidebar_width,
-                        this.details_width,
-                        this.last_window_size.width,
-                        this.sidebar_collapsed,
-                        this.details_collapsed,
-                    ));
+                    let minimum = match handle {
+                        PaneResizeHandle::Sidebar => this.sidebar_min_width(),
+                        PaneResizeHandle::Details => this.details_min_width(),
+                    };
+                    this.pane_resize = Some(
+                        PaneResizeState::new(
+                            handle,
+                            e.position.x,
+                            this.sidebar_width,
+                            this.details_width,
+                            this.last_window_size.width,
+                            this.sidebar_collapsed,
+                            this.details_collapsed,
+                        )
+                        .with_minimums(
+                            minimum,
+                            this.main_min_width(),
+                            this.pane_collapsed_width(),
+                        ),
+                    );
                     cx.notify();
                 }),
             )

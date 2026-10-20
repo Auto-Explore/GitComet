@@ -503,6 +503,8 @@ pub(super) struct PaneResizeState {
     pub(super) bounds_details_collapsed: bool,
     pub(super) min_width: Pixels,
     pub(super) max_width: Pixels,
+    pub(super) main_min_width: Pixels,
+    pub(super) collapsed_width: Pixels,
 }
 
 impl PaneResizeState {
@@ -537,8 +539,8 @@ impl PaneResizeState {
             other_width,
             other_collapsed,
             total_w,
-            sidebar_collapsed,
-            details_collapsed,
+            px(super::MAIN_MIN_PX),
+            px(super::PANE_COLLAPSED_PX),
         );
         Self {
             handle,
@@ -551,7 +553,34 @@ impl PaneResizeState {
             bounds_details_collapsed: details_collapsed,
             min_width,
             max_width,
+            main_min_width: px(super::MAIN_MIN_PX),
+            collapsed_width: px(super::PANE_COLLAPSED_PX),
         }
+    }
+
+    pub(super) fn with_minimums(
+        mut self,
+        minimum: Pixels,
+        main: Pixels,
+        collapsed: Pixels,
+    ) -> Self {
+        self.min_width = minimum;
+        self.main_min_width = main;
+        self.collapsed_width = collapsed;
+        let other_collapsed = match self.handle {
+            PaneResizeHandle::Sidebar => self.bounds_details_collapsed,
+            PaneResizeHandle::Details => self.bounds_sidebar_collapsed,
+        };
+        self.max_width = super::pane_resize_drag_width_bounds_for_other_pane(
+            minimum,
+            self.other_width,
+            other_collapsed,
+            self.bounds_total_w,
+            main,
+            collapsed,
+        )
+        .1;
+        self
     }
 
     #[inline]
@@ -576,8 +605,8 @@ impl PaneResizeState {
                 self.other_width,
                 other_collapsed,
                 total_w,
-                sidebar_collapsed,
-                details_collapsed,
+                self.main_min_width,
+                self.collapsed_width,
             )
         }
     }
@@ -956,6 +985,7 @@ pub struct GitCometView {
     pub(super) theme: AppTheme,
     pub(super) title_bar: Entity<TitleBarView>,
     pub(super) sidebar_pane: Entity<SidebarPaneView>,
+    pub(super) _sidebar_header_subscription: gpui::Subscription,
     pub(super) diff_renderer: Entity<DiffRenderer>,
     pub(super) main_pane: Entity<MainPaneView>,
     pub(super) details_pane: Entity<DetailsPaneView>,
@@ -1092,6 +1122,8 @@ pub struct GitCometView {
     pub(super) sidebar_width_design: f32,
     pub(super) details_width_design: f32,
     pub(super) sidebar_width: Pixels,
+    pub(super) sidebar_header_minimum: Pixels,
+    pub(super) sidebar_window_size_request: Option<(gpui::Size<Pixels>, gpui::Size<Pixels>)>,
     pub(super) details_width: Pixels,
     pub(super) sidebar_render_width: Pixels,
     pub(super) details_render_width: Pixels,
