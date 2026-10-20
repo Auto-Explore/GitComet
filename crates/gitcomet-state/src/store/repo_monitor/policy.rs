@@ -754,9 +754,30 @@ mod tests {
         fs::create_dir(&ancestor).unwrap();
         fs::create_dir(&destination).unwrap();
         let incoming = root.join("incoming-link");
-        if !gitcomet_core::test_support::symlink::directory(&destination, &incoming) {
-            return;
-        }
+        let fixture_kind =
+            if gitcomet_core::test_support::symlink::directory(&destination, &incoming) {
+                "directory-symlink"
+            } else {
+                #[cfg(windows)]
+                {
+                    // Fixed relative names avoid shell interpolation and a
+                    // junction exercises the reparse race without privileges.
+                    let result = std::process::Command::new("cmd")
+                        .current_dir(&root)
+                        .args(["/d", "/c", "mklink", "/J", "incoming-link", "destination"])
+                        .output()
+                        .unwrap();
+                    assert!(
+                        result.status.success(),
+                        "junction fixture failed: {result:?}"
+                    );
+                    "directory-junction"
+                }
+                #[cfg(not(windows))]
+                {
+                    unreachable!("only Windows may lack the symlink fixture privilege")
+                }
+            };
         let requested = vec![ancestor.join("first"), ancestor.join("second")];
         let mut replaced = false;
         let mut stamps = Stamps::default();
@@ -801,5 +822,6 @@ mod tests {
             "an independent invocation must accept the stable replacement"
         );
         assert!(fresh_stamps.0.is_empty(), "stable passes must not loop");
+        println!("WATCH_PREFIX_REPLACEMENT_RACE exercised=true kind={fixture_kind}");
     }
 }
