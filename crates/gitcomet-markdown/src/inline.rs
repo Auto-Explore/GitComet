@@ -119,6 +119,14 @@ pub(crate) fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<Markd
                     }
                     HtmlHandling::OpenContainer(..)
                     | HtmlHandling::CloseContainer(_)
+                    | HtmlHandling::OpenList(_)
+                    | HtmlHandling::CloseList(_)
+                    | HtmlHandling::OpenItem
+                    | HtmlHandling::CloseItem
+                    | HtmlHandling::OpenQuote
+                    | HtmlHandling::CloseQuote
+                    | HtmlHandling::OpenDetails(_)
+                    | HtmlHandling::CloseDetails
                     | HtmlHandling::Rule => {
                         if !text_buf.is_empty() {
                             text_buf.push(' ');
@@ -208,9 +216,11 @@ pub(crate) fn push_row(
         inline_spans: spans,
         code_language: row.code_language,
         diagram: None,
+        details: decoration.details,
         source_line_range: row.source_line_range,
         change_hint: MarkdownChangeHint::None,
         indent_level: row.indent_level,
+        ordered_list_start: decoration.ordered_list_start,
         blockquote_level: row.blockquote_level,
         footnote_label: decoration.footnote_label,
         alert_kind: decoration.alert_kind,

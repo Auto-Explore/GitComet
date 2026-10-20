@@ -1,7 +1,10 @@
 use super::*;
 use pulldown_cmark::{CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
 
+mod html_details;
+mod html_pre;
 mod html_tables;
+use html_pre::PendingHtmlPre;
 use html_tables::PendingHtmlTable;
 
 /// Flatten markdown events into preview rows.
@@ -27,6 +30,8 @@ pub(crate) fn flatten_to_rows(
     }
 
     flattener.finish_pending_html_table()?;
+    flattener.finish_pending_html_pre()?;
+    flattener.ensure_details_summary()?;
     let mut rows = flattener.rows;
     finish_table_blocks(&mut rows);
     insert_top_level_heading_spacer_rows(&mut rows);
@@ -36,14 +41,14 @@ pub(crate) fn flatten_to_rows(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ListContext {
     Unordered,
-    Ordered { next_number: u64 },
+    Ordered { first_number: u64, next_number: u64 },
 }
 
 impl ListContext {
     fn next_item_kind(&mut self) -> MarkdownPreviewRowKind {
         match self {
             Self::Unordered => MarkdownPreviewRowKind::ListItem { number: None },
-            Self::Ordered { next_number } => {
+            Self::Ordered { next_number, .. } => {
                 let number = *next_number;
                 *next_number = next_number.saturating_add(1);
                 MarkdownPreviewRowKind::ListItem {
@@ -64,11 +69,22 @@ struct OpenItem {
 }
 
 /// The block constructs enclosing the text being read, outermost first.
-enum Container {
+enum ContainerKind {
     List(ListContext),
     Item(OpenItem),
-    Quote,
+    Quote(MarkdownBlockQuoteContext),
     Footnote,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ContainerOwner {
+    Markdown,
+    Html,
+}
+
+struct Container {
+    kind: ContainerKind,
+    owner: ContainerOwner,
 }
 
 /// An image whose description is being read: it is collected apart from the
@@ -158,6 +174,7 @@ enum HtmlPiece {
         label: Range<usize>,
         whole: Range<usize>,
     },
+    Pre(Range<usize>),
 }
 
 /// A `<p>`, `<div>`, `<center>` or `<hN>` still open.
@@ -167,6 +184,7 @@ struct OpenHtmlContainer {
     /// How many markdown containers were open around it; it cannot outlive
     /// them.
     depth: usize,
+    html_depth: usize,
 }
 
 /// Turns pulldown-cmark's event stream into preview rows.
@@ -194,7 +212,7 @@ struct Flattener<'a> {
     html_links: usize,
     image: Option<OpenImage>,
     containers: Vec<Container>,
-    quotes: Vec<MarkdownBlockQuoteContext>,
+    details: Vec<OpenDetails>,
     footnote: Option<MarkdownFootnoteContext>,
     /// Where the heading being read starts.
     heading: Option<usize>,
@@ -202,6 +220,8 @@ struct Flattener<'a> {
     table: Option<OpenTable>,
     html_block: Option<HtmlBlockBuffer>,
     pending_html_table: Option<PendingHtmlTable>,
+    pending_html_pre: Option<PendingHtmlPre>,
+    captured_pre_ends: Vec<TagEnd>,
     captured_html_ends: Vec<TagEnd>,
     html_containers: Vec<OpenHtmlContainer>,
     /// The `<hN>` being read: its level and where it starts.
@@ -237,13 +257,15 @@ impl<'a> Flattener<'a> {
             html_links: 0,
             image: None,
             containers: Vec::new(),
-            quotes: Vec::new(),
+            details: Vec::new(),
             footnote: None,
             heading: None,
             code: None,
             table: None,
             html_block: None,
             pending_html_table: None,
+            pending_html_pre: None,
+            captured_pre_ends: Vec::new(),
             captured_html_ends: Vec::new(),
             html_containers: Vec::new(),
             html_heading: None,
@@ -254,6 +276,9 @@ impl<'a> Flattener<'a> {
     }
 
     fn event(&mut self, event: Event<'_>, range: Range<usize>) -> Option<()> {
+        if self.capture_pre_event(&event, &range)? {
+            return Some(());
+        }
         if self.capture_table_event(&event, &range)? {
             return Some(());
         }
@@ -356,11 +381,10 @@ impl<'a> Flattener<'a> {
             }
             Tag::BlockQuote(kind) => {
                 self.begin_block(true)?;
-                self.quotes.push(MarkdownBlockQuoteContext {
-                    alert_kind: kind.and_then(markdown_alert_kind_from_blockquote_kind),
-                    emitted_row: false,
-                });
-                self.containers.push(Container::Quote);
+                self.open_quote(
+                    kind.and_then(markdown_alert_kind_from_blockquote_kind),
+                    ContainerOwner::Markdown,
+                );
             }
             Tag::CodeBlock(kind) => {
                 self.begin_block(true)?;
@@ -388,27 +412,11 @@ impl<'a> Flattener<'a> {
                 // The parent item's text — or picture, or checkbox — gets its
                 // own row at the current indent before the sub-list opens.
                 self.begin_block(true)?;
-                self.containers.push(Container::List(match first_number {
-                    Some(next_number) => ListContext::Ordered { next_number },
-                    None => ListContext::Unordered,
-                }));
+                self.open_list(first_number, ContainerOwner::Markdown);
             }
             Tag::Item => {
                 self.begin_block(true)?;
-                let kind = self
-                    .containers
-                    .iter_mut()
-                    .rev()
-                    .find_map(|container| match container {
-                        Container::List(list) => Some(list.next_item_kind()),
-                        _ => None,
-                    })
-                    .unwrap_or(MarkdownPreviewRowKind::ListItem { number: None });
-                self.containers.push(Container::Item(OpenItem {
-                    kind,
-                    marker_drawn: false,
-                    task: None,
-                }));
+                self.open_item(ContainerOwner::Markdown);
             }
             Tag::FootnoteDefinition(label) => {
                 self.begin_block(true)?;
@@ -416,7 +424,10 @@ impl<'a> Flattener<'a> {
                     label: label.to_string().into(),
                     emitted_label: false,
                 });
-                self.containers.push(Container::Footnote);
+                self.containers.push(Container {
+                    kind: ContainerKind::Footnote,
+                    owner: ContainerOwner::Markdown,
+                });
             }
             Tag::Table(alignments) => {
                 self.begin_block(true)?;
@@ -503,8 +514,7 @@ impl<'a> Flattener<'a> {
             TagEnd::BlockQuote(_) => {
                 self.end_html_row(range.end)?;
                 self.end_open_html();
-                self.quotes.pop();
-                self.pop_container();
+                self.pop_container()?;
             }
             TagEnd::CodeBlock => {
                 let code = self.code.take()?;
@@ -532,19 +542,19 @@ impl<'a> Flattener<'a> {
                     }
                 }
             }
-            TagEnd::List(_) => self.pop_container(),
+            TagEnd::List(_) => self.pop_container()?,
             TagEnd::Item => {
                 // Text a nested block or paragraph has not already emitted —
                 // or a picture, or an empty item's checkbox.
                 self.end_html_row(range.end)?;
                 self.end_open_html();
-                self.pop_container();
+                self.pop_container()?;
             }
             TagEnd::FootnoteDefinition => {
                 self.end_html_row(range.end)?;
                 self.end_open_html();
                 self.footnote = None;
-                self.pop_container();
+                self.pop_container()?;
             }
             TagEnd::Table => self.table = None,
             TagEnd::TableHead | TagEnd::TableRow => self.end_table_row(range.end)?,
@@ -764,18 +774,13 @@ impl<'a> Flattener<'a> {
             HtmlHandling::DetailsSummary(summary) => {
                 self.flush_row(range.start)?;
                 let (text, spans) = parse_inline_markdown_fragment(&summary);
-                if !text.is_empty() {
+                let kind = self.details_summary_kind();
+                if !text.is_empty() || self.current_details().is_some() {
+                    let text = if text.is_empty() { "Details" } else { &text };
                     let lines = self.line_range(range);
                     let (indent, quotes) = (self.indent_level(), self.blockquote_level());
                     self.push_row(
-                        MarkdownPreviewRowInput::plain(
-                            MarkdownPreviewRowKind::DetailsSummary,
-                            &text,
-                            &spans,
-                            lines,
-                            indent,
-                            quotes,
-                        ),
+                        MarkdownPreviewRowInput::plain(kind, text, &spans, lines, indent, quotes),
                         None,
                         false,
                     )?;
@@ -837,6 +842,56 @@ impl<'a> Flattener<'a> {
                 self.push_fallback_rows(html, range)?;
             }
             HtmlHandling::AppendLiteral => self.push_text(html, range, false),
+            HtmlHandling::OpenList(_)
+            | HtmlHandling::CloseList(_)
+            | HtmlHandling::OpenItem
+            | HtmlHandling::CloseItem
+            | HtmlHandling::OpenQuote
+            | HtmlHandling::CloseQuote
+            | HtmlHandling::OpenDetails(_)
+            | HtmlHandling::CloseDetails
+                if self.html_containers_inert() =>
+            {
+                push_separator(&mut self.text);
+            }
+            HtmlHandling::OpenList(number) => {
+                self.split_row_at(range.start)?;
+                self.close_html_container(HtmlContainerKind::Paragraph);
+                self.open_list(number, ContainerOwner::Html);
+            }
+            HtmlHandling::CloseList(ordered) => {
+                self.close_html_block(range.end, |kind| {
+                    matches!(kind, ContainerKind::List(list)
+                        if matches!(list, ListContext::Ordered { .. }) == ordered)
+                })?;
+            }
+            HtmlHandling::OpenItem => {
+                self.split_row_at(range.start)?;
+                if self.containers.last().is_some_and(|container| {
+                    container.owner == ContainerOwner::Html
+                        && matches!(container.kind, ContainerKind::Item(_))
+                }) {
+                    self.close_html_block(range.start, |kind| {
+                        matches!(kind, ContainerKind::Item(_))
+                    })?;
+                }
+                self.open_item(ContainerOwner::Html);
+            }
+            HtmlHandling::CloseItem => {
+                self.close_html_block(range.end, |kind| matches!(kind, ContainerKind::Item(_)))?;
+            }
+            HtmlHandling::OpenQuote => {
+                self.split_row_at(range.start)?;
+                self.close_html_container(HtmlContainerKind::Paragraph);
+                self.open_quote(None, ContainerOwner::Html);
+            }
+            HtmlHandling::CloseQuote => {
+                self.close_html_block(range.end, |kind| matches!(kind, ContainerKind::Quote(_)))?;
+            }
+            HtmlHandling::OpenDetails(initially_open) => {
+                self.open_details(initially_open, range)?;
+            }
+            HtmlHandling::CloseDetails => self.close_details(range.end)?,
             // A table row, a heading or a picture's description cannot be
             // split, so a block element there only separates words.
             HtmlHandling::OpenContainer(..) | HtmlHandling::Rule
@@ -913,7 +968,8 @@ impl<'a> Flattener<'a> {
         self.html_containers.push(OpenHtmlContainer {
             kind,
             align,
-            depth: self.containers.len(),
+            depth: self.markdown_container_depth(),
+            html_depth: self.html_container_depth(),
         });
     }
 
@@ -932,18 +988,25 @@ impl<'a> Flattener<'a> {
     /// preview knows every tag in it; otherwise line by line, verbatim where
     /// it cannot interpret a line.
     fn read_html_flow_block(&mut self, block: &HtmlBlockBuffer) -> Option<()> {
-        let tokens: Vec<HtmlToken> = html_tokens(&block.text).collect();
-        let mut pieces = Vec::with_capacity(tokens.len());
-        let mut ix = 0;
-        while let Some(token) = tokens.get(ix) {
-            ix += 1;
+        let mut pieces = Vec::new();
+        let mut at = 0;
+        while let Some(token) = html_tokens(&block.text[at..]).next() {
             let range = match token {
                 HtmlToken::Text(range) => {
-                    pieces.push(HtmlPiece::Text(range.clone()));
+                    let range = range.start + at..range.end + at;
+                    at = range.end;
+                    pieces.push(HtmlPiece::Text(range));
                     continue;
                 }
-                HtmlToken::Tag(range) => range.clone(),
+                HtmlToken::Tag(range) => range.start + at..range.end + at,
             };
+            at = range.end;
+            let lower = block.text[range.clone()].to_ascii_lowercase();
+            if is_html_open_tag(&lower, "pre") {
+                at = html_pre::pre_end(&block.text, at).map_or(block.text.len(), |end| end.end);
+                pieces.push(HtmlPiece::Pre(range.start..at));
+                continue;
+            }
             let handling = classify_html_tag(&block.text[range.clone()]);
             if handling != HtmlHandling::AppendLiteral {
                 pieces.push(HtmlPiece::Tag(handling, range));
@@ -951,26 +1014,26 @@ impl<'a> Flattener<'a> {
             }
             // A `<summary>` label is read whole, as markdown; any other tag
             // the preview does not know leaves the block to be shown as written.
-            let lower = block.text[range.clone()].to_ascii_lowercase();
             let close = is_html_open_tag(&lower, "summary")
                 .then(|| {
-                    tokens[ix..].iter().position(|token| {
-                        matches!(token, HtmlToken::Tag(tag)
-                            if is_html_close_tag(&block.text[tag.clone()].to_ascii_lowercase(), "summary"))
+                    html_tokens(&block.text[at..]).find_map(|token| {
+                        let HtmlToken::Tag(tag) = token else {
+                            return None;
+                        };
+                        let tag = tag.start + at..tag.end + at;
+                        is_html_close_tag(&block.text[tag.clone()].to_ascii_lowercase(), "summary")
+                            .then_some(tag)
                     })
                 })
                 .flatten();
-            let Some(close) = close else {
-                return self.read_html_block_lines(block);
-            };
-            let HtmlToken::Tag(close_range) = &tokens[ix + close] else {
+            let Some(close_range) = close else {
                 return self.read_html_block_lines(block);
             };
             pieces.push(HtmlPiece::Summary {
                 label: range.end..close_range.start,
                 whole: range.start..close_range.end,
             });
-            ix += close + 1;
+            at = close_range.end;
         }
         for piece in pieces {
             match piece {
@@ -993,6 +1056,9 @@ impl<'a> Flattener<'a> {
                 HtmlPiece::Summary { label, whole } => {
                     let summary = HtmlHandling::DetailsSummary(block.text[label].to_owned());
                     self.apply_html(summary, "", block.source_range(whole), false)?;
+                }
+                HtmlPiece::Pre(range) => {
+                    self.read_html_pre(&block.slice(range))?;
                 }
                 HtmlPiece::Text(range) => {
                     let text = &block.text[range.clone()];
@@ -1233,7 +1299,7 @@ impl<'a> Flattener<'a> {
     fn flush_before_block(&mut self, claim_task: bool) -> Option<()> {
         let task_waiting = claim_task
             && self.innermost_text_container().is_some_and(
-                |container| matches!(container, Container::Item(item) if item.task.is_some()),
+                |container| matches!(container, ContainerKind::Item(item) if item.task.is_some()),
             );
         if !self.text.is_empty() || !self.images.is_empty() || task_waiting {
             let at = self.content.as_ref().map_or(0, |content| content.end);
@@ -1249,8 +1315,8 @@ impl<'a> Flattener<'a> {
     fn flush_row(&mut self, at: usize) -> Option<()> {
         self.trim_html_trailing_space();
         let (kind, continues_item, task_waiting) = match self.innermost_text_container() {
-            Some(Container::Item(item)) => (item.kind, item.marker_drawn, item.task.is_some()),
-            Some(Container::Quote) => (MarkdownPreviewRowKind::BlockquoteLine, false, false),
+            Some(ContainerKind::Item(item)) => (item.kind, item.marker_drawn, item.task.is_some()),
+            Some(ContainerKind::Quote(_)) => (MarkdownPreviewRowKind::BlockquoteLine, false, false),
             _ => (MarkdownPreviewRowKind::Paragraph, false, false),
         };
         if self.text.is_empty() && self.images.is_empty() && !task_waiting {
@@ -1263,7 +1329,7 @@ impl<'a> Flattener<'a> {
         let text = std::mem::take(&mut self.text);
         let spans = std::mem::take(&mut self.spans);
         let task = match self.innermost_text_container_mut() {
-            Some(Container::Item(item)) => {
+            Some(ContainerKind::Item(item)) => {
                 item.marker_drawn = true;
                 item.task.take()
             }
@@ -1305,6 +1371,7 @@ impl<'a> Flattener<'a> {
         task: Option<MarkdownTaskMarker>,
         continues_item: bool,
     ) -> Option<()> {
+        self.ensure_details_summary()?;
         let pending_images = std::mem::take(&mut self.images);
         let footnote_label = self.footnote.as_mut().and_then(|footnote| {
             (!footnote.emitted_label).then(|| {
@@ -1322,6 +1389,8 @@ impl<'a> Flattener<'a> {
                     | MarkdownPreviewRowKind::DetailsSummary
             );
         let mut decoration = MarkdownPreviewRowDecoration {
+            details: self.current_details(),
+            ordered_list_start: self.ordered_list_start(),
             footnote_label,
             task,
             continues_item,
@@ -1332,11 +1401,14 @@ impl<'a> Flattener<'a> {
             },
             ..MarkdownPreviewRowDecoration::default()
         };
-        if let Some(alert) = self
-            .quotes
-            .iter_mut()
-            .rev()
-            .find(|quote| quote.alert_kind.is_some())
+        if let Some(alert) =
+            self.containers
+                .iter_mut()
+                .rev()
+                .find_map(|container| match &mut container.kind {
+                    ContainerKind::Quote(quote) if quote.alert_kind.is_some() => Some(quote),
+                    _ => None,
+                })
         {
             decoration.alert_kind = alert.alert_kind;
             if !alert.emitted_row {
@@ -1422,6 +1494,7 @@ impl<'a> Flattener<'a> {
     /// has to take the pending pictures, or they would be carried past it and
     /// land on an unrelated row.
     fn push_fallback_rows(&mut self, text: &str, range: Range<usize>) -> Option<()> {
+        self.ensure_details_summary()?;
         let lines = self.line_range(range);
         let segments = if text.is_empty() {
             vec![""]
@@ -1452,7 +1525,12 @@ impl<'a> Flattener<'a> {
             });
             pending_images = rest;
             row.inline_images = Arc::from(mine);
-            push_row(&mut self.rows, row, MarkdownPreviewRowDecoration::default())?;
+            let decoration = MarkdownPreviewRowDecoration {
+                details: self.current_details(),
+                ordered_list_start: self.ordered_list_start(),
+                ..MarkdownPreviewRowDecoration::default()
+            };
+            push_row(&mut self.rows, row, decoration)?;
         }
 
         Some(())
@@ -1486,45 +1564,168 @@ impl<'a> Flattener<'a> {
         let depth = self
             .containers
             .iter()
-            .filter(|container| matches!(container, Container::List(_) | Container::Footnote))
+            .filter(|container| {
+                matches!(
+                    container.kind,
+                    ContainerKind::List(_) | ContainerKind::Footnote
+                )
+            })
             .count();
         u8::try_from(depth).unwrap_or(u8::MAX)
     }
 
     fn blockquote_level(&self) -> u8 {
-        u8::try_from(self.quotes.len()).unwrap_or(u8::MAX)
+        let depth = self
+            .containers
+            .iter()
+            .filter(|container| matches!(container.kind, ContainerKind::Quote(_)))
+            .count();
+        u8::try_from(depth).unwrap_or(u8::MAX)
+    }
+
+    fn ordered_list_start(&self) -> Option<u64> {
+        self.containers
+            .iter()
+            .rev()
+            .find_map(|container| match container.kind {
+                ContainerKind::List(list) => Some(match list {
+                    ListContext::Ordered { first_number, .. } => Some(first_number),
+                    ListContext::Unordered => None,
+                }),
+                _ => None,
+            })
+            .flatten()
     }
 
     /// The container that decides what a row of text is: the innermost list
     /// item or quote.
-    fn innermost_text_container(&self) -> Option<&Container> {
+    fn innermost_text_container(&self) -> Option<&ContainerKind> {
         self.containers
             .iter()
             .rev()
-            .find(|container| matches!(container, Container::Item(_) | Container::Quote))
+            .map(|container| &container.kind)
+            .find(|kind| matches!(kind, ContainerKind::Item(_) | ContainerKind::Quote(_)))
     }
 
-    fn innermost_text_container_mut(&mut self) -> Option<&mut Container> {
+    fn innermost_text_container_mut(&mut self) -> Option<&mut ContainerKind> {
         self.containers
             .iter_mut()
             .rev()
-            .find(|container| matches!(container, Container::Item(_) | Container::Quote))
+            .map(|container| &mut container.kind)
+            .find(|kind| matches!(kind, ContainerKind::Item(_) | ContainerKind::Quote(_)))
     }
 
     fn innermost_item_mut(&mut self) -> Option<&mut OpenItem> {
         self.containers
             .iter_mut()
             .rev()
-            .find_map(|container| match container {
-                Container::Item(item) => Some(item),
+            .find_map(|container| match &mut container.kind {
+                ContainerKind::Item(item) => Some(item),
                 _ => None,
             })
     }
 
-    fn pop_container(&mut self) {
-        self.containers.pop();
-        let depth = self.containers.len();
-        self.html_containers.retain(|open| open.depth <= depth);
+    fn pop_container(&mut self) -> Option<()> {
+        self.ensure_details_summary()?;
+        if let Some(index) = self
+            .containers
+            .iter()
+            .rposition(|container| container.owner == ContainerOwner::Markdown)
+        {
+            self.containers.truncate(index);
+        }
+        self.trim_html_container_scopes();
+        self.close_details_outside_owner_scope();
+        Some(())
+    }
+
+    fn markdown_container_depth(&self) -> usize {
+        self.containers
+            .iter()
+            .filter(|container| container.owner == ContainerOwner::Markdown)
+            .count()
+    }
+
+    fn html_container_depth(&self) -> usize {
+        self.containers
+            .iter()
+            .filter(|container| container.owner == ContainerOwner::Html)
+            .count()
+    }
+
+    fn trim_html_container_scopes(&mut self) {
+        let markdown = self.markdown_container_depth();
+        let html = self.html_container_depth();
+        self.html_containers
+            .retain(|open| open.depth <= markdown && open.html_depth <= html);
+    }
+
+    fn open_list(&mut self, number: Option<u64>, owner: ContainerOwner) {
+        self.containers.push(Container {
+            kind: ContainerKind::List(match number {
+                Some(next_number) => ListContext::Ordered {
+                    first_number: next_number,
+                    next_number,
+                },
+                None => ListContext::Unordered,
+            }),
+            owner,
+        });
+    }
+
+    fn open_item(&mut self, owner: ContainerOwner) {
+        let kind = self
+            .containers
+            .iter_mut()
+            .rev()
+            .filter(|container| container.owner == owner)
+            .find_map(|container| match &mut container.kind {
+                ContainerKind::List(list) => Some(list.next_item_kind()),
+                _ => None,
+            })
+            .unwrap_or(MarkdownPreviewRowKind::ListItem { number: None });
+        self.containers.push(Container {
+            kind: ContainerKind::Item(OpenItem {
+                kind,
+                marker_drawn: false,
+                task: None,
+            }),
+            owner,
+        });
+    }
+
+    fn open_quote(&mut self, alert_kind: Option<MarkdownAlertKind>, owner: ContainerOwner) {
+        self.containers.push(Container {
+            kind: ContainerKind::Quote(MarkdownBlockQuoteContext {
+                alert_kind,
+                emitted_row: false,
+            }),
+            owner,
+        });
+    }
+
+    fn close_html_block(
+        &mut self,
+        at: usize,
+        closes: impl Fn(&ContainerKind) -> bool,
+    ) -> Option<()> {
+        let Some(index) = self.containers.iter().rposition(|container| {
+            container.owner == ContainerOwner::Html && closes(&container.kind)
+        }) else {
+            return Some(());
+        };
+        self.split_row_at(at)?;
+        self.ensure_details_summary()?;
+        self.close_html_paragraphs();
+        let mut next = 0;
+        self.containers.retain(|container| {
+            let retain = next < index || container.owner == ContainerOwner::Markdown;
+            next += 1;
+            retain
+        });
+        self.trim_html_container_scopes();
+        self.close_details_outside_owner_scope();
+        Some(())
     }
 }
 
@@ -1630,15 +1831,15 @@ pub(crate) fn insert_top_level_heading_spacer_rows(rows: &mut Vec<MarkdownPrevie
     }
 
     let mut spaced_rows = Vec::with_capacity(rows.len() + rows.len() / 4);
-    let mut pending_gap_after_heading: Option<Range<usize>> = None;
+    let mut pending_gap_after_heading: Option<MarkdownPreviewRow> = None;
 
     for row in rows.drain(..) {
         let is_top_level_heading = markdown_row_is_top_level_heading(&row);
-        if let Some(source_line_range) = pending_gap_after_heading.take()
+        if let Some(spacer) = pending_gap_after_heading.take()
             && !is_top_level_heading
             && !matches!(row.kind, MarkdownPreviewRowKind::Spacer)
         {
-            spaced_rows.push(markdown_preview_spacer_row_with_range(source_line_range));
+            spaced_rows.push(spacer);
         }
 
         if is_top_level_heading {
@@ -1651,16 +1852,12 @@ pub(crate) fn insert_top_level_heading_spacer_rows(rows: &mut Vec<MarkdownPrevie
                     )
             );
 
-            // One spacer row is the section break. Adding a second one under
-            // the heading doubles it to two blank rows, which reads as a hole
-            // in the document; the heading's own vertical insets carry the
-            // smaller gap beneath it instead.
+            let mut spacer = markdown_preview_spacer_row_with_range(row.source_line_range.clone());
+            spacer.details = row.details.clone();
             if has_content_before_heading {
-                spaced_rows.push(markdown_preview_spacer_row_with_range(
-                    row.source_line_range.clone(),
-                ));
+                spaced_rows.push(spacer);
             } else {
-                pending_gap_after_heading = Some(row.source_line_range.clone());
+                pending_gap_after_heading = Some(spacer);
             }
         }
 
@@ -1675,3 +1872,4 @@ pub(crate) fn markdown_row_is_top_level_heading(row: &MarkdownPreviewRow) -> boo
         && row.indent_level == 0
         && row.blockquote_level == 0
 }
+use html_details::OpenDetails;

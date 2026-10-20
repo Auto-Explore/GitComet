@@ -139,15 +139,24 @@ pub struct MarkdownDiagramSource {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarkdownDetails {
+    pub id: usize,
+    pub initially_open: bool,
+    pub parent: Option<Arc<MarkdownDetails>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarkdownPreviewRow {
     pub kind: MarkdownPreviewRowKind,
     pub text: SharedString,
     pub inline_spans: Arc<Vec<MarkdownInlineSpan>>,
     pub code_language: Option<gitcomet_syntax::DiffSyntaxLanguage>,
     pub diagram: Option<Arc<MarkdownDiagramSource>>,
+    pub details: Option<Arc<MarkdownDetails>>,
     pub source_line_range: Range<usize>,
     pub change_hint: MarkdownChangeHint,
     pub indent_level: u8,
+    pub ordered_list_start: Option<u64>,
     pub blockquote_level: u8,
     pub footnote_label: Option<SharedString>,
     pub alert_kind: Option<MarkdownAlertKind>,
@@ -177,9 +186,11 @@ impl Default for MarkdownPreviewRow {
             inline_spans: Arc::default(),
             code_language: None,
             diagram: None,
+            details: None,
             source_line_range: 0..0,
             change_hint: MarkdownChangeHint::None,
             indent_level: 0,
+            ordered_list_start: None,
             blockquote_level: 0,
             footnote_label: None,
             alert_kind: None,

@@ -19,6 +19,14 @@ pub(crate) enum HtmlHandling {
     /// `<h1>`–`<h6>`, with its `align`.
     OpenContainer(HtmlContainerKind, MarkdownTextAlign),
     CloseContainer(HtmlContainerKind),
+    OpenList(Option<u64>),
+    CloseList(bool),
+    OpenItem,
+    CloseItem,
+    OpenQuote,
+    CloseQuote,
+    OpenDetails(bool),
+    CloseDetails,
     /// `<hr>`: a thematic break.
     Rule,
     AppendLiteral,
@@ -169,6 +177,22 @@ pub(crate) fn classify_html_tag(tag: &str) -> HtmlHandling {
         };
     }
     match (name, closing) {
+        ("ul", false) => HtmlHandling::OpenList(None),
+        ("ol", false) => HtmlHandling::OpenList(Some(
+            extract_html_attribute(tag, "start")
+                .and_then(|number| number.trim().parse().ok())
+                .unwrap_or(1),
+        )),
+        ("ul", true) => HtmlHandling::CloseList(false),
+        ("ol", true) => HtmlHandling::CloseList(true),
+        ("li", false) => HtmlHandling::OpenItem,
+        ("li", true) => HtmlHandling::CloseItem,
+        ("blockquote", false) => HtmlHandling::OpenQuote,
+        ("blockquote", true) => HtmlHandling::CloseQuote,
+        ("details", false) => {
+            HtmlHandling::OpenDetails(extract_html_attribute(tag, "open").is_some())
+        }
+        ("details", true) => HtmlHandling::CloseDetails,
         ("br", _) => HtmlHandling::HardBreak,
         ("hr", false) => HtmlHandling::Rule,
         ("hr", true) => HtmlHandling::Ignore,
@@ -189,7 +213,7 @@ pub(crate) fn classify_html_tag(tag: &str) -> HtmlHandling {
             None => HtmlHandling::Ignore,
         },
         ("a", true) => HtmlHandling::EndLink,
-        ("img" | "sub" | "sup" | "span" | "small" | "picture" | "source" | "details", _) => {
+        ("img" | "sub" | "sup" | "span" | "small" | "picture" | "source", _) => {
             HtmlHandling::Ignore
         }
         _ => HtmlHandling::AppendLiteral,

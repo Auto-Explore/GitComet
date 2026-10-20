@@ -204,6 +204,8 @@ impl<'a> MarkdownPreviewRowInput<'a> {
 
 #[derive(Clone, Default)]
 pub(crate) struct MarkdownPreviewRowDecoration {
+    pub(crate) ordered_list_start: Option<u64>,
+    pub(crate) details: Option<Arc<MarkdownDetails>>,
     pub(crate) footnote_label: Option<SharedString>,
     pub(crate) alert_kind: Option<MarkdownAlertKind>,
     pub(crate) starts_alert: bool,

@@ -233,10 +233,6 @@ pub(crate) fn markdown_diff_row_groups(
     }
 
     for group in &mut groups {
-        // A row whose lines are untouched still changed when the `<div align>`
-        // around it did: that line has no row of its own to mark. Spacers can
-        // move between versions without anything changing, so only real rows
-        // are paired.
         let old_rows = group
             .old
             .iter()
@@ -248,7 +244,7 @@ pub(crate) fn markdown_diff_row_groups(
         let realigned = old_rows.clone().count() == new_rows.clone().count()
             && old_rows
                 .zip(new_rows)
-                .any(|(old, new)| old.align != new.align || !same_table_presentation(old, new));
+                .any(|(old, new)| !same_container_presentation(old, new));
         let changed = realigned
             || group
                 .old
@@ -407,16 +403,36 @@ pub(crate) fn markdown_inline_diff_rows_can_merge(
             _ => false,
         }
         && same_spans
-        && old_row.code_language == new_row.code_language
-        && old_row.indent_level == new_row.indent_level
-        && old_row.blockquote_level == new_row.blockquote_level
+        && same_container_presentation(old_row, new_row)
         && old_row.footnote_label == new_row.footnote_label
         && old_row.alert_kind == new_row.alert_kind
         && old_row.starts_alert == new_row.starts_alert
         && old_row.continues_item == new_row.continues_item
-        && old_row.align == new_row.align
-        && same_table_presentation(old_row, new_row)
         && old_row.task.map(|task| task.checked) == new_row.task.map(|task| task.checked)
+}
+
+fn same_container_presentation(old: &MarkdownPreviewRow, new: &MarkdownPreviewRow) -> bool {
+    old.indent_level == new.indent_level
+        && old.blockquote_level == new.blockquote_level
+        && old.code_language == new.code_language
+        && old.ordered_list_start == new.ordered_list_start
+        && old.align == new.align
+        && same_table_presentation(old, new)
+        && same_details_presentation(old.details.as_deref(), new.details.as_deref())
+}
+
+fn same_details_presentation(
+    mut old: Option<&MarkdownDetails>,
+    mut new: Option<&MarkdownDetails>,
+) -> bool {
+    while let (Some(a), Some(b)) = (old, new) {
+        if a.initially_open != b.initially_open {
+            return false;
+        }
+        old = a.parent.as_deref();
+        new = b.parent.as_deref();
+    }
+    old.is_none() && new.is_none()
 }
 
 /// Compare table boundaries and cell presentation, excluding source positions.

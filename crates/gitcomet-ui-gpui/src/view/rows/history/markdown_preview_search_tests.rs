@@ -19,6 +19,8 @@ fn row(text: &str, spans: Vec<MarkdownInlineSpan>) -> MarkdownPreviewRow {
         inline_spans: Arc::new(spans),
         code_language: None,
         diagram: None,
+        details: None,
+        ordered_list_start: None,
         source_line_range: 0..1,
         change_hint: MarkdownChangeHint::None,
         indent_level: 0,

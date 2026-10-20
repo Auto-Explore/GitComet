@@ -76,7 +76,7 @@ impl HtmlBlockBuffer {
             })
     }
 
-    fn slice(&self, range: Range<usize>) -> Self {
+    pub(super) fn slice(&self, range: Range<usize>) -> Self {
         let mut result = Self::default();
         let first = self
             .lines
@@ -109,7 +109,7 @@ impl HtmlBlockBuffer {
         result
     }
 
-    fn append(&mut self, other: &Self) {
+    pub(super) fn append(&mut self, other: &Self) {
         let previous = self.lines.last().map_or(0, |(_, source)| source.end);
         if let Some((_, next)) = other.lines.first()
             && next.start > previous
@@ -360,13 +360,26 @@ impl Flattener<'_> {
         if end <= start {
             return Some(());
         }
+        let block = self.source_buffer(start..end);
+        self.read_html_block(&block)
+    }
+
+    pub(super) fn source_buffer(&self, range: Range<usize>) -> HtmlBlockBuffer {
         let mut block = HtmlBlockBuffer::default();
-        let mut at = start;
-        for line in self.source[start..end].split_inclusive('\n') {
+        let mut at = range.start;
+        let markdown_quotes = self
+            .containers
+            .iter()
+            .filter(|container| {
+                container.owner == ContainerOwner::Markdown
+                    && matches!(container.kind, ContainerKind::Quote(_))
+            })
+            .count();
+        for line in self.source[range].split_inclusive('\n') {
             let mut skip = 0;
             if at == 0 || self.source.as_bytes().get(at - 1) == Some(&b'\n') {
                 // Pulldown removes these prefixes from HTML events as well.
-                for _ in 0..self.blockquote_level() {
+                for _ in 0..markdown_quotes {
                     let rest = &line[skip..];
                     let spaces = rest.len() - rest.trim_start_matches(' ').len();
                     if rest.as_bytes().get(spaces) != Some(&b'>') {
@@ -381,7 +394,7 @@ impl Flattener<'_> {
             block.push(&line[skip..], at + skip..at + line.len());
             at += line.len();
         }
-        self.read_html_block(&block)
+        block
     }
 
     pub(super) fn finish_pending_html_table(&mut self) -> Option<()> {
