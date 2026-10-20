@@ -78,6 +78,53 @@ DXC was Windows SDK 1.8.2502.11, staged next to isolated executables; loaded
 modules confirmed the DLLs used. Once smoothing is deferred, DXC adds only a
 small improvement. Production packaging does not bundle these SDK DLLs.
 
+## Repository bootstrap overlap
+
+The next change creates the `AppStore` and prepares repository bootstrap before
+`cx.open_window`. Repository workers can then load status and history while
+the native window initializes its DX12 renderer. The previous saved-profile
+trace had Git available by 96.3 ms, but created the store at 658.5 ms.
+
+Preparation applies settings and entry gates before dispatching repository
+requests. The view consumes one prepared bootstrap decision and attaches to
+the latest store snapshot, including retained notifications and diagnostics.
+Git-runtime recovery, focused tools, empty workspaces, saved workspace layout,
+and failed-open handling retain their existing behavior.
+
+Six new bootstrap tests pass. They cover loading before a window exists,
+single dispatch and stable repository identity, entry gates, focused/empty
+workspaces, failures before attachment, Git recovery, and feedback consumption.
+Another 152 existing app, notification, and window-lifecycle tests pass.
+
+Five alternating pairs compared the frozen lazy-only build with this bootstrap
+candidate, using the same release profile and DX12/FXC:
+
+| Milestone | Lazy only | Early bootstrap |
+| --- | ---: | ---: |
+| Launch to first draw, median | 708.2 ms | 868.6 ms |
+| Launch to repository ready, median | 1,183.4 ms | 1,015.1 ms |
+| Repository-ready range | 1,165.8–1,242.6 ms | 983.2–1,150.6 ms |
+
+This is a tradeoff, not a uniform improvement. Three candidate runs overlapped
+loading, while two waited for the Git runtime probe and restored only after
+renderer initialization. First-frame CPU drawing was not slower; the delay
+occurred before window attachment. Contention between renderer initialization
+and repository workers is a possible explanation, not a proven attribution.
+The first observed bootstrap launch reached harness readiness at 1,350.2 ms.
+Neither these warm-cache pairs nor that first observation establish reboot-cold
+subsecond startup. Dependency source identities and build paths also changed
+when integrating the identical renderer source, potentially affecting layout.
+
+With the actual saved profile, the parent observed interaction at 859.8 ms;
+app tracing recorded repository readiness at 1,229.6 ms. That run took the
+deferred path: bootstrap preparation was at 102.7 ms and the Git probe finished
+at 107.5 ms, but its UI handoff waited until window initialization completed.
+
+A fresh 1 kHz samply capture of an early-bootstrap run attributed 550.5 ms of
+sampled compiler CPU to ordinary shaders (quads 188.1 ms, shadows 161.1 ms).
+There were still no eager smoothing pipeline calls. This is diagnostic evidence
+for the next renderer experiment, not a controlled attribution of contention.
+
 ## Remaining work
 
 The candidate still compiles ordinary shaders, including quads (~121 ms
@@ -93,10 +140,21 @@ Watcher initialization (~142 ms sampled CPU) and directory traversal run
 concurrently. A worktree-dirty scan also overlaps the main status scan.
 These inclusive and parallel costs must not be added as elapsed-time savings.
 
-Starting repository bootstrap before window/GPU creation is the next candidate
-for overlapping useful work. It must preserve settings-before-restore ordering,
-entry gates, Git-runtime readiness, focused modes, and single ownership of
-bootstrap dispatch. Any saving requires measurement.
+After bootstrap overlap, further experiments include:
+
+- Create ordinary DX12 pipelines with a small worker pool. Elapsed savings are
+  unknown; workers need their own error scopes and must preserve failure recovery.
+- Start the gitlink status supplement alongside the gix worktree scan after
+  selecting paths. This could overlap part of the observed 149 ms wait while
+  preserving submodule status, cancellation, and error handling.
+- Reduce repeated filesystem lookups during watcher initialization while
+  preserving watch coverage. Other-worktree scans already exclude the active
+  checkout; they are not duplicate active-repository status requests.
+
+These are unmeasured opportunities. Public `wgpu::PipelineCache` in version
+29.0.4 supports Vulkan only, so it does not provide persistent DX12 shader
+caching. More shader deferral requires evidence that the initial frame does
+not need those pipelines.
 
 ## Validation and reproduction
 
@@ -133,6 +191,8 @@ Large local artifacts remain under ignored `target/startup-investigation/`:
 `repo-lazy-pairs/session.json`, `experiment-summary.json`, the frozen
 `baseline-frozen/` and `lazy-runtime/` binaries/PDBs, and
 `samply-lazy-candidate/` with the matching symbols, ETL, and analysis.
+The bootstrap experiment adds `bootstrap-runtime/`, `repo-bootstrap-pairs/`,
+`bootstrap-stage-real-profile/`, and `samply-bootstrap-candidate/`.
 Their availability is local; this document records the durable measurements.
 
 ## Upstream precompilation

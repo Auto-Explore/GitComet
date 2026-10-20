@@ -333,6 +333,7 @@ mod terminal_preferences;
 pub(crate) mod test_support;
 mod toast_host;
 mod ui_persistence;
+pub(crate) mod window_bootstrap;
 mod window_gates;
 use gitcomet_ui_kit::zoom_wheel;
 pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};

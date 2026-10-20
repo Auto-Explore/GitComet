@@ -764,6 +764,18 @@ pub(super) fn open_gitcomet_window(
     let view_config = launch.view_config.clone();
     let ui_scale_percent = ui_scale.percent;
 
+    let store_stage = gitcomet_core::startup_trace::span("app_store_init");
+    #[cfg(test)]
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
+    #[cfg(not(test))]
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    drop(store_stage);
+    // The store's own workers can open the active repository while the native
+    // window initializes its renderer. Entry gates and store settings are applied
+    // before any repository request, and the view consumes this decision once.
+    let bootstrap =
+        crate::view::window_bootstrap::PreparedWindowBootstrap::new(&store, view_config, cx);
+
     let window = crate::ui_probe::time_section("open main window", || {
         let _stage = gitcomet_core::startup_trace::span("open_window");
         cx.open_window(
@@ -792,15 +804,7 @@ pub(super) fn open_gitcomet_window(
                     close_window_or_warn(window, cx);
                     false
                 });
-                let store_stage = gitcomet_core::startup_trace::span("app_store_init");
-                #[cfg(test)]
-                let (store, events) = AppStore::new_test(Arc::clone(&backend));
-                #[cfg(not(test))]
-                let (store, events) = AppStore::new(Arc::clone(&backend));
-                drop(store_stage);
-                cx.new(|cx| {
-                    GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
-                })
+                cx.new(|cx| GitCometView::new_with_bootstrap(store, events, bootstrap, window, cx))
             },
         )
     })
