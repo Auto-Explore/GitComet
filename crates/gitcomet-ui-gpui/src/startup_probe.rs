@@ -1,7 +1,7 @@
 use gitcomet_state::model::{AppState, Loadable};
 use serde_json::{Map, Value, json};
 use std::env;
-use std::io::Write as _;
+use std::io::Write;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -162,6 +162,7 @@ fn mark_once(event: StartupProbeEvent, emitted: &AtomicBool) -> bool {
 }
 
 fn emit_event(event: StartupProbeEvent) {
+    crate::ui_probe::scenario_record("startup_milestone", json!({"name": event.as_str()}));
     gitcomet_core::startup_trace::mark(event.as_str());
     let mut payload = Map::new();
     payload.insert("name".to_string(), json!(event.as_str()));
@@ -185,8 +186,18 @@ fn emit_repo_progress(repos_loaded: usize, repos_total: usize) {
 
 fn emit_payload(payload: serde_json::Value) {
     let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "{EVENT_PREFIX}{payload}");
-    let _ = stderr.flush();
+    let _ = write_payload_record(&mut stderr, &payload);
+}
+
+fn write_payload_record(
+    writer: &mut impl Write,
+    payload: &serde_json::Value,
+) -> std::io::Result<()> {
+    // Formatting Value directly into stderr sends each JSON token separately.
+    // In particular, redirected Windows pipes can stall between those writes.
+    let line = format!("{EVENT_PREFIX}{payload}\n");
+    writer.write_all(line.as_bytes())?;
+    writer.flush()
 }
 
 fn count_ready_repos(state: &AppState) -> usize {
@@ -233,12 +244,61 @@ fn current_rss_kib() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        StartupProbeConfig, active_repo_ready, count_ready_repos, pack_repo_progress, should_exit,
+        EVENT_PREFIX, StartupProbeConfig, active_repo_ready, count_ready_repos, pack_repo_progress,
+        should_exit, write_payload_record,
     };
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{AppState, Loadable, RepoId, RepoState};
     use gitcomet_ui_kit::ui_probe::parse_bool_flag;
     use std::path::PathBuf;
+
+    #[test]
+    fn startup_payload_is_one_complete_flushed_write_with_escaped_json_preserved() {
+        #[derive(Default)]
+        struct Writes {
+            records: Vec<Vec<u8>>,
+            flushes: usize,
+        }
+        impl std::io::Write for Writes {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.records.push(bytes.to_vec());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes += 1;
+                Ok(())
+            }
+        }
+
+        let payload = serde_json::json!({
+            "name": "first_interactive",
+            "rss_kib": null,
+            "alloc_bytes": 0,
+            "note": "quote\" slash\\ newline\n雪",
+        });
+        let mut writer = Writes::default();
+        write_payload_record(&mut writer, &payload).unwrap();
+        assert_eq!(
+            writer.records.len(),
+            1,
+            "JSON tokens must not cause separate writes"
+        );
+        assert_eq!(writer.flushes, 1, "publish the complete record immediately");
+        let line = std::str::from_utf8(&writer.records[0]).unwrap();
+        assert!(line.ends_with('\n'));
+        assert_eq!(line.lines().count(), 1);
+        let parsed: serde_json::Value =
+            serde_json::from_str(line.strip_prefix(EVENT_PREFIX).unwrap()).unwrap();
+        assert_eq!(parsed, payload);
+
+        let home = serde_json::json!({"name": "home_ready", "rss_kib": null});
+        write_payload_record(&mut writer, &home).unwrap();
+        assert_eq!(writer.records.len(), 2);
+        assert_eq!(writer.flushes, 2, "do not buffer milestones until shutdown");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&writer.records[1][EVENT_PREFIX.len()..]).unwrap();
+        assert_eq!(parsed, home);
+    }
 
     #[test]
     fn parse_bool_flag_accepts_common_truthy_values() {
