@@ -1582,7 +1582,7 @@ fn review_regression_lifecycle_cold_start_activates_a_requested_inactive_saved_t
     let saved_paths = saved.repositories.clone();
     let launch = normal_empty_launch_config(None);
 
-    cx.update(|app| {
+    let (window, view) = cx.update(|app| {
         crate::workspaces::initialize_for_test(app, vec![saved]);
         let window = open_gitcomet_window(app, Arc::clone(&backend), &launch);
         let owner = normal_gitcomet_window_by_id(app, window.window_id())
@@ -1615,7 +1615,10 @@ fn review_regression_lifecycle_cold_start_activates_a_requested_inactive_saved_t
                 target: BrowserOpenTarget::ExistingWindow,
             },
         );
+        (window, owner.view.upgrade().expect("restoring window view"))
     });
+    let mut window_cx = gpui::VisualTestContext::from_window(window.into(), cx);
+    crate::view::test_support::drain_store_worker(&view, &mut window_cx);
 
     let deadline = Instant::now() + Duration::from_secs(3);
     let active = loop {
