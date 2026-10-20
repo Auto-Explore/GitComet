@@ -1,3 +1,4 @@
+mod conflict_region_origin;
 mod control;
 mod effect;
 mod message;
@@ -12,6 +13,7 @@ mod repo_path_list;
 mod status;
 mod store_event;
 
+pub use conflict_region_origin::ConflictRegionOrigin;
 pub use control::ControlEffect;
 pub use effect::Effect;
 pub use persistence::PersistenceEffect;

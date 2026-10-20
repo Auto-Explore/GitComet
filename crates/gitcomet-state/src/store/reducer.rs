@@ -8,6 +8,7 @@ mod branch_exists_prompt;
 mod comparison_tests;
 mod conflict_interactions;
 mod conflict_load;
+mod conflict_region_mapping;
 mod diff_selection;
 mod diff_session;
 mod effects;

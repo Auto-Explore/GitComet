@@ -3,12 +3,10 @@ use super::util::{EffectAccumulator, push_diagnostic};
 use crate::model::{AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoState};
 use crate::msg::{ConflictAutosolveMode, Effect};
 use gitcomet_core::conflict_session::{
-    ConflictPayload, ConflictRegionResolution, ConflictRegionSourceRanges,
-    ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
+    ConflictPayload, ConflictRegionResolution, ConflictResolverStrategy, ConflictSession,
 };
 use gitcomet_core::domain::FileStatusKind;
 use gitcomet_core::error::Error;
-use gitcomet_core::merge::{MergeSource, OrderedSelection};
 use std::path::{Path, PathBuf};
 
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
@@ -161,193 +159,60 @@ fn restore_conflict_session_resolutions(existing: &ConflictSession, next: &mut C
         return;
     }
 
-    let same_region =
-        |left: &gitcomet_core::conflict_session::ConflictRegion,
-         right: &gitcomet_core::conflict_session::ConflictRegion| {
-            left.base == right.base && left.ours == right.ours && left.theirs == right.theirs
+    let origin = crate::msg::ConflictRegionOrigin::from_session(existing);
+    let correspondences = super::conflict_region_mapping::correspondences(&origin, next);
+    let same_ordered_regions = existing.regions.len() == next.regions.len()
+        && correspondences.iter().enumerate().all(|(index, correspondence)| {
+            matches!(correspondence, Some(super::conflict_region_mapping::RegionCorrespondence::Identity(previous)) if *previous == index)
+        });
+    if !same_ordered_regions {
+        next.restore_plan_decisions_from(existing);
+    }
+    let next_has_base = !next.base.is_absent();
+    for (current, correspondence) in next.regions.iter_mut().zip(correspondences) {
+        use super::conflict_region_mapping::{
+            RegionCorrespondence, map_resolution, source_backed_resolution,
         };
-    let existing_is_provisional = conflict_session_uses_provisional_stage_inputs(existing);
-    let next_has_base_source = !next.base.is_absent();
-    let matches_existing =
-        |previous: &gitcomet_core::conflict_session::ConflictRegion,
-         current: &gitcomet_core::conflict_session::ConflictRegion| {
-            (previous.base == current.base || (existing_is_provisional && previous.base.is_none()))
-                && previous.ours == current.ours
-                && previous.theirs == current.theirs
-        };
-
-    // The common reload case is positionally identical. Preserve every
-    // resolution, including duplicate-content regions, without ambiguity.
-    if existing.regions.len() == next.regions.len()
-        && existing
-            .regions
-            .iter()
-            .zip(next.regions.iter())
-            .all(|(previous, current)| matches_existing(previous, current))
-    {
-        for (previous, current) in existing.regions.iter().zip(next.regions.iter_mut()) {
-            current.resolution =
-                restored_region_resolution(previous, existing_is_provisional, next_has_base_source);
-        }
-        next.sync_merge_plan_from_regions();
-        return;
-    }
-
-    next.restore_plan_decisions_from(existing);
-
-    // When the region sequence changed, only restore identities that are
-    // unique on both sides. This aligns insertions/deletions while avoiding
-    // silently assigning the wrong resolution among indistinguishable
-    // duplicate blocks.
-    let next_unique: Vec<bool> = next
-        .regions
-        .iter()
-        .map(|region| {
-            next.regions
-                .iter()
-                .filter(|candidate| same_region(region, candidate))
-                .take(2)
-                .count()
-                == 1
-        })
-        .collect();
-    let mut cursor = 0usize;
-    for (current_ix, current) in next.regions.iter_mut().enumerate() {
-        if !next_unique[current_ix]
-            || existing
-                .regions
-                .iter()
-                .filter(|candidate| matches_existing(candidate, current))
-                .take(2)
-                .count()
-                != 1
-        {
-            continue;
-        }
-        let Some(found) = existing.regions.get(cursor..).and_then(|remaining| {
-            remaining
-                .iter()
-                .position(|previous| matches_existing(previous, current))
-        }) else {
-            continue;
-        };
-        current.resolution = restored_region_resolution(
-            &existing.regions[cursor + found],
-            existing_is_provisional,
-            next_has_base_source,
-        );
-        cursor += found + 1;
-    }
-    restore_provisional_resolutions_by_source_overlap(existing, next);
-    next.sync_merge_plan_from_regions();
-}
-
-fn source_ranges_overlap(left: &std::ops::Range<usize>, right: &std::ops::Range<usize>) -> bool {
-    if left.is_empty() || right.is_empty() {
-        return left.is_empty() && right.is_empty() && left.start == right.start;
-    }
-    left.start < right.end && right.start < left.end
-}
-
-fn conflict_ranges_overlap(
-    previous: &ConflictRegionSourceRanges,
-    current: &ConflictRegionSourceRanges,
-) -> bool {
-    source_ranges_overlap(&previous.ours, &current.ours)
-        || source_ranges_overlap(&previous.theirs, &current.theirs)
-}
-
-fn source_backed_resolution(resolution: &ConflictRegionResolution) -> bool {
-    matches!(
-        resolution,
-        ConflictRegionResolution::PickBase
-            | ConflictRegionResolution::PickOurs
-            | ConflictRegionResolution::PickTheirs
-            | ConflictRegionResolution::PickBoth
-            | ConflictRegionResolution::Sources(_)
-    )
-}
-
-fn restore_provisional_resolutions_by_source_overlap(
-    existing: &ConflictSession,
-    next: &mut ConflictSession,
-) {
-    if !conflict_session_uses_provisional_stage_inputs(existing)
-        || existing.region_source_ranges.len() != existing.regions.len()
-        || next.region_source_ranges.len() != next.regions.len()
-    {
-        return;
-    }
-    let Some(marker_projection) = existing.marker_projection.as_deref() else {
-        return;
-    };
-    let (projected_ours, projected_theirs) = reconstruct_conflict_marker_sides(marker_projection);
-    let (Some(next_ours), Some(next_theirs)) = (next.ours.as_text(), next.theirs.as_text()) else {
-        return;
-    };
-    if projected_ours != next_ours || projected_theirs != next_theirs {
-        return;
-    }
-
-    let next_has_base_source = !next.base.is_absent();
-    let restored: Vec<Option<ConflictRegionResolution>> = next
-        .region_source_ranges
-        .iter()
-        .map(|current_ranges| {
-            let mut candidates = existing
-                .region_source_ranges
-                .iter()
-                .enumerate()
-                .filter(|(_, previous_ranges)| {
-                    conflict_ranges_overlap(previous_ranges, current_ranges)
-                })
-                .map(|(index, _)| &existing.regions[index]);
-            let first = candidates.next()?;
-            if !source_backed_resolution(&first.resolution) {
-                return None;
+        match correspondence {
+            Some(RegionCorrespondence::Identity(index)) => {
+                current.resolution = map_resolution(
+                    &origin,
+                    index,
+                    next_has_base,
+                    &existing.regions[index].resolution,
+                );
             }
-            let decision = restored_region_resolution(first, true, next_has_base_source);
-            candidates
-                .all(|region| {
-                    source_backed_resolution(&region.resolution)
-                        && restored_region_resolution(region, true, next_has_base_source)
-                            == decision
-                })
-                .then_some(decision)
-        })
-        .collect();
-
-    for (region, restored) in next.regions.iter_mut().zip(restored) {
-        if matches!(region.resolution, ConflictRegionResolution::Unresolved)
-            && let Some(restored) = restored
-        {
-            region.resolution = restored;
+            Some(RegionCorrespondence::SourceOverlap(indices))
+                if matches!(current.resolution, ConflictRegionResolution::Unresolved) =>
+            {
+                let Some((&first, remaining)) = indices.split_first() else {
+                    continue;
+                };
+                if !source_backed_resolution(&existing.regions[first].resolution) {
+                    continue;
+                }
+                let resolution = map_resolution(
+                    &origin,
+                    first,
+                    next_has_base,
+                    &existing.regions[first].resolution,
+                );
+                if remaining.iter().all(|&index| {
+                    source_backed_resolution(&existing.regions[index].resolution)
+                        && map_resolution(
+                            &origin,
+                            index,
+                            next_has_base,
+                            &existing.regions[index].resolution,
+                        ) == resolution
+                }) {
+                    current.resolution = resolution;
+                }
+            }
+            Some(RegionCorrespondence::SourceOverlap(_)) | None => {}
         }
     }
-}
-
-fn restored_region_resolution(
-    previous: &gitcomet_core::conflict_session::ConflictRegion,
-    existing_is_provisional: bool,
-    next_has_base_source: bool,
-) -> ConflictRegionResolution {
-    let resolution = previous.resolution.clone();
-    if !existing_is_provisional || previous.base.is_some() || !next_has_base_source {
-        return resolution;
-    }
-
-    // A CurrentOnly two-way marker block numbers ours/theirs as A/B. A
-    // full three-source session numbers base/ours/theirs as A/B/C, so carry
-    // early ordered picks into the loaded session's source space.
-    match resolution {
-        ConflictRegionResolution::Sources(selection) => ConflictRegionResolution::Sources(
-            OrderedSelection::from_sources(selection.iter().map(|source| match source {
-                MergeSource::A => MergeSource::B,
-                MergeSource::B | MergeSource::C => MergeSource::C,
-            })),
-        ),
-        other => other,
-    }
+    next.sync_merge_plan_from_regions();
 }
 
 fn conflict_session_uses_provisional_stage_inputs(session: &ConflictSession) -> bool {
