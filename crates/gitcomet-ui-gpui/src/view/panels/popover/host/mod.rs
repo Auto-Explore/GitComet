@@ -872,6 +872,7 @@ impl PopoverHost {
             context_menu_focus_handle,
             menu_invoker_focus: None,
             focus_return: None,
+            markdown_image_approval: None,
             active_invoker: None,
             popover_opened_from_diff_panel: false,
             prompt_tab_group_focus_handle,
@@ -1371,6 +1372,7 @@ impl PopoverHost {
         self.picker_row_menu = None;
         self.menu_invoker_focus = None;
         self.focus_return = None;
+        self.markdown_image_approval = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
@@ -1721,8 +1723,10 @@ impl PopoverHost {
             invoker,
             focus_return,
             new_source,
+            markdown_image_approval,
         } = kind.into();
         self.focus_return = focus_return;
+        self.markdown_image_approval = markdown_image_approval;
         // Branch-collision prompts are also held in shared state. Replacing one
         // without resolving it leaves that state occupied, so the same
         // collision cannot emit a fresh prompt later.

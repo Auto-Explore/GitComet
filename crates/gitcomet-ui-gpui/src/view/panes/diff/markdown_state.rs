@@ -4,6 +4,7 @@ use std::cell::RefCell;
 /// The rendered preview of a whole file: its parsed document, and what the
 /// renderer keeps between frames.
 pub(in crate::view) struct WorktreeMarkdownPreview {
+    pub(in crate::view) disclosures: crate::view::markdown_disclosures::MarkdownDisclosures,
     pub(in crate::view) document: LoadableMarkdownDoc,
     /// The file and content revision `document` was parsed from.
     pub(in crate::view) path: Option<std::path::PathBuf>,
@@ -29,6 +30,7 @@ pub(in crate::view) struct WorktreeMarkdownPreview {
 impl Default for WorktreeMarkdownPreview {
     fn default() -> Self {
         Self {
+            disclosures: Default::default(),
             document: Loadable::NotLoaded,
             path: None,
             source_rev: 0,
@@ -46,6 +48,7 @@ impl Default for WorktreeMarkdownPreview {
 impl WorktreeMarkdownPreview {
     /// Forget the parsed document: another file, or none, is on screen.
     pub(in crate::view) fn invalidate(&mut self) {
+        self.disclosures = Default::default();
         self.path = None;
         self.source_rev = 0;
         self.document = Loadable::NotLoaded;

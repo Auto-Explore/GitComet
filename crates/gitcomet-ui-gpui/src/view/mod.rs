@@ -57,6 +57,7 @@ pub(in crate::view) struct PopoverRequest {
     invoker: Option<SharedString>,
     focus_return: Option<FocusHandle>,
     new_source: bool,
+    markdown_image_approval: Option<markdown_interaction::MarkdownInteraction>,
 }
 
 impl From<PopoverKind> for PopoverRequest {
@@ -66,6 +67,7 @@ impl From<PopoverKind> for PopoverRequest {
             invoker: None,
             focus_return: None,
             new_source: false,
+            markdown_image_approval: None,
         }
     }
 }
@@ -84,6 +86,7 @@ impl PopoverKind {
             invoker: Some(invoker),
             focus_return: None,
             new_source: true,
+            markdown_image_approval: None,
         }
     }
 }
@@ -292,6 +295,8 @@ mod large_file_card;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 use gitcomet_markdown as markdown_preview;
+mod markdown_disclosures;
+mod markdown_interaction;
 mod markdown_scrollbar;
 mod menu_presentation;
 mod mod_helpers;

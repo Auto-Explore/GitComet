@@ -2345,7 +2345,7 @@ impl DiffRenderer {
                                                 .clone(),
                                             blocks: self.worktree_markdown.blocks.clone(),
                                             layout: self.worktree_markdown.layout.clone(),
-                                            view: Some(cx.entity()),
+                                            view: Some(cx.entity().into()),
                                             text_region: DiffTextRegion::Inline,
                                             change_bar_color:
                                                 rows::worktree_markdown_preview_bar_color(
@@ -2359,6 +2359,7 @@ impl DiffRenderer {
                                                 .clone(),
                                             change_extents: None,
                                             tasks_editable: self.markdown_preview_tasks_editable(),
+                                            disclosures: Some(self.worktree_markdown.disclosures.clone()),
                                             scroll: Some(
                                                 self.worktree_preview_scroll
                                                     .0
@@ -2840,6 +2841,8 @@ impl DiffRenderer {
             )
             .when_some(diff_bar, |d, bar| d.child(bar))
             .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
-            .child(DiffTextSelectionTracker { view: cx.entity() })
+            .child(DiffTextSelectionTracker {
+                view: cx.entity().into(),
+            })
     }
 }

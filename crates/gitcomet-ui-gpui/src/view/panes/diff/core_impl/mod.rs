@@ -1107,7 +1107,7 @@ impl DiffRenderer {
         rows::MarkdownRemoteImageAccess {
             policy: self.remote_markdown_images.policy,
             approved_urls: Arc::clone(&self.remote_markdown_images.approved_urls),
-            approval_view,
+            approval_view: approval_view.map(Into::into),
         }
     }
 
@@ -2393,8 +2393,10 @@ impl DiffRenderer {
                         .unwrap_or(DiffTextRegion::SplitLeft),
                 }
             };
-            let end_visible_ix = count - 1;
-            let end_offset = self.diff_text_line_len_for_region(end_visible_ix, region);
+            let Some((end_visible_ix, end_offset)) = self.markdown_preview_region_eof(region)
+            else {
+                return;
+            };
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {

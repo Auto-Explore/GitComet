@@ -17,7 +17,7 @@ type MarkdownFlowHighlightLayers = (MarkdownFlowHighlights, MarkdownFlowBackgrou
 /// selection machinery.
 pub(in crate::view) struct MarkdownFlowText {
     tab_width: usize,
-    view: Entity<DiffRenderer>,
+    view: crate::view::markdown_interaction::MarkdownInteraction,
     row_ix: usize,
     region: DiffTextRegion,
     /// The row's raw text when it differs from what is painted, i.e. when tabs
@@ -55,7 +55,7 @@ pub(in crate::view) enum MarkdownFlowPaintPhase {
 impl MarkdownFlowText {
     pub(in crate::view) fn new(
         tab_width: usize,
-        view: Entity<DiffRenderer>,
+        view: crate::view::markdown_interaction::MarkdownInteraction,
         row_ix: usize,
         region: DiffTextRegion,
         row_text: SharedString,
@@ -126,10 +126,9 @@ impl MarkdownFlowText {
     }
 
     fn paint_selection(&self, layout: &gpui::TextLayout, window: &mut Window, cx: &mut App) {
-        let Some(selected) = self
-            .view
-            .read(cx)
-            .diff_text_local_selection_range_in(self.region, (self.row_ix, 0..self.row_len()))
+        let Some(selected) =
+            self.view
+                .selection_range(self.region, self.row_ix, 0..self.row_len(), cx)
         else {
             return;
         };
@@ -150,7 +149,7 @@ impl MarkdownFlowText {
             return;
         }
 
-        let color = self.view.read(cx).diff_text_selection_color();
+        let color = self.view.selection_color(cx);
         let rects = markdown_flow_range_rects(layout, start, end);
         if rects.is_empty() {
             return;
@@ -535,60 +534,57 @@ impl gpui::Element for MarkdownFlowText {
         let region = self.region;
         if let Some((cell, row_len)) = self.cell.clone() {
             let text = self.text.clone();
-            self.view.clone().update(cx, |this, _cx| {
-                this.add_diff_text_cell_hitbox(
-                    row_ix,
-                    region,
-                    row_len,
-                    DiffTextHitbox {
-                        atomic: false,
-                        bounds,
-                        layout_key: 0,
-                        source_visible_ix: row_ix,
-                        text_start_offset: cell.start,
-                        text_len: cell.len(),
-                        offset_map: None,
-                        painted_text: text,
-                        streamed_ascii_monospace_cell_width: None,
-                        wrapped: Some(DiffTextWrappedHit {
-                            tab_width: self.tab_width,
-                            layout,
-                            untabbed: None,
-                        }),
-                        cells: Vec::new(),
-                    },
-                );
-            });
+            self.view.add_cell_hitbox(
+                row_ix,
+                region,
+                row_len,
+                DiffTextHitbox {
+                    atomic: false,
+                    bounds,
+                    layout_key: 0,
+                    source_visible_ix: row_ix,
+                    text_start_offset: cell.start,
+                    text_len: cell.len(),
+                    offset_map: None,
+                    painted_text: text,
+                    streamed_ascii_monospace_cell_width: None,
+                    wrapped: Some(DiffTextWrappedHit {
+                        tab_width: self.tab_width,
+                        layout,
+                        untabbed: None,
+                    }),
+                    cells: Vec::new(),
+                },
+                cx,
+            );
             return;
         }
         let untabbed = self.untabbed.clone();
         let text_len = untabbed
             .as_ref()
             .map_or_else(|| self.text.len(), |raw| raw.len());
-        self.view.clone().update(cx, |this, _cx| {
-            // A markdown row is its own source line, painted whole.
-            this.set_diff_text_hitbox(
-                row_ix,
-                region,
-                DiffTextHitbox {
-                    atomic: false,
-                    bounds,
-                    layout_key: 0,
-                    source_visible_ix: row_ix,
-                    text_start_offset: 0,
-                    text_len,
-                    offset_map: None,
-                    painted_text: self.text.clone(),
-                    streamed_ascii_monospace_cell_width: None,
-                    wrapped: Some(DiffTextWrappedHit {
-                        tab_width: self.tab_width,
-                        layout,
-                        untabbed,
-                    }),
-                    cells: Vec::new(),
-                },
-            );
-        });
+        self.view.set_hitbox(
+            row_ix,
+            region,
+            DiffTextHitbox {
+                atomic: false,
+                bounds,
+                layout_key: 0,
+                source_visible_ix: row_ix,
+                text_start_offset: 0,
+                text_len,
+                offset_map: None,
+                painted_text: self.text.clone(),
+                streamed_ascii_monospace_cell_width: None,
+                wrapped: Some(DiffTextWrappedHit {
+                    tab_width: self.tab_width,
+                    layout,
+                    untabbed,
+                }),
+                cells: Vec::new(),
+            },
+            cx,
+        );
     }
 }
 

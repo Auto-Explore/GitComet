@@ -181,7 +181,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Action | macOS | Windows / Linux | Scope / notes |
 | --- | --- | --- | --- |
 | Open the file history tab | `Ctrl-H` | `Ctrl-H` | Working-tree files and files viewed at a commit; not while a text field has focus. |
-| Search the current diff | `Cmd-F` | `Ctrl-F` | If rendered markdown preview is open, GitComet switches back to source mode before opening search. |
+| Search the current diff | `Cmd-F` | `Ctrl-F` | Rendered Markdown previews search their rendered text and expand disclosures containing the current match. |
 | Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
 | Previous search match | `F2` | `F2` | While diff search is open. The ↑ button in the search box does the same. |
 | Next search match | `F3` | `F3` | While diff search is open. The ↓ button in the search box does the same. |
@@ -212,6 +212,7 @@ selects the section's files. At the end of the section, advancement selects the
 previous file; when the section is empty, it clears the diff.
 
 Preview-mode note:
+- [Markdown previews](markdown-previews.md) also support text selection, link menus, and keyboard-operated disclosures in embedded descriptions.
 - Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, whitespace toggle, and conflict navigation hotkeys until you return to source mode.
 - The diff navigation keys above still work while a GitComet text input has focus, but search activation, `Escape`, view toggles, and staging `Space` remain tied to the active diff surface rather than text inputs.
 

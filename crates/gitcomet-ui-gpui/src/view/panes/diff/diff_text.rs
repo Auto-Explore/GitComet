@@ -826,28 +826,7 @@ impl DiffRenderer {
     }
 
     fn open_markdown_preview_web_link(&mut self, url: SharedString, cx: &mut gpui::Context<Self>) {
-        // Tests record the link rather than start a browser.
-        #[cfg(test)]
-        {
-            let _ = cx;
-            OPENED_WEB_LINKS.with(|links| links.borrow_mut().push(url.to_string()));
-        }
-        #[cfg(not(test))]
-        crate::view::platform_open::spawn_launch(
-            cx,
-            move || crate::view::platform_open::open_url_blocking(&url),
-            |this, result, cx| {
-                if let Err(err) = result {
-                    this.commands.send(
-                        DiffCommand::Toast(
-                            components::ToastKind::Error,
-                            format!("Failed to open link: {err}").into(),
-                        ),
-                        cx,
-                    );
-                }
-            },
-        );
+        open_markdown_web_link(url, self.commands.clone(), cx);
     }
 
     pub(in super::super::super) fn handle_diff_text_mouse_down(
@@ -2362,6 +2341,9 @@ impl DiffRenderer {
                 && this.markdown_preview_row_copies_nothing(source_visible_ix, region)
         };
         for source_visible_ix in start.source_visible_ix..=end.source_visible_ix {
+            if !self.markdown_row_visible(source_visible_ix, DiffTextRegion::Inline) {
+                continue;
+            }
             if force_inline || self.diff_view == DiffViewMode::Inline {
                 if copies_nothing(self, source_visible_ix, DiffTextRegion::Inline) {
                     continue;
@@ -2624,6 +2606,34 @@ impl DiffRenderer {
                 .clone(),
         }
     }
+}
+
+pub(in crate::view) fn open_markdown_web_link<T: 'static>(
+    url: SharedString,
+    commands: super::services::DiffCommands,
+    cx: &mut gpui::Context<T>,
+) {
+    #[cfg(test)]
+    {
+        let _ = (cx, commands);
+        OPENED_WEB_LINKS.with(|links| links.borrow_mut().push(url.to_string()));
+    }
+    #[cfg(not(test))]
+    crate::view::platform_open::spawn_launch(
+        cx,
+        move || crate::view::platform_open::open_url_blocking(&url),
+        move |_this, result, cx| {
+            if let Err(err) = result {
+                commands.send(
+                    DiffCommand::Toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open link: {err}").into(),
+                    ),
+                    cx,
+                );
+            }
+        },
+    );
 }
 
 #[cfg(test)]

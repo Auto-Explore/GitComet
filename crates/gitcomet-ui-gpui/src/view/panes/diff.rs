@@ -10,7 +10,7 @@ pub(in crate::view) mod diff_cache;
 mod diff_patch;
 pub(in crate::view) mod diff_search;
 mod diff_stage;
-mod diff_text;
+pub(in crate::view) mod diff_text;
 mod file_disk;
 pub(in crate::view) mod file_editor;
 pub(in crate::view) mod helpers;

@@ -54,7 +54,8 @@ impl MarkdownPreviewHoveredLink {
 pub(in crate::view) struct MarkdownRemoteImageAccess {
     pub(in crate::view) policy: RemoteMarkdownImagePolicy,
     pub(in crate::view) approved_urls: Arc<FxHashSet<SharedString>>,
-    pub(in crate::view) approval_view: Option<Entity<DiffRenderer>>,
+    pub(in crate::view) approval_view:
+        Option<crate::view::markdown_interaction::MarkdownInteraction>,
 }
 
 impl Default for MarkdownRemoteImageAccess {
@@ -1073,9 +1074,7 @@ fn markdown_preview_blocked_image(
                         controls::ControlActivation::Nested,
                         move |_event, _window, cx| {
                             cx.stop_propagation();
-                            view.update(cx, |this, cx| {
-                                this.approve_remote_markdown_image(url.clone(), cx);
-                            });
+                            view.approve_image(url.clone(), cx);
                         },
                     )
                 },

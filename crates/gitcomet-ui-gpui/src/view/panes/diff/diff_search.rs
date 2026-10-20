@@ -2414,7 +2414,10 @@ impl DiffRenderer {
                     MarkdownSearchSurface::Worktree
                     | MarkdownSearchSurface::DiffInline
                     | MarkdownSearchSurface::DiffSplit,
-                ) => self.markdown_interaction.reveal.request(visible_ix),
+                ) => {
+                    self.reveal_markdown_disclosures(visible_ix);
+                    self.markdown_interaction.reveal.request(visible_ix);
+                }
                 Some(MarkdownSearchSurface::Conflict) => {
                     self.conflict_markdown_preview_reveal(visible_ix)
                 }

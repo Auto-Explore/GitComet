@@ -3,6 +3,154 @@
 use super::*;
 
 #[gpui::test]
+fn full_markdown_copy_and_search_respect_closed_disclosures(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(7141),
+        "markdown_disclosures",
+        "Before\n\n<details><summary>Middle</summary>\n\nHidden needle\n\n</details>\n\nAfter\n\n<details><summary>Final</summary>\n\nHidden final\n\n</details>",
+    );
+    focus_diff_panel(cx, &view);
+    cx.update(|window, app| {
+        let pane = view.read(app).diff_renderer.clone();
+        pane.update(app, |pane, cx| {
+            pane.select_all_diff_text(window, cx);
+            pane.copy_selected_diff_text_to_clipboard(cx);
+            let copied = cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap();
+            assert!(copied.contains("Before"));
+            assert!(copied.contains("After"));
+            assert!(copied.ends_with("Final"), "{copied:?}");
+            assert!(!copied.contains("Hidden"));
+            assert_eq!(
+                pane.diff_text_head.unwrap().source_visible_ix,
+                fixture.row_ix("Final")
+            );
+            let selected = (pane.diff_text_anchor, pane.diff_text_head);
+            let final_details = fixture.document.rows[fixture.row_ix("Final")]
+                .details
+                .as_ref()
+                .unwrap()
+                .id;
+            pane.toggle_markdown_disclosure(final_details, cx);
+            assert_eq!((pane.diff_text_anchor, pane.diff_text_head), selected);
+            pane.toggle_markdown_disclosure(final_details, cx);
+            assert_eq!((pane.diff_text_anchor, pane.diff_text_head), selected);
+            pane.diff_search_active = true;
+            pane.diff_search_query = "Hidden needle".into();
+            pane.diff_search_input
+                .update(cx, |input, cx| input.set_text("Hidden needle", cx));
+            pane.diff_search_recompute_matches_and_scroll_to_first();
+            cx.notify();
+        });
+    });
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+    let hidden = fixture.row_ix("Hidden needle");
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{hidden}"
+        )))
+        .is_some()
+    );
+    cx.update(|_, app| {
+        let pane = view.read(app).diff_renderer.read(app);
+        assert!(pane.markdown_row_visible(hidden, DiffTextRegion::Inline));
+        assert!(!pane.markdown_row_visible(fixture.row_ix("Hidden final"), DiffTextRegion::Inline));
+    });
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_diff_keeps_details_bodies_expanded_in_both_layouts(cx: &mut gpui::TestAppContext) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = open_rendered_markdown_diff_in(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(7142),
+        "markdown_diff_disclosures",
+        "<details><summary>Changes</summary>\n\nOld body\n\n</details>",
+        "<details><summary>Changes</summary>\n\nNew body\n\n</details>",
+        DiffViewMode::Inline,
+    );
+    for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.clone();
+            pane.update(app, |pane, cx| {
+                pane.diff_view = mode;
+                cx.notify();
+            });
+        });
+        for _ in 0..3 {
+            draw_and_drain_test_window(cx);
+        }
+        let (old, new, summary) = cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            let gitcomet_state::model::Loadable::Ready(preview) = &pane.diff_markdown.preview
+            else {
+                panic!("preview ready");
+            };
+            match mode {
+                DiffViewMode::Inline => (
+                    row_ix_with_text(&preview.inline, "Old body"),
+                    row_ix_with_text(&preview.inline, "New body"),
+                    row_ix_with_text(&preview.inline, "Changes"),
+                ),
+                DiffViewMode::Split => (
+                    row_ix_with_text(&preview.old, "Old body"),
+                    row_ix_with_text(&preview.new, "New body"),
+                    row_ix_with_text(&preview.new, "Changes"),
+                ),
+            }
+        });
+        assert!(
+            cx.debug_bounds(leaked_selector(format!("markdown_preview_text_box_{old}")))
+                .is_some()
+        );
+        assert!(
+            cx.debug_bounds(leaked_selector(format!("markdown_preview_text_box_{new}")))
+                .is_some()
+        );
+        assert!(
+            cx.debug_bounds(leaked_selector(format!("markdown_disclosure_{summary}")))
+                .is_none()
+        );
+        cx.update(|_, app| {
+            let pane = view.read(app).diff_renderer.read(app);
+            let (old_region, new_region) = match mode {
+                DiffViewMode::Inline => (DiffTextRegion::Inline, DiffTextRegion::Inline),
+                DiffViewMode::Split => (DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight),
+            };
+            assert!(
+                pane.diff_text_hitbox_bounds_for_tests(old, old_region)
+                    .is_some()
+            );
+            assert!(
+                pane.diff_text_hitbox_bounds_for_tests(new, new_region)
+                    .is_some()
+            );
+        });
+    }
+    std::fs::remove_dir_all(&workdir).unwrap();
+}
+
+#[gpui::test]
 fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {

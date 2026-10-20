@@ -510,7 +510,10 @@ impl WindowHostImpl for HostWindow {
     ) -> Result<gitcomet_extension_api::MarkdownView, HostError> {
         self.live()?;
         let theme = Rc::clone(&self.theme);
-        let view = cx.new(|_| super::hosted::markdown::MarkdownView::new(theme));
+        let commands = self.diff_environment.services.commands.clone();
+        let preferences = self.diff_environment.preferences.clone();
+        let view = cx
+            .new(|cx| super::hosted::markdown::MarkdownView::new(theme, commands, preferences, cx));
         Ok(gitcomet_extension_api::MarkdownView::new(Rc::new(
             super::hosted::markdown::HostedMarkdownView { entity: view },
         )))

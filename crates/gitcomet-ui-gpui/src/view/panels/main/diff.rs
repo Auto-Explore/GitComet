@@ -702,7 +702,7 @@ impl DiffRenderer {
                 row_boxes: row_boxes.clone(),
                 block_scrolls: this.diff_markdown.block_scrolls[side].clone(),
                 blocks: Default::default(),
-                view: Some(cx.entity()),
+                view: Some(cx.entity().into()),
                 text_region: region,
                 change_bar_color: None,
                 query: query.clone(),
@@ -713,6 +713,7 @@ impl DiffRenderer {
                 change_extents: Some(this.diff_markdown.change_extents.clone()),
                 layout: this.diff_markdown.layouts[side].clone(),
                 // Only the split's new side is parsed from the working-tree file.
+                disclosures: None,
                 tasks_editable: region == DiffTextRegion::SplitRight
                     && this.markdown_preview_tasks_editable(),
             };

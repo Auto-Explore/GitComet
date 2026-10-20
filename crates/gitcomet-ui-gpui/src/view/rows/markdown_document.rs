@@ -60,7 +60,7 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) layout: MarkdownDocumentLayoutCache,
     /// Set when the preview is interactive: text selection, copy, the link
     /// menu, and the diff context menu all go through this view.
-    pub(in crate::view) view: Option<Entity<DiffRenderer>>,
+    pub(in crate::view) view: Option<crate::view::markdown_interaction::MarkdownInteraction>,
     pub(in crate::view) text_region: DiffTextRegion,
     /// Gutter colour for a wholly added or removed file, `None` otherwise.
     pub(in crate::view) change_bar_color: Option<gpui::Rgba>,
@@ -81,6 +81,7 @@ pub(in crate::view) struct MarkdownDocumentContext {
     /// Whether a task checkbox click writes to the file: only a document parsed
     /// from the working-tree file itself, so its byte offsets are the disk's.
     pub(in crate::view) tasks_editable: bool,
+    pub(in crate::view) disclosures: Option<crate::view::markdown_disclosures::MarkdownDisclosures>,
 }
 
 /// Vertical extents of changed blocks in scroll-content coordinates, placed
@@ -337,9 +338,7 @@ fn windowed_column(
             // `refresh` is a no-op mid-draw; the corrected spacers show next
             // frame.
             match view.clone() {
-                Some(view) => {
-                    window.on_next_frame(move |_, cx| view.update(cx, |_, cx| cx.notify()))
-                }
+                Some(view) => window.on_next_frame(move |_, cx| view.notify(cx)),
                 None => window.request_animation_frame(),
             }
         }
@@ -369,6 +368,8 @@ fn windowed_column(
     }
 
     let scroll = context.scroll.clone();
+    let planned_offset = scroll.as_ref().map(gpui::ScrollHandle::offset);
+    let viewport_view = context.view.clone();
     let revealing = context.reveal.pending().is_some();
     column.on_children_prepainted(move |bounds, window, _cx| {
         let Some((spacer, rest)) = bounds.split_first() else {
@@ -390,6 +391,16 @@ fn windowed_column(
         }
         let items: Vec<_> = flow.clone().zip(rest.iter().copied()).collect();
         record(&cache, &items, window);
+        if scroll
+            .as_ref()
+            .zip(planned_offset)
+            .is_some_and(|(scroll, planned)| scroll.offset() != planned)
+        {
+            match viewport_view.clone() {
+                Some(view) => window.on_next_frame(move |_, cx| view.notify(cx)),
+                None => window.request_animation_frame(),
+            }
+        }
     })
 }
 
@@ -495,6 +506,7 @@ impl MarkdownDocumentContext {
             hovered_link: None,
             change_extents: None,
             tasks_editable: false,
+            disclosures: None,
         }
     }
 }
@@ -704,36 +716,27 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
         return column.into_any_element();
     };
     let boxes = context.row_boxes.clone();
-    let focus = |view: &Entity<DiffRenderer>, window: &mut Window, cx: &mut App| {
-        let focus = view.read(cx).diff_panel_focus_handle.clone();
-        window.focus(&focus, cx);
-    };
     column
         .id("markdown_preview_document")
         .on_mouse_move({
             let (view, boxes) = (view.clone(), boxes.clone());
             move |event, _window, cx| {
                 let hit = boxes.hit_at(event.position);
-                view.update(cx, |this, cx| match hit {
+                let row = match hit {
                     Some(MarkdownBoxHit {
-                        kind: MarkdownBoxKind::Row(row_ix),
+                        kind: MarkdownBoxKind::Row(row),
                         region,
-                    }) => this.update_markdown_preview_link_hover(
-                        row_ix,
-                        region,
-                        event.position,
-                        event.pressed_button.is_some(),
-                        cx,
-                    ),
-                    _ => this.clear_markdown_preview_link_hover(cx),
-                });
+                    }) => Some((row, region)),
+                    _ => None,
+                };
+                view.hover(row, event.position, event.pressed_button.is_some(), cx);
             }
         })
         .on_hover({
             let view = view.clone();
             move |hovered, _window, cx| {
                 if !*hovered {
-                    view.update(cx, |this, cx| this.clear_markdown_preview_link_hover(cx));
+                    view.hover(None, point(px(0.0), px(0.0)), false, cx);
                 }
             }
         })
@@ -749,29 +752,15 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
                     crate::press_gesture::claim_press(cx);
                     cx.stop_propagation();
                 }
-                focus(&view, window, cx);
-                view.update(cx, |this, cx| {
-                    match kind {
-                        MarkdownBoxKind::Row(row_ix) | MarkdownBoxKind::RowPadding(row_ix) => this
-                            .handle_markdown_preview_row_mouse_down(
-                                row_ix,
-                                region,
-                                event.position,
-                                event.click_count,
-                                window,
-                                cx,
-                            ),
-                        MarkdownBoxKind::Gap(next_row_ix) => this
-                            .handle_diff_text_document_gap_mouse_down(
-                                next_row_ix,
-                                region,
-                                event.position,
-                                window,
-                                cx,
-                            ),
+                view.focus(window, cx);
+                match kind {
+                    MarkdownBoxKind::Row(row) | MarkdownBoxKind::RowPadding(row) => {
+                        view.row_mouse_down(row, region, event, window, cx)
                     }
-                    cx.notify();
-                });
+                    MarkdownBoxKind::Gap(row) => {
+                        view.gap_mouse_down(row, region, event.position, window, cx)
+                    }
+                }
             }
         })
         .on_pointer_click(gpui::MouseButton::Left, {
@@ -784,18 +773,15 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
                 else {
                     return;
                 };
-                view.update(cx, |this, cx| {
-                    this.handle_markdown_preview_link_click(
-                        row_ix,
-                        region,
-                        event.position,
-                        event.click_count,
-                        event.modifiers.secondary(),
-                        window,
-                        cx,
-                    );
-                    cx.notify();
-                });
+                view.link_click(
+                    row_ix,
+                    region,
+                    event.position,
+                    event.click_count,
+                    event.modifiers.secondary(),
+                    window,
+                    cx,
+                );
             }
         })
         .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
@@ -807,14 +793,11 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
                 MarkdownBoxKind::RowPadding(row_ix) | MarkdownBoxKind::Gap(row_ix) => {
                     crate::press_gesture::claim_press(cx);
                     cx.stop_propagation();
-                    focus(&view, window, cx);
+                    view.focus(window, cx);
                     row_ix
                 }
             };
-            view.update(cx, |this, cx| {
-                this.open_diff_editor_context_menu(row_ix, region, event.position, window, cx);
-                cx.notify();
-            });
+            view.context_menu(row_ix, region, event.position, window, cx);
         })
         .into_any_element()
 }
@@ -825,8 +808,13 @@ pub(in crate::view) fn render_markdown_document(
     document: &Arc<MarkdownPreviewDocument>,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
-    let blocks = context.blocks.blocks(document);
-    render_markdown_document_with_blocks(tab_width, document, &blocks, context)
+    let document = context
+        .disclosures
+        .as_ref()
+        .map(|disclosures| disclosures.project(document))
+        .unwrap_or_else(|| document.clone());
+    let blocks = context.blocks.blocks(&document);
+    render_markdown_document_with_blocks(tab_width, &document, &blocks, context)
 }
 
 /// As [`render_markdown_document`], for a document whose blocks are already
@@ -868,7 +856,9 @@ pub(in crate::view) fn render_markdown_document_with_blocks(
         .min_w(px(0.0))
         .min_h_full()
         .child(body);
-    if let Some(view) = context.view.clone() {
+    if let Some(crate::view::markdown_interaction::MarkdownInteraction::Diff(view)) =
+        context.view.clone()
+    {
         surface = surface.child(flowing_diff_text_empty_space(view, context.text_region));
     }
     surface.into_any_element()
@@ -1053,7 +1043,11 @@ pub(in crate::view) fn render_markdown_diff_split(
         .min_w(px(0.0))
         .min_h_full()
         .child(column);
-    if let (Some(left_view), Some(right_view)) = (left.view.clone(), right.view.clone()) {
+    if let (
+        Some(crate::view::markdown_interaction::MarkdownInteraction::Diff(left_view)),
+        Some(crate::view::markdown_interaction::MarkdownInteraction::Diff(right_view)),
+    ) = (left.view.clone(), right.view.clone())
+    {
         surface = surface.child(
             div()
                 .flex()
@@ -1427,6 +1421,9 @@ fn render_block(
             ))
             .into_any_element(),
         MarkdownBlock::Paragraph(row_ix) => match document.rows.get(*row_ix) {
+            Some(row) if row.kind == MarkdownPreviewRowKind::DetailsSummary => wrapper
+                .child(render_disclosure_row(tab_width, *row_ix, row, context))
+                .into_any_element(),
             // A footnote definition reads as its label and then its text, like
             // a list item: the label hangs where a bullet would.
             Some(row) if row.footnote_label.is_some() => div()
@@ -1525,6 +1522,62 @@ fn render_block(
     }
 }
 
+fn render_disclosure_row(
+    tab_width: usize,
+    row_ix: usize,
+    row: &MarkdownPreviewRow,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
+    let section = row.details.as_ref();
+    let interactive = context.disclosures.is_some() && context.view.is_some() && section.is_some();
+    let open = section.is_none_or(|section| {
+        context
+            .disclosures
+            .as_ref()
+            .is_none_or(|disclosures| disclosures.is_open(section))
+    });
+    let marker = div()
+        .id(("markdown_disclosure", row_ix))
+        .debug_selector(move || {
+            if interactive {
+                format!("markdown_disclosure_{row_ix}")
+            } else {
+                format!("markdown_disclosure_expanded_{row_ix}")
+            }
+        })
+        .flex_none()
+        .w(scaled(MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX, context))
+        .mr(scaled(MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX, context))
+        .text_color(context.theme.colors.foreground.secondary)
+        .child(if open { "▾" } else { "▸" });
+    let marker = match (context.disclosures.as_ref(), context.view.clone(), section) {
+        (Some(_), Some(view), Some(section)) => {
+            let id = section.id;
+            marker
+                .control_interaction(
+                    crate::kit::interaction::InteractionStyle::new(context.theme),
+                    Default::default(),
+                )
+                .on_activate(
+                    false,
+                    crate::kit::interaction::ControlActivation::Nested,
+                    move |_, _, cx| view.toggle_disclosure(id, cx),
+                )
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                    crate::kit::text_selection_owner::preserve(cx);
+                })
+        }
+        _ => marker,
+    };
+    recorded(
+        row_shell(row_ix, row, context)
+            .child(marker)
+            .child(render_row_line(tab_width, row_ix, row, context)),
+        MarkdownBoxKind::Row(row_ix),
+        context,
+    )
+}
+
 /// Where the text of a list item `levels` deep starts: its indent, then the
 /// marker column and the gap after it.
 fn list_content_indent(levels: u8, context: &MarkdownDocumentContext) -> Pixels {
@@ -1570,9 +1623,7 @@ fn non_text_block_shell(
         let Some(bounds) = children_bounds.first().copied() else {
             return;
         };
-        view.update(app, |this, _cx| {
-            this.set_diff_text_motion_target(bounds, start, end);
-        });
+        view.set_motion_target(bounds, start, end, app);
     })
 }
 
@@ -1657,7 +1708,7 @@ fn reveal_listener(row_ix: usize, context: &MarkdownDocumentContext) -> gpui::Di
         // `refresh` is a no-op mid-draw, and this frame was laid out at the old
         // offset: repaint on the next one.
         match view.clone() {
-            Some(view) => window.on_next_frame(move |_, cx| view.update(cx, |_, cx| cx.notify())),
+            Some(view) => window.on_next_frame(move |_, cx| view.notify(cx)),
             None => window.request_animation_frame(),
         }
     })
@@ -1846,20 +1897,16 @@ fn render_inline_image(
                     let bounds = painted_bounds.get();
                     let position = event.position;
                     let follow = event.modifiers.secondary();
-                    view.update(cx, |this, cx| {
-                        this.open_markdown_preview_link_menu(
-                            region,
-                            row_ix,
-                            url,
-                            load_remote_image_url,
-                            bounds,
-                            position,
-                            follow,
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                    });
+                    view.image_link_click(
+                        (row_ix, region),
+                        url,
+                        load_remote_image_url,
+                        bounds,
+                        position,
+                        follow,
+                        window,
+                        cx,
+                    );
                 }),
         )
         .into_any_element()
@@ -2097,9 +2144,7 @@ fn render_task_checkbox(
             false,
             crate::kit::interaction::ControlActivation::Nested,
             move |_, _, cx| {
-                view.update(cx, |this, cx| {
-                    this.toggle_markdown_preview_task(region, task, cx);
-                });
+                view.toggle_task(region, task, cx);
             },
         )
         .into_any_element()
@@ -2497,42 +2542,41 @@ fn render_table_image(
                     ) {
                         return;
                     }
-                    view.update(cx, |pane, _| {
-                        pane.add_diff_text_cell_hitbox(
+                    view.add_cell_hitbox(
+                        row_ix,
+                        region,
+                        row_len,
+                        DiffTextHitbox {
+                            atomic: true,
+                            bounds,
+                            layout_key: 0,
+                            source_visible_ix: row_ix,
+                            text_start_offset: range.start,
+                            text_len: range.len(),
+                            offset_map: None,
+                            painted_text: SharedString::default(),
+                            streamed_ascii_monospace_cell_width: None,
+                            wrapped: None,
+                            cells: Vec::new(),
+                        },
+                        cx,
+                    );
+                    let selected = view
+                        .selection_range(region, row_ix, range.clone(), cx)
+                        .is_some_and(|selected| !selected.is_empty());
+                    if selected {
+                        super::markdown_flow_text::record_selection_paint_for_tests(
                             row_ix,
-                            region,
-                            row_len,
-                            DiffTextHitbox {
-                                atomic: true,
-                                bounds,
-                                layout_key: 0,
-                                source_visible_ix: row_ix,
-                                text_start_offset: range.start,
-                                text_len: range.len(),
-                                offset_map: None,
-                                painted_text: SharedString::default(),
-                                streamed_ascii_monospace_cell_width: None,
-                                wrapped: None,
-                                cells: Vec::new(),
-                            },
+                            &[bounds],
                         );
-                        let selected = pane
-                            .diff_text_local_selection_range_in(region, (row_ix, range.clone()))
-                            .is_some_and(|selected| !selected.is_empty());
-                        if selected {
-                            super::markdown_flow_text::record_selection_paint_for_tests(
-                                row_ix,
-                                &[bounds],
-                            );
-                            window.paint_quad(
-                                PaintQuad::new(bounds).background(pane.diff_text_selection_color()),
-                            );
-                        } else if searched {
-                            window.paint_quad(
-                                PaintQuad::new(bounds).background(with_alpha(search_color, 0.35)),
-                            );
-                        }
-                    });
+                        window.paint_quad(
+                            PaintQuad::new(bounds).background(view.selection_color(cx)),
+                        );
+                    } else if searched {
+                        window.paint_quad(
+                            PaintQuad::new(bounds).background(with_alpha(search_color, 0.35)),
+                        );
+                    }
                 },
             )
             .absolute()

@@ -1235,10 +1235,16 @@ impl DiffRenderer {
         region: DiffTextRegion,
     ) -> Option<(usize, usize)> {
         let document = self.markdown_preview_document_for_region(region)?;
-        let row_ix = document
-            .rows
-            .iter()
-            .rposition(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))?;
+        if self.is_file_preview_active()
+            && let Loadable::Ready(source) = &self.worktree_markdown.document
+        {
+            self.worktree_markdown.disclosures.project(source);
+        }
+        let row_ix = document.rows.iter().rposition(|row| {
+            !matches!(row.kind, MarkdownPreviewRowKind::Spacer)
+                && (!self.is_file_preview_active()
+                    || self.worktree_markdown.disclosures.is_visible(row))
+        })?;
         Some((row_ix, document.rows.get(row_ix)?.text.len()))
     }
 
@@ -1457,9 +1463,72 @@ impl DiffRenderer {
         let Some(row_ix) = self.markdown_preview_anchor_target(region, destination) else {
             return false;
         };
+        self.reveal_markdown_disclosures(row_ix);
         self.markdown_interaction.reveal.request_top(row_ix);
         cx.notify();
         true
+    }
+
+    pub(in crate::view) fn markdown_row_visible(
+        &self,
+        row_ix: usize,
+        region: DiffTextRegion,
+    ) -> bool {
+        !self.is_markdown_preview_active()
+            || !self.is_file_preview_active()
+            || self
+                .markdown_preview_row_at(row_ix, region)
+                .is_none_or(|row| self.worktree_markdown.disclosures.is_visible(row))
+    }
+
+    pub(in crate::view) fn toggle_markdown_disclosure(
+        &mut self,
+        id: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.is_file_preview_active() {
+            return;
+        }
+        let hides_selection = self
+            .diff_text_normalized_selection()
+            .is_some_and(|(start, end)| {
+                (start.source_visible_ix..=end.source_visible_ix).any(|ix| {
+                    self.markdown_preview_row_at(ix, DiffTextRegion::Inline)
+                        .is_some_and(|row| self.worktree_markdown.disclosures.would_hide(row, id))
+                })
+            });
+        if !self.worktree_markdown.disclosures.toggle(id) {
+            return;
+        }
+        if hides_selection {
+            self.clear_diff_text_selection();
+        }
+        self.invalidate_markdown_visibility();
+        cx.notify();
+    }
+
+    pub(in crate::view) fn reveal_markdown_disclosures(&mut self, row_ix: usize) {
+        if !self.is_file_preview_active() {
+            return;
+        }
+        let Loadable::Ready(document) = &self.worktree_markdown.document else {
+            return;
+        };
+        self.worktree_markdown.disclosures.project(document);
+        if let Some(row) = document.rows.get(row_ix)
+            && self.worktree_markdown.disclosures.reveal(row)
+        {
+            self.invalidate_markdown_visibility();
+        }
+    }
+
+    fn invalidate_markdown_visibility(&mut self) {
+        self.worktree_markdown.blocks = Default::default();
+        self.worktree_markdown.layout = Default::default();
+        self.diff_text_hitboxes.clear();
+        self.diff_text_motion_targets.clear();
+        self.markdown_interaction.hovered_link = None;
+        self.markdown_interaction.plain_link = None;
     }
 
     /// "Open in GitComet" for a link to a file in this repository.
@@ -1598,25 +1667,11 @@ impl DiffRenderer {
             .then(|| self.markdown_preview_link_span_ix_at(row_ix, region, position))
             .flatten()
             .map(|(row, span_ix)| {
-                // A link whose text changes style spans several runs; the whole
-                // link is what the pointer is on.
-                let spans = &row.inline_spans;
-                let url = spans[span_ix].link_url.clone();
-                let same_link = |a: usize, b: usize| {
-                    spans[a].link_url == url && spans[a].byte_range.end == spans[b].byte_range.start
-                };
-                let mut first = span_ix;
-                while first > 0 && same_link(first - 1, first) {
-                    first -= 1;
-                }
-                let mut last = span_ix;
-                while last + 1 < spans.len() && same_link(last, last + 1) {
-                    last += 1;
-                }
+                let url = row.inline_spans[span_ix].link_url.clone();
                 let hovered = rows::MarkdownPreviewHoveredLink {
                     region,
                     row_ix,
-                    byte_range: spans[first].byte_range.start..spans[last].byte_range.end,
+                    byte_range: crate::view::markdown_interaction::linked_span_range(row, span_ix),
                 };
                 (hovered, url)
             });

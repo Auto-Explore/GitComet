@@ -1,7 +1,7 @@
 //! Markdown rendered by the host, for text an extension shows in its own
 //! views: a pull request's description, say.
 
-use gitcomet_ui_kit::gpui::{AnyView, App, SharedString};
+use gitcomet_ui_kit::gpui::{AnyView, App, ScrollHandle, SharedString};
 use std::rc::Rc;
 
 /// What the host implements behind a [`MarkdownView`].
@@ -9,14 +9,13 @@ use std::rc::Rc;
 pub trait MarkdownViewImpl {
     fn view(&self) -> AnyView;
     fn set_source(&self, source: SharedString, cx: &mut App);
+    fn set_scroll_handle(&self, handle: Option<ScrollHandle>, cx: &mut App);
 }
 
 /// An owning handle to a read-only markdown view, from
 /// [`WindowHost::create_markdown_view`](crate::WindowHost::create_markdown_view).
 /// It lays out at its content's height, so it belongs inside a container
-/// that scrolls. It uses History's markdown renderer, read-only: nothing can
-/// be selected, links are shown but do not open, and a line holding inline
-/// code is set in the editor font throughout.
+/// that scrolls.
 #[derive(Clone)]
 pub struct MarkdownView(Rc<dyn MarkdownViewImpl>);
 
@@ -33,5 +32,9 @@ impl MarkdownView {
     /// Shows `source`, replacing what was there.
     pub fn set_source(&self, source: impl Into<SharedString>, cx: &mut App) {
         self.0.set_source(source.into(), cx)
+    }
+
+    pub fn set_scroll_handle(&self, handle: Option<ScrollHandle>, cx: &mut App) {
+        self.0.set_scroll_handle(handle, cx)
     }
 }

@@ -133,7 +133,7 @@ pub(super) fn empty_diff_text_document(
 }
 
 pub(super) struct DiffTextSelectionTracker {
-    pub(super) view: Entity<DiffRenderer>,
+    pub(super) view: crate::view::markdown_interaction::MarkdownInteraction,
 }
 
 impl IntoElement for DiffTextSelectionTracker {
@@ -195,16 +195,7 @@ impl Element for DiffTextSelectionTracker {
             if phase != gpui::DispatchPhase::Bubble {
                 return;
             }
-            view_for_move.update(cx, |this, cx| {
-                if !this.diff_text_selecting {
-                    return;
-                }
-                let before = this.diff_text_head;
-                this.update_diff_text_selection_from_mouse(event.position);
-                if this.diff_text_head != before {
-                    cx.notify();
-                }
-            });
+            view_for_move.selection_move(event.position, cx);
         });
 
         let view_for_up = self.view.clone();
@@ -215,12 +206,7 @@ impl Element for DiffTextSelectionTracker {
             if event.button != MouseButton::Left {
                 return;
             }
-            view_for_up.update(cx, |this, cx| {
-                if this.diff_text_selecting {
-                    this.end_diff_text_selection();
-                    cx.notify();
-                }
-            });
+            view_for_up.selection_end(cx);
         });
     }
 }

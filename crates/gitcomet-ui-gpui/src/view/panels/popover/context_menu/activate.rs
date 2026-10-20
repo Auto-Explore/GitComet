@@ -1237,9 +1237,13 @@ impl PopoverHost {
                 );
             }
             ContextMenuAction::LoadRemoteMarkdownImage { url } => {
-                self.diff_renderer.update(cx, |pane, cx| {
-                    pane.approve_remote_markdown_image(url, cx);
-                });
+                if let Some(view) = self.markdown_image_approval.clone() {
+                    view.approve_image(url, cx);
+                } else {
+                    self.diff_renderer.update(cx, |pane, cx| {
+                        pane.approve_remote_markdown_image(url, cx);
+                    });
+                }
             }
             ContextMenuAction::OpenWebUrl { url } => {
                 crate::view::platform_open::spawn_launch(
