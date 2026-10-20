@@ -107,6 +107,7 @@ fn wait_for(
     description: &str,
     ready: impl Fn(&RepoState) -> bool,
 ) {
+    crate::view::test_support::drain_store_worker(view, cx);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let snapshot = store.snapshot();
@@ -1293,9 +1294,15 @@ fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppConte
     );
 
     let conflicted = std::fs::read_to_string(dir.path().join("a.txt")).unwrap();
+    let ops_before = store.snapshot().repos[0].ops_rev;
     click(cx, "conflict_save_stage");
     click(cx, "conflict_save");
+    crate::view::test_support::drain_store_worker(&view, cx);
     let repo = &store.snapshot().repos[0];
+    assert_eq!(
+        repo.ops_rev, ops_before,
+        "disabled saves do not dispatch an action"
+    );
     assert_eq!(
         repo.local_actions_in_flight, 0,
         "nothing saves while a conflict is open"
