@@ -761,10 +761,10 @@ impl DiffRenderer {
         self.diff_surface().markdown_preview
     }
 
-    /// Returns `true` when the current diff target is a conflicted file and
-    /// there is an applicable conflict resolver strategy.
+    /// Whether the merge tool is on screen with a resolver strategy, rather
+    /// than its compare view.
     pub(in crate::view) fn is_conflict_resolver_active(&self) -> bool {
-        self.conflicted_worktree_target()
+        self.active_conflict_target()
             .is_some_and(|(_, kind)| Self::conflict_resolver_strategy(kind, false).is_some())
     }
 
@@ -774,19 +774,28 @@ impl DiffRenderer {
     /// which is a picture with no text to search; search has to tell the two
     /// apart or it would report no matches over a file it could have searched.
     pub(in crate::view) fn is_conflict_rendered_markdown_preview_active(&self) -> bool {
-        self.is_conflict_rendered_preview_active()
-            && self.conflict_resolver.path.as_ref().is_some_and(|path| {
-                crate::view::preview_path_rendered_kind(path) == Some(RenderedPreviewKind::Markdown)
-            })
+        self.conflict_rendered_preview_kind() == Some(RenderedPreviewKind::Markdown)
     }
 
     pub(in crate::view) fn is_conflict_rendered_preview_active(&self) -> bool {
-        self.conflict_resolver.path.as_ref().is_some_and(|path| {
+        self.conflict_rendered_preview_kind().is_some()
+    }
+
+    /// The rendered preview the merge tool shows, only while it is loaded for
+    /// the conflict on screen.
+    fn conflict_rendered_preview_kind(&self) -> Option<RenderedPreviewKind> {
+        let (path, _) = self.active_conflict_target()?;
+        let repo_id = self.active_repo_id()?;
+        if !self.conflict_resolver.matches_target(repo_id, &path)
+            || self.conflict_resolver.resolver_preview_mode != ConflictResolverPreviewMode::Preview
+        {
+            return None;
+        }
+        crate::view::preview_path_rendered_kind(&path).filter(|kind| {
             matches!(
-                crate::view::preview_path_rendered_kind(path),
-                Some(RenderedPreviewKind::Svg | RenderedPreviewKind::Markdown)
-            ) && self.conflict_resolver.resolver_preview_mode
-                == ConflictResolverPreviewMode::Preview
+                kind,
+                RenderedPreviewKind::Svg | RenderedPreviewKind::Markdown
+            )
         })
     }
 

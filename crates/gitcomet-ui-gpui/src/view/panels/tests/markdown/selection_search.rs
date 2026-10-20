@@ -2627,3 +2627,162 @@ fn a_double_click_on_an_aligned_word_selects_the_word_painted_there(cx: &mut gpu
 
     fixture.cleanup();
 }
+
+/// The merge tool stays loaded under a read-only view of its conflicted file,
+/// Preview mode included; search must take the view on screen, not the
+/// hidden merge tool's rendered documents.
+#[gpui::test]
+fn a_read_only_view_of_a_conflicted_markdown_file_is_not_the_merge_tool_preview(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(49);
+    let workdir = tempfile::tempdir().expect("workdir");
+    let file_rel = std::path::PathBuf::from("conflict.md");
+    let current = "<<<<<<< ours\n# Local\n=======\n# Remote\n>>>>>>> theirs\n";
+    std::fs::write(workdir.path().join(&file_rel), current).expect("write conflict");
+    let state = |content_preview| {
+        let mut repo = opening_repo_state(repo_id, workdir.path());
+        set_test_conflict_status(
+            &mut repo,
+            file_rel.clone(),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        );
+        set_test_conflict_file(
+            &mut repo,
+            file_rel.clone(),
+            "# Base\n",
+            "# Local\n",
+            "# Remote\n",
+            current,
+        );
+        repo.conflict_state.conflict_file_load_mode =
+            gitcomet_state::model::ConflictFileLoadMode::Full;
+        repo.diff_state.content_preview = content_preview;
+        app_state_with_repo(repo, repo_id)
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| push_test_state(this, state(false), cx));
+    });
+    draw_and_drain_test_window(cx);
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            assert_eq!(pane.conflict_resolver.path.as_ref(), Some(&file_rel));
+            pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = diff_renderer.read(app);
+        assert!(pane.is_conflict_rendered_preview_active());
+        assert_eq!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::Conflict)
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| push_test_state(this, state(true), cx));
+    });
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    cx.update(|_window, app| {
+        let pane = diff_renderer.read(app);
+        assert!(pane.is_file_preview_active());
+        assert!(!pane.is_conflict_rendered_preview_active());
+        assert_ne!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::Conflict)
+        );
+    });
+}
+
+/// Selecting another conflicted file keeps the merge tool on the previous one
+/// until the new one loads; its Preview must not stand in for the file now
+/// selected.
+#[gpui::test]
+fn the_previous_conflicts_preview_is_not_the_one_loading(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(50);
+    let workdir = tempfile::tempdir().expect("workdir");
+    let first = std::path::PathBuf::from("first.md");
+    let second = std::path::PathBuf::from("second.md");
+    let current = "<<<<<<< ours\n# Local\n=======\n# Remote\n>>>>>>> theirs\n";
+    let state = |path: &std::path::Path, loaded: bool| {
+        let mut repo = opening_repo_state(repo_id, workdir.path());
+        set_test_conflict_status(
+            &mut repo,
+            path.to_path_buf(),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        );
+        set_test_conflict_file(
+            &mut repo,
+            path.to_path_buf(),
+            "# Base\n",
+            "# Local\n",
+            "# Remote\n",
+            current,
+        );
+        repo.conflict_state.conflict_file_load_mode =
+            gitcomet_state::model::ConflictFileLoadMode::Full;
+        if !loaded {
+            repo.conflict_state.conflict_file = Loadable::Loading;
+            repo.conflict_state.conflict_rev += 1;
+        }
+        app_state_with_repo(repo, repo_id)
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state(&first, true), cx)
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let diff_renderer = cx.update(|_window, app| view.read(app).diff_renderer.clone());
+    cx.update(|_window, app| {
+        diff_renderer.update(app, |pane, cx| {
+            assert_eq!(pane.conflict_resolver.path.as_ref(), Some(&first));
+            pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert!(
+            diff_renderer
+                .read(app)
+                .is_conflict_rendered_preview_active()
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state(&second, false), cx)
+        });
+    });
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    cx.update(|_window, app| {
+        let pane = diff_renderer.read(app);
+        assert_eq!(
+            pane.active_conflict_target().map(|(path, _)| path),
+            Some(second.clone())
+        );
+        assert!(!pane.is_conflict_rendered_preview_active());
+        assert_ne!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::Conflict)
+        );
+    });
+}

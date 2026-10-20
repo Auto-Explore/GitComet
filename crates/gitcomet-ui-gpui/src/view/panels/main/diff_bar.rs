@@ -203,12 +203,12 @@ impl DiffRenderer {
             && self.is_collapsed_diff_projection_active())
         .then(|| self.collapsed_diff_total_file_stat())
         .flatten();
-        let stage = repo_id.and_then(|repo_id| self.stage_action(repo_id, cx));
-        let mut actions: Vec<AnyElement> = stage
-            .map(|action| self.stage_button(action, theme, scale, window, cx))
-            .into_iter()
-            .collect();
-        actions.extend(self.hosted_bar_items(theme, scale));
+        // Owner items first, so the built-in primary action stays rightmost.
+        let mut actions = self.hosted_bar_items(theme, scale);
+        if let Some(action) = repo_id.and_then(|repo_id| self.stage_action(repo_id, cx)) {
+            actions.push(self.stage_button(action, theme, scale, window, cx));
+        }
+        actions.extend(self.conflict_save_bar_actions(theme, scale, cx));
         if nav.is_none()
             && viewer_nav.is_none()
             && stats.is_none()
@@ -239,18 +239,20 @@ impl DiffRenderer {
                 div()
                     .id("diff_bar_position")
                     .debug_selector(|| "diff_bar_position".to_string())
+                    .min_w(px(0.0))
                     .pl(scale.px(4.0))
                     .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
-                    .whitespace_nowrap()
+                    .truncate()
                     .child(position_label(index, count))
                     .when_some(nav.context.clone(), |d, context| {
                         d.gitcomet_tooltip(theme, context)
                     })
             });
+            // Shrinks with the left slot: the place truncates, the arrows stay.
             div()
                 .flex()
-                .flex_none()
+                .min_w(px(0.0))
                 .items_center()
                 .gap(scale.px(2.0))
                 .child(arrow(
@@ -294,15 +296,16 @@ impl DiffRenderer {
                         .child(format!("+{added}")),
                 )
         });
-        // Text chips stay centred between equal-width side slots. Image controls
-        // wrap into the remaining space without shrinking navigation or actions;
-        // in narrow hosted panes the bar can also wrap those slots onto new rows.
+        // Text chips stay centred between equal-width side slots until the
+        // actions need more than their half: they never shrink, so the left
+        // slot yields first, and a pane too narrow for both wraps them onto a
+        // row of their own. Image controls wrap into the remaining space.
         Some(
             components::bottom_bar(theme, scale)
                 .id("diff_bottom_bar")
                 .debug_selector(|| "diff_bottom_bar".to_string())
                 .flex_shrink_0()
-                .when(image_toolbar, |d| d.flex_wrap())
+                .flex_wrap()
                 .child(
                     div()
                         .flex()
@@ -327,14 +330,13 @@ impl DiffRenderer {
                 .child(
                     div()
                         .id("diff_bar_actions")
+                        .debug_selector(|| "diff_bar_actions".to_string())
                         .flex()
                         .flex_1()
                         .flex_basis(px(0.0))
-                        .min_w(px(0.0))
                         .when(image_toolbar, |d| d.flex_none().ml_auto())
                         .items_center()
                         .justify_end()
-                        .overflow_hidden()
                         .child(
                             div()
                                 .flex()

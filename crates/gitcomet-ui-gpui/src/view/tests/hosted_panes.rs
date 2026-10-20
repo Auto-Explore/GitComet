@@ -3712,6 +3712,91 @@ fn a_linked_worktree_pane_offers_and_runs_no_staging_or_editing(cx: &mut gpui::T
     );
 }
 
+/// A save that stages is staging: a pane that may edit but not stage drops
+/// it unrun, and still runs a plain save.
+#[gpui::test]
+fn a_pane_without_staging_drops_a_save_that_stages(cx: &mut gpui::TestAppContext) {
+    use crate::view::hosted::diff_pane::DiffPaneView;
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    let (dir, store, view, app_cx) =
+        open_repository_with(cx, Arc::new(gitcomet_git_gix::GixBackend));
+    let root = dir.path().to_path_buf();
+    let (host, repository) = app_cx.update(|_window, app| {
+        let host = view.read(app).extension_window.as_ref().unwrap().host();
+        let repository = host.active_repository(app).unwrap().unwrap();
+        (host, repository)
+    });
+    let mut policy = DiffPanePolicy::default();
+    policy.allow_stage = false;
+    let pane = app_cx.update(|_window, app| {
+        host.create_diff_pane(
+            &repository,
+            DiffTarget::working_tree("a.rs".into(), DiffArea::Unstaged),
+            DiffPaneOptions {
+                policy,
+                ..DiffPaneOptions::default()
+            },
+            app,
+        )
+        .unwrap()
+    });
+    settle(app_cx, &view, &store, "the pane", |cx| {
+        cx.update(|_window, app| !pane.is_loading(app))
+    });
+    let entity = pane
+        .view()
+        .downcast::<DiffPaneView>()
+        .unwrap_or_else(|_| panic!("a hosted diff pane"));
+    let shown = pane.view();
+    let (_holder, cx) = cx.add_window_view(move |_, _| PaneHolder(shown));
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let repo_id = repository.repo_id();
+    let save = |contents: &str, stage: bool, cx: &mut gpui::VisualTestContext| {
+        let (saved_tx, saved_rx) = smol::channel::bounded(1);
+        cx.update(|_, app| {
+            entity.read(app).renderer_dispatch(
+                Msg::SaveWorktreeFile {
+                    repo_id,
+                    path: "a.rs".into(),
+                    contents: contents.to_string().into(),
+                    expected_contents: Some(std::fs::read(root.join("a.rs")).unwrap().into()),
+                    stage,
+                    completion: Some(saved_tx),
+                },
+                app,
+            );
+        });
+        saved_rx
+    };
+    let staging = save("staged\n", true, cx);
+    assert!(
+        smol::block_on(staging.recv()).is_err(),
+        "the staging save was dropped, never run"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.rs")).unwrap(),
+        numbered("a", 30, Some(3))
+    );
+    let plain = save("saved\n", false, cx);
+    assert_eq!(
+        smol::block_on(plain.recv()),
+        Ok(true),
+        "the plain save runs"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.rs")).unwrap(),
+        "saved\n"
+    );
+    let staged = crate::test_support::git(&root, &["diff", "--cached", "--name-only"]);
+    assert!(staged.is_empty(), "nothing was staged");
+}
+
 /// A list on a linked worktree reloads when that worktree changes, as its
 /// watch reports it.
 #[gpui::test]

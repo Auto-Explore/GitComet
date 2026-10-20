@@ -23,10 +23,14 @@ pub fn filled_action_frame(theme: AppTheme, scale: UiScale) -> Div {
         .rounded(px(theme.radii.control))
         .bg(gpui::rgba(0x00000000))
         .border_1()
-        .border_color(with_alpha(
-            theme.colors.foreground.secondary,
-            if theme.is_dark { 0.34 } else { 0.26 },
-        ))
+        .border_color(filled_action_frame_border(theme))
+}
+
+pub(super) fn filled_action_frame_border(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.foreground.secondary,
+        if theme.is_dark { 0.34 } else { 0.26 },
+    )
 }
 
 pub struct SplitButton {
@@ -96,10 +100,6 @@ impl SplitButton {
             SplitButtonStyle::Filled => theme.colors.surface.raised,
             SplitButtonStyle::Borderless => gpui::rgba(0x00000000),
         };
-        let border_color = with_alpha(
-            theme.colors.foreground.secondary,
-            if theme.is_dark { 0.34 } else { 0.26 },
-        );
         // Without a frame around it the divider is the only thing left holding
         // the pair together, so it stays — just quieter than a real border.
         let divider_color = if borderless {
@@ -108,7 +108,7 @@ impl SplitButton {
                 if theme.is_dark { 0.24 } else { 0.18 },
             )
         } else {
-            border_color
+            filled_action_frame_border(theme)
         };
 
         let inner = div()

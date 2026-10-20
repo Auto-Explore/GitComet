@@ -23,6 +23,67 @@ const CONFLICT_VSPLIT_CHROME_PX: f32 = 200.0;
 /// rather than borrowing a control height it does not match.
 const CONFLICT_PANEL_HEADER_HEIGHT_PX: f32 = 24.0;
 
+/// A way out of the text resolver, offered in the bottom bar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictSave {
+    Save,
+    SaveAndStage,
+    /// The mergetool window's save: writes the result for git and exits.
+    SaveAndClose,
+}
+
+impl ConflictSave {
+    /// The bar's saves in order, the primary one last.
+    fn for_view_mode(view_mode: GitCometViewMode) -> &'static [Self] {
+        match view_mode {
+            GitCometViewMode::Normal => &[Self::Save, Self::SaveAndStage],
+            GitCometViewMode::FocusedMergetool => &[Self::SaveAndClose],
+            // A difftool window shows a snapshot, never a conflict.
+            GitCometViewMode::FocusedDiff => &[],
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Save => "conflict_save",
+            Self::SaveAndStage => "conflict_save_stage",
+            Self::SaveAndClose => "conflict_save_close",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Save => "Save",
+            Self::SaveAndStage => "Save & stage",
+            Self::SaveAndClose => "Save & close",
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Save => "Save the resolved file",
+            Self::SaveAndStage => "Save the resolved file and stage it",
+            Self::SaveAndClose => "Save the resolved file and close",
+        }
+    }
+
+    fn stages(self) -> bool {
+        match self {
+            Self::SaveAndStage => true,
+            Self::Save | Self::SaveAndClose => false,
+        }
+    }
+
+    /// The primary save is framed with an icon, like Stage.
+    fn primary_icon(self) -> Option<&'static str> {
+        match self {
+            Self::Save => None,
+            Self::SaveAndStage => Some("icons/plus.svg"),
+            Self::SaveAndClose => Some("icons/check.svg"),
+        }
+    }
+}
+
 fn scaled_panel_header_height(ui_scale_percent: u32) -> Pixels {
     crate::ui_scale::design_px_from_percent(CONFLICT_PANEL_HEADER_HEIGHT_PX, ui_scale_percent)
 }
@@ -72,14 +133,12 @@ impl DiffRenderer {
     }
 
     /// Toolbar controls for the full text resolver: conflict navigation,
-    /// pick actions, view-mode toggles, autosolve entry points, and the
-    /// save/stage completion actions.
+    /// pick actions, view-mode toggles and autosolve entry points. Its saves
+    /// sit in the bottom bar.
     pub(super) fn conflict_toolbar_full_controls(
         &self,
-        mut controls: gpui::Div,
+        controls: gpui::Div,
         conflict_rendered_preview_active: bool,
-        repo_id: Option<RepoId>,
-        conflict_target_path: &Option<std::path::PathBuf>,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
@@ -91,7 +150,7 @@ impl DiffRenderer {
             ui_scale_percent,
         );
         let active_pick_state = self.conflict_resolver_active_pick_state();
-        controls = controls
+        controls
             .when(!conflict_rendered_preview_active, |d| {
                 let can_nav_prev = self.conflict_has_prev();
                 let can_nav_next = self.conflict_has_next();
@@ -311,141 +370,148 @@ impl DiffRenderer {
                             ))
                     }
                 },
-            );
+            )
+    }
 
-        if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
-            let total = self.conflict_resolver_conflict_count();
-            let resolved = self.conflict_resolver_resolved_count();
-            let unresolved = total.saturating_sub(resolved);
-            let focused_mergetool_mode = self.view_mode == GitCometViewMode::FocusedMergetool;
-            let save_label = if focused_mergetool_mode {
-                "Save & close"
-            } else {
-                "Save"
-            };
-            let save_path = path.clone();
-            let stage_path = path.clone();
-            let gate_unresolved = if self.conflict_resolver.output_is_protected {
-                self.conflict_resolver_input.read_with(cx, |input, _| {
-                    usize::from(conflict_resolver::text_contains_conflict_markers(
-                        input.text(),
-                    ))
-                })
-            } else if self.conflict_resolved_output_is_streamed() {
-                unresolved
-            } else {
-                self.conflict_resolver_input.read_with(cx, |input, _| {
-                    conflict_resolver::conflict_stage_safety_check(
-                        input.text(),
-                        &self.conflict_resolver.marker_segments,
-                        &self.conflict_resolved_output_block_map,
-                    )
-                    .unresolved_blocks
-                })
-            };
-            let save_button = components::Button::new("conflict_save", save_label)
-                .style(components::ButtonStyle::Outlined)
-                .disabled(gate_unresolved > 0)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    let text = this.current_conflict_resolved_output_text(cx);
-                    let blocks_save = if this.conflict_resolver.output_is_protected {
-                        conflict_resolver::text_contains_conflict_markers(&text)
-                    } else {
-                        conflict_resolver::conflict_stage_safety_check(
-                            &text,
-                            &this.conflict_resolver.marker_segments,
-                            &this.conflict_resolved_output_block_map,
-                        )
-                        .blocks_save()
-                    };
-                    if blocks_save {
-                        cx.notify();
-                        return;
-                    }
-                    if this.view_mode == GitCometViewMode::FocusedMergetool {
-                        this.focused_mergetool_save_and_exit(repo_id, save_path.clone(), cx);
-                        return;
-                    }
-                    let text = this.conflict_resolver_save_contents_from_text(text);
-                    let Some(contents) = this.conflict_output_bytes_for_save(text, cx) else {
-                        return;
-                    };
-                    this.store.dispatch(Msg::SaveWorktreeFile {
-                        repo_id,
-                        path: save_path.clone(),
-                        contents,
-                        expected_contents: None,
-                        stage: false,
-                        completion: None,
-                    });
-                    this.mark_conflict_resolved_output_saved(cx);
-                });
-            controls = controls
-                .child(
-                    div()
-                        .w(px(1.0))
-                        .h(divider_h)
-                        .bg(theme.colors.stroke.default),
-                )
-                .child(save_button)
-                .when(show_conflict_save_stage_action(self.view_mode), |d| {
-                    let mut save_stage_btn =
-                        components::Button::new("conflict_save_stage", "Save & stage")
-                            .style(components::ButtonStyle::Filled)
-                            .disabled(gate_unresolved > 0)
-                            .on_click(theme, cx, move |this, _e, _window, cx| {
-                                let text = this.current_conflict_resolved_output_text(cx);
-                                let blocks_stage = if this.conflict_resolver.output_is_protected {
-                                    conflict_resolver::text_contains_conflict_markers(&text)
-                                } else {
-                                    conflict_resolver::conflict_stage_safety_check(
-                                        &text,
-                                        &this.conflict_resolver.marker_segments,
-                                        &this.conflict_resolved_output_block_map,
-                                    )
-                                    .blocks_save()
-                                };
-                                if blocks_stage {
-                                    cx.notify();
-                                } else {
-                                    let text = this.conflict_resolver_save_contents_from_text(text);
-                                    if let Some(contents) =
-                                        this.conflict_output_bytes_for_save(text, cx)
-                                    {
-                                        this.store.dispatch(Msg::SaveWorktreeFile {
-                                            repo_id,
-                                            path: stage_path.clone(),
-                                            contents,
-                                            expected_contents: None,
-                                            stage: true,
-                                            completion: None,
-                                        });
-                                        this.mark_conflict_resolved_output_saved(cx);
-                                    }
-                                }
-                            });
-                    if gate_unresolved > 0 {
-                        let noun = if gate_unresolved == 1 {
-                            "conflict is"
-                        } else {
-                            "conflicts are"
-                        };
-                        save_stage_btn = save_stage_btn.gitcomet_tooltip(
-                            theme,
-                            format!("Disabled: {gate_unresolved} {noun} still unresolved").into(),
-                        );
-                    }
-                    d.child(save_stage_btn)
-                });
+    /// Binary, keep/delete and decision-only conflicts act inside their own
+    /// panels; only the full text resolver has the toolbar's picks.
+    pub(super) fn conflict_resolver_is_simple_strategy(&self) -> bool {
+        matches!(
+            self.conflict_resolver.strategy,
+            Some(
+                gitcomet_core::conflict_session::ConflictResolverStrategy::BinarySidePick
+                    | gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete
+                    | gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly
+            )
+        )
+    }
+
+    /// The text resolver's saves for the bottom bar's action slot, primary
+    /// last. Empty unless a loaded text resolver is on screen.
+    pub(super) fn conflict_save_bar_actions(
+        &self,
+        theme: AppTheme,
+        scale: crate::ui_scale::UiScale,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        if self.text_conflict_save_target().is_none() {
+            return Vec::new();
         }
+        let check = self.conflict_save_check(cx);
+        let blocked = match check.unresolved_blocks {
+            0 if check.has_conflict_markers => Some(SharedString::from(
+                "Disabled: conflict markers remain in the output",
+            )),
+            0 => None,
+            1 => Some("Disabled: 1 conflict is still unresolved".into()),
+            n => Some(format!("Disabled: {n} conflicts are still unresolved").into()),
+        };
+        let pane = cx.entity().downgrade();
+        ConflictSave::for_view_mode(self.view_mode)
+            .iter()
+            .filter(|save| self.store.admits_save(save.stages()))
+            .map(|&save| {
+                let pane = pane.clone();
+                let button =
+                    components::ActionButton::new(save.id(), save.label(), move |(), cx| {
+                        let _ = pane.update(cx, |pane, cx| {
+                            pane.save_conflict_resolver_output(save, cx);
+                        });
+                    })
+                    .enabled(blocked.is_none())
+                    .with_tooltip(blocked.clone().unwrap_or_else(|| save.tooltip().into()));
+                match save.primary_icon() {
+                    Some(icon) => button.with_icon(icon).framed(),
+                    None => button,
+                }
+                .render(save.id(), (), theme, scale)
+            })
+            .collect()
+    }
 
-        controls
+    /// Where the text resolver's output saves to: only while the pane shows
+    /// the full text resolver, loaded for the conflict on screen.
+    fn text_conflict_save_target(&self) -> Option<(RepoId, std::path::PathBuf)> {
+        if self.conflict_resolver.is_binary_conflict
+            || self.conflict_resolver.strategy
+                != Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
+        {
+            return None;
+        }
+        let repo_id = self.active_repo_id()?;
+        let (path, _) = self.active_conflict_target()?;
+        self.conflict_resolver
+            .matches_target(repo_id, &path)
+            .then_some((repo_id, path))
+    }
+
+    /// What keeps the resolved output from saving. The bar and the click both
+    /// ask, so an enabled save is never refused.
+    fn conflict_save_check(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> conflict_resolver::ConflictStageSafetyCheck {
+        if self.conflict_resolver.output_is_protected {
+            let has_conflict_markers = self.conflict_resolver_input.read_with(cx, |input, _| {
+                conflict_resolver::text_contains_conflict_markers(input.text())
+            });
+            return conflict_resolver::ConflictStageSafetyCheck {
+                has_conflict_markers,
+                unresolved_blocks: 0,
+            };
+        }
+        if self.conflict_resolved_output_is_streamed() {
+            let total = self.conflict_resolver_conflict_count();
+            return conflict_resolver::ConflictStageSafetyCheck {
+                has_conflict_markers: false,
+                unresolved_blocks: total.saturating_sub(self.conflict_resolver_resolved_count()),
+            };
+        }
+        self.conflict_resolver_input.read_with(cx, |input, _| {
+            conflict_resolver::conflict_stage_safety_check(
+                input.text(),
+                &self.conflict_resolver.marker_segments,
+                &self.conflict_resolved_output_block_map,
+            )
+        })
+    }
+
+    /// Writes the resolved output to the conflict on screen, unless the
+    /// output is not ready to save.
+    fn save_conflict_resolver_output(&mut self, save: ConflictSave, cx: &mut gpui::Context<Self>) {
+        let Some((repo_id, path)) = self.text_conflict_save_target() else {
+            return;
+        };
+        if self.conflict_save_check(cx).blocks_save() {
+            cx.notify();
+            return;
+        }
+        let stage = match save {
+            ConflictSave::SaveAndClose => {
+                self.focused_mergetool_save_and_exit(repo_id, path, cx);
+                return;
+            }
+            ConflictSave::Save | ConflictSave::SaveAndStage => save.stages(),
+        };
+        let text = self.current_conflict_resolved_output_text(cx);
+        let text = self.conflict_resolver_save_contents_from_text(text);
+        let Some(contents) = self.conflict_output_bytes_for_save(text, cx) else {
+            return;
+        };
+        self.store.dispatch(Msg::SaveWorktreeFile {
+            repo_id,
+            path,
+            contents,
+            expected_contents: None,
+            stage,
+            completion: None,
+        });
+        self.mark_conflict_resolved_output_saved(cx);
     }
 
     /// Footer bar for the text conflict resolver (section 30): live resolution
-    /// status line plus the leftover-marker indicator. The save/stage
-    /// completion actions live in the top toolbar; merge abort lives in
-    /// the action bar's "Abort merge" button.
+    /// status line plus the leftover-marker indicator. The saves live in the
+    /// bottom bar; merge abort lives in the action bar's "Abort merge" button.
     fn conflict_resolver_footer(
         &self,
         theme: AppTheme,
@@ -2667,6 +2733,35 @@ fn minimap_band_color(
     };
     color.alpha = alpha;
     Some(color)
+}
+
+#[cfg(test)]
+mod conflict_save_tests {
+    use super::ConflictSave;
+    use crate::view::GitCometViewMode;
+
+    #[test]
+    fn only_the_main_window_stages_and_only_a_mergetool_closes() {
+        let labels = |mode| {
+            ConflictSave::for_view_mode(mode)
+                .iter()
+                .map(|save| save.label())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(GitCometViewMode::Normal), ["Save", "Save & stage"]);
+        assert_eq!(labels(GitCometViewMode::FocusedMergetool), ["Save & close"]);
+        assert!(labels(GitCometViewMode::FocusedDiff).is_empty());
+    }
+
+    #[test]
+    fn only_save_and_stage_stages() {
+        let saves = [
+            ConflictSave::Save,
+            ConflictSave::SaveAndStage,
+            ConflictSave::SaveAndClose,
+        ];
+        assert_eq!(saves.map(ConflictSave::stages), [false, true, false]);
+    }
 }
 
 #[cfg(test)]

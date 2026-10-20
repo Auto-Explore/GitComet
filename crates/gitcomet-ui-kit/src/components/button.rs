@@ -677,8 +677,8 @@ fn mix(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
 mod tests {
     use super::*;
     use crate::test_support::{
-        assert_color_close, color_close, painted_control_quads, redraw, solid_background,
-        solid_color,
+        assert_color_close, color_close, painted_control_quads, painted_fills_inside, redraw,
+        solid_background, solid_color,
     };
     use gpui::{Context, Render, TestAppContext, Window};
     use std::cell::RefCell;
@@ -817,26 +817,6 @@ mod tests {
         }
     }
 
-    fn fills_inside(cx: &mut gpui::VisualTestContext, selector: &'static str) -> Vec<Rgba> {
-        let bounds = cx.debug_bounds(selector).expect("button must be drawn");
-        cx.update(|window, _| {
-            let scale = window.scale_factor();
-            let inside = |value: f32, start: gpui::Pixels, length: gpui::Pixels| {
-                value >= f32::from(start) * scale - 1.0
-                    && value <= f32::from(start + length) * scale + 1.0
-            };
-            window
-                .painted_quads()
-                .into_iter()
-                .filter(|quad| {
-                    inside(quad.bounds.origin.x.0, bounds.origin.x, bounds.size.width)
-                        && inside(quad.bounds.origin.y.0, bounds.origin.y, bounds.size.height)
-                })
-                .filter_map(|quad| solid_color(&quad.background))
-                .collect()
-        })
-    }
-
     const SLOT_COLOR: u32 = 0x3388cc;
 
     fn draw_enabled_and_disabled(
@@ -870,8 +850,8 @@ mod tests {
         let plate = with_alpha(gpui::rgb(SLOT_COLOR), 0.14);
         let has =
             |fills: &[Rgba], expected: Rgba| fills.iter().any(|fill| color_close(*fill, expected));
-        let enabled = fills_inside(cx, "on");
-        let disabled = fills_inside(cx, "off");
+        let enabled = painted_fills_inside(cx, "on");
+        let disabled = painted_fills_inside(cx, "off");
         assert!(has(&enabled, plate), "{enabled:?}");
         assert!(
             has(&disabled, themes()[0].disabled_color(plate)),

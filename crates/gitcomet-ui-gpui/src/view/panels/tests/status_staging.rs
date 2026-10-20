@@ -1193,6 +1193,184 @@ fn checking_out_a_conflict_side_preserves_an_unrelated_diff(cx: &mut gpui::TestA
     crate::view::test_support::drain_store_worker(&view, cx);
 }
 
+/// `conflicted_merge` open in the text resolver on `a.txt`, through the
+/// real backend.
+fn open_text_resolver(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    tempfile::TempDir,
+    AppStore,
+    View,
+    Entity<DiffRenderer>,
+    &mut gpui::VisualTestContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    conflicted_merge(dir.path());
+    let backend = gitcomet_git_gix::GixBackend.open(dir.path()).unwrap();
+    let status = backend
+        .status(&gitcomet_core::services::CancellationToken::new())
+        .unwrap();
+    let mut repo = opening_repo_state(REPO, dir.path());
+    repo.open = Loadable::Ready(());
+    repo.worktree_status = Loadable::Ready(status.unstaged.clone());
+    repo.staged_status = Loadable::Ready(status.staged.clone());
+    repo.status = Loadable::Ready(Arc::new(status));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    crate::view::test_support::drain_store_worker(&view, cx);
+    super::shortcuts::apply_state(cx, &view, app_state_with_repo(repo, REPO));
+    store.insert_repo_for_test(REPO, backend);
+    store.dispatch(Msg::SelectDiff {
+        repo_id: REPO,
+        target: DiffTarget::working_tree("a.txt".into(), DiffArea::Unstaged),
+    });
+    wait_for(cx, &view, &store, "the conflict file", |repo| {
+        matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+    });
+    let diff_renderer = cx.update(|_, app| view.read(app).diff_renderer.clone());
+    super::shortcuts::wait_until(cx, "the text resolver", |cx| {
+        draw_and_drain_test_window(cx);
+        cx.update(|_, app| {
+            diff_renderer.read(app).conflict_resolver.path.as_deref() == Some(Path::new("a.txt"))
+        })
+    });
+
+    (dir, store, view, diff_renderer, cx)
+}
+
+/// The text resolver saves from the bottom bar's right end, Save & stage
+/// rightmost, and keeps both whole in a narrow pane. Both stay off while a
+/// conflict is open; once it is picked, Save & stage writes and stages it.
+#[gpui::test]
+fn the_resolver_saves_and_stages_from_the_bottom_bar(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
+
+    let bar = cx.debug_bounds("diff_bottom_bar").expect("the bottom bar");
+    let save = cx.debug_bounds("conflict_save").expect("Save");
+    let save_stage = cx
+        .debug_bounds("conflict_save_stage_frame")
+        .expect("a framed Save & stage");
+    assert!(
+        bar.contains(&save.center()) && bar.contains(&save_stage.center()),
+        "the saves sit in the bottom bar: {save:?} {save_stage:?} {bar:?}"
+    );
+    assert!(
+        save.right() <= save_stage.left(),
+        "Save & stage is rightmost"
+    );
+    assert!(
+        bar.right() - save_stage.right() <= px(12.0),
+        "Save & stage ends at the bar's right edge: {save_stage:?} {bar:?}"
+    );
+
+    // A narrow pane takes room from the bar's left side before Save. The
+    // fixture's error toasts would cover the bar there.
+    cx.update(|_, app| crate::view::test_support::dismiss_error_toasts(&view, app));
+    cx.simulate_resize(gpui::size(px(760.0), px(800.0)));
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+    let bar = cx.debug_bounds("diff_bottom_bar").expect("the bottom bar");
+    let slot = cx
+        .debug_bounds("diff_bar_actions")
+        .expect("the action slot");
+    let save = cx.debug_bounds("conflict_save").expect("Save");
+    let save_stage = cx
+        .debug_bounds("conflict_save_stage_frame")
+        .expect("Save & stage");
+    assert!(
+        slot.left() <= save.left() && save_stage.right() <= slot.right(),
+        "both saves fit their slot: {save:?} {save_stage:?} {slot:?}"
+    );
+    assert!(slot.right() <= bar.right(), "{slot:?} {bar:?}");
+    let position = cx
+        .debug_bounds("diff_bar_position")
+        .expect("the file's place");
+    assert!(
+        position.right() <= slot.left(),
+        "the file's place shortens instead of running under the saves: {position:?} {slot:?}"
+    );
+
+    let conflicted = std::fs::read_to_string(dir.path().join("a.txt")).unwrap();
+    click(cx, "conflict_save_stage");
+    click(cx, "conflict_save");
+    let repo = &store.snapshot().repos[0];
+    assert_eq!(
+        repo.local_actions_in_flight, 0,
+        "nothing saves while a conflict is open"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        conflicted
+    );
+
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    click(cx, "conflict_save_stage");
+    wait_for(cx, &view, &store, "save and stage the resolution", |repo| {
+        repo.local_actions_in_flight == 0
+            && matches!(&repo.status, Loadable::Ready(status) if status.unstaged.is_empty())
+    });
+
+    let snapshot = store.snapshot();
+    assert!(
+        snapshot.repos[0].feedback.last_error.is_none(),
+        "{:?}",
+        snapshot.repos[0].feedback.last_error
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "ours\n"
+    );
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--unmerged"]),
+        b"",
+        "the resolution is staged"
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+/// The bar's plain Save writes the resolution and leaves the file unmerged.
+#[gpui::test]
+fn the_resolver_bar_save_writes_without_staging(cx: &mut gpui::TestAppContext) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    click(cx, "conflict_save");
+    wait_for(cx, &view, &store, "save the resolution", |repo| {
+        repo.local_actions_in_flight == 0
+    });
+
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "ours\n"
+    );
+    assert!(
+        !git_output(dir.path(), &["ls-files", "--unmerged"]).is_empty(),
+        "Save leaves the file unmerged"
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
 #[derive(Clone, Copy, Debug)]
 enum EditorKeyFocus {
     Panel,

@@ -1765,9 +1765,7 @@ impl DiffRenderer {
             self.ensure_conflict_markdown_preview_cache(cx);
         }
         let repo = self.active_repo();
-        let conflict_target = (!inline_submodule_diff_active)
-            .then(|| self.conflicted_worktree_target())
-            .flatten();
+        let conflict_target = self.active_conflict_target();
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));
@@ -1874,22 +1872,12 @@ impl DiffRenderer {
         };
         let mut controls = div().flex().items_center().gap_1();
         let mut change_navigation = None;
-        let is_simple_conflict_strategy = matches!(
-            self.conflict_resolver.strategy,
-            Some(
-                gitcomet_core::conflict_session::ConflictResolverStrategy::BinarySidePick
-                    | gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete
-                    | gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly
-            )
-        );
-        if is_conflict_resolver && is_simple_conflict_strategy {
+        if is_conflict_resolver && self.conflict_resolver_is_simple_strategy() {
             controls = self.conflict_toolbar_simple_controls(controls, theme);
         } else if is_conflict_resolver {
             controls = self.conflict_toolbar_full_controls(
                 controls,
                 conflict_rendered_preview_active,
-                repo_id,
-                &conflict_target_path,
                 theme,
                 cx,
             );
@@ -2133,7 +2121,8 @@ impl DiffRenderer {
         {
             // The full text resolver gets its own settings menu under the cog
             // (section 30); everything else keeps the diff actions menu.
-            let resolver_settings_active = is_conflict_resolver && !is_simple_conflict_strategy;
+            let resolver_settings_active =
+                is_conflict_resolver && !self.conflict_resolver_is_simple_strategy();
             let (cog_id, cog_kind, cog_tooltip): (&'static str, PopoverKind, &'static str) =
                 if resolver_settings_active {
                     (

@@ -98,12 +98,12 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.99.0"
+rust-version = "1.99.1"
 
 [patch.crates-io]
 # block 0.1.6 has no released fix for its uninhabited extern class static.
@@ -176,7 +176,7 @@ itertools = "0.15.0"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
 log = "0.4.34"
-lru = "0.18"
+lru = "0.19"
 mermaid-rs-renderer = { path = "vendor/mermaid-rs-renderer", version = "0.3.1", default-features = false }
 roxmltree = "0.21"
 # git-annex object paths are hashed with MD5 (not for security).
@@ -260,7 +260,7 @@ tree-sitter-cue = { path = "vendor/tree-sitter-cue" }
 # vendor/tree-sitter-css/Cargo.toml.
 tree-sitter-css = { path = "vendor/tree-sitter-css" }
 tree-sitter-dart = "0.2.0"
-tree-sitter-devicetree = "0.14.1"
+tree-sitter-devicetree = "0.15.0"
 tree-sitter-dhall = { path = "vendor/tree-sitter-dhall" }
 tree-sitter-diff = "0.1.0"
 tree-sitter-ebnf = { path = "vendor/tree-sitter-ebnf" }
@@ -336,7 +336,7 @@ tree-sitter-proto = "0.6.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-qmljs = "0.3.1"
 tree-sitter-r = "1.3.0"
-tree-sitter-racket = "0.24.7"
+tree-sitter-racket = "0.25.0"
 tree-sitter-regex = "0.25.0"
 tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
 # Vendored for a grammar fix: a `=begin` block comment ended at any `=end`,
@@ -345,9 +345,9 @@ tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
 tree-sitter-ruby = { path = "vendor/tree-sitter-ruby" }
 tree-sitter-rust = { path = "vendor/tree-sitter-rust" }
 tree-sitter-scala = { path = "vendor/tree-sitter-scala" }
-tree-sitter-scheme = "0.24.7"
+tree-sitter-scheme = "0.25.0"
 tree-sitter-sequel = { path = "vendor/tree-sitter-sequel" }
-tree-sitter-sfapex = "2.4.0"
+tree-sitter-sfapex = "3.0.1"
 tree-sitter-smali = { path = "vendor/tree-sitter-smali" }
 # Vendored to fix its highlight query for the workspace tree-sitter. See
 # vendor/tree-sitter-solidity/Cargo.toml.

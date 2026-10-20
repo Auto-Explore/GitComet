@@ -97,6 +97,14 @@ fn apex_names_are_not_constants_unless_upper_case_and_soql_objects_are_types() {
 }
 
 #[test]
+fn apex_multi_line_strings_are_strings() {
+    let text = "String body = '''\n    hello\n''';\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Apex, text, line, fragment);
+    assert_eq!(kinds(0, "'''"), [K::String]);
+    assert_eq!(kinds(1, "hello"), [K::String]);
+}
+
+#[test]
 fn qml_object_declarations_name_their_type() {
     let text = "import QtQuick\n\nRectangle {\n    width: 640\n}\n";
     let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Qml, text, line, fragment);
@@ -140,6 +148,14 @@ fn racket_and_scheme_quoted_data_keep_their_own_colours() {
         assert_eq!(kinds("0"), [K::Number], "{language:?}");
         assert_eq!(kinds("'"), [K::Operator], "{language:?}");
     }
+}
+
+#[test]
+fn scheme_bytevectors_and_syntax_quotes_keep_their_kinds() {
+    let text = "(define v #u8(1 2))\n(syntax-case x () (_ #'x))\n";
+    let kinds = |line, fragment| kinds(DiffSyntaxLanguage::Scheme, text, line, fragment);
+    assert_eq!(kinds(0, "#u8("), [K::PunctuationBracket]);
+    assert_eq!(kinds(1, "#'"), [K::Operator]);
 }
 
 #[test]

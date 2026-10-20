@@ -20,10 +20,6 @@ pub(super) fn show_external_mergetool_actions(view_mode: GitCometViewMode) -> bo
     matches!(view_mode, GitCometViewMode::Normal)
 }
 
-pub(super) fn show_conflict_save_stage_action(view_mode: GitCometViewMode) -> bool {
-    matches!(view_mode, GitCometViewMode::Normal)
-}
-
 pub(super) fn conflict_side_output_bytes(
     file: &gitcomet_state::model::ConflictFile,
     side: ThreeWayColumn,

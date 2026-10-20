@@ -2208,7 +2208,8 @@ fn conflict_content_preview_background_search_uses_preview_rows(cx: &mut gpui::T
     cx.update(|_, app| {
         let pane = diff_renderer.read(app);
         assert!(pane.is_file_preview_active());
-        assert!(pane.active_conflict_target().is_some());
+        assert!(pane.conflicted_worktree_target().is_some());
+        assert!(pane.active_conflict_target().is_none());
         assert!(pane.worktree_preview_line_count().is_some());
     });
 

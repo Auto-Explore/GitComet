@@ -5,7 +5,7 @@
 ; nvim's apex file starts `; inherits: soql`, which nvim resolves by prepending
 ; the soql file; sosl is a GitComet addition because the Apex grammar embeds
 ; SOSL too (`[FIND ... RETURNING ...]`) and nvim's apex query leaves it plain.
-; Not the crate's apex/queries/highlights.scm (tree-sitter-sfapex 2.4.0, MIT): it
+; Not the crate's apex/queries/highlights.scm (tree-sitter-sfapex 3.0.1, MIT): it
 ; uses VS Code semantic-token names (`@class`, `@enumMember`, `@decorator`, ...)
 ; that GitComet does not map, and colours no SOQL. Edits, marked `GitComet:`:
 ;
@@ -405,7 +405,10 @@
   (currency_literal)
 ] @number
 
-(string_literal) @string
+[
+  (string_literal)
+  (multi_line_string_literal) ; GitComet: sfapex 3.0's `'''` strings
+] @string
 
 [
   (line_comment)

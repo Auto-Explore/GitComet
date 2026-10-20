@@ -397,12 +397,7 @@ impl DiffRenderer {
                 out
             })));
         }
-        // A content preview of a conflicted file renders the preview, so it
-        // wins over the resolver, as in the synchronous scanners.
-        if !source_lines
-            && !self.is_file_preview_active()
-            && self.active_conflict_target().is_some()
-        {
+        if !source_lines && self.active_conflict_target().is_some() {
             // Only search inputs are copied; syntax/image/layout caches remain
             // owned by the live view. Deferred line indexes stay shared.
             let source = &self.conflict_resolver;

@@ -1,11 +1,12 @@
 ; Scheme.
 ;
-; tree-sitter-scheme 0.24.7's queries/highlights.scm (MIT), edited to match the other
+; tree-sitter-scheme 0.25.0's queries/highlights.scm (MIT), edited to match the other
 ; Lisps here (Common Lisp, Racket, Emacs Lisp, Janet). It was written for last pattern
 ; wins, as GitComet resolves. Edits:
 ;
 ;   * (character) and (boolean) were @constant.builtin: now @character and @boolean.
-;     (keyword) had no capture: now @constant. `#(` and `#vu8(` join the brackets.
+;     `#(`, `#vu8(` and `#u8(` join the brackets. (dot) and datum labels stay
+;     plain, as in Racket.
 ;   * `(list . (symbol) @function)` coloured every list head, `let` and `do`
 ;     bindings and syntax-rules patterns included, and the head-position
 ;     @function.builtin regex (~200 names) coloured library calls. Both dropped: no
@@ -19,10 +20,10 @@
 ;   * Added definitions: procedure and syntax names @function with parameters,
 ;     value names plain @variable, record types @type, a named let's name
 ;     @function, and library names @namespace.
-;   * `#;` comments: upstream's four hand-written levels became one
-;     @comment.discarded rule, which GitComet greys whole at any depth.
+;   * `#;` comments: upstream's plain @comment became @comment.discarded, which
+;     GitComet greys whole at any depth.
 
-["(" ")" "[" "]" "{" "}" "#(" "#vu8("] @punctuation.bracket
+["(" ")" "[" "]" "#(" "#vu8(" "#u8("] @punctuation.bracket
 
 ; ---- Literals ---------------------------------------------------------------
 
@@ -42,7 +43,7 @@
 (quasiquote "`" @operator)
 (unquote "," @operator)
 (unquote_splicing ",@" @operator)
-(syntax "#'" @operator)
+(syntax_quote "#'" @operator)
 (quasisyntax "#`" @operator)
 (unsyntax "#," @operator)
 (unsyntax_splicing "#,@" @operator)
@@ -171,8 +172,7 @@
 
 ;; datum comment ;;
 
-(comment
-  (_)) @comment.discarded
+(sexp_comment) @comment.discarded
 
 [(comment)
  (block_comment)

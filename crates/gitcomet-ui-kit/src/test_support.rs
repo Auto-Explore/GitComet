@@ -73,6 +73,30 @@ pub fn painted_control_quads(
     })
 }
 
+/// Solid fills of the quads painted inside a control's bounds.
+pub fn painted_fills_inside(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+) -> Vec<gpui::Rgba> {
+    let bounds = cx.debug_bounds(selector).expect("control must be drawn");
+    cx.update(|window, _| {
+        let scale = window.scale_factor();
+        let inside = |value: f32, start: gpui::Pixels, length: gpui::Pixels| {
+            value >= f32::from(start) * scale - 1.0
+                && value <= f32::from(start + length) * scale + 1.0
+        };
+        window
+            .painted_quads()
+            .into_iter()
+            .filter(|quad| {
+                inside(quad.bounds.origin.x.0, bounds.origin.x, bounds.size.width)
+                    && inside(quad.bounds.origin.y.0, bounds.origin.y, bounds.size.height)
+            })
+            .filter_map(|quad| solid_color(&quad.background))
+            .collect()
+    })
+}
+
 /// Colours compared within the Rgba→Hsla→Rgba round trip a style applies.
 pub fn color_close(a: gpui::Rgba, b: gpui::Rgba) -> bool {
     [

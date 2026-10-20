@@ -931,9 +931,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6651c9ed80effdc7db0ff72512157f901af5e3549e341e24b1dd4887d836d838"
+checksum = "877bf67ac8e52449eb2f9e98a344ea163beb70dd1f9eebe3cc5357dcfeaee4df"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2039,9 +2039,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "fixedbitset"
@@ -2444,7 +2444,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "gitcomet"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "embed-resource",
  "gitcomet-app",
@@ -2462,7 +2462,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "fs2",
@@ -2486,7 +2486,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-base"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gitcomet-base",
  "serde",
@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-conflict-resolver"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gitcomet-core",
  "gitcomet-text",
@@ -2510,7 +2510,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -2541,7 +2541,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-diagrams"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "criterion",
  "gitcomet-base",
@@ -2556,7 +2556,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-difftastic"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "difftastic",
  "gitcomet-core",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-extension-api"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gitcomet-core",
  "gitcomet-state",
@@ -2611,11 +2611,11 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-fonts"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "gitcomet-fs-watch"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dispatch2",
  "libc",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-git-gix"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "crc32fast",
  "filetime",
@@ -2639,7 +2639,7 @@ dependencies = [
  "gitcomet-win32-window-utils",
  "gix",
  "itertools 0.15.0",
- "lru",
+ "lru 0.19.0",
  "memchr",
  "rustc-hash 2.1.3",
  "rustix",
@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-markdown"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gitcomet-core",
  "gitcomet-diagrams",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-perf"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2676,7 +2676,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-state"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gitcomet-base",
  "gitcomet-core",
@@ -2696,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-syntax"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dekobon-tree-sitter-groovy",
  "gitcomet-base",
@@ -2805,12 +2805,12 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-text"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
  "jiff",
- "lru",
+ "lru 0.19.0",
  "memchr",
  "rustc-hash 2.1.3",
  "smallvec",
@@ -2818,7 +2818,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-tree-sitter-alloc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ctor",
  "rustfs-mimalloc-sys",
@@ -2828,7 +2828,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-gpui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2857,7 +2857,7 @@ dependencies = [
  "gpui_ce_wgpu",
  "image",
  "jiff",
- "lru",
+ "lru 0.19.0",
  "memchr",
  "metal",
  "palette",
@@ -2887,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-kit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fontdb 0.24.0",
  "gitcomet-base",
@@ -2897,7 +2897,7 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_parley",
  "gpui_ce_platform",
- "lru",
+ "lru 0.19.0",
  "memchr",
  "palette",
  "raw-window-handle",
@@ -2915,7 +2915,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-media"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fast_image_resize",
  "gitcomet-base",
@@ -2924,7 +2924,7 @@ dependencies = [
  "gitcomet-ui-kit",
  "gpui-ce",
  "image",
- "lru",
+ "lru 0.19.0",
  "resvg",
  "rustc-hash 2.1.3",
  "tempfile",
@@ -2932,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-terminal"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
  "gitcomet-base",
@@ -5106,9 +5106,9 @@ dependencies = [
 
 [[package]]
 name = "line-numbers"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20cb02b1f7cf0c1da53c7bc8686223e492cefdba080086ecdd7f20315c6e2edd"
+checksum = "24ab6409a2f9ffae158ae823a012a7d7d68386663a14bedc260ca66eacf65c2c"
 
 [[package]]
 name = "linebender_resource_handle"
@@ -5179,6 +5179,15 @@ name = "lru"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
+dependencies = [
+ "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "lru"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a9f71e3591c7ec44d3e563e87bf14ddc2bada8519dca046e5b0e560cd004e2d"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -5335,7 +5344,7 @@ dependencies = [
  "fontdb 0.23.0",
  "gitcomet-fonts",
  "json5",
- "lru",
+ "lru 0.18.5",
  "once_cell",
  "regex",
  "serde",
@@ -8217,9 +8226,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-devicetree"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e6874b59d8252cbaf9750f7152166e17ed162921a5f6d4e8bd2a2bc2aed46b"
+checksum = "6264316c288e1d4fed3002fb6c2d7a8e90d65d519e2ecf64a60c5abd0ee35481"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -8672,9 +8681,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-racket"
-version = "0.24.7"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8395b6a054e6264c67e1ef915f239c4f86575b7d7c69638bdbf3c336c58f128"
+checksum = "066bd54f4513d35a21b44f733da74bb065bb6734e565db96b516a79dd7c29e5f"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -8724,9 +8733,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-scheme"
-version = "0.24.7"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a7e7f156bdf38145f26705d1733185698845307d3e9d9c071ecce4375575131"
+checksum = "439ddaefe4c2fc449a98fb57f638ed60aa3dad378b6bc85e9c261c69584bfd37"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -8742,9 +8751,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-sfapex"
-version = "2.4.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b97637acb3bcfc2518162ecf9b02a18b28a502cd7631bec5c2a26f4e5ea024b"
+checksum = "e902b5d7951d1477ff43ad5ec8b2e6adae029cce593a770c64e10362ee7dec7b"
 dependencies = [
  "cc",
  "tree-sitter-language",

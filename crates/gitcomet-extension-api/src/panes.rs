@@ -386,7 +386,8 @@ pub type DiffBarRun = gitcomet_ui_kit::components::ActionRun<Option<DiffLineRang
 pub struct DiffBar {
     pub position: Option<DiffFilePosition>,
     pub items: Vec<DiffBarItem>,
-    /// Arbitrary owner-built controls, mounted after the standard actions.
+    /// Arbitrary owner-built controls, mounted after `items`; the host's own
+    /// actions, such as a conflict's Save & stage, sit to their right.
     /// Their entity owns its state and redraws independently of the pane.
     pub content: Option<AnyView>,
 }
