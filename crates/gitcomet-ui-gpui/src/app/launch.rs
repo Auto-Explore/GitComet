@@ -827,19 +827,16 @@ pub(super) fn open_gitcomet_window(
     window
 }
 
-/// Client-side decorations inset a rounded frame into the surface; the pixels
-/// outside it must show the desktop, not a solid fill, so every platform but
-/// macOS asks for a transparent surface.
+/// Windows and macOS use their default opaque surfaces. Linux client-side
+/// decorations retain transparency around the inset rounded frame.
 ///
-/// `GITCOMET_WINDOW_BACKGROUND=opaque|transparent` overrides the choice. It is
-/// a diagnostic knob: on Windows a transparent surface changes how the
-/// compositor blends the window, so this is the quickest way to tell whether
-/// that is what makes a build feel slow.
+/// `GITCOMET_WINDOW_BACKGROUND=opaque|transparent` overrides the choice for
+/// compositor and startup diagnostics.
 pub(crate) fn with_main_window_background(mut options: WindowOptions) -> WindowOptions {
     let transparent = match std::env::var("GITCOMET_WINDOW_BACKGROUND") {
         Ok(value) if value.trim().eq_ignore_ascii_case("opaque") => false,
         Ok(value) if value.trim().eq_ignore_ascii_case("transparent") => true,
-        _ => !cfg!(target_os = "macos"),
+        _ => !cfg!(any(target_os = "macos", target_os = "windows")),
     };
     #[cfg(target_os = "macos")]
     {
