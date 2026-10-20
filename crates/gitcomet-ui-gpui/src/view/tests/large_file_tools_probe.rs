@@ -24,7 +24,9 @@ fn tools(version: &str) -> LargeFileToolsState {
     }
 }
 
-fn fixture(cx: &mut gpui::TestAppContext) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
+fn unpresented_fixture(
+    cx: &mut gpui::TestAppContext,
+) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     store.dispatch(Msg::SetGitRuntimeState(runtime("A")));
     // A repository keeps these request-lifecycle fixtures eligible for automatic
@@ -42,6 +44,20 @@ fn fixture(cx: &mut gpui::TestAppContext) -> (Entity<GitCometView>, &mut gpui::V
         });
         view.apply_state_snapshot(view.store.snapshot(), cx);
     });
+    assert_eq!(requests(&view, cx).len(), 0);
+    (view, cx)
+}
+
+fn next_frame(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+}
+
+fn fixture(cx: &mut gpui::TestAppContext) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
+    let (view, cx) = unpresented_fixture(cx);
+    next_frame(cx);
+    next_frame(cx);
     assert_eq!(requests(&view, cx).len(), 1);
     (view, cx)
 }
@@ -115,6 +131,94 @@ fn stored_tools(
 ) -> LargeFileToolsState {
     test_support::drain_store_worker(view, cx);
     cx.update(|_, app| view.read(app).store.snapshot().large_file_tools.clone())
+}
+
+#[gpui::test]
+fn large_file_probe_waits_for_initial_platform_frame_without_another_snapshot(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = unpresented_fixture(cx);
+    publish_store(&view, cx);
+    let handle = cx.update(|window, _| window.window_handle());
+    let platform_window = cx.cx.test_window(handle);
+    assert_eq!(platform_window.presents(), 0);
+    assert!(requests(&view, cx).is_empty());
+    platform_window.simulate_frame_request(gpui::RequestFrameOptions {
+        require_presentation: true,
+        ..Default::default()
+    });
+    assert_eq!(platform_window.presents(), 1);
+    assert!(
+        requests(&view, cx).is_empty(),
+        "the first callback runs before the platform presents"
+    );
+    platform_window.simulate_frame_request(gpui::RequestFrameOptions {
+        require_presentation: true,
+        ..Default::default()
+    });
+    assert_eq!(requests(&view, cx).len(), 1);
+    next_frame(cx);
+    publish_store(&view, cx);
+    assert_eq!(requests(&view, cx).len(), 1);
+}
+
+#[gpui::test]
+fn large_file_probe_frame_gate_uses_the_latest_runtime(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = unpresented_fixture(cx);
+    next_frame(cx);
+    change_runtime(&view, cx, runtime("B"));
+    publish_store(&view, cx);
+    assert!(requests(&view, cx).is_empty());
+    next_frame(cx);
+    let pending = requests(&view, cx);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].runtime, runtime("B"));
+}
+
+#[gpui::test]
+fn large_file_probe_settings_result_before_frame_prevents_automatic_work(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = unpresented_fixture(cx);
+    let queued = cx.update(|_, app| view.read(app).state.clone());
+    accept_settings_tools(&view, cx, tools("installed since startup"));
+    // Even the stale NotChecked snapshot must not restart the settled runtime.
+    view.update(cx, |view, cx| {
+        view.apply_state_snapshot(queued, cx);
+    });
+    next_frame(cx);
+    next_frame(cx);
+    assert!(requests(&view, cx).is_empty());
+    assert_eq!(stored_tools(&view, cx), tools("installed since startup"));
+}
+
+#[gpui::test]
+fn large_file_probe_closed_owner_cannot_start_when_frame_gate_opens(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = unpresented_fixture(cx);
+    next_frame(cx);
+    view.update(cx, |view, _| view.close_large_file_tools_probe());
+    next_frame(cx);
+    publish_store(&view, cx);
+    assert!(requests(&view, cx).is_empty());
+}
+
+#[gpui::test]
+fn large_file_probe_frame_callbacks_do_not_retain_a_closed_view(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let window = cx.add_window(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let weak = window
+        .update(cx, |_, window, cx| {
+            let weak = cx.weak_entity();
+            window.remove_window();
+            weak
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|_| {});
+    assert!(
+        weak.upgrade().is_none(),
+        "pending frame callbacks must not retain the closed view"
+    );
 }
 
 #[gpui::test]
@@ -259,6 +363,11 @@ fn large_file_probe_drop_cancels_the_owned_request(cx: &mut gpui::TestAppContext
         .recv_timeout(Duration::from_secs(2))
         .unwrap();
     let window = cx.add_window(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update_window(window.into(), |_, window, cx| {
+        window.simulate_next_frame(cx);
+        window.simulate_next_frame(cx);
+    })
+    .unwrap();
     let (request, weak) = window
         .update(cx, |view, _, cx| {
             view.large_file_tools_detector_for_test = Some(HeldLargeFileToolsDetector {

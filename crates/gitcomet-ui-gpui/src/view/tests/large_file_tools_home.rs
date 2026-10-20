@@ -141,6 +141,10 @@ fn witness(
 }
 
 fn assert_published(view: &Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        window.simulate_next_frame(cx);
+    });
     pump_until(cx, "native large-file result publication", |cx| {
         cx.update(|_, app| {
             let state = view.read(app).store.snapshot();
@@ -156,8 +160,38 @@ fn assert_published(view: &Entity<GitCometView>, cx: &mut gpui::VisualTestContex
 }
 
 #[gpui::test]
+fn large_file_probe_native_commands_wait_until_after_initial_platform_frame(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (native, view, cx) = fixture(cx, true);
+    apply_snapshots(&view, cx);
+    let handle = cx.update(|window, _| window.window_handle());
+    let platform_window = cx.cx.test_window(handle);
+    assert_eq!(platform_window.presents(), 0);
+    assert_eq!(witness("before-platform-frame", &native, &view, cx), 0);
+    platform_window.simulate_frame_request(gpui::RequestFrameOptions {
+        require_presentation: true,
+        ..Default::default()
+    });
+    assert_eq!(platform_window.presents(), 1);
+    apply_snapshots(&view, cx);
+    assert_eq!(witness("after-first-present", &native, &view, cx), 0);
+    // No repository completion is needed: this fixture's open stays blocked.
+    platform_window.simulate_frame_request(gpui::RequestFrameOptions {
+        require_presentation: true,
+        ..Default::default()
+    });
+    assert_published(&view, cx);
+    assert_eq!(witness("following-platform-turn", &native, &view, cx), 2);
+}
+
+#[gpui::test]
 fn large_file_probe_home_defers_automatic_native_detectors(cx: &mut gpui::TestAppContext) {
     let (native, view, cx) = fixture(cx, false);
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        window.simulate_next_frame(cx);
+    });
     apply_snapshots(&view, cx);
     assert!(cx.update(|_, app| view.read(app).state.repos.is_empty()));
     if request_count(&view, cx) != 0 {
@@ -176,6 +210,10 @@ fn large_file_probe_home_defers_automatic_native_detectors(cx: &mut gpui::TestAp
 #[gpui::test]
 fn large_file_probe_home_first_opening_repo_starts_one_native_pair(cx: &mut gpui::TestAppContext) {
     let (native, view, cx) = fixture(cx, false);
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        window.simulate_next_frame(cx);
+    });
     apply_snapshots(&view, cx);
     if request_count(&view, cx) != 0 {
         assert_published(&view, cx);
@@ -255,6 +293,10 @@ fn large_file_probe_home_settings_publication_prevents_redundant_detection(
             .dispatch(Msg::OpenRepo(native.root.path().join("repository")));
     });
     apply_snapshots(&view, cx);
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        window.simulate_next_frame(cx);
+    });
     assert_eq!(
         witness("settings-then-first-repository", &native, &view, cx),
         0

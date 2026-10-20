@@ -31,6 +31,7 @@ pub(super) struct LargeFileToolsPublication {
 /// One window's request lifetime; results continue to live in AppState.
 #[derive(Default)]
 pub(super) struct LargeFileToolsProbeOwner {
+    initial_frame_complete: bool,
     sequence: u64,
     closed: bool,
     runtime: Option<GitRuntimeState>,
@@ -131,6 +132,30 @@ pub(super) struct HeldLargeFileToolsDetector {
 }
 
 impl GitCometView {
+    pub(super) fn schedule_large_file_tools_after_initial_frame(
+        &self,
+        window: &mut Window,
+        cx: &gpui::Context<Self>,
+    ) {
+        let view = cx.weak_entity();
+        // GPUI draws once while opening a window without presenting it. Its
+        // next-frame callbacks run before that platform frame's presentation,
+        // so one callback would still compete with the first submitted frame.
+        // A second callback leaves that platform presentation attempt free to
+        // finish, even when startup is slow. This is not a GPU completion fence:
+        // a lost device or stale atlas can still require a later presentation.
+        window.on_next_frame(move |window, _cx| {
+            window.on_next_frame(move |_window, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.large_file_tools_probe.initial_frame_complete = true;
+                    // Read the current snapshot/runtime: preferences or a
+                    // Settings result may have changed while frames were pending.
+                    view.refresh_large_file_tools(cx);
+                });
+            });
+        });
+    }
+
     pub(super) fn close_large_file_tools_probe(&mut self) {
         self.large_file_tools_probe.close();
     }
@@ -178,11 +203,23 @@ impl GitCometView {
         current_git_runtime()
     }
 
-    /// Probe `git lfs` / `git annex` once per Git runtime. Not gated by any
-    /// preference: the answer decides whether their commands are offered.
+    /// Automatically probe `git lfs` / `git annex` once per Git runtime, after
+    /// the initial platform frame. Settings rechecks remain immediate and can
+    /// publish a fresher result without waiting for this automatic discovery.
+    /// No result is persisted across processes or reused solely by Git version:
+    /// rechecking Settings still discovers PATH/tool installation changes.
     pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
         #[cfg(test)]
         if self.large_file_tools_detector_for_test.is_none() {
+            return;
+        }
+        if !self.large_file_tools_probe.initial_frame_complete
+            || self.state.repos.is_empty()
+            || !matches!(
+                self.state.large_file_tools.git_lfs,
+                gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
+            )
+        {
             return;
         }
         let runtime = self.large_file_tools_runtime();

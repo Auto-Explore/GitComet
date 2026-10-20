@@ -1350,6 +1350,7 @@ impl GitCometView {
         view.drive_submodule_diff_bootstrap();
         runtime_probe::request(cx, false);
         view.refresh_signing_tools(false, cx);
+        view.schedule_large_file_tools_after_initial_frame(window, cx);
 
         view.sync_workspace_and_registry(cx);
         if view.is_home_screen_active() {
