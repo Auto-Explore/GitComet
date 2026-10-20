@@ -1207,6 +1207,7 @@ pub enum Msg {
     ConflictToggleRegionSource {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictRegionOrigin>,
         region_index: usize,
         source: gitcomet_core::merge::MergeSource,
     },
@@ -1214,6 +1215,7 @@ pub enum Msg {
     ConflictReplaceRegionSelection {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictRegionOrigin>,
         region_index: usize,
         selection: gitcomet_core::merge::OrderedSelection,
     },
@@ -1236,6 +1238,7 @@ pub enum Msg {
     ConflictSyncRegionResolutions {
         repo_id: RepoId,
         path: RepoPath,
+        origin: Arc<super::ConflictRegionOrigin>,
         updates: Vec<ConflictRegionResolutionUpdate>,
     },
     ConflictApplyAutosolve {

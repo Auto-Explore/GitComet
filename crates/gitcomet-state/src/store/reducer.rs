@@ -8,6 +8,7 @@ mod branch_exists_prompt;
 mod comparison_tests;
 mod conflict_interactions;
 mod conflict_load;
+mod conflict_region_commands;
 mod conflict_region_mapping;
 mod diff_selection;
 mod diff_session;
@@ -1565,22 +1566,22 @@ fn reduce_inner(
             completion,
         } => {
             let expected_contents = match expected_contents {
-                WorktreeSaveBaseline::DeriveFromLoadedConflict => state
-                    .repos
-                    .iter()
-                    .find(|r| r.id == repo_id)
-                    .and_then(|r| match &r.conflict_state.conflict_file {
-                        crate::model::Loadable::Ready(Some(file))
-                            if file.path.as_path() == path =>
-                        {
-                            file.current_bytes.clone().or_else(|| {
-                                file.current
-                                    .as_ref()
-                                    .map(|text| Arc::<[u8]>::from(text.as_bytes()))
-                            })
+                WorktreeSaveBaseline::DeriveFromLoadedConflict => {
+                    state.repos.iter().find(|r| r.id == repo_id).and_then(|r| {
+                        match &r.conflict_state.conflict_file {
+                            crate::model::Loadable::Ready(Some(file))
+                                if file.path.as_path() == path =>
+                            {
+                                file.current_bytes.clone().or_else(|| {
+                                    file.current
+                                        .as_ref()
+                                        .map(|text| Arc::<[u8]>::from(text.as_bytes()))
+                                })
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    }),
+                    })
+                }
                 WorktreeSaveBaseline::Absent => None,
                 WorktreeSaveBaseline::Present(contents) => Some(contents),
             };
@@ -1996,20 +1997,28 @@ fn reduce_inner(
         Msg::ConflictToggleRegionSource {
             repo_id,
             path,
+            origin,
             region_index,
             source,
-        } => {
-            conflict_interactions::toggle_region_source(state, repo_id, path, region_index, source)
-        }
-        Msg::ConflictReplaceRegionSelection {
-            repo_id,
-            path,
-            region_index,
-            selection,
-        } => conflict_interactions::replace_region_selection(
+        } => conflict_region_commands::toggle_region_source(
             state,
             repo_id,
             path,
+            origin,
+            region_index,
+            source,
+        ),
+        Msg::ConflictReplaceRegionSelection {
+            repo_id,
+            path,
+            origin,
+            region_index,
+            selection,
+        } => conflict_region_commands::replace_region_selection(
+            state,
+            repo_id,
+            path,
+            origin,
             region_index,
             selection,
         ),
@@ -2032,8 +2041,11 @@ fn reduce_inner(
         Msg::ConflictSyncRegionResolutions {
             repo_id,
             path,
+            origin,
             updates,
-        } => conflict_interactions::sync_region_resolutions(state, repo_id, path, updates),
+        } => {
+            conflict_region_commands::sync_region_resolutions(state, repo_id, path, origin, updates)
+        }
         Msg::ConflictApplyAutosolve {
             repo_id,
             path,

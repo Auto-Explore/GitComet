@@ -495,6 +495,7 @@ impl DiffRenderer {
         };
         let text = self.current_conflict_resolved_output_text(cx);
         let text = self.conflict_resolver_save_contents_from_text(text);
+        let saved_text: Arc<str> = Arc::from(text.as_str());
         let Some(contents) = self.conflict_output_bytes_for_save(text, cx) else {
             return;
         };
@@ -504,22 +505,48 @@ impl DiffRenderer {
         else {
             return;
         };
-        let expected_contents = file
+        let previous_contents = file
             .current_bytes
             .clone()
-            .or_else(|| file.current.as_ref().map(|text| Arc::from(text.as_bytes())))
-            .map_or(
-                gitcomet_state::msg::WorktreeSaveBaseline::Absent,
-                gitcomet_state::msg::WorktreeSaveBaseline::Present,
-            );
+            .or_else(|| file.current.as_ref().map(|text| Arc::from(text.as_bytes())));
+        let expected_contents = previous_contents.clone().map_or(
+            gitcomet_state::msg::WorktreeSaveBaseline::Absent,
+            gitcomet_state::msg::WorktreeSaveBaseline::Present,
+        );
+        let saved_contents: Arc<[u8]> = Arc::from(contents.as_bytes());
+        let (completion, completed) = smol::channel::bounded(1);
         self.store.dispatch(Msg::SaveWorktreeFile {
             repo_id,
-            path,
+            path: path.clone(),
             contents,
             expected_contents,
             stage,
-            completion: None,
+            completion: Some(completion),
         });
+        cx.spawn(async move |view, cx| {
+            if completed.recv().await != Ok(true) {
+                return;
+            }
+            let _ = view.update(cx, |this, cx| {
+                if !this.conflict_resolver.matches_target(repo_id, &path) {
+                    return;
+                }
+                let Some(file) = &mut this.conflict_resolver.loaded_file else {
+                    return;
+                };
+                let current = file
+                    .current_bytes
+                    .clone()
+                    .or_else(|| file.current.as_ref().map(|text| Arc::from(text.as_bytes())));
+                if current != previous_contents {
+                    return;
+                }
+                file.current_bytes = Some(saved_contents);
+                file.current = Some(saved_text);
+                cx.notify();
+            });
+        })
+        .detach();
         self.mark_conflict_resolved_output_saved(cx);
     }
 

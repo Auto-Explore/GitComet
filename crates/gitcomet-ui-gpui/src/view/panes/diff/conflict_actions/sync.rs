@@ -66,6 +66,14 @@ impl DiffRenderer {
             return;
         }
 
+        if self.conflict_resolver.matches_target(repo_id, &path)
+            && self.conflict_resolver_has_unrepresented_local_choices(cx)
+        {
+            self.conflict_resolver.refresh_deferred = true;
+            return;
+        }
+        self.conflict_resolver.refresh_deferred = false;
+
         let source_hash = conflict_file_source_fingerprint(file);
 
         let needs_rebuild = self.conflict_resolver.repo_id != Some(repo_id)
@@ -307,6 +315,13 @@ impl DiffRenderer {
             loaded_file: Some(file.clone()),
             conflict_syntax_language,
             source_hash: Some(source_hash),
+            region_origin: session.map(|session| {
+                Arc::new(gitcomet_state::msg::ConflictRegionOrigin::from_session(
+                    session,
+                ))
+            }),
+            region_resolution_baseline: None,
+            refresh_deferred: false,
             output_is_protected,
             // A re-bootstrap means a different conflict or different file
             // content, so an earlier waiver no longer speaks for it.
@@ -403,6 +418,7 @@ impl DiffRenderer {
         // `conflict_resolved_output_is_streamed`).
         self.ensure_conflict_resolved_output_materialized(cx);
         self.rebuild_conflict_resolved_output_block_map(cx);
+        self.conflict_resolver_reset_resolution_baseline(cx);
         self.mark_conflict_resolved_output_saved(cx);
         // On a fresh open, center the first unresolved semantic target (then
         // the first original conflict, then the first delta). Deferred item
@@ -1011,6 +1027,20 @@ impl DiffRenderer {
             .and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolver.loaded_file = Some(file.clone());
         self.conflict_resolver.conflict_rev = new_rev;
+        if let Some(session) = session {
+            if !self
+                .conflict_resolver
+                .region_origin
+                .as_ref()
+                .is_some_and(|origin| origin.matches_session(session))
+            {
+                self.conflict_resolver.region_origin = Some(Arc::new(
+                    gitcomet_state::msg::ConflictRegionOrigin::from_session(session),
+                ));
+            }
+        } else {
+            self.conflict_resolver.region_origin = None;
+        }
 
         // Clear segment caches since marker_segments changed.
         self.clear_conflict_diff_style_caches();
@@ -1078,6 +1108,7 @@ impl DiffRenderer {
         if !preserved_materialized_output {
             self.rebuild_conflict_resolved_output_block_map(cx);
         }
+        self.conflict_resolver_reset_resolution_baseline(cx);
 
         if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();

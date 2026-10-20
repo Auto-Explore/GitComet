@@ -2,7 +2,7 @@ use super::util;
 use crate::model::{AppState, RepoId};
 use crate::msg::{
     ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictBulkScope,
-    ConflictRegionChoice, ConflictRegionResolutionUpdate, Effect, RepoPath,
+    ConflictRegionChoice, Effect, RepoPath,
 };
 use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::conflict_session::{
@@ -68,56 +68,6 @@ pub(super) fn set_region_choice(
     choice: ConflictRegionChoice,
 ) -> Vec<Effect> {
     set_region_choice_inline(state, repo_id, path, region_index, choice);
-    Vec::new()
-}
-
-pub(super) fn toggle_region_source(
-    state: &mut AppState,
-    repo_id: RepoId,
-    path: RepoPath,
-    region_index: usize,
-    source: MergeSource,
-) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches_current_conflict_path(repo_state, path.as_path()) {
-        return Vec::new();
-    }
-    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
-        return Vec::new();
-    };
-    if session.path != path.as_path() {
-        return Vec::new();
-    }
-    if session.toggle_region_source(region_index, source) {
-        repo_state.bump_conflict_rev();
-    }
-    Vec::new()
-}
-
-pub(super) fn replace_region_selection(
-    state: &mut AppState,
-    repo_id: RepoId,
-    path: RepoPath,
-    region_index: usize,
-    selection: OrderedSelection,
-) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches_current_conflict_path(repo_state, path.as_path()) {
-        return Vec::new();
-    }
-    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
-        return Vec::new();
-    };
-    if session.path != path.as_path() {
-        return Vec::new();
-    }
-    if session.replace_region_selection(region_index, selection) {
-        repo_state.bump_conflict_rev();
-    }
     Vec::new()
 }
 
@@ -562,55 +512,6 @@ fn edit_regions(
     // sufficient for embedded and focused views to rebuild from session text;
     // the pending-structure bit keeps that projection across same-path reloads.
     repo_state.bump_conflict_rev();
-    Vec::new()
-}
-
-pub(super) fn sync_region_resolutions(
-    state: &mut AppState,
-    repo_id: RepoId,
-    path: RepoPath,
-    updates: Vec<ConflictRegionResolutionUpdate>,
-) -> Vec<Effect> {
-    if updates.is_empty() {
-        return Vec::new();
-    }
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    if !matches_current_conflict_path(repo_state, path.as_path()) {
-        return Vec::new();
-    }
-    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
-        return Vec::new();
-    };
-    if session.path != path.as_path() {
-        return Vec::new();
-    }
-
-    let mut latest_by_region: rustc_hash::FxHashMap<usize, ConflictRegionResolution> =
-        rustc_hash::FxHashMap::default();
-    for update in updates {
-        latest_by_region.insert(update.region_index, update.resolution);
-    }
-
-    let mut changed = 0usize;
-    for (region_index, resolution) in latest_by_region {
-        let Some(region) = session.regions.get_mut(region_index) else {
-            continue;
-        };
-        if matches!(resolution, ConflictRegionResolution::PickBase) && region.base.is_none() {
-            continue;
-        }
-        if region.resolution != resolution {
-            region.resolution = resolution;
-            changed += 1;
-        }
-    }
-
-    if changed > 0 {
-        session.sync_merge_plan_from_regions();
-        repo_state.bump_conflict_rev();
-    }
     Vec::new()
 }
 

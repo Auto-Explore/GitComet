@@ -55,6 +55,26 @@ impl ConflictRegionOrigin {
         matches!(self.basis, ConflictRegionBasis::Provisional { .. })
     }
 
+    pub fn matches_session(&self, session: &ConflictSession) -> bool {
+        let is_provisional = session.strategy == ConflictResolverStrategy::FullTextResolver
+            && session.base.is_absent()
+            && session.ours.is_absent()
+            && session.theirs.is_absent();
+        self.is_provisional() == is_provisional
+            && (!is_provisional || self.marker_projection() == session.marker_projection.as_deref())
+            && self.source_ranges.as_ref() == session.region_source_ranges
+            && self.regions.len() == session.regions.len()
+            && self
+                .regions
+                .iter()
+                .zip(&session.regions)
+                .all(|(origin, current)| {
+                    origin.base == current.base
+                        && origin.ours == current.ours
+                        && origin.theirs == current.theirs
+                })
+    }
+
     pub(crate) fn marker_projection(&self) -> Option<&str> {
         match &self.basis {
             ConflictRegionBasis::Provisional { marker_projection } => marker_projection.as_deref(),

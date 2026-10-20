@@ -10,6 +10,15 @@ pub(super) enum RegionCorrespondence {
     SourceOverlap(Vec<usize>),
 }
 
+impl RegionCorrespondence {
+    pub(super) fn origins(&self) -> &[usize] {
+        match self {
+            Self::Identity(index) => std::slice::from_ref(index),
+            Self::SourceOverlap(indices) => indices,
+        }
+    }
+}
+
 pub(super) fn correspondences(
     origin: &ConflictRegionOrigin,
     next: &ConflictSession,

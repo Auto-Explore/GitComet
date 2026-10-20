@@ -250,6 +250,10 @@ pub(crate) struct ConflictResolverUiState {
     pub(crate) loaded_file: Option<gitcomet_state::model::ConflictFile>,
     pub(crate) conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(crate) source_hash: Option<u64>,
+    pub(crate) region_origin: Option<Arc<gitcomet_state::msg::ConflictRegionOrigin>>,
+    pub(crate) region_resolution_baseline:
+        Option<FxHashMap<usize, Vec<gitcomet_core::conflict_session::ConflictRegionResolution>>>,
+    pub(crate) refresh_deferred: bool,
     /// The editable output contains preserved worktree text whose conflict
     /// spans could not be mapped safely onto the stage projection.
     pub(crate) output_is_protected: bool,
@@ -404,6 +408,9 @@ impl Default for ConflictResolverUiState {
             context_fold_reveals: FxHashMap::default(),
             conflict_syntax_language: None,
             source_hash: None,
+            region_origin: None,
+            region_resolution_baseline: None,
+            refresh_deferred: false,
             output_is_protected: false,
             output_protection_waived: false,
             current: None,
