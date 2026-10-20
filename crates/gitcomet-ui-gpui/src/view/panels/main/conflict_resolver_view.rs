@@ -524,7 +524,9 @@ impl DiffRenderer {
             completion: Some(completion),
         });
         cx.spawn(async move |view, cx| {
-            if completed.recv().await != Ok(true) {
+            if crate::ui_runtime::background_compute(move || completed.recv_blocking()).await
+                != Ok(true)
+            {
                 return;
             }
             let _ = view.update(cx, |this, cx| {
