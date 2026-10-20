@@ -472,6 +472,61 @@ impl WgpuPipelines {
         dual_source_blending: bool,
         tier: RendererTier,
     ) -> Self {
+        // Warm runtime rebuilds keep the original serial error-scope behavior.
+        Self::new_with_workers(
+            device,
+            bind_group_layouts,
+            surface_format,
+            alpha_mode,
+            path_sample_count,
+            dual_source_blending,
+            tier,
+            1,
+        )
+        .expect("serial pipeline creation reports errors through the caller's device scopes")
+    }
+
+    pub(super) fn new_for_backend(
+        device: &wgpu::Device,
+        bind_group_layouts: &WgpuBindGroupLayouts,
+        surface_format: wgpu::TextureFormat,
+        alpha_mode: wgpu::CompositeAlphaMode,
+        path_sample_count: u32,
+        dual_source_blending: bool,
+        tier: RendererTier,
+        _backend: wgpu::Backend,
+    ) -> Result<Self, wgpu::Error> {
+        let workers = 1;
+        #[cfg(target_os = "windows")]
+        let workers = if _backend == wgpu::Backend::Dx12 {
+            std::thread::available_parallelism()
+                .map_or(1, std::num::NonZeroUsize::get)
+                .min(3)
+        } else {
+            workers
+        };
+        Self::new_with_workers(
+            device,
+            bind_group_layouts,
+            surface_format,
+            alpha_mode,
+            path_sample_count,
+            dual_source_blending,
+            tier,
+            workers,
+        )
+    }
+
+    fn new_with_workers(
+        device: &wgpu::Device,
+        bind_group_layouts: &WgpuBindGroupLayouts,
+        surface_format: wgpu::TextureFormat,
+        alpha_mode: wgpu::CompositeAlphaMode,
+        path_sample_count: u32,
+        dual_source_blending: bool,
+        tier: RendererTier,
+        _workers: usize,
+    ) -> Result<Self, wgpu::Error> {
         let dual_source_blending = tier == RendererTier::Modern
             && supported_dual_source_blending(device, dual_source_blending);
         let base_source = match tier {
@@ -547,65 +602,97 @@ impl WgpuPipelines {
             shader::DataLayout::Surface => &surface_layout,
             shader::DataLayout::Blur => &blur_layout,
         };
-        let create =
-            |specification: shader::Pipeline, target: &wgpu::ColorTargetState, samples, module| {
-                create_render_pipeline(
-                    device,
-                    specification,
-                    layout_for(specification.data_layout),
-                    target,
-                    samples,
-                    module,
-                )
+        let describe =
+            |specification: shader::Pipeline, target, samples, module| PipelineCreation {
+                specification,
+                layout: layout_for(specification.data_layout),
+                target,
+                sample_count: samples,
+                module,
             };
-
-        Self {
-            quads: create(shader::QUADS, &scene_target, 1, &shader_module),
-            damage_clear_quads: None,
-            smoothed_quads: None,
-            shadows: create(shader::SHADOWS, &scene_target, 1, &shader_module),
-            smoothed_shadows: None,
-            path_rasterization: create(
+        let subpixel_target = wgpu::ColorTargetState {
+            write_mask: wgpu::ColorWrites::COLOR,
+            ..color_target(surface_format, Some(subpixel_blend_state()))
+        };
+        let mut requests = vec![
+            describe(shader::QUADS, &scene_target, 1, &shader_module),
+            describe(shader::SHADOWS, &scene_target, 1, &shader_module),
+            describe(
                 shader::PATH_RASTERIZATION,
                 &path_rasterization_target,
                 path_sample_count,
                 &shader_module,
             ),
-            paths: create(shader::PATHS, &path_target, 1, &shader_module),
-            underlines: create(shader::UNDERLINES, &scene_target, 1, &shader_module),
-            monochrome_sprites: create(
-                shader::MONOCHROME_SPRITES,
-                &scene_target,
+            describe(shader::PATHS, &path_target, 1, &shader_module),
+            describe(shader::UNDERLINES, &scene_target, 1, &shader_module),
+            describe(shader::MONOCHROME_SPRITES, &scene_target, 1, &shader_module),
+        ];
+        if let Some(module) = subpixel_shader_module.as_ref() {
+            requests.push(describe(
+                shader::SUBPIXEL_SPRITES,
+                &subpixel_target,
                 1,
-                &shader_module,
-            ),
-            subpixel_sprites: subpixel_shader_module.as_ref().map(|module| {
-                create(
-                    shader::SUBPIXEL_SPRITES,
-                    &wgpu::ColorTargetState {
-                        write_mask: wgpu::ColorWrites::COLOR,
-                        ..color_target(surface_format, Some(subpixel_blend_state()))
-                    },
-                    1,
-                    module,
-                )
-            }),
-            polychrome_sprites: create(
-                shader::POLYCHROME_SPRITES,
-                &scene_target,
-                1,
-                &shader_module,
-            ),
-            smoothed_polychrome_sprites: None,
-            surfaces: create(shader::SURFACES, &composite_target, 1, &shader_module),
-            blur_downsample: create(
+                module,
+            ));
+        }
+        requests.extend([
+            describe(shader::POLYCHROME_SPRITES, &scene_target, 1, &shader_module),
+            describe(shader::SURFACES, &composite_target, 1, &shader_module),
+            // Keep the two shared fullscreen vertex stages in one worker batch.
+            describe(
                 shader::BLUR_DOWNSAMPLE,
                 &overwrite_target,
                 1,
                 &shader_module,
             ),
-            blur: create(shader::BLUR, &overwrite_target, 1, &shader_module),
-            blur_composite: create(shader::BLUR_COMPOSITE, &composite_target, 1, &shader_module),
+            describe(shader::BLUR, &overwrite_target, 1, &shader_module),
+            describe(shader::BLUR_COMPOSITE, &composite_target, 1, &shader_module),
+        ]);
+        #[cfg(target_os = "windows")]
+        let pipelines = if _workers > 1 {
+            create_pipelines_parallel(device, &requests, _workers)?
+        } else {
+            requests
+                .iter()
+                .map(|request| request.create(device))
+                .collect()
+        };
+        #[cfg(not(target_os = "windows"))]
+        let pipelines: Vec<_> = requests
+            .iter()
+            .map(|request| request.create(device))
+            .collect();
+        let mut pipelines = pipelines.into_iter();
+        let mut next = || {
+            pipelines
+                .next()
+                .expect("every requested pipeline was created")
+        };
+        let quads = next();
+        let shadows = next();
+        let path_rasterization = next();
+        let paths = next();
+        let underlines = next();
+        let monochrome_sprites = next();
+        let subpixel_sprites = subpixel_shader_module.as_ref().map(|_| next());
+
+        Ok(Self {
+            quads,
+            damage_clear_quads: None,
+            smoothed_quads: None,
+            shadows,
+            smoothed_shadows: None,
+            path_rasterization,
+            paths,
+            underlines,
+            monochrome_sprites,
+            subpixel_sprites,
+            polychrome_sprites: next(),
+            smoothed_polychrome_sprites: None,
+            surfaces: next(),
+            blur_downsample: next(),
+            blur: next(),
+            blur_composite: next(),
             smoothed_blur_composite: None,
             smoothing_textured_layout: textured_layout,
             smoothing_blur_layout: blur_layout,
@@ -614,7 +701,134 @@ impl WgpuPipelines {
             base_shader: shader_module,
             instance_layout: instance_layout,
             damage_clear_format: surface_format,
+        })
+    }
+}
+
+struct PipelineCreation<'a> {
+    specification: shader::Pipeline,
+    layout: &'a wgpu::PipelineLayout,
+    target: &'a wgpu::ColorTargetState,
+    sample_count: u32,
+    module: &'a wgpu::ShaderModule,
+}
+
+impl PipelineCreation<'_> {
+    fn create(&self, device: &wgpu::Device) -> WgpuRenderPipeline {
+        create_render_pipeline(
+            device,
+            self.specification,
+            self.layout,
+            self.target,
+            self.sample_count,
+            self.module,
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn create_pipelines_parallel(
+    device: &wgpu::Device,
+    requests: &[PipelineCreation<'_>],
+    workers: usize,
+) -> Result<Vec<WgpuRenderPipeline>, wgpu::Error> {
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    // Adjacent pipelines sharing a vertex stage stay sequential: wgpu's DX12
+    // shader cache releases its lock during compilation and is not single-flight.
+    let mut batches: Vec<std::ops::Range<usize>> = Vec::new();
+    for (index, request) in requests.iter().enumerate() {
+        if index > 0
+            && request.specification.vertex_entry == requests[index - 1].specification.vertex_entry
+            && request.module == requests[index - 1].module
+            && request.layout == requests[index - 1].layout
+        {
+            batches.last_mut().unwrap().end = index + 1;
+        } else {
+            batches.push(index..index + 1);
         }
+    }
+    let next_batch = AtomicUsize::new(0);
+    let run_worker = || {
+        // Error scopes are thread-local. Parent initialization scopes cannot
+        // observe a worker failure, so drain all three scopes on the worker.
+        let scopes = [
+            device.push_error_scope(wgpu::ErrorFilter::Validation),
+            device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
+            device.push_error_scope(wgpu::ErrorFilter::Internal),
+        ];
+        let mut pipelines = Vec::new();
+        while let Some(batch) = batches.get(next_batch.fetch_add(1, Ordering::Relaxed)) {
+            for index in batch.clone() {
+                pipelines.push((index, requests[index].create(device)));
+            }
+        }
+        let mut error = None;
+        for scope in scopes.into_iter().rev() {
+            if let Some(captured) = gpui::block_on(scope.pop()) {
+                retain_pipeline_error(&mut error, captured);
+            }
+        }
+        match error {
+            Some(error) => Err(error),
+            None => Ok(pipelines),
+        }
+    };
+    let results = std::thread::scope(|scope| {
+        // Include the calling thread in the bound; never start one thread per PSO.
+        let mut handles = Vec::new();
+        for index in 1..workers.clamp(1, 3).min(batches.len().max(1)) {
+            match std::thread::Builder::new()
+                .name(format!("gpui-dx12-pipelines-{index}"))
+                .spawn_scoped(scope, &run_worker)
+            {
+                Ok(handle) => handles.push(handle),
+                // Already-started workers and the caller can finish the queue.
+                Err(_) => break,
+            }
+        }
+        let caller = catch_unwind(AssertUnwindSafe(&run_worker));
+        let mut results = vec![caller];
+        // Join every worker before returning errors or resuming any panic.
+        results.extend(handles.into_iter().map(|handle| handle.join()));
+        results
+    });
+    let mut pipelines = Vec::with_capacity(requests.len());
+    let mut error = None;
+    let mut panic = None;
+    for result in results {
+        match result {
+            Ok(Ok(created)) => pipelines.extend(created),
+            Ok(Err(captured)) => retain_pipeline_error(&mut error, captured),
+            Err(payload) => {
+                panic.get_or_insert(payload);
+            }
+        }
+    }
+    if let Some(payload) = panic {
+        resume_unwind(payload);
+    }
+    if let Some(error) = error {
+        return Err(error);
+    }
+    pipelines.sort_unstable_by_key(|(index, _)| *index);
+    Ok(pipelines
+        .into_iter()
+        .map(|(_, pipeline)| pipeline)
+        .collect())
+}
+
+#[cfg(target_os = "windows")]
+fn retain_pipeline_error(slot: &mut Option<wgpu::Error>, error: wgpu::Error) {
+    // Never hide a fatal worker error behind a validation failure from another.
+    if slot.is_none()
+        || matches!(slot, Some(wgpu::Error::Validation { .. }))
+            && !matches!(error, wgpu::Error::Validation { .. })
+    {
+        *slot = Some(error);
     }
 }
 
@@ -817,6 +1031,147 @@ pub(super) fn desktop_scene_blend_state(alpha_mode: wgpu::CompositeAlphaMode) ->
 mod tests {
     use super::*;
     use crate::WgpuContext;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parallel_pipeline_failure_is_captured_and_allows_retry() -> anyhow::Result<()> {
+        let _gpu_test_guard = crate::test_gpu::guard();
+        let context = WgpuContext::new_headless(None)?;
+        anyhow::ensure!(context.adapter.get_info().backend == wgpu::Backend::Dx12);
+        let device = &context.device;
+        let layouts = WgpuBindGroupLayouts::new(device, context.renderer_tier());
+        let layout = create_pipeline_layout(device, "parallel_test", &layouts, &layouts.instances);
+        let module = create_shader_module(device, "parallel_test", BASE_WGSL);
+        let valid_target = color_target(context.color_texture_format(), None);
+        let invalid_target = color_target(wgpu::TextureFormat::Depth24Plus, None);
+        let requests = [
+            PipelineCreation {
+                specification: shader::SHADOWS,
+                layout: &layout,
+                target: &valid_target,
+                sample_count: 1,
+                module: &module,
+            },
+            PipelineCreation {
+                specification: shader::QUADS,
+                layout: &layout,
+                target: &invalid_target,
+                sample_count: 1,
+                module: &module,
+            },
+            PipelineCreation {
+                specification: shader::UNDERLINES,
+                layout: &layout,
+                target: &valid_target,
+                sample_count: 1,
+                module: &module,
+            },
+        ];
+        let parent_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let error = match create_pipelines_parallel(device, &requests, 3) {
+            Ok(_) => panic!("invalid worker pipeline was accepted"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, wgpu::Error::Validation { .. }));
+        assert!(gpui::block_on(parent_scope.pop()).is_none());
+        assert!(
+            context.uncaptured_error_slot().lock().unwrap().is_none(),
+            "worker errors must be returned, not leak into an unrelated frame"
+        );
+        let mut retry = requests;
+        retry[1].target = &valid_target;
+        let pipelines = create_pipelines_parallel(device, &retry, 3)?;
+        assert_eq!(
+            pipelines
+                .iter()
+                .map(|pipeline| pipeline.specification.label)
+                .collect::<Vec<_>>(),
+            ["shadows", "quads", "underlines"],
+            "completion order must not change pipeline assignment"
+        );
+        assert!(context.uncaptured_error_slot().lock().unwrap().is_none());
+        Ok(())
+    }
+
+    #[cfg(all(feature = "test-support", target_os = "windows"))]
+    #[test]
+    fn parallel_pipeline_creation_matches_serial_pixels() -> anyhow::Result<()> {
+        use super::super::WgpuRenderer;
+        use gpui::{
+            Bounds, ContentMask, Corners, DevicePixels, Quad, ScaledPixels, Scene, Shadow, point,
+            size, solid_background,
+        };
+
+        let _gpu_test_guard = crate::test_gpu::guard();
+        let context = WgpuContext::new_headless(None)?;
+        anyhow::ensure!(context.adapter.get_info().backend == wgpu::Backend::Dx12);
+        let target = size(DevicePixels(64), DevicePixels(64));
+        let mut parallel = WgpuRenderer::new_headless(&context, target)?;
+        let mut serial = WgpuRenderer::new_headless(&context, target)?;
+        for (renderer, workers) in [(&mut parallel, 3), (&mut serial, 1)] {
+            renderer.retained.disable_for_tests();
+            let config = renderer.target.configuration().clone();
+            let samples = renderer.rendering_params.path_sample_count;
+            let dual_source = renderer.dual_source_blending;
+            let resources = renderer.resources_mut();
+            resources.pipelines = WgpuPipelines::new_with_workers(
+                &resources.device,
+                &resources.bind_group_layouts,
+                config.format,
+                config.alpha_mode,
+                samples,
+                dual_source,
+                resources.renderer_tier,
+                workers,
+            )?;
+            assert_eq!(
+                resources.pipelines.subpixel_sprites.is_some(),
+                dual_source,
+                "parallel creation must retain supported subpixel rendering"
+            );
+            assert!(resources.pipelines.smoothed_quads.is_none());
+            assert!(resources.pipelines.smoothed_shadows.is_none());
+        }
+        let bounds = Bounds::new(
+            point(ScaledPixels(16.0), ScaledPixels(16.0)),
+            size(ScaledPixels(32.0), ScaledPixels(32.0)),
+        );
+        let content_mask = ContentMask {
+            bounds: Bounds::new(
+                point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size(ScaledPixels(64.0), ScaledPixels(64.0)),
+            ),
+            ..Default::default()
+        };
+        let corners = Corners::all(ScaledPixels(8.0));
+        let mut scene = Scene::default();
+        scene.insert_primitive(Shadow {
+            order: 0,
+            bounds,
+            element_bounds: bounds,
+            content_mask,
+            corner_radii: corners,
+            element_corner_radii: corners,
+            corner_smoothing: 0.0,
+            color: solid_background(gpui::white()),
+            blur_radius: ScaledPixels(4.0),
+            inset: false.into(),
+        });
+        scene.insert_primitive(Quad {
+            bounds,
+            content_mask,
+            corner_radii: corners,
+            background: solid_background(gpui::white()),
+            ..Default::default()
+        });
+        scene.finish();
+        let reference = serial.render_to_image(&scene)?;
+        assert_eq!(reference.get_pixel(32, 32).0, [255; 4]);
+        assert_eq!(parallel.render_to_image(&scene)?, reference);
+        assert_eq!(parallel.render_to_image(&scene)?, reference);
+        assert!(context.uncaptured_error_slot().lock().unwrap().is_none());
+        Ok(())
+    }
 
     #[test]
     fn smoothing_creation_failure_rolls_back_only_new_pipelines() -> anyhow::Result<()> {

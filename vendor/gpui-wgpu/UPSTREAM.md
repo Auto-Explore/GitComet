@@ -19,7 +19,7 @@ rendering quality. Failed creation removes only newly created pipelines and
 uses the existing DX12 frame retry policy. Device/renderer reconstruction
 starts with no smoothing pipelines.
 
-The change affects these files relative to the base revision:
+The smoothing change affects these files relative to the base revision:
 
 - `src/wgpu_renderer.rs`
 - `src/wgpu_renderer/drawing.rs`
@@ -27,6 +27,15 @@ The change affects these files relative to the base revision:
 - `src/wgpu_renderer/frame.rs`
 - `src/wgpu_renderer/lazy_smoothing_tests.rs`
 - `src/wgpu_renderer/pipelines.rs`
+
+GitComet also adds bounded parallel creation of ordinary pipelines in
+`src/wgpu_renderer/pipelines.rs` and `src/wgpu_renderer/resources.rs`.
+Windows DX12 startup and device recovery use at most three compilation lanes,
+including the calling thread, bounded by available parallelism. Workers capture
+their own device errors, all workers join before failure propagation, and
+partial results are discarded on failure. Adjacent pipelines sharing a vertex
+shader stay in the same batch. Warm runtime rebuilds and other backends retain
+serial creation. All ordinary pipelines are ready before rendering begins.
 
 All other upstream source files, tests, examples, and the license are retained
 unchanged. `Cargo.toml` expands the upstream workspace dependencies and lints,
@@ -36,22 +45,55 @@ or the other GPUI crates.
 
 ## Validation
 
-The exact renderer source was built in GitComet's `release-with-debug` profile
+The smoothing change was built in GitComet's `release-with-debug` profile
 and tested on Windows with the AMD Radeon 890M using DX12. Four focused tests
 passed: first-use rendering matched prepared-pipeline pixels, backdrop and
 isolated-filter planning worked, failed creation rolled back correctly, and
 the existing DX12 frame retry behavior was preserved. History navigation and
 settings were also exercised in the application.
 
+The parallel creation change passes two further Windows DX12 tests: exact pixel
+equality against serial creation, and worker validation failure followed by
+successful retry without leaking errors. All four smoothing regressions pass
+with the parallel creation change as well.
+
+This crate is excluded from the production workspace, so testing it with
+`cargo test -p gpui_ce_wgpu` at the root does not resolve its dev dependencies.
+For an isolated test build, copy this directory to a fresh
+`target/gpui-wgpu-tests` directory, seed its `Cargo.lock` from the root lockfile,
+and append the following to the copied manifest:
+
+```toml
+[workspace]
+
+[patch."https://github.com/Havunen/gpui-ce.git"]
+gpui_ce_wgpu = { path = "." }
+
+[patch.crates-io]
+block = { path = "../../vendor/block" }
+```
+
+Then run from the repository root:
+
+```powershell
+cargo test --manifest-path target/gpui-wgpu-tests/Cargo.toml --features test-support --lib parallel_pipeline -- --test-threads=1
+cargo test --manifest-path target/gpui-wgpu-tests/Cargo.toml --features test-support --lib smoothing -- --test-threads=1
+```
+
+Cargo resolves test-only dependencies in the copied lockfile. Keep production
+workspace membership and manifests unchanged. The Windows parallel tests
+require DX12 and do not silently validate a different backend.
+
 ## Updating
 
 When changing GitComet's GPUI revision, compare this crate with
 `crates/gpui_wgpu` at the new revision. If upstream includes the same behavior,
 remove this directory, its workspace exclusion, and the root git-source patch.
-Otherwise, apply the smoothing changes to the new crate, expand its workspace
-manifest values again, and update every sibling dependency revision here to
-match the root GPUI revision.
+Otherwise, apply the smoothing and parallel creation changes to the new crate,
+expand its workspace manifest values again, and update every sibling dependency
+revision here to match the root GPUI revision.
 
-Keep the upstream tests and run the smoothing tests on DX12 after an update.
+Keep the upstream tests and run the smoothing and parallel creation tests on
+DX12 after an update.
 Do not import temporary measurement instrumentation or absolute paths from an
 experiment checkout.

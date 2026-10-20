@@ -3,6 +3,12 @@
 Measured on October 20, 2026 with a Ryzen AI 9 HX 370 and Radeon 890M.
 DX12 remains the default; DX11 was used only as a diagnostic comparison.
 
+The final candidate's warm-start medians are **671.7 ms to first draw** and
+**847.8 ms to repository readiness** across eight runs in two alternating-pair
+sessions. Seven of eight runs reached readiness below one second; the remaining
+run took 1,014.7 ms. The median target is met on this machine; a strict
+subsecond maximum was not achieved, and reboot-cold startup was not measured.
+
 ## Baseline and bottleneck
 
 GitComet baseline: `848514d8b4b9e3d11e37565ebc6399ded0a707fd`.
@@ -125,10 +131,66 @@ sampled compiler CPU to ordinary shaders (quads 188.1 ms, shadows 161.1 ms).
 There were still no eager smoothing pipeline calls. This is diagnostic evidence
 for the next renderer experiment, not a controlled attribution of contention.
 
+## Parallel ordinary pipeline creation
+
+The renderer now has a bounded parallel initialization path for Windows DX12.
+It uses at most three compilation lanes, including the caller, and respects
+available parallelism. All ordinary pipelines are created before rendering.
+Other backends and warm runtime rebuilds keep serial initialization.
+
+Each worker captures its own wgpu errors. All workers join before an error or
+panic propagates, partial pipeline sets are discarded on failure, and pipelines
+sharing a vertex stage remain in the same batch to avoid duplicate cache misses.
+Two new DX12 tests pass: serial/parallel pixel equality over repeated frames,
+and worker validation failure followed by a clean retry without error leakage.
+The four existing smoothing regressions also pass on this renderer.
+
+Eight alternating pairs across two sessions (five plus three) compared the
+frozen bootstrap build with the parallel candidate using DX12/FXC and the same
+`release-with-debug` profile. No compilation ran during measurements.
+
+| Milestone | Bootstrap / serial pipelines | Bootstrap / parallel pipelines |
+| --- | ---: | ---: |
+| Launch to first draw, median | 801.6 ms | 671.7 ms |
+| Launch to repository ready, median | 1,100.2 ms | 847.8 ms |
+| Repository-ready range | 1,009.1–1,267.5 ms | 807.0–1,014.7 ms |
+
+The candidate reached repository readiness faster in every pair. Median paired
+saving was 251.1 ms, with a median paired ratio of 0.776 (22.4% lower latency).
+Two pairs had small first-draw regressions of 14.5 and 23.8 ms despite faster
+readiness. Bootstrap timing varied: the serial baseline overlapped loading in
+four of eight runs, and the candidate in seven of eight. These are practical
+end-to-end results with mixed bootstrap paths, not a shader-only microbenchmark.
+The candidate's one deferred run was also its one result above one second.
+The four pairs in which both variants overlapped loading still improved
+readiness in every pair, with a median paired saving of 187.4 ms.
+
+Memory results depend on that path mix. Across all eight runs, median sampled
+peak working set was 675.1 MiB for serial creation and 669.1 MiB for parallel
+creation; median sampled peak private bytes were 838.1 and 864.5 MiB.
+In the four comparable early-loading pairs, parallel creation increased sampled
+peak working set by a median 150.3 MiB and private bytes by 209.8 MiB.
+These are maxima of current-process samples approximately every 260 ms over the
+short run. They are not exact native peak counters, allocation stacks, retained
+heap, steady-state memory, or GPU memory. No general memory reduction is claimed.
+
+The first observed parallel-candidate launch reached first draw at 837.6 ms and
+repository readiness at 1,019.6 ms. With the actual saved profile, app tracing
+recorded first paint at 623.3 ms, repository ready at 709.8 ms, and interaction at
+755.3 ms; the parent observed interaction at 879.2 ms. An empty profile reached
+ready Home at 539.2 ms in app tracing, observed at 630.6 ms by the parent.
+History navigation and opening Settings passed live checks on the final binary.
+
+Parallel compilation moves work onto a bounded set of threads; these results
+do not establish a reduction in total shader compiler CPU. The exact pre-format
+compiled/test sources and their relationship to the rustfmt-formatted working
+source are retained in the local provenance artifacts.
+
 ## Remaining work
 
-The candidate still compiles ordinary shaders, including quads (~121 ms
+The earlier lazy-only trace attributed ordinary shader work to quads (~121 ms
 sampled compiler CPU), shadows (~67 ms), and path rasterization (~39 ms).
+Those shaders still compile; their initialization can now overlap.
 
 After window creation, repository `LoadStatus` took about 376 ms wall time
 in the diagnostic trace. It includes a 149 ms child-command wait while
@@ -140,10 +202,12 @@ Watcher initialization (~142 ms sampled CPU) and directory traversal run
 concurrently. A worktree-dirty scan also overlaps the main status scan.
 These inclusive and parallel costs must not be added as elapsed-time savings.
 
-After bootstrap overlap, further experiments include:
+Further experiments include:
 
-- Create ordinary DX12 pipelines with a small worker pool. Elapsed savings are
-  unknown; workers need their own error scopes and must preserve failure recovery.
+- Adopt a completed background Git probe before window attachment, with explicit
+  ownership of the deferred restore and protection against duplicate recovery.
+  The current UI handoff can still serialize loading when the probe finishes
+  just after bootstrap preparation.
 - Start the gitlink status supplement alongside the gix worktree scan after
   selecting paths. This could overlap part of the observed 149 ms wait while
   preserving submodule status, cancellation, and error handling.
@@ -193,6 +257,9 @@ Large local artifacts remain under ignored `target/startup-investigation/`:
 `samply-lazy-candidate/` with the matching symbols, ETL, and analysis.
 The bootstrap experiment adds `bootstrap-runtime/`, `repo-bootstrap-pairs/`,
 `bootstrap-stage-real-profile/`, and `samply-bootstrap-candidate/`.
+The final experiment adds `parallel-runtime/`, `repo-parallel-pairs/`,
+`repo-parallel-confirmation/`, `parallel-comparison-summary.json`, the
+`parallel-stage-*` traces, and `parallel-compiled-source/`.
 Their availability is local; this document records the durable measurements.
 
 ## Upstream precompilation

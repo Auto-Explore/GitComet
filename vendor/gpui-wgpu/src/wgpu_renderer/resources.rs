@@ -101,7 +101,7 @@ impl WgpuResources {
         let queue = Arc::clone(&context.queue);
         let renderer_tier = context.renderer_tier();
         let bind_group_layouts = WgpuBindGroupLayouts::new(&device, renderer_tier);
-        let pipelines = WgpuPipelines::new(
+        let pipelines = WgpuPipelines::new_for_backend(
             &device,
             &bind_group_layouts,
             surface_config.format,
@@ -109,7 +109,8 @@ impl WgpuResources {
             rendering.path_sample_count,
             dual_source_blending,
             renderer_tier,
-        );
+            context.adapter.get_info().backend,
+        )?;
         let linear_sampler = |label| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some(label),
