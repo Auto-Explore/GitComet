@@ -268,7 +268,7 @@ pub fn titlebar_control_button(
                                 .h(icon_size)
                                 .flex_shrink_0()
                                 .text_color(idle_color)
-                                .group_hover(id, move |s| s.text_color(hover_color)),
+                                .group_hover_style(id, move |s| s.text_color(hover_color)),
                         ),
                 ),
         )

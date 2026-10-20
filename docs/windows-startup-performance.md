@@ -23,6 +23,114 @@ The measured candidate is GitComet
 caches; reboot-cold startup was not measured. Callback, CPU-submission, and ETW
 Present times do not prove physical display scanout.
 
+## Fresh samply capture: remaining costs
+
+A new 1 kHz CPU/context-switch/graphics capture on October 20 used the same
+frozen release-with-debug executable from its original path. The foreground
+repository-startup check passed on hardware DX12. No compilation ran during
+capture. This is one diagnostic run with warm OS/driver caches, not a replacement
+for the unprofiled five-pair confirmation above.
+
+| Milestone, from process spawn | Fresh sampled run | Previous sampled run |
+| --- | ---: | ---: |
+| First recorded CPU draw complete | 561.2 ms | 526.3 ms |
+| First platform submission complete | 616.1 ms | 561.0 ms |
+| Repository-ready observation | 689.2 ms | 602.9 ms |
+| Status task complete | 516.4 ms | 507.6 ms |
+
+The remaining critical path is predominantly renderer initialization and the
+first two frame submissions. Required repository data is already available
+before the first recorded draw starts.
+
+| Work | Fresh evidence | Interpretation |
+| --- | --- | --- |
+| DX12 context initialization | Main-thread samples span 71.2–274.6 ms of ETW process age; 84.6 ms sampled CPU | Adapter enumeration accounts for 43.4 ms CPU and device creation 27.4 ms CPU within this category. The observed interval also contains 75.7 ms off-CPU time following preemption. |
+| Ordinary render pipelines | Main-thread samples span 283.7–490.4 ms; 485.1 ms compiler CPU across the main thread and two workers | Largest remaining compiler cost. The main pipeline interval has only about 2.0 ms off CPU; this is predominantly executing work, not a long worker join. |
+| First platform submission | 55.0 ms instrumented elapsed time | Includes surface resize/configuration, atlas upload and render-target allocation. Its native sampled interval has 7.1 ms sampled CPU and 41.1 ms off CPU. |
+| Second draw and submission | 16.1 ms drawing, then 47.5 ms submitting | Its native submission interval has 6.1 ms sampled CPU and 37.8 ms off CPU. Atlas staging-buffer and render-target allocations appear near the long gaps. No compiler CPU was sampled in either submission. |
+
+CPU totals are summed across threads where stated. Inclusive categories overlap
+and must not be added to elapsed intervals. Sample spans are observed first/last
+samples, not instrumented function entry/exit. Scheduler on-CPU markers and
+sampled `threadCPUDelta` are separate measurements.
+
+The relevant frame-allocation call chains are
+`PreparedTargets::prepare -> Device::create_texture` and
+`WgpuAtlas::before_frame -> StagingBuffer::new -> create_buffer`, reaching
+`gpu_allocator::MemoryBlock::new -> ID3D12Device::CreateHeap`. The longest
+nearby off-CPU intervals are 10.9 ms in the first frame and 7.3/28.3 ms in the
+second. Samples near these gaps include
+`NtGdiDdDDIWaitForSynchronizationObjectFromCpu`; however, the switch-out events
+are labelled preempted. They establish resource-call-associated scheduling
+gaps, not exact driver-wait durations. The trace does not label texture extents
+or prove which path/filter target was allocated.
+
+The first-submission interval includes an observed 18.7 ms resize/configure
+span. This is a changed-size configuration: native DX12 construction starts
+with a 1×1 surface, the first Present uses 2100×1350, and equal dimensions return
+before configuration. It is not evidence of a redundant equal-size resize.
+Investigate whether construction can use the intended size directly.
+Retained path textures can grow with scene bounds; confirming why another
+allocation is needed in frame two requires target labels, sizes and invalidation
+reasons. GPUI does not rotate these textures through retained per-frame slots.
+This capture is not a Rust heap-allocation profile.
+
+Repository work still consumes substantial parallel resources:
+
+- Status takes 322.1 ms elapsed and finishes at 516.4 ms after spawn. Its result
+  is present in the initial recorded view state applications, before drawing.
+  Initial log loading finishes at 227.0 ms.
+- The watcher thread consumes 142.9 ms CPU in the first 1.1 seconds, including
+  52.5 ms in watcher reload and 25.5 ms in watch-path expansion. These nested
+  values are not additive.
+- Optional LFS/annex discovery consumes 125.0 ms CPU, with sampled work beginning
+  around ETW process age 624 ms, after the first successful native Present at
+  615.1 ms. It no longer contributes sampled CPU before that presentation.
+  This does not exclude contention during the subsequent readiness interval.
+
+The tail after first submission is observable on one journal clock:
+8.7 ms until the second draw, 16.1 ms drawing, 47.5 ms submitting, then 0.7 ms
+until ready. Failed readiness predicates are not logged, so the full 73.1 ms
+tail cannot be called polling waste or assumed removable. Indexed-history
+state is applied immediately before readiness, but full indexing is not a
+startup requirement and no late initial status/log result appears.
+
+Compared with the preceding sampled run, ordinary pipeline compiler CPU rose
+from 383.1 to 485.1 ms, while the main pipeline sample span grew by about
+41.7 ms. First/second submission durations rose from 34.7/19.2 to 55.0/47.5 ms.
+Status elapsed time remained essentially unchanged at 321.9/322.1 ms.
+These observations locate the slower work in this run; they do not identify
+the cause of run-to-run variation. The two runs used different executable
+launch paths and opened different repository revisions.
+
+The next concrete investigations are render-target/atlas allocation and
+surface configuration during the first two frames, followed by per-pipeline
+release timings to reduce the remaining shader work. Status and watcher work
+remain relevant to CPU contention and to establishing reliable sub-500 ms
+readiness once rendering improves. No additive speedup is claimed from these
+overlapping costs.
+
+Evidence is retained under
+`target/startup-investigation/samply-remaining-20261020/`: `startup.json.gz`,
+matching symbols, kernel/user ETLs, `recording.json`, `process-analysis.json`,
+`renderer-findings.txt`, `renderer-phase-evidence.json`, `renderer-submission-evidence.json`,
+`remaining-readiness-findings.{txt,json}`, and `status-thread-evidence.json`.
+`pre-present-analysis.json` covers native process age 0–615.0769 ms;
+`post-present-to1100-analysis.json` covers 615.0769–1100 ms. They contain
+1290.6 and 195.7 ms aggregate app CPU respectively. All 505.1 ms sampled compiler
+CPU, including approximately 20 ms of internal device initialization, precedes
+the first native Present.
+
+The capture run is `ed9bbc81-abd2-4893-8ca1-093fb9943733`, PID 14888.
+The executable remains source `8bd06006` / GPUI `a4ee8500`, SHA256
+`d62aa0087d9e9e6e3925b3d35a46ab2c0898e41dd2c0a2e4b496d62aace20584`.
+The measured repository checkout is `c4b00cb7`; this is not the executable's
+source revision. The binary includes all runtime optimizations but predates
+the diagnostic-only log batching correction. ETW process-age, app-stage and
+spawn-aligned journal clocks are kept separate; profile epoch metadata was
+not used to align ETW to readiness. No display scanout or reboot-cold latency
+was measured.
+
 ## Opaque surfaces, deferred work, and Home adoption
 
 The implementation consists of these committed changes:

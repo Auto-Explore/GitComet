@@ -750,7 +750,7 @@ fn status_folder_action(
         .flex()
         .items_center()
         .invisible()
-        .group_hover(row_group, |d| d.visible())
+        .group_hover_style(row_group, |d| d.visible())
         .child(button)
         .into_any_element()
 }
@@ -1018,7 +1018,7 @@ fn status_row(
                 .flex()
                 .items_center()
                 .invisible()
-                .group_hover(row_group.clone(), |d| d.visible())
+                .group_hover_style(row_group.clone(), |d| d.visible())
                 .gap(scaled_px(4.0))
                 .child(stage_button),
         )
