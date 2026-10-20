@@ -1,5 +1,6 @@
 use super::*;
 use crate::kit::drag_autoscroll::{DRAG_AUTOSCROLL_TICK, drag_autoscroll_step};
+use crate::view::text_geometry::DiffTextHit;
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 mod editor_context_menu;
 
@@ -19,16 +20,6 @@ pub(in crate::view) fn take_opened_web_links_for_tests() -> Vec<String> {
 enum DiffTextOffsetBias {
     Start,
     End,
-}
-
-/// A row hit keeps the caret boundary and the pointer's geometric relation to
-/// the painted text separate. The right half of the final glyph resolves to the
-/// end caret boundary just like trailing blank space does, but only the latter
-/// should suppress click highlights.
-#[derive(Clone, Copy)]
-struct DiffTextHit {
-    pos: DiffTextPos,
-    past_painted_text: bool,
 }
 
 enum DiffTextPairDocumentLookup {
@@ -51,13 +42,7 @@ fn diff_text_local_range_from_source_ranges(
 
 impl DiffRenderer {
     pub(super) fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
-        let a = self.diff_text_anchor?;
-        let b = self.diff_text_head?;
-        Some(if a.cmp_key() <= b.cmp_key() {
-            (a, b)
-        } else {
-            (b, a)
-        })
+        crate::view::text_geometry::normalized_selection(self.diff_text_anchor, self.diff_text_head)
     }
 
     pub(in super::super::super) fn diff_text_selection_visible_range(
@@ -140,46 +125,13 @@ impl DiffRenderer {
         row_len: usize,
         cell: DiffTextHitbox,
     ) {
-        let row = self
-            .diff_text_hitboxes
-            .entry((visible_ix, region))
-            .or_insert_with(|| DiffTextHitbox {
-                atomic: false,
-                bounds: cell.bounds,
-                layout_key: 0,
-                source_visible_ix: cell.source_visible_ix,
-                text_start_offset: 0,
-                text_len: row_len,
-                offset_map: None,
-                painted_text: SharedString::default(),
-                streamed_ascii_monospace_cell_width: None,
-                wrapped: None,
-                cells: Vec::new(),
-            });
-        row.bounds = row.bounds.union(&cell.bounds);
-        row.cells.push(cell);
-    }
-
-    /// The cell of a table row a point belongs to: the one it is in, else the
-    /// nearest, by the same line-first distance a drag uses between rows.
-    fn diff_text_cell_for_position(
-        hitbox: &DiffTextHitbox,
-        position: Point<Pixels>,
-    ) -> Option<&DiffTextHitbox> {
-        let distance = |bounds: &Bounds<Pixels>| {
-            let dy = (bounds.top() - position.y)
-                .max(position.y - bounds.bottom())
-                .max(px(0.0));
-            let dx = (bounds.left() - position.x)
-                .max(position.x - bounds.right())
-                .max(px(0.0));
-            (dy, dx)
-        };
-        hitbox.cells.iter().min_by(|a, b| {
-            distance(&a.bounds)
-                .partial_cmp(&distance(&b.bounds))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        crate::view::text_geometry::add_cell_hitbox(
+            &mut self.diff_text_hitboxes,
+            visible_ix,
+            region,
+            row_len,
+            cell,
+        );
     }
 
     /// Register a painted non-text block as a logical target for an active
@@ -266,194 +218,24 @@ impl DiffRenderer {
             .map(|hit| hit.pos)
     }
 
-    /// Resolve a drag against a block whose copy text has no painted glyphs.
-    /// Approaching from above lands after it; approaching from below lands
-    /// before it. While the pointer is inside the block, the selection anchor
-    /// decides which boundary extends across the block.
-    fn diff_text_pos_from_motion_target(
-        &self,
-        target: &DiffTextMotionTarget,
-        position: Point<Pixels>,
-    ) -> DiffTextPos {
-        if position.y < target.bounds.top() {
-            return target.start;
-        }
-        if position.y > target.bounds.bottom() {
-            return target.end;
-        }
-
-        if let Some(anchor) = self.diff_text_anchor {
-            if anchor.cmp_key() >= target.end.cmp_key() {
-                return target.start;
-            }
-            if anchor.cmp_key() <= target.start.cmp_key() {
-                return target.end;
-            }
-        }
-
-        if position.y <= target.bounds.center().y {
-            target.start
-        } else {
-            target.end
-        }
-    }
-
     fn diff_text_hit_in_hitbox(
         &self,
         hitbox: &DiffTextHitbox,
         region: DiffTextRegion,
         position: Point<Pixels>,
-    ) -> Option<DiffTextHit> {
-        if !hitbox.cells.is_empty() {
-            let cell = Self::diff_text_cell_for_position(hitbox, position)?;
-            return self.diff_text_hit_in_hitbox(cell, region, position);
-        }
-        if hitbox.atomic {
-            let after = position.y > hitbox.bounds.bottom()
-                || (position.y >= hitbox.bounds.top() && position.x >= hitbox.bounds.center().x);
-            return Some(DiffTextHit {
-                pos: DiffTextPos {
-                    source_visible_ix: hitbox.source_visible_ix,
-                    region,
-                    offset: hitbox.text_start_offset + if after { hitbox.text_len } else { 0 },
-                },
-                past_painted_text: true,
-            });
-        }
-        if let Some(wrapped) = &hitbox.wrapped {
-            // A wrapped row spans several visual lines, so the click resolves
-            // against the layout it was painted with; `Err` is the clamp to the
-            // nearest boundary, which is what a drag past the text wants.
-            let (painted_offset, past_painted_text) = if position.y < hitbox.bounds.top() {
-                (0, true)
-            } else if position.y > hitbox.bounds.bottom() {
-                (wrapped.layout.len(), true)
-            } else {
-                match wrapped.layout.index_for_position(position) {
-                    Ok(offset) => (offset, false),
-                    Err(offset) => (offset, true),
-                }
-            };
-            return Some(DiffTextHit {
-                pos: DiffTextPos {
-                    source_visible_ix: hitbox.source_visible_ix,
-                    region,
-                    offset: hitbox
-                        .text_start_offset
-                        .saturating_add(wrapped.row_offset(painted_offset).min(hitbox.text_len)),
-                },
-                past_painted_text,
-            });
-        }
-        // A single shaped line lies wholly below a point above it and wholly
-        // above one below it, so those resolve to its ends rather than to
-        // whatever character shares their x.
-        let (local_offset, past_painted_text) = if position.y < hitbox.bounds.top() {
-            (0, true)
-        } else if position.y > hitbox.bounds.bottom() {
-            (hitbox.text_len, true)
-        } else {
-            let x = (position.x - hitbox.bounds.left()).max(px(0.0));
-            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
-                if cell_width <= px(0.0) {
-                    (0, x > px(0.0))
-                } else {
-                    let text_width = cell_width * hitbox.text_len as f32;
-                    (
-                        (((x / cell_width) + 0.5).floor() as usize).min(hitbox.text_len),
-                        x > text_width,
-                    )
-                }
-            } else {
-                let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
-                (
-                    layout
-                        .closest_index_for_x(x)
-                        .min(layout.len())
-                        .min(hitbox.text_len),
-                    x > layout.width,
-                )
-            }
-        };
-        let local_offset = hitbox
-            .offset_map
-            .as_ref()
-            .map(|map| map.source_offset_for_display(local_offset))
-            .unwrap_or(local_offset);
-        Some(DiffTextHit {
-            pos: DiffTextPos {
-                source_visible_ix: hitbox.source_visible_ix,
-                region,
-                offset: hitbox.text_start_offset.saturating_add(local_offset),
-            },
-            past_painted_text,
-        })
+    ) -> Option<crate::view::text_geometry::DiffTextHit> {
+        self.text_geometry()
+            .diff_text_hit_in_hitbox(hitbox, region, position)
     }
 
-    /// The box a range of one row's text occupies on screen — the inverse of
-    /// [`Self::diff_text_pos_in_hitbox`], for anchoring a menu to the run of
-    /// text it acts on.
-    ///
-    /// `range` is in the offset space that method reports. A range that wraps
-    /// reports its part on the visual line nearest `near` — the line clicked.
     fn diff_text_bounds_in_hitbox(
         &self,
         hitbox: &DiffTextHitbox,
         range: Range<usize>,
         near: Point<Pixels>,
     ) -> Option<Bounds<Pixels>> {
-        if !hitbox.cells.is_empty() {
-            let cell = hitbox.cells.iter().find(|cell| {
-                (cell.text_start_offset..=cell.text_start_offset + cell.text_len)
-                    .contains(&range.start)
-            })?;
-            return self.diff_text_bounds_in_hitbox(cell, range, near);
-        }
-        if hitbox.atomic {
-            return Some(hitbox.bounds);
-        }
-        let local = |offset: usize| {
-            offset
-                .saturating_sub(hitbox.text_start_offset)
-                .min(hitbox.text_len)
-        };
-        let (start, end) = (local(range.start), local(range.end));
-
-        if let Some(wrapped) = &hitbox.wrapped {
-            // One box per visual line, as the selection paints: gpui puts an
-            // offset at a wrap boundary at the end of the line above, so a
-            // range that starts a line would otherwise begin on the previous one.
-            let rects = rows::markdown_flow_range_rects(
-                &wrapped.layout,
-                wrapped.painted_offset(start),
-                wrapped.painted_offset(end),
-            );
-            let distance = |rect: &Bounds<Pixels>| {
-                f32::from((rect.top() - near.y).max(near.y - rect.bottom()))
-            };
-            return rects
-                .into_iter()
-                .min_by(|a, b| distance(a).total_cmp(&distance(b)));
-        }
-
-        let x_for = |offset: usize| -> Option<Pixels> {
-            let display_offset = hitbox
-                .offset_map
-                .as_ref()
-                .map(|map| map.display_offset_for_source(offset))
-                .unwrap_or(offset);
-            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
-                return Some(cell_width * display_offset as f32);
-            }
-            let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
-            Some(layout.x_for_index(display_offset.min(layout.len())))
-        };
-        let left = hitbox.bounds.left() + x_for(start)?;
-        let right = hitbox.bounds.left() + x_for(end)?;
-        Some(Bounds::from_corners(
-            point(left, hitbox.bounds.top()),
-            point(right.max(left), hitbox.bounds.bottom()),
-        ))
+        self.text_geometry()
+            .diff_text_bounds_in_hitbox(hitbox, range, near)
     }
 
     /// Bring the current quick-search match into view sideways.
@@ -652,118 +434,16 @@ impl DiffRenderer {
     }
 
     fn diff_text_pos_for_mouse(&self, position: Point<Pixels>) -> Option<DiffTextPos> {
-        let restrict_region = self
-            .diff_text_selecting
-            .then_some(self.diff_text_anchor)
-            .flatten()
-            .map(|p| p.region)
-            .filter(|r| matches!(r, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight));
+        self.text_geometry().diff_text_pos_for_mouse(position)
+    }
 
-        for ((visible_ix, region), hitbox) in &self.diff_text_hitboxes {
-            if restrict_region.is_some_and(|restrict| restrict != *region) {
-                continue;
-            }
-            if hitbox.bounds.contains(&position) {
-                return self.diff_text_pos_from_hitbox(*visible_ix, *region, position);
-            }
-        }
-        for target in &self.diff_text_motion_targets {
-            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
-                continue;
-            }
-            if target.bounds.contains(&position) {
-                return Some(self.diff_text_pos_from_motion_target(target, position));
-            }
-        }
-
-        // Vertical distance decides first. Text runs in lines, so the row a
-        // point off the text belongs to is the one beside it, however far along
-        // the line it is — adding the two distances instead let a point in the
-        // margin between two blocks pick a row several blocks away that merely
-        // shared its column.
-        let mut best: Option<((usize, DiffTextRegion), (Pixels, Pixels))> = None;
-        for (key, hitbox) in &self.diff_text_hitboxes {
-            if restrict_region.is_some_and(|restrict| restrict != key.1) {
-                continue;
-            }
-            let dy = if position.y < hitbox.bounds.top() {
-                hitbox.bounds.top() - position.y
-            } else if position.y > hitbox.bounds.bottom() {
-                position.y - hitbox.bounds.bottom()
-            } else {
-                px(0.0)
-            };
-            let dx = if position.x < hitbox.bounds.left() {
-                hitbox.bounds.left() - position.x
-            } else if position.x > hitbox.bounds.right() {
-                position.x - hitbox.bounds.right()
-            } else {
-                px(0.0)
-            };
-            // Rows are stored in a hash map, so ties are broken on the row
-            // itself rather than on iteration order.
-            let rank = (dy, dx, key.0, key.1.order());
-            let closer = match best {
-                None => true,
-                Some((best_key, (best_dy, best_dx))) => {
-                    rank < (best_dy, best_dx, best_key.0, best_key.1.order())
-                }
-            };
-            if closer {
-                best = Some((*key, (dy, dx)));
-            }
-        }
-
-        let mut best_motion: Option<(usize, (Pixels, Pixels, usize, u8))> = None;
-        for (target_ix, target) in self.diff_text_motion_targets.iter().enumerate() {
-            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
-                continue;
-            }
-            let dy = if position.y < target.bounds.top() {
-                target.bounds.top() - position.y
-            } else if position.y > target.bounds.bottom() {
-                position.y - target.bounds.bottom()
-            } else {
-                px(0.0)
-            };
-            let dx = if position.x < target.bounds.left() {
-                target.bounds.left() - position.x
-            } else if position.x > target.bounds.right() {
-                position.x - target.bounds.right()
-            } else {
-                px(0.0)
-            };
-            let rank = (
-                dy,
-                dx,
-                target.start.source_visible_ix,
-                target.start.region.order(),
-            );
-            if best_motion.is_none_or(|(_, best_rank)| rank < best_rank) {
-                best_motion = Some((target_ix, rank));
-            }
-        }
-
-        match (best, best_motion) {
-            (None, None) => None,
-            (Some(((visible_ix, region), _)), None) => {
-                self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
-            }
-            (None, Some((target_ix, _))) => Some(self.diff_text_pos_from_motion_target(
-                &self.diff_text_motion_targets[target_ix],
-                position,
-            )),
-            (Some(((visible_ix, region), (dy, dx))), Some((target_ix, motion_rank))) => {
-                let text_rank = (dy, dx, visible_ix, region.order());
-                if text_rank <= motion_rank {
-                    self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
-                } else {
-                    Some(self.diff_text_pos_from_motion_target(
-                        &self.diff_text_motion_targets[target_ix],
-                        position,
-                    ))
-                }
-            }
+    fn text_geometry(&self) -> crate::view::text_geometry::TextGeometry<'_> {
+        crate::view::text_geometry::TextGeometry {
+            hitboxes: &self.diff_text_hitboxes,
+            motion_targets: &self.diff_text_motion_targets,
+            layout_cache: Some(&self.diff_text_layout_cache),
+            anchor: self.diff_text_anchor,
+            selecting: self.diff_text_selecting,
         }
     }
 
@@ -1962,62 +1642,14 @@ impl DiffRenderer {
         region: DiffTextRegion,
         text_len: usize,
     ) -> Option<Range<usize>> {
-        let (start, end) = self.diff_text_normalized_selection()?;
-        if start == end {
-            return None;
-        }
-        if source_visible_ix < start.source_visible_ix || source_visible_ix > end.source_visible_ix
-        {
-            return None;
-        }
-
-        let split_region = (self.diff_view == DiffViewMode::Split
-            && start.region == end.region
-            && matches!(
-                start.region,
-                DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
-            ))
-        .then_some(start.region);
-        if split_region.is_some_and(|r| r != region) {
-            return None;
-        }
-
-        let region_order = region.order();
-        let start_order = start.region.order();
-        let end_order = end.region.order();
-
-        let mut a = 0usize;
-        let mut b = text_len;
-
-        if start.source_visible_ix == end.source_visible_ix
-            && source_visible_ix == start.source_visible_ix
-        {
-            if region_order < start_order || region_order > end_order {
-                return None;
-            }
-            if region == start.region {
-                a = start.offset.min(text_len);
-            }
-            if region == end.region {
-                b = end.offset.min(text_len);
-            }
-        } else if source_visible_ix == start.source_visible_ix {
-            if region_order < start_order {
-                return None;
-            }
-            if region == start.region {
-                a = start.offset.min(text_len);
-            }
-        } else if source_visible_ix == end.source_visible_ix {
-            if region_order > end_order {
-                return None;
-            }
-            if region == end.region {
-                b = end.offset.min(text_len);
-            }
-        }
-
-        Some(a..b.max(a))
+        crate::view::text_geometry::source_selection_range(
+            self.diff_text_anchor,
+            self.diff_text_head,
+            self.diff_view == DiffViewMode::Split,
+            source_visible_ix,
+            region,
+            text_len,
+        )
     }
 
     fn diff_text_wrap_range_for_region(

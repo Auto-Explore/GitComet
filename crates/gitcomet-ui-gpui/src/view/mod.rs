@@ -325,6 +325,7 @@ mod sidebar_sticky;
 mod splash;
 mod state_apply;
 mod status_actions;
+mod text_geometry;
 pub(in crate::view) use gitcomet_text::tab_width;
 mod terminal_panel;
 mod terminal_preferences;
