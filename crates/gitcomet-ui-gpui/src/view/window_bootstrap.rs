@@ -1,17 +1,17 @@
 //! Prepare repository work before native window/renderer initialization.
 use super::*;
-use gitcomet_core::process::GitRuntimeState;
+use gitcomet_core::process::{GitExecutableAvailability, GitRuntimeState};
 use std::sync::{Mutex, Weak};
 
 enum GitBootstrapState {
-    Waiting(DeferredRepoBootstrap),
+    Waiting(Option<DeferredRepoBootstrap>),
     Dispatched(GitRuntimeState),
     Attached,
 }
 
-/// The worker can consume a restore only until the native window attaches.
-/// Queueing both messages under this lock makes that ownership transfer exact,
-/// even if the store has not reduced either message when the view is created.
+/// The worker can adopt Git and consume an optional restore only until the
+/// native window attaches. Queueing the messages under this lock makes that
+/// ownership transfer exact even before the store has reduced the messages.
 struct GitBootstrapHandoff {
     store: AppStore,
     expected_runtime: GitRuntimeState,
@@ -35,22 +35,28 @@ impl GitBootstrapHandoff {
             unreachable!();
         };
         self.store.dispatch(Msg::SetGitRuntimeState(runtime));
+        let has_repository_bootstrap = bootstrap.is_some();
         match bootstrap {
-            DeferredRepoBootstrap::RestoreSession {
+            Some(DeferredRepoBootstrap::RestoreSession {
                 open_repos,
                 active_repo,
-            } => self.store.dispatch(Msg::RestoreSession {
+            }) => self.store.dispatch(Msg::RestoreSession {
                 open_repos,
                 active_repo,
             }),
-            DeferredRepoBootstrap::OpenRepos(paths) => {
+            Some(DeferredRepoBootstrap::OpenRepos(paths)) => {
                 for path in paths {
                     self.store.dispatch(Msg::OpenRepo(path));
                 }
             }
+            None => {}
         }
         drop(state);
-        gitcomet_core::startup_trace::mark("repository_bootstrap_dispatched_after_git_probe");
+        gitcomet_core::startup_trace::mark(if has_repository_bootstrap {
+            "repository_bootstrap_dispatched_after_git_probe"
+        } else {
+            "home_git_runtime_dispatched_after_probe"
+        });
     }
 }
 
@@ -98,10 +104,26 @@ impl PreparedWindowBootstrap {
     }
 
     fn begin_git_probe_handoff(&mut self, store: &AppStore) -> Option<Weak<GitBootstrapHandoff>> {
-        let bootstrap = self.deferred_repo_bootstrap.take()?;
+        if self.git_probe_handoff.is_some() {
+            return None;
+        }
+        let initial_state = store.snapshot();
+        // Home also needs Git before its Open/Clone/Init actions are usable.
+        // A store created before discovery finishes would otherwise attach
+        // with Checking and wait for a foreground report after its first frame.
+        let home_waiting_for_git = self.config.view_mode == GitCometViewMode::Normal
+            && initial_state.repos.is_empty()
+            && matches!(
+                initial_state.git_runtime.availability,
+                GitExecutableAvailability::Checking
+            );
+        if self.deferred_repo_bootstrap.is_none() && !home_waiting_for_git {
+            return None;
+        }
+        let bootstrap = self.deferred_repo_bootstrap.take();
         let handoff = Arc::new(GitBootstrapHandoff {
             store: store.clone(),
-            expected_runtime: store.snapshot().git_runtime.clone(),
+            expected_runtime: initial_state.git_runtime.clone(),
             state: Mutex::new(GitBootstrapState::Waiting(bootstrap)),
         });
         let worker = Arc::downgrade(&handoff);
@@ -114,7 +136,7 @@ impl PreparedWindowBootstrap {
         let mut state = handoff.state.lock().unwrap_or_else(|err| err.into_inner());
         match std::mem::replace(&mut *state, GitBootstrapState::Attached) {
             GitBootstrapState::Waiting(bootstrap) => {
-                self.deferred_repo_bootstrap = Some(bootstrap);
+                self.deferred_repo_bootstrap = bootstrap;
                 None
             }
             GitBootstrapState::Dispatched(runtime) => Some(runtime),
@@ -445,6 +467,169 @@ mod tests {
             .barrier_for_test()
             .recv_timeout(Duration::from_secs(3))
             .expect("feedback acknowledgments are reduced");
+    }
+
+    #[gpui::test]
+    fn empty_home_adopts_git_before_attachment_and_renders_usable_actions(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events, opens) = store(false, false);
+        let mut bootstrap = prepare(
+            &store,
+            GitCometViewConfig {
+                workspace: WorkspaceBootstrap::Empty,
+                ..GitCometViewConfig::normal(None)
+            },
+            session::UiSession {
+                open_repos: vec![PathBuf::from("/repos/legacy-home-session")],
+                ..Default::default()
+            },
+            cx,
+        );
+        assert!(!bootstrap.startup_repo_bootstrap_pending);
+        assert!(bootstrap.deferred_repo_bootstrap.is_none());
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .expect("empty Home must adopt the running Git probe")
+            .upgrade()
+            .unwrap();
+        assert!(
+            bootstrap.begin_git_probe_handoff(&store).is_none(),
+            "preparation must not replace an already-owned handoff"
+        );
+        let runtime = AppState::test_default().git_runtime;
+        // The main thread remains occupied creating the native window. Home's
+        // store must become usable without a foreground runtime-report task.
+        std::thread::scope(|scope| {
+            scope.spawn(|| handoff.complete(runtime.clone(), &runtime));
+        });
+        wait_for_state(&store, |state| state.git_runtime == runtime);
+        handoff.complete(runtime.clone(), &runtime);
+        let store_for_assert = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_bootstrap(store, events, bootstrap, window, cx)
+        });
+        cx.update(|window, app| {
+            let view = view.read(app);
+            assert!(view.state.git_runtime.is_available());
+            assert!(view.is_home_screen_active());
+            assert!(!view.blocks_repository_management_actions());
+            assert!(!view.startup_repo_bootstrap_pending);
+            assert!(view.deferred_repo_bootstrap.is_none());
+            assert!(view.startup_repo_runtime_adoption.is_none());
+            let _ = window.draw(app);
+        });
+        for selector in [
+            "home_open_repo_action",
+            "home_clone_repo_action",
+            "home_init_repo_action",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "the first attached Home must render usable {selector}"
+            );
+        }
+        assert!(cx.debug_bounds("repository_loading_screen").is_none());
+        assert!(cx.debug_bounds("git_unavailable_screen").is_none());
+        handoff.complete(runtime.clone(), &runtime);
+        shutdown(&store_for_assert);
+        assert!(store_for_assert.snapshot().repos.is_empty());
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+    }
+
+    #[gpui::test]
+    fn empty_home_rejects_missing_and_stale_git_then_recovers_after_attachment(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events, opens) = store(false, false);
+        let mut bootstrap = prepare(
+            &store,
+            GitCometViewConfig::normal(None),
+            session::UiSession::default(),
+            cx,
+        );
+        let handoff = bootstrap
+            .begin_git_probe_handoff(&store)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        let runtime = AppState::test_default().git_runtime;
+        let mut missing = runtime.clone();
+        missing.availability = GitExecutableAvailability::Unavailable {
+            detail: "Git is unavailable".into(),
+        };
+        handoff.complete(missing.clone(), &missing);
+        handoff.complete(runtime.clone(), &missing);
+        let mut other = runtime.clone();
+        other.preference = GitExecutablePreference::Custom(PathBuf::from("/other/home-git"));
+        handoff.complete(other.clone(), &other);
+        store
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert!(matches!(
+            store.snapshot().git_runtime.availability,
+            GitExecutableAvailability::Checking
+        ));
+
+        let store_for_assert = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new_with_bootstrap(store, events, bootstrap, window, cx)
+        });
+        // Attachment owns reporting now; even a valid late worker result must
+        // not make unavailable Git appear usable or change its recovery path.
+        handoff.complete(runtime.clone(), &runtime);
+        store_for_assert
+            .barrier_for_test()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert!(!store_for_assert.snapshot().git_runtime.is_available());
+        store_for_assert.dispatch(Msg::SetGitRuntimeState(missing));
+        wait_for_state(&store_for_assert, |state| {
+            state.git_runtime.unavailable_detail().is_some()
+        });
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                view.apply_state_snapshot(store_for_assert.snapshot(), cx);
+                assert!(view.blocks_repository_management_actions());
+                assert!(view.deferred_repo_bootstrap.is_none());
+            });
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("git_unavailable_screen").is_some());
+        assert!(cx.debug_bounds("home_open_repo_action").is_none());
+
+        store_for_assert.dispatch(Msg::SetGitRuntimeState(runtime.clone()));
+        wait_for_state(&store_for_assert, |state| state.git_runtime == runtime);
+        cx.update(|window, app| {
+            view.update(app, |view, cx| {
+                view.apply_state_snapshot(store_for_assert.snapshot(), cx);
+                assert!(view.state.git_runtime.is_available());
+            });
+            let _ = window.draw(app);
+            // Rendering reconciles the Git-unavailable window gate with the
+            // recovered snapshot, just as it does for ordinary runtime recovery.
+            assert!(!view.read(app).blocks_repository_management_actions());
+        });
+        assert!(cx.debug_bounds("home_open_repo_action").is_some());
+        assert!(cx.debug_bounds("git_unavailable_screen").is_none());
+        shutdown(&store_for_assert);
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
+    }
+
+    #[gpui::test]
+    fn available_empty_home_does_not_wait_for_another_probe(cx: &mut gpui::TestAppContext) {
+        let (store, _events, opens) = store(true, false);
+        let mut bootstrap = prepare(
+            &store,
+            GitCometViewConfig::normal(None),
+            session::UiSession::default(),
+            cx,
+        );
+        assert!(bootstrap.begin_git_probe_handoff(&store).is_none());
+        assert!(!bootstrap.startup_repo_bootstrap_pending);
+        shutdown(&store);
+        assert_eq!(opens.load(Ordering::SeqCst), 0);
     }
 
     #[gpui::test]
@@ -1112,7 +1297,12 @@ mod tests {
         assert!(empty.ui_session.open_repos.is_empty());
         assert!(empty.deferred_repo_bootstrap.is_none());
         assert!(!empty.startup_repo_bootstrap_pending);
-        assert!(empty.begin_git_probe_handoff(&store).is_none());
+        assert!(
+            empty.begin_git_probe_handoff(&store).is_some(),
+            "an empty workspace adopts Git without restoring legacy tabs"
+        );
+        assert!(empty.attach_git_probe_handoff().is_none());
+        assert!(empty.deferred_repo_bootstrap.is_none());
 
         let mut focused = prepare(
             &store,
