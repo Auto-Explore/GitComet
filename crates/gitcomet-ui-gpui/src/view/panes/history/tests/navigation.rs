@@ -251,6 +251,49 @@ fn indexed_history_paging_clamps_and_respects_focus(cx: &mut gpui::TestAppContex
     paging_clamps_and_respects_focus(cx, true);
 }
 
+fn home_end_select_first_and_last_row(cx: &mut gpui::TestAppContext, indexed: bool) {
+    let (fixture, cx) = mount_navigation(cx, indexed, 3);
+    cx.simulate_keystrokes("end");
+    fixture.assert_commit(cx, 2);
+    cx.simulate_keystrokes("home");
+    fixture.assert_commit(cx, 0);
+
+    for (key, commit) in [("end", 2), ("home", 0)] {
+        let mut state = (*fixture.store.snapshot()).clone();
+        state.repos[0].history_state.selected_commit = None;
+        fixture
+            .store
+            .replace_snapshot_for_test(Arc::new(state.clone()));
+        set_history_view_state_for_tests(cx, &fixture.root, Arc::new(state));
+        sync_view_with_store(cx, &fixture.root);
+        cx.simulate_keystrokes(key);
+        fixture.assert_commit(cx, commit);
+    }
+
+    // Without history focus (find input focused), the keys do nothing.
+    cx.simulate_keystrokes("secondary-f");
+    sync_view_with_store(cx, &fixture.root);
+    let before = cx.update(|_, app| fixture.history.read(app).pending_history_selections.len());
+    cx.simulate_keystrokes("end");
+    cx.update(|_, app| {
+        assert_eq!(
+            fixture.history.read(app).pending_history_selections.len(),
+            before
+        );
+    });
+    fixture.assert_commit(cx, 0);
+}
+
+#[gpui::test]
+fn cached_history_home_end_select_first_and_last_row(cx: &mut gpui::TestAppContext) {
+    home_end_select_first_and_last_row(cx, false);
+}
+
+#[gpui::test]
+fn indexed_history_home_end_select_first_and_last_row(cx: &mut gpui::TestAppContext) {
+    home_end_select_first_and_last_row(cx, true);
+}
+
 fn paging_includes_worktree_rows(cx: &mut gpui::TestAppContext, indexed: bool) {
     use gitcomet_core::domain::{FileStatus, FileStatusKind, WorktreeDirtySummary};
 

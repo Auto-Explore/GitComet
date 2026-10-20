@@ -2840,6 +2840,25 @@ impl DetailsPaneView {
         &self.status_section_focus_handles[Self::status_section_alignment_key(section) as usize]
     }
 
+    /// Step the open diff through its file list without moving focus.
+    pub(in crate::view) fn defer_status_file_step(
+        &self,
+        repo_id: RepoId,
+        step: DiffFileStep,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let diff_renderer = self.diff_renderer.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = diff_renderer.update(cx, |pane, cx| {
+                    pane.try_step_diff_file(repo_id, step, window, cx)
+                });
+            });
+        });
+    }
+
     /// The shared action reads and clears our selection, so release the details
     /// pane before calling it. Keep section focus for the next Space or Ctrl+A.
     pub(in crate::view) fn defer_status_stage_and_advance(

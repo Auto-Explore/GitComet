@@ -668,3 +668,30 @@ fn status_section_space_rechecks_selection_before_deferred_staging(cx: &mut gpui
     assert_eq!(preview(cx, &view), before);
     assert!(selected(cx, &view, DiffArea::Unstaged).is_empty());
 }
+
+#[gpui::test]
+fn status_section_keys_step_through_files(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = fixture(cx);
+    let section = StatusSection::CombinedUnstaged;
+    click_row(cx, section, 0, gpui::Modifiers::default());
+    wait_until_store_diff_target_path(cx, &view, Path::new("a.rs"));
+    sync_store_snapshot(cx, &view);
+    let press = |cx: &mut gpui::VisualTestContext, keys: &str, path: &str| {
+        cx.simulate_keystrokes(keys);
+        draw_and_drain_test_window(cx);
+        wait_until_store_diff_target_path(cx, &view, Path::new(path));
+        sync_store_snapshot(cx, &view);
+    };
+    press(cx, "down", "b.rs");
+    press(cx, "end", "new/b.rs");
+    press(cx, "home", "a.rs");
+    cx.update(|window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert!(pane.status_section_focus_handle(section).is_focused(window));
+    });
+    cx.simulate_keystrokes("ctrl-a");
+    draw_and_drain_test_window(cx);
+    assert!(selected(cx, &view, DiffArea::Unstaged).len() > 1);
+    press(cx, "down", "b.rs");
+    assert!(selected(cx, &view, DiffArea::Unstaged).len() <= 1);
+}

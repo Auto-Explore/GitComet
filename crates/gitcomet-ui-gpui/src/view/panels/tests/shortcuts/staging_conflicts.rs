@@ -787,6 +787,96 @@ fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
     );
 }
 
+#[gpui::test]
+fn conflict_resolver_ignores_plain_file_step_keys(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70578);
+    let commit_id = CommitId("abcdef0011223395".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_plain_step_keys",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/a_conflicted.rs");
+    let second = std::path::PathBuf::from("src/b_conflicted.rs");
+    let mut repo = simple_conflict_repo(repo_id, &workdir, &commit_id, first.as_path());
+    let status = |path: &std::path::Path| gitcomet_core::domain::FileStatus {
+        path: path.to_path_buf(),
+        kind: gitcomet_core::domain::FileStatusKind::Conflicted,
+        conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+    };
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(vec![]),
+            unstaged: Arc::new(vec![status(&first), status(&second)]),
+        }
+        .into(),
+    );
+    repo.status_rev = repo.status_rev.wrapping_add(1);
+    repo.diff_state.diff_target = Some(DiffTarget::working_tree(first.clone(), DiffArea::Unstaged));
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver for the plain step keys",
+        |pane| pane.conflict_resolver.path.as_deref() == Some(first.as_path()),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+    focus_diff_panel(cx, &view);
+
+    let target_path = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app).store.snapshot().repos[0]
+                .diff_state
+                .diff_target
+                .as_ref()
+                .and_then(|target| match target {
+                    DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
+                    _ => None,
+                })
+        })
+    };
+    for key in ["down", "end"] {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        assert_eq!(
+            target_path(cx),
+            Some(first.clone()),
+            "`{key}` must not move"
+        );
+    }
+
+    // A focused status section sends the same keys to the diff; they must not
+    // leave the resolver either.
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .status_section_focus_handle(StatusSection::CombinedUnstaged)
+            .clone();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    for key in ["down", "end"] {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        assert_eq!(
+            target_path(cx),
+            Some(first.clone()),
+            "`{key}` in the status section must not move"
+        );
+    }
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+}
+
 /// The bottom bar's Stage is Space by another route: it stages the shown file
 /// and opens the next one in its section, then hands focus back to the diff
 /// so the next Space carries on.

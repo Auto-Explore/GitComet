@@ -96,6 +96,41 @@ type BuiltinRowRenderer = fn(
 ) -> Vec<AnyElement>;
 
 impl DetailsPaneView {
+    /// Number of whole rows visible in a file list, or `None` before its first layout.
+    pub(in crate::view) fn file_list_page_rows(
+        &self,
+        _repo_id: RepoId,
+        list: crate::view::rows::FileListId,
+    ) -> Option<usize> {
+        use crate::view::rows::FileListId;
+        let (scroll, row_height) = match list {
+            FileListId::CommitFiles => (&self.commit_files_scroll, self.sidebar_row_height()),
+            FileListId::RangeFiles => (&self.range_files_scroll, self.sidebar_row_height()),
+            FileListId::WorktreeFiles => (&self.worktree_files_scroll, self.sidebar_row_height()),
+            FileListId::Status(section) => {
+                let scroll = match section {
+                    StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
+                        &self.unstaged_scroll
+                    }
+                    StatusSection::Untracked => &self.untracked_scroll,
+                    StatusSection::Staged => &self.staged_scroll,
+                };
+                (
+                    scroll,
+                    crate::view::rows::status::status_row_height(self.ui_scale()),
+                )
+            }
+        };
+        let viewport = f32::from(scroll.0.borrow().last_item_size?.item.height);
+        let row_height = f32::from(row_height);
+        (viewport.is_finite() && row_height.is_finite() && viewport > 0.0 && row_height > 0.0)
+            .then(|| (viewport / row_height).floor().max(1.0) as usize)
+    }
+
+    fn sidebar_row_height(&self) -> Pixels {
+        crate::view::rows::sidebar::sidebar_list_row_height(self.theme, self.ui_scale_percent)
+    }
+
     pub(in crate::view) fn changed_file_list(
         &self,
         repo_id: RepoId,

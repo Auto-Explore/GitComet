@@ -1,10 +1,19 @@
 use super::*;
+use crate::view::rows::FileListId;
 
 #[derive(Debug)]
 pub(super) struct StatusNavigationContext<'a> {
     section: StatusSection,
     entries: Vec<&'a gitcomet_core::domain::FileStatus>,
     current_ix: usize,
+}
+
+/// The index `delta` rows from `current`, clamped to the list. `None` when the
+/// step does not move.
+fn step_ix(current: usize, len: usize, delta: isize) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    let target = current.saturating_add_signed(delta).min(last);
+    (delta != 0 && target != current).then_some(target)
 }
 
 impl<'a> StatusNavigationContext<'a> {
@@ -16,12 +25,8 @@ impl<'a> StatusNavigationContext<'a> {
         (self.current_ix + 1 < self.entries.len()).then_some(self.current_ix + 1)
     }
 
-    fn adjacent_ix(&self, direction: i8) -> Option<usize> {
-        if direction < 0 {
-            self.prev_ix()
-        } else {
-            self.next_ix()
-        }
+    fn adjacent_ix(&self, delta: isize) -> Option<usize> {
+        step_ix(self.current_ix, self.entries.len(), delta)
     }
 
     pub(super) fn next_or_prev_path(&self) -> Option<std::path::PathBuf> {
@@ -335,14 +340,10 @@ fn adjacent_file_in_list<'a>(
     files: &'a [gitcomet_core::domain::CommitFileChange],
     drawn_source_indices: Option<&[usize]>,
     path: &std::path::Path,
-    direction: i8,
+    delta: isize,
 ) -> Option<(usize, &'a gitcomet_core::domain::CommitFileChange)> {
     let (current_ix, len) = file_position_in_list(files, drawn_source_indices, path)?;
-    let target_ix = if direction < 0 {
-        current_ix.checked_sub(1)?
-    } else {
-        (current_ix + 1 < len).then_some(current_ix + 1)?
-    };
+    let target_ix = step_ix(current_ix, len, delta)?;
     let source_ix = match drawn_source_indices {
         Some(drawn) => *drawn.get(target_ix)?,
         None => target_ix,
@@ -359,19 +360,14 @@ fn adjacent_inline_diff_ix(
     selected_ix: usize,
     entries_len: usize,
     drawn_order: Option<&[usize]>,
-    direction: i8,
+    delta: isize,
 ) -> Option<usize> {
-    let step = |ix: usize, len: usize| match direction {
-        d if d < 0 => ix.checked_sub(1),
-        d if d > 0 => (ix + 1 < len).then_some(ix + 1),
-        _ => None,
-    };
     match drawn_order {
         Some(order) => {
             let display_ix = order.iter().position(|entry| *entry == selected_ix)?;
-            order.get(step(display_ix, order.len())?).copied()
+            order.get(step_ix(display_ix, order.len(), delta)?).copied()
         }
-        None => step(selected_ix, entries_len),
+        None => step_ix(selected_ix, entries_len, delta),
     }
 }
 
@@ -379,11 +375,11 @@ pub(super) fn adjacent_diff_file_target_for_repo(
     repo: &RepoState,
     diff_target: &DiffTarget,
     change_tracking_view: ChangeTrackingView,
-    direction: i8,
+    delta: isize,
     file_list_source_indices: Option<&[usize]>,
     status_section_order: Option<&[usize]>,
 ) -> Option<AdjacentDiffFileTarget> {
-    if direction == 0 {
+    if delta == 0 {
         return None;
     }
 
@@ -395,7 +391,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                 change_tracking_view,
                 status_section_order,
             )?;
-            let target_ix = navigation.adjacent_ix(direction)?;
+            let target_ix = navigation.adjacent_ix(delta)?;
             let entry = navigation.entries.get(target_ix)?;
             let path = entry.path.clone();
             let area = navigation.section.diff_area();
@@ -420,7 +416,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                 return None;
             }
             let (target_ix, file) =
-                adjacent_file_in_list(&details.files, file_list_source_indices, path, direction)?;
+                adjacent_file_in_list(&details.files, file_list_source_indices, path, delta)?;
 
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
@@ -444,7 +440,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                 return None;
             };
             let (target_ix, file) =
-                adjacent_file_in_list(files, file_list_source_indices, path, direction)?;
+                adjacent_file_in_list(files, file_list_source_indices, path, delta)?;
             Some(AdjacentDiffFileTarget::Range {
                 target: DiffTarget::commit_range(
                     from_commit_id.clone(),
@@ -458,6 +454,9 @@ pub(super) fn adjacent_diff_file_target_for_repo(
         DiffTarget::CommitRange { path: None, .. } => None,
     }
 }
+
+/// Selected entry, entry count and drawn order of the open inline diff.
+type InlineDiffFileState = (usize, usize, Option<std::sync::Arc<[usize]>>);
 
 impl DiffRenderer {
     /// The display order of the section the open working-tree diff belongs to.
@@ -553,12 +552,12 @@ impl DiffRenderer {
         )
     }
 
-    /// Both the toolbar and its actions use these neighbors in display order.
-    pub(super) fn inline_diff_file_neighbors(
+    /// The open inline diff's selected entry, entry count and drawn order.
+    fn inline_diff_file_state(
         &self,
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
-    ) -> Option<(Option<usize>, Option<usize>)> {
+    ) -> Option<InlineDiffFileState> {
         let inline = self.active_inline_submodule_diff()?;
         let selected_ix = inline.selected_ix;
         let entries_len = inline.entries.len();
@@ -575,16 +574,13 @@ impl DiffRenderer {
                 .as_ref()?
                 .worktree_order(repo_id, &path, cx)
         });
-        Some((
-            adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), -1),
-            adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), 1),
-        ))
+        Some((selected_ix, entries_len, drawn_order))
     }
 
     fn try_select_adjacent_diff_file_inner(
         &mut self,
         repo_id: RepoId,
-        direction: i8,
+        delta: isize,
         focus_diff_panel: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -594,7 +590,7 @@ impl DiffRenderer {
                 return false;
             }
             let action = self.hosted_decor.as_ref().and_then(|decor| {
-                if direction < 0 {
+                if delta < 0 {
                     decor.options.file_navigation.previous.clone()
                 } else {
                     decor.options.file_navigation.next.clone()
@@ -606,12 +602,12 @@ impl DiffRenderer {
             }
             return false;
         }
-        if let Some((prev_ix, next_ix)) = self.inline_diff_file_neighbors(repo_id, cx) {
-            let Some(next_ix) = (match direction {
-                d if d < 0 => prev_ix,
-                d if d > 0 => next_ix,
-                _ => None,
-            }) else {
+        if let Some((selected_ix, entries_len, drawn_order)) =
+            self.inline_diff_file_state(repo_id, cx)
+        {
+            let Some(next_ix) =
+                adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), delta)
+            else {
                 return false;
             };
             if focus_diff_panel {
@@ -635,7 +631,7 @@ impl DiffRenderer {
                 repo,
                 diff_target,
                 change_tracking_view,
-                direction,
+                delta,
                 file_list_source_indices.as_deref(),
                 status_section_order.as_deref(),
             )
@@ -694,7 +690,7 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction, true, window, cx)
+        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, true, window, cx)
     }
 
     pub(in crate::view) fn try_select_adjacent_diff_file_preserving_focus(
@@ -704,7 +700,71 @@ impl DiffRenderer {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.try_select_adjacent_diff_file_inner(repo_id, direction, false, window, cx)
+        self.try_select_adjacent_diff_file_inner(repo_id, direction as isize, false, window, cx)
+    }
+
+    /// The list the open diff came from, to size a page step.
+    fn open_diff_file_list(&self, cx: &mut gpui::Context<Self>) -> Option<FileListId> {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            return matches!(
+                inline.origin,
+                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
+            )
+            .then_some(FileListId::WorktreeFiles);
+        }
+        let repo = self.active_repo()?;
+        Some(match self.bound_diff_state(repo).diff_target.as_ref()? {
+            DiffTarget::Commit { .. } => FileListId::CommitFiles,
+            DiffTarget::CommitRange { .. } => FileListId::RangeFiles,
+            DiffTarget::WorkingTree { path, area, .. } => {
+                let view = self.active_change_tracking_view(cx);
+                FileListId::Status(status_navigation_section(
+                    repo,
+                    path.as_path(),
+                    *area,
+                    view,
+                )?)
+            }
+        })
+    }
+
+    /// Steps the open diff through its file list without moving focus. Does
+    /// nothing in the conflict resolver, so a stray key cannot leave a
+    /// half-resolved file.
+    pub(in crate::view) fn try_step_diff_file(
+        &mut self,
+        repo_id: RepoId,
+        step: DiffFileStep,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.is_conflict_resolver_active() {
+            return false;
+        }
+        let delta = match step {
+            DiffFileStep::Prev => -1,
+            DiffFileStep::Next => 1,
+            _ if self.hosted_decor.is_some() => return false,
+            DiffFileStep::First => isize::MIN,
+            DiffFileStep::Last => isize::MAX,
+            DiffFileStep::PageUp | DiffFileStep::PageDown => {
+                let page = self
+                    .open_diff_file_list(cx)
+                    .and_then(|list| {
+                        self.commands
+                            .navigation
+                            .as_ref()?
+                            .page_rows(repo_id, list, cx)
+                    })
+                    .unwrap_or(1) as isize;
+                if step == DiffFileStep::PageUp {
+                    -page
+                } else {
+                    page
+                }
+            }
+        };
+        self.try_select_adjacent_diff_file_inner(repo_id, delta, false, window, cx)
     }
 }
 
@@ -729,6 +789,35 @@ mod tests {
             kind,
             conflict: None,
         }
+    }
+
+    #[test]
+    fn diff_file_step_maps_only_plain_navigation_keys() {
+        let step = |s: &str| DiffFileStep::from_keystroke(&gpui::Keystroke::parse(s).unwrap());
+        assert_eq!(step("up"), Some(DiffFileStep::Prev));
+        assert_eq!(step("down"), Some(DiffFileStep::Next));
+        assert_eq!(step("pageup"), Some(DiffFileStep::PageUp));
+        assert_eq!(step("pagedown"), Some(DiffFileStep::PageDown));
+        assert_eq!(step("home"), Some(DiffFileStep::First));
+        assert_eq!(step("end"), Some(DiffFileStep::Last));
+        assert_eq!(step("alt-up"), None);
+        assert_eq!(step("shift-down"), None);
+        assert_eq!(step("a"), None);
+    }
+
+    #[test]
+    fn step_ix_clamps_and_reports_no_move() {
+        assert_eq!(step_ix(2, 5, 1), Some(3));
+        assert_eq!(step_ix(2, 5, -1), Some(1));
+        assert_eq!(step_ix(0, 5, -1), None);
+        assert_eq!(step_ix(4, 5, 1), None);
+        assert_eq!(step_ix(1, 10, 4), Some(5));
+        assert_eq!(step_ix(7, 10, 4), Some(9));
+        assert_eq!(step_ix(7, 10, -40), Some(0));
+        assert_eq!(step_ix(3, 5, isize::MIN), Some(0));
+        assert_eq!(step_ix(3, 5, isize::MAX), Some(4));
+        assert_eq!(step_ix(0, 0, 1), None);
+        assert_eq!(step_ix(2, 5, 0), None);
     }
 
     /// The bar's one-pass place must agree with what the prev/next actions

@@ -316,6 +316,10 @@ impl DetailsPaneView {
         if loading || StatusSectionEntries::from_repo(repo, section).is_none() {
             return true;
         }
+        if let Some(step) = DiffFileStep::from_keystroke(keystroke) {
+            self.defer_status_file_step(repo_id, step, window, cx);
+            return true;
+        }
         if keystroke.key == "a" {
             let paths = self.status_display_order_paths(repo_id, section);
             let order_rev = self.status_anchor_order_rev(repo, section);

@@ -5,6 +5,10 @@ use gitcomet_core::domain::SubmoduleStatus;
 use std::sync::Arc;
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
+
+pub(in crate::view) fn status_row_height(scale: crate::ui_scale::UiScale) -> Pixels {
+    scale.row_height(STATUS_ROW_HEIGHT_PX, 32.0)
+}
 /// Line box for the path label, in UI-font units so it tracks the font
 /// setting like the label's own size.
 const STATUS_ROW_LINE_HEIGHT_PX: f32 = 18.0;

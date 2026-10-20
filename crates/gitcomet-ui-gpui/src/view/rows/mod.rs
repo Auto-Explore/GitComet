@@ -1159,7 +1159,7 @@ mod history_shapes;
 mod markdown_document;
 mod markdown_flow_text;
 pub(in crate::view) mod sidebar;
-mod status;
+pub(in crate::view) mod status;
 pub(in crate::view) use status::apply_file_list_selection_click;
 
 #[cfg(feature = "benchmarks")]

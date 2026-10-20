@@ -136,8 +136,40 @@ actions!(
     ]
 );
 
+/// A plain key that moves the open diff through its file list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiffFileStep {
+    Prev,
+    Next,
+    PageUp,
+    PageDown,
+    First,
+    Last,
+}
+
+impl DiffFileStep {
+    pub(crate) fn from_keystroke(keystroke: &gpui::Keystroke) -> Option<Self> {
+        let mods = keystroke.modifiers;
+        if mods.control || mods.alt || mods.platform || mods.function || mods.shift {
+            return None;
+        }
+        Some(match keystroke.key.as_str() {
+            "up" => Self::Prev,
+            "down" => Self::Next,
+            "pageup" => Self::PageUp,
+            "pagedown" => Self::PageDown,
+            "home" => Self::First,
+            "end" => Self::Last,
+            _ => return None,
+        })
+    }
+}
+
 /// Chords owned by a focused status section, including empty sections.
 pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    if DiffFileStep::from_keystroke(keystroke).is_some() {
+        return true;
+    }
     let mods = keystroke.modifiers;
     if mods.alt || mods.shift || mods.function {
         return false;

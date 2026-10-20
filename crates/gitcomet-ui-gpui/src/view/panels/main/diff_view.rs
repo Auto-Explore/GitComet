@@ -494,6 +494,13 @@ impl DiffRenderer {
         }
 
         if !handled
+            && let Some(step) = DiffFileStep::from_keystroke(keystroke)
+            && let Some(repo_id) = self.active_repo_id()
+        {
+            handled = self.try_step_diff_file(repo_id, step, window, cx);
+        }
+
+        if !handled
             && !self.is_inline_submodule_diff_active()
             && (mods.control || mods.platform)
             && !mods.alt

@@ -272,6 +272,116 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
 }
 
 #[gpui::test]
+fn commit_details_diff_panel_keys_step_through_files(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(7053);
+    let commit_id = CommitId("0123456789abcdef".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_details_diff_keys",
+        std::process::id()
+    ));
+    let files = (0..64)
+        .map(|ix| {
+            let kind = if ix == 1 {
+                FileStatusKind::Added
+            } else {
+                FileStatusKind::Modified
+            };
+            CommitFileChange::new(
+                std::path::PathBuf::from(format!("src/commit_keys/file_{ix:02}.rs")),
+                kind,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.history_state.selected_commit = Some(commit_id.clone());
+    repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
+        id: commit_id.clone(),
+        message: "subject".into(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
+        committed_at: "2026-04-14 12:00:00 +0300".into(),
+        committed_at_unix: 0,
+        parent_ids: vec![],
+        files: files.clone(),
+    }));
+    repo.diff_state.diff_target =
+        Some(DiffTarget::commit(commit_id.clone(), files[0].path.clone()));
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    cx.simulate_resize(gpui::size(px(1024.0), px(900.0)));
+    draw_and_drain_test_window(cx);
+    focus_diff_panel(cx, &view);
+
+    // Presses `key` and waits for the store to open `files[expected]`.
+    let press = |cx: &mut gpui::VisualTestContext, key: &str, expected: usize| {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        wait_until_store_diff_target_path(cx, &view, files[expected].path.as_path());
+        sync_store_snapshot(cx, &view);
+        assert_eq!(
+            active_commit_diff_target_path(cx, &view),
+            Some(files[expected].path.clone()),
+            "after `{key}`"
+        );
+    };
+    let unchanged = |cx: &mut gpui::VisualTestContext, key: &str, expected: usize| {
+        cx.simulate_keystrokes(key);
+        draw_and_drain_test_window(cx);
+        sync_store_snapshot(cx, &view);
+        assert_eq!(
+            active_commit_diff_target_path(cx, &view),
+            Some(files[expected].path.clone()),
+            "`{key}` must not move"
+        );
+    };
+
+    press(cx, "down", 1);
+    press(cx, "down", 2);
+    press(cx, "up", 1);
+    press(cx, "up", 0);
+    unchanged(cx, "up", 0);
+
+    cx.simulate_keystrokes("pagedown");
+    draw_and_drain_test_window(cx);
+    wait_until(cx, "page down to leave the first files", |cx| {
+        sync_store_snapshot(cx, &view);
+        active_commit_diff_target_path(cx, &view)
+            .is_some_and(|path| path != files[0].path && path != files[1].path)
+    });
+    let page_ix = files
+        .iter()
+        .position(|file| Some(&file.path) == active_commit_diff_target_path(cx, &view).as_ref())
+        .unwrap();
+    assert!(page_ix > 2 && page_ix < 63, "page_ix={page_ix}");
+
+    press(cx, "end", 63);
+    let offset_y = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        uniform_list_offset(&pane.commit_files_scroll).y
+    });
+    assert!(offset_y < px(0.0), "offset_y={offset_y:?}");
+    press(cx, "home", 0);
+    unchanged(cx, "shift-down", 0);
+
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .diff_renderer
+            .read(app)
+            .diff_panel_focus_handle
+            .clone();
+        assert!(focus.is_focused(window), "the diff panel keeps focus");
+    });
+}
+
+#[gpui::test]
 fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -450,6 +560,10 @@ fn comparison_diff_steps_through_range_files_with_arrows_and_f1_f4(cx: &mut gpui
     wait_until_store_diff_target_path(cx, &view, files[1].path.as_path());
     sync_store_snapshot(cx, &view);
     assert_eq!(drawn_file_arrows(cx, &view), Some((true, true)));
+
+    cx.simulate_keystrokes("down");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, files[2].path.as_path());
 }
 
 #[gpui::test]

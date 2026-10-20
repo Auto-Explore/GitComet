@@ -1410,6 +1410,14 @@ impl HistoryView {
             return false;
         }
         let row = match current {
+            // Home/End (`rows == usize::MAX`) go to the list edge, even with no selection.
+            None if rows == usize::MAX => {
+                if direction.is_negative() {
+                    0
+                } else {
+                    total - 1
+                }
+            }
             // A page key enters the list at its first row.
             None if paging => 0,
             _ => {

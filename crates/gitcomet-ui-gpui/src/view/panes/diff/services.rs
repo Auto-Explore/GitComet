@@ -81,6 +81,12 @@ pub(in crate::view) trait DiffNavigation {
     fn status_order(&self, repo: RepoId, section: StatusSection, cx: &App) -> Option<Arc<[usize]>>;
     fn file_order(&self, repo: RepoId, range: bool, cx: &App) -> Option<Arc<[usize]>>;
     fn worktree_order(&self, repo: RepoId, path: &Path, cx: &App) -> Option<Arc<[usize]>>;
+    fn page_rows(
+        &self,
+        repo: RepoId,
+        list: crate::view::rows::FileListId,
+        cx: &App,
+    ) -> Option<usize>;
 }
 
 type DiffCommandDispatch = dyn Fn(DiffCommand, &mut App);

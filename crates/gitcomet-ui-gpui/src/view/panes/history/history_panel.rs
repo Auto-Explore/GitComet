@@ -243,6 +243,12 @@ impl HistoryView {
                         "pagedown" if this.history_panel_focus_handle.is_focused(window) => {
                             this.history_select_page(1, cx)
                         }
+                        "home" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_edge(-1, cx)
+                        }
+                        "end" if this.history_panel_focus_handle.is_focused(window) => {
+                            this.history_select_edge(1, cx)
+                        }
                         "enter" => this.history_open_selected_worktree(window, cx),
                         "escape" if this.history_find_is_open() => {
                             this.close_history_find(window, cx);
@@ -313,6 +319,14 @@ impl HistoryView {
     ) -> bool {
         let rows = self.history_page_rows();
         self.history_select_by_rows(direction, rows, true, cx)
+    }
+
+    pub(in crate::view) fn history_select_edge(
+        &mut self,
+        direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.history_select_by_rows(direction, usize::MAX, true, cx)
     }
 
     pub(super) fn history_page_rows(&self) -> usize {
@@ -446,6 +460,9 @@ impl HistoryView {
             (Some(current_list_ix), false) => {
                 current_list_ix.saturating_add(rows).min(list_len - 1)
             }
+            // Home/End (`rows == usize::MAX`) go to the list edge, even with no selection.
+            (None, true) if rows == usize::MAX => 0,
+            (None, false) if rows == usize::MAX => list_len - 1,
             // A page key enters the list at its first row, as in indexed history.
             (None, _) if paging => offset,
             (None, true) => list_len.saturating_sub(1),

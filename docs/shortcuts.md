@@ -121,6 +121,7 @@ These shortcuts apply while the commit history list is showing.
 | --- | --- | --- | --- |
 | Previous / next row | `Up`, `Down` | `Up`, `Down` | While the history list has focus. |
 | Previous / next page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | While the history list has focus. Moves selection by one visible page, updates the selected row's details, and stops at the first / last available row. With nothing selected, selects the first row. |
+| First / last row | `Home`, `End` | `Home`, `End` | While the history list has focus. Also with nothing selected. |
 | Find a commit | `Cmd-F` | `Ctrl-F` | Opens the find bar over the history. Matches the commit summary or the author (each on its own), or the start of the SHA (4+ hex characters), across the whole history, not only the loaded rows. Typing selects the first match. With the bar already open, refocuses it with the query selected. |
 | Find options | `Aa`, `W`, `.*` buttons | `Aa`, `W`, `.*` buttons | Match Case, Whole Word and Regex toggles, as in diff search; toggling one searches again and selects the first match. Without Match Case, plain text ignores ASCII letter case only (`É` and `é` differ), while a regex ignores Unicode case. The SHA prefix always ignores case and Whole Word, and applies only while Regex is off. An invalid regex reads "Invalid regex" and searches nothing. |
 | Next match | `Enter`, `F3` | `Enter`, `F3` | Selects the next match below the selected commit, wrapping to the top. `Enter` only from the find bar; `F3` also from the list. Also the ↓ button. |
@@ -188,6 +189,9 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Close search, clear selection, or close the current diff | `Escape` | `Escape` | Exact behavior depends on the current diff state. |
 | Previous file in the status list | `F1` | `F1` | Working tree and conflict-oriented diff flows. |
 | Next file in the status list | `F4` | `F4` | Working tree and conflict-oriented diff flows. |
+| Previous / next file in the list the diff came from | `Up`, `Down` | `Up`, `Down` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
+| Previous / next page of files | `PageUp`, `PageDown` | `PageUp`, `PageDown` | One visible page of the file list. No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
+| First / last file | `Home`, `End` | `Home`, `End` | No modifiers. Commit, comparison, worktree and status lists. Stops at the first / last file. Not in the conflict resolver; use `F1` / `F4` there. |
 | Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | Moves one change block (a run of consecutive changed lines) at a time, landing on its first line, in Full, Collapsed, and whole-commit diffs alike. The conflict resolver moves by conflict instead. |
 | Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Same unit as Previous change. With nothing selected, goes to the first change block. |
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
@@ -210,6 +214,8 @@ file and advances when that file is shown in the diff. Keyboard focus stays in
 the list, so another `Space` acts on the next file and `Ctrl-A` / `Cmd-A` still
 selects the section's files. At the end of the section, advancement selects the
 previous file; when the section is empty, it clears the diff.
+`Up` / `Down`, `PageUp` / `PageDown` and `Home` / `End` step through the
+section's files and open each file in the diff. Keyboard focus stays in the list.
 
 Preview-mode note:
 - Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, whitespace toggle, and conflict navigation hotkeys until you return to source mode.
