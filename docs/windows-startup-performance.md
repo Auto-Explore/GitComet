@@ -4,7 +4,197 @@ Measured on October 20, 2026 with a Ryzen AI 9 HX 370 and Radeon 890M.
 DX12 remains the default; DX11 was used for diagnostic comparisons and
 compatibility checks.
 
-The combined startup changes reached median **540.6 ms first CPU draw**,
+The latest completed application changes use opaque Windows surfaces, coalesce
+startup resizes, defer unused filter shaders and optional-tool discovery, adopt
+Git discovery before attaching Home, and reuse validated watcher ancestor
+metadata. DX12 remains the default.
+
+The final five-pair confirmation session reached median **440.5 ms first CPU
+draw**, **481.0 ms first platform submission**, and **495.8 ms repository
+readiness**. All five pairs improved. Three of five candidate runs reached ready
+below 500 ms; the range was **466.5–512.5 ms**. This is not a reliable sub-500 ms
+guarantee: an earlier session with the same binaries regressed, and its slower
+renderer-construction state was not reproduced in the successful CPU capture.
+Both sessions are retained below.
+
+The measured candidate is GitComet
+`8bd06006d90b96026611928d15663371ceb0d781`, pinned to GPUI
+`a4ee85008357c2e8e659bf8383ccae65ab62f94f`. All comparisons reused OS/driver
+caches; reboot-cold startup was not measured. Callback, CPU-submission, and ETW
+Present times do not prove physical display scanout.
+
+## Opaque surfaces, deferred work, and Home adoption
+
+The implementation consists of these committed changes:
+
+- `afcb771a`: opaque Windows main and Settings windows. The user inspected and
+  accepted the appearance. The explicit background diagnostic override remains.
+- `c6f19db7`: pin GPUI to checked startup-resize coalescing and demand-driven
+  filter pipelines. Initial configuration/fallback remains checked, runtime
+  resizes remain immediate, and pending dimensions survive renderer recovery.
+  Ordinary direct frames and retained texture copies do not create the filter
+  group. Actual blur, opacity groups, or a retained shader blit create it on
+  first use. Unsupported external-surface integrations omit their pipeline.
+- `ebcf9d4e`: empty Home shares the completed background Git-probe handoff, with
+  the same stale-result and exactly-once attachment guards as repository
+  bootstrap. Its readiness predicate is unchanged.
+- `71db65d2`: automatic LFS/annex discovery starts after the initial platform
+  presentation attempt. This is frame-loop ordering, not a GPU/display fence.
+  Settings rechecks, runtime invalidation, and descendant cancellation remain.
+- `5a48946a`: watcher expansion reuses successful ordinary ancestor metadata
+  within one expansion and revalidates reused identities. Terminal paths,
+  missing/error results, symlinks, and Windows reparse points are not cached.
+  Stable cache entries are discarded; native watch coverage is not deferred.
+- `8bd06006`: the new watcher replacement-race test uses a directory junction
+  when Windows does not grant symlink creation privileges, retaining all race
+  and invalidation assertions.
+
+GPUI commits `5fbcd42c`, `ccbedc27`, and `a4ee8500` are pushed to
+`lazy_load_shaders` in the GPUI worktree. The GitComet branch has not been pushed.
+
+## Repository measurements: both sessions retained
+
+Each session alternates five pairs of the previous frozen `7ebb3e91` /
+`164485d7` binary and the new `8bd06006` / `a4ee8500` binary. Both arms use
+DX12/FXC, identical release-with-debug settings, fresh app profiles, and the
+desktop startup scenario. All twenty runs are valid and use early repository
+bootstrap. No compilation or sampling profiler ran during measurement.
+
+| Median, five runs per arm | Earlier baseline | Earlier candidate | Confirmation baseline | Confirmation candidate |
+| --- | ---: | ---: | ---: | ---: |
+| Spawn to first CPU draw | 516.0 ms | 644.9 ms | 481.0 ms | 440.5 ms |
+| Spawn to first submission | 596.3 ms | 705.9 ms | 561.2 ms | 481.0 ms |
+| First submission duration | 78.8 ms | 47.5 ms | 70.6 ms | 32.7 ms |
+| Spawn to repository ready | 655.3 ms | 707.2 ms | 566.7 ms | 495.8 ms |
+| Candidate ready range | — | 557.9–726.6 ms | — | 466.5–512.5 ms |
+
+The earlier median paired ready change was **+67.2 ms**. In confirmation it was
+**−64.9 ms**, with every pair improving by 54.4–99.8 ms. Three confirmation
+candidates were ready below 500 ms and four submitted below 500 ms. Independent
+medians and median paired changes are different statistics.
+
+Separate three-pair stage diagnostics reproduced the earlier slowdown before
+renderer construction: open-window-to-renderer increased from 334.3 to
+558.9 ms, while renderer-to-view initialization fell from 70.3 to 27.5 ms and
+submission duration fell from 78.3 to 39.0 ms. These intervals include native
+window/driver/pipeline work and do not identify a specific cause.
+
+A subsequent three-pair control launched the *same candidate executable* from
+its frozen path and the profiler's copied path. Both were fast: ready medians
+499.7 and 492.8 ms. This does not establish a fixed-path effect. The successful
+ETW capture and later five-pair confirmation also did not reproduce the slow
+state. Temperature, frequency, driver-cache state, and competing workload were
+not recorded sufficiently to assign the earlier regression to any of them.
+The results are neither pooled nor selectively discarded.
+
+Repository readiness requires open/status/history readiness and a laid-out
+history viewport; the harness polls at 50 ms intervals. It does not require the
+entire indexed history in the startup scenario. It is a usable-content
+measurement with polling delay, not a timestamp for the exact last worker.
+Status is the last required data publication in all five confirmation runs.
+In pairs 1/4/5 it arrives after the first CPU draw and reaches the view after
+first submission. In pairs 2/3, which miss 500 ms, status is already available
+at the first state application. Both content readiness and rendering matter;
+shorter status alone would not resolve those two misses.
+
+## Home and diagnostic logging overhead
+
+The original three-pair Home diagnostics retained one severe candidate outlier:
+baseline Home-ready markers were 588.4/574.8/558.0 ms and candidates were
+926.8/524.9/486.1 ms. A later three-pair confirmation improved all pairs,
+641.8/586.4/612.4 → 544.2/519.3/581.2 ms. These are app-trace times, not
+spawn-to-ready times.
+
+Further investigation found that the callback gap after `first_interactive`
+does not necessarily represent another frame. When Home is already ready,
+`first_interactive` and `home_ready` run sequentially in the same callback.
+Synchronous diagnostic output between them can inflate the interval.
+The real serde_json emission experiment measured 59 writes per stderr payload
+and 44 per trace record. Under PowerShell redirected stderr, a callback gap
+reached 29.7 ms without GPUI; formatting each complete record before writing
+reduced the experiment's median from 3.406 to 0.079 ms.
+
+The diagnostic code now formats each complete JSON line before `write_all`,
+while preserving immediate record visibility, flushing, escaping, and recorded
+timestamps. Startup milestones also enter the UI journal before synchronous
+output, so future captures can use its existing process-spawn clock anchor.
+Readiness conditions are unchanged. The application timings in this document
+use the frozen `8bd06006` binary, before this diagnostic-only correction;
+the emission experiment is separate evidence, not a rebuilt-app speedup.
+The correction passed all three startup-trace tests and all eight startup-probe
+tests in the cached `ci-test` build.
+
+An additional frozen-binary comparison used the existing Python harness's
+direct stderr file and seeded empty profiles. Baseline Home-ready markers were
+433.4/442.1/456.2 ms; candidates were **343.6/364.8/368.7 ms**. The candidate
+interactive-to-Home interval was only 0.189–0.207 ms. This supports the early
+Home handoff and identifies diagnostic I/O as a source of inflated callback
+gaps. The Python profiles also disable background update checks, seed survey
+preferences, and set window geometry, so the entire PowerShell-versus-Python
+latency difference must not be attributed to stderr alone.
+
+The earlier repository benchmark did not enable these startup-stage markers.
+The logging finding therefore does **not** explain away its regression.
+
+## Fresh trace and watcher verification
+
+The successful `samply-lean-startup-final` capture used the frozen candidate,
+matching PDB, foreground DX12, 1 kHz CPU sampling, scheduling events, and graphics
+events. Two preceding elevation-helper failures recorded no valid trace and
+are excluded. The fixed analysis window is process age 0–1100 ms.
+
+| Inclusive sampled CPU | Previous capture | New capture |
+| --- | ---: | ---: |
+| Native shader compiler, all app threads | 447.2 ms | 402.1 ms |
+| Main-thread compiler | 169.8 ms | 164.6 ms |
+| Watcher thread | 127.6 ms | 100.1 ms |
+| Watcher input reload | 74.9 ms | 34.5 ms |
+
+These nested categories overlap and are not additive elapsed savings. Ordinary
+pipeline creation accounts for 383.1 ms of the new compiler CPU across three
+participants; device-internal compilation and earlier context work account for
+the remainder. Both pipeline workers finish before the main compiler tail.
+The trace has no long new main-thread join delay and no positive samples of
+the separate DX11 device constructor.
+
+A separate bounded-worker experiment compared 3/4/6/8 participants across four
+alternating rounds, each with a fresh hardware DX12 device and the same eight
+ordinary pipelines. With release-equivalent shader flags (no DEBUG/VALIDATION;
+VALIDATION_INDIRECT_CALL retained), pipeline-construction medians were
+195.7/195.2/199.5/198.4 ms. The first three-worker run was 258.5 ms and is retained.
+The quad pipeline finished last in all sixteen runs. Increasing worker count
+provided no convincing benefit, so the production limit stays at three.
+The test host code was still a debug build and spent about 56 ms parsing/setup,
+so these are relative diagnostic results, not release application latencies or
+proof of the release trace's longest pipeline label. The temporary experiment
+patch and logs are archived locally; no additional GPUI change was shipped.
+
+The new trace reaches first CPU draw at 526.3 ms, first submission at 561.0 ms,
+and scenario readiness at 602.9 ms after spawn. Status finishes at 507.6 ms,
+13.4 ms before the first draw starts and 53.4 ms before submission. Overlapping
+the roughly 115 ms gitlink child with the base status walk could shorten status,
+but no end-to-end saving is established while renderer/viewport work finishes
+later. First successful ETW Present is at 556.2561 ms process age with status
+zero. Automatic LFS/annex probes start after that first Present.
+
+Separate watcher diagnostics show one setup attempt and one policy revalidation
+in every run, with no retry/rebuild loop. The sum of setup phase wall times
+falls from median 233.6 to 192.3 ms across three pairs. Input expansion improves
+while directory discovery is slower; these concurrent wall intervals include
+scheduling and do not establish per-phase CPU savings.
+
+The application validation reports 402 passes, with three explicit ignored
+fixtures. Existing unrelated symlink-only tests may self-skip without Windows
+privileges; the new replacement race explicitly executed via a directory
+junction. GPUI validation passed 63 Windows tests, 66 WGPU default tests plus
+five integration tests, and 67 surface-enabled tests plus five integration
+tests. Default strict Clippy passed; the surface-enabled run narrowly allowed
+two verified pre-existing warnings in unchanged code. DX12 history navigation
+and Settings, and explicit DX11 Settings, passed on the frozen application.
+
+## Historical handoff and DX11 deferral result
+
+The preceding combined startup changes reached median **540.6 ms first CPU draw**,
 **646.6 ms first platform submission**, and **658.8 ms repository readiness**
 over five runs. Readiness improved in every pair, but first-frame submission
 became slower in four of five pairs. The 500 ms target has not been achieved.
@@ -212,11 +402,12 @@ Opaque mode reduced submission duration from a median 86.5 to 21.9 ms. All five
 pairs improved, with a median paired duration saving of 61.1 ms.
 Launch-to-submit improved in four of five pairs by a median 47.4 ms.
 The four deferred/deferred pairs saved
-53.9 ms submission but regressed ready by 12.1 ms. Opaque mode changes the
-desktop-visible pixels around GitComet's inset rounded frame, so it is not a
-visually equivalent shipping fix. GPUI starts opaque, then reconfigures and
-rebuilds pipelines for the requested transparency. Passing the intended initial
-appearance upstream is the relevant follow-up.
+53.9 ms submission but regressed ready by 12.1 ms. Opaque mode can change the
+desktop-visible pixels around GitComet's inset rounded frame. The user later
+inspected this mode, saw no unwanted difference, and accepted it as the default
+in `afcb771a`. This avoids starting opaque and then reconfiguring/rebuilding for
+transparency. The table above records the earlier diagnostic, before that
+product decision.
 
 ## Completed Git-probe handoff
 
@@ -452,27 +643,26 @@ source are retained in the local provenance artifacts.
 
 ## Remaining work
 
-The next priorities are:
+The resize, opaque-background, optional-tool, watcher, and early-Home changes
+described above are implemented and tested. The remaining priorities are:
 
-- Instrument ordinary pipeline requests and DX12 device initialization
-  separately, then evaluate background-task scheduling with a controlled
-  comparison. The new trace shows overlap and renderer-gated readiness, but
-  does not establish how much waiting or CPU time scheduling can remove.
-- Coalesce intermediate startup surface resizes while preserving final size,
-  runtime resizing, readback, and recovery. Pass the intended initial background
-  appearance upstream to avoid the opaque-to-transparent rebuild without
-  changing the frame. These changes overlap; their potential gains cannot be
-  added.
-- Investigate repeated watcher lookups and optional-tool overlap without
-  sacrificing watch coverage, descendant cancellation, or eventual capability
-  checks. Prioritize the renderer for this startup case: the populated gitlink
-  supplement remains real work, but status finishes before the first frame.
-- Resolve the separate empty-Home readiness regression with callback/frame
-  timings before attributing it to a particular renderer operation.
+- Establish more margin below 500 ms and understand the earlier slower renderer
+  state. The later median alone does not establish consistent startup.
+- Attribute individual pipelines in a release application capture before
+  changing shader code. The bounded 3/4/6/8-worker experiment is complete and
+  does not justify changing the current limit.
+- Revisit status overlap when it delays first displayed content. It arrives
+  after the first CPU draw in three confirmation runs, although it is already
+  ready before rendering in both runs that miss 500 ms.
+- Keep remaining shader deferral tied to actual scene requirements. Home uses
+  a colored image; repository tabs and frame corners use paths. Shadows can be
+  required by light-theme controls and focus rings.
+- Treat diagnostic logging overhead separately from application work, and keep
+  Home callback times separate from spawn-to-submit and repository-ready times.
 
-The combined candidate needs about 147 ms less elapsed time for 500 ms
-submission and 159 ms for 500 ms ready. These are target gaps, not predicted
-savings, and overlapping changes must not be added into a projected time.
+The final confirmation median is below 500 ms, but its slowest candidate is
+12.5 ms above it. The earlier session still required more than 200 ms of
+improvement. These are observed gaps, not predicted additive savings.
 Public `wgpu::PipelineCache` in version
 29.0.4 supports Vulkan only, so it does not provide persistent DX12 shader
 caching. More shader deferral requires evidence that the initial frame does
@@ -521,6 +711,43 @@ The historical parallel experiment adds `parallel-runtime/`, `repo-parallel-pair
 `repo-parallel-confirmation/`, `parallel-comparison-summary.json`, the
 `parallel-stage-*` traces, and `parallel-compiled-source/`.
 Their availability is local; this document records the durable measurements.
+
+The latest implementation is frozen in `lean-startup-runtime/` with source
+revision `8bd06006`, clean patch, source hashes, and successful build log
+`lean-startup-release-build.log`. Executable SHA256:
+`d62aa0087d9e9e6e3925b3d35a46ab2c0898e41dd2c0a2e4b496d62aace20584`.
+PDB SHA256:
+`9c0f0a8165364dfb03b6cbc20536e704b87bb0164bc8cb447bc1025bfc0cb7e9`.
+Its evidence includes:
+
+- `lean-startup-comparison.json` and `repo-lean-startup-pairs/session.json`,
+  session `b72848e8-ca7a-453f-98ff-fd6965ab6779`: earlier regression.
+- `lean-confirmation-comparison.json` and `repo-lean-confirmation/session.json`,
+  session `a4beaa49-9fb9-4ca5-8f72-e65bdf7f92f3`: final five-pair confirmation.
+- `lean-confirmation-readiness-findings.txt` and
+  `lean-confirmation-readiness-evidence.json`: per-run data/publication/frame
+  dependencies and threshold counts.
+- `lean-stage-home-comparison.json`, `lean-stage-home-findings.txt`,
+  `lean-confirm-home-*`, and `lean-home-file-*`: separate stage/Home diagnostics.
+- `lean-path-control-comparison.json` and `lean-dx11-control-comparison.json`:
+  separate path and renderer controls.
+- `lean-watcher-comparison.json` and `lean-watcher-findings.txt`: setup phases,
+  attempts, and reload coverage.
+- `samply-lean-startup-final/`: valid capture, matching symbols, ETLs,
+  foreground evidence, CPU analysis, renderer findings, and
+  `status-readiness-decision.txt`. The adjacent stage trace is
+  `samply-lean-startup-final-stage.jsonl`.
+- `gpui-final-startup-validation.txt` and `lean-startup-app-validation.txt`:
+  test commands, complete logs, source hashes, fixture corrections and limits.
+- `lean-startup-history-jump/`, `lean-startup-settings/`, and
+  `lean-startup-explicit-dx11/`: successful frozen-binary live checks.
+- `probe-emission/run-20261020-144202-187/summary.json`: isolated serde_json
+  write-count and redirection experiment.
+- `probe-emission/validation-20261020-144838/`: diagnostic correction's successful
+  build, eleven focused test results, and source/executable hashes.
+- `gpui-worker-count-release-flags.log`: bounded-worker control using shipping
+  native shader compiler flags. The earlier `gpui-worker-count-diagnostic.log`
+  uses debug flags and is retained separately.
 
 The clean pin and runtime comparisons are `pinned-final-comparison.json`,
 `pinned-dxc-comparison.json`, and `pinned-opaque-comparison.json`, backed by
