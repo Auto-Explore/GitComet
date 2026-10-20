@@ -244,8 +244,8 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
                 .commit_message_input
                 .read(app)
                 .text(),
-            "",
-            "expected secondary-enter commit to clear the commit message input"
+            "hello shortcut",
+            "expected a failed commit to keep the commit message"
         );
     });
 }

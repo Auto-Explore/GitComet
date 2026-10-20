@@ -302,6 +302,7 @@ mod pane_store;
 mod panels;
 mod panes;
 mod patch_split;
+mod pending_commit;
 mod perf;
 mod permalink;
 pub(super) mod platform_open;

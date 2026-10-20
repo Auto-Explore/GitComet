@@ -417,7 +417,8 @@ fn amend_allowed_when_filtered_log_is_empty_but_head_branch_exists() {
     assert!(DetailsPaneView::can_submit_commit(
         Some(&repo),
         "message",
-        true
+        true,
+        false
     ));
 }
 
@@ -434,7 +435,8 @@ fn amend_not_allowed_on_unborn_head_branch() {
     assert!(!DetailsPaneView::can_submit_commit(
         Some(&repo),
         "message",
-        true
+        true,
+        false
     ));
 }
 
@@ -450,7 +452,8 @@ fn amend_allowed_on_detached_head_without_visible_log_entry() {
     assert!(DetailsPaneView::can_submit_commit(
         Some(&repo),
         "message",
-        true
+        true,
+        false
     ));
 }
 

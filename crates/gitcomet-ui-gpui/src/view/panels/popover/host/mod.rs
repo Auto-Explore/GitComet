@@ -259,6 +259,7 @@ impl PopoverHost {
             }
             this.commit_prompt_message_drafts
                 .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
+            this.advance_pending_commit_prompts(cx);
 
             // Closing clears `this.popover`, so the per-event work below still
             // runs and simply finds no popover to fingerprint.
@@ -976,6 +977,7 @@ impl PopoverHost {
             file_history_file_picker_search_input: None,
             stash_picker_search_input: None,
             commit_prompt_message_drafts: FxHashMap::default(),
+            pending_commit_prompts: FxHashMap::default(),
             commit_prompt_message_input,
             commit_prompt_message_scroll,
             commit_prompt_focus,
