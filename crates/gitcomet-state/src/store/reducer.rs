@@ -38,7 +38,7 @@ pub(super) mod test_inputs;
 mod util;
 
 use crate::model::{AppState, Loadable, RepoId};
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList};
+use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline};
 use auth::{annex_adjusted_refusal, annex_takeover};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -1563,9 +1563,12 @@ fn reduce_inner(
             stage,
             completion,
         } => {
-            let expected_contents = expected_contents.or_else(|| {
-                state.repos.iter().find(|r| r.id == repo_id).and_then(|r| {
-                    match &r.conflict_state.conflict_file {
+            let expected_contents = match expected_contents {
+                WorktreeSaveBaseline::DeriveFromLoadedConflict => state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == repo_id)
+                    .and_then(|r| match &r.conflict_state.conflict_file {
                         crate::model::Loadable::Ready(Some(file))
                             if file.path.as_path() == path =>
                         {
@@ -1576,9 +1579,10 @@ fn reduce_inner(
                             })
                         }
                         _ => None,
-                    }
-                })
-            });
+                    }),
+                WorktreeSaveBaseline::Absent => None,
+                WorktreeSaveBaseline::Present(contents) => Some(contents),
+            };
             begin_local_action(state, repo_id);
             actions_emit_effects::save_worktree_file(
                 repo_id,

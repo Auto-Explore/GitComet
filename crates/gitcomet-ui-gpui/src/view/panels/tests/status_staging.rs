@@ -1361,11 +1361,18 @@ fn the_resolver_bar_save_writes_without_staging(cx: &mut gpui::TestAppContext) {
         });
     });
     draw_and_drain_test_window(cx);
+    let ops_before = store.snapshot().repos[0].ops_rev;
     click(cx, "conflict_save");
     wait_for(cx, &view, &store, "save the resolution", |repo| {
-        repo.local_actions_in_flight == 0
+        repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0
     });
 
+    let snapshot = store.snapshot();
+    assert!(
+        snapshot.repos[0].feedback.last_error.is_none(),
+        "{:?}",
+        snapshot.repos[0].feedback.last_error
+    );
     assert_eq!(
         std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
         "ours\n"
@@ -1376,6 +1383,86 @@ fn the_resolver_bar_save_writes_without_staging(cx: &mut gpui::TestAppContext) {
     );
     store.dispatch(Msg::CloseRepo { repo_id: REPO });
     crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+fn save_cached_resolver_during_reload(
+    cx: &mut gpui::TestAppContext,
+    external_contents: Option<&str>,
+) {
+    let (dir, store, view, diff_renderer, cx) = open_text_resolver(cx);
+    wait_for(cx, &view, &store, "the full conflict payload", |repo| {
+        repo.conflict_state.conflict_file_load_mode
+            == gitcomet_state::model::ConflictFileLoadMode::Full
+            && matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+    });
+    cx.update(|_, app| {
+        diff_renderer.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    let mut loading_state = store.snapshot().as_ref().clone();
+    let conflict = &mut loading_state.repos[0].conflict_state;
+    conflict.conflict_file = Loadable::Loading;
+    conflict.session_pending_restore = conflict.conflict_session.take();
+    conflict.conflict_rev = conflict.conflict_rev.wrapping_add(1);
+    super::shortcuts::apply_state(cx, &view, Arc::new(loading_state));
+    draw_and_drain_test_window(cx);
+    cx.update(|_, app| {
+        assert_eq!(
+            diff_renderer
+                .read(app)
+                .conflict_resolver_input
+                .read(app)
+                .text(),
+            "ours\n"
+        );
+    });
+    let unmerged_before = git_output(dir.path(), &["ls-files", "--unmerged"]);
+    assert!(!unmerged_before.is_empty());
+    if let Some(contents) = external_contents {
+        std::fs::write(dir.path().join("a.txt"), contents).unwrap();
+    }
+    let ops_before = store.snapshot().repos[0].ops_rev;
+    click(cx, "conflict_save");
+    wait_for(cx, &view, &store, "complete cached resolver save", |repo| {
+        repo.ops_rev >= ops_before + 2 && repo.local_actions_in_flight == 0
+    });
+    let snapshot = store.snapshot();
+    let error = &snapshot.repos[0].feedback.last_error;
+    match external_contents {
+        None => assert!(error.is_none(), "{error:?}"),
+        Some(_) => assert!(
+            error
+                .as_ref()
+                .is_some_and(|error| error.contains("The file changed on disk")),
+            "{error:?}"
+        ),
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        external_contents.unwrap_or("ours\n")
+    );
+    assert_eq!(
+        git_output(dir.path(), &["ls-files", "--unmerged"]),
+        unmerged_before
+    );
+    store.dispatch(Msg::CloseRepo { repo_id: REPO });
+    crate::view::test_support::drain_store_worker(&view, cx);
+}
+
+#[gpui::test]
+fn the_resolver_bar_saves_cached_output_during_reload(cx: &mut gpui::TestAppContext) {
+    save_cached_resolver_during_reload(cx, None);
+}
+
+#[gpui::test]
+fn the_resolver_bar_preserves_external_changes_during_reload(cx: &mut gpui::TestAppContext) {
+    save_cached_resolver_during_reload(cx, Some("external edit\n"));
 }
 
 #[derive(Clone, Copy, Debug)]

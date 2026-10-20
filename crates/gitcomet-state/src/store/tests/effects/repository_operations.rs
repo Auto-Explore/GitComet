@@ -1,7 +1,8 @@
 //! Repository operations: stash, branches, checkout, clone, saves, attributes.
 
 use super::*;
-use crate::msg::{PersistenceEffect, RepoCommandEffect};
+use crate::model::ConflictFile;
+use crate::msg::{PersistenceEffect, RepoCommandEffect, WorktreeSaveBaseline};
 use crate::store::repository_runtime::RepositoryRuntimes;
 
 /// Exercise a worker effect and feed all its replies through the reducer.
@@ -682,6 +683,90 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     assert!(saw_finished_ok, "did not observe CloneRepoFinished");
     assert!(saw_open_repo, "did not observe OpenRepo after clone");
     assert!(dest.join(".git").exists(), "expected .git at cloned dest");
+}
+
+#[test]
+fn save_with_an_absent_baseline_only_creates_a_still_absent_file() {
+    for file_appeared in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = PathBuf::from("conflict.txt");
+        let target = dir.path().join(&path);
+        assert!(!target.exists());
+        let displayed_baseline = WorktreeSaveBaseline::Absent;
+
+        if file_appeared {
+            fs::write(&target, b"external file\n").unwrap();
+        }
+
+        let repo_id = RepoId(9531);
+        let repository: Arc<dyn GitRepository> = Arc::new(DummyRepo::new(dir.path()));
+        let mut repos = RepositoryRuntimes::default();
+        repos.attach_repository_for_test(repo_id, repository.clone());
+        let mut repo_state = RepoState::new_opening(repo_id, repository.spec().clone());
+        repo_state.set_open(Loadable::Ready(()));
+        repo_state.conflict_state.conflict_file_path = Some(path.clone());
+        repo_state.conflict_state.conflict_file =
+            Loadable::Ready(Some(ConflictFile::from_loaded_stage_parts(
+                path.clone(),
+                (None, None),
+                (None, None),
+                (None, None),
+                (
+                    None,
+                    file_appeared.then(|| Arc::<str>::from("external file\n")),
+                ),
+            )));
+        let mut state = AppState {
+            repos: vec![repo_state],
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        let (completion_tx, completion_rx) = smol::channel::bounded(1);
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(9532),
+            &mut state,
+            Msg::SaveWorktreeFile {
+                repo_id,
+                path,
+                contents: "resolved\n".into(),
+                expected_contents: displayed_baseline,
+                stage: false,
+                completion: Some(completion_tx),
+            },
+        );
+        assert_eq!(effects.len(), 1);
+        assert_eq!(state.repos[0].local_actions_in_flight, 1);
+        let executor = super::super::executor::TaskExecutor::new(1);
+        let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+        apply_effect_with_state_for_test(
+            &executor,
+            &backend,
+            &mut repos,
+            &mut state,
+            effects.into_iter().next().unwrap(),
+        );
+        executor.join();
+
+        let saved = completion_rx.try_recv().unwrap();
+        assert_eq!(state.repos[0].local_actions_in_flight, 0);
+        assert_eq!(state.repos[0].ops_rev, 2);
+        if file_appeared {
+            assert_eq!(fs::read(&target).unwrap(), b"external file\n");
+            assert!(!saved);
+            assert!(
+                state.repos[0]
+                    .feedback
+                    .last_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("The file changed on disk"))
+            );
+        } else {
+            assert_eq!(fs::read(&target).unwrap(), b"resolved\n");
+            assert!(saved);
+            assert_eq!(state.repos[0].feedback.last_error, None);
+        }
+    }
 }
 
 #[test]

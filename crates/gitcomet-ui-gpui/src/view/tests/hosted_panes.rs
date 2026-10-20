@@ -7,6 +7,7 @@ use gitcomet_extension_api::{
     DiffSnapshot, Registry,
 };
 use gitcomet_state::model::Loadable;
+use gitcomet_state::msg::WorktreeSaveBaseline;
 
 fn git(dir: &Path, args: &[&str]) {
     crate::test_support::git(dir, args);
@@ -3637,7 +3638,7 @@ fn a_linked_worktree_pane_offers_and_runs_no_staging_or_editing(cx: &mut gpui::T
                 repo_id,
                 path: "a.rs".into(),
                 contents: "overwritten\n".into(),
-                expected_contents: None,
+                expected_contents: WorktreeSaveBaseline::DeriveFromLoadedConflict,
                 stage: false,
                 completion: Some(saved_tx),
             },
@@ -3765,7 +3766,9 @@ fn a_pane_without_staging_drops_a_save_that_stages(cx: &mut gpui::TestAppContext
                     repo_id,
                     path: "a.rs".into(),
                     contents: contents.to_string().into(),
-                    expected_contents: Some(std::fs::read(root.join("a.rs")).unwrap().into()),
+                    expected_contents: WorktreeSaveBaseline::Present(
+                        std::fs::read(root.join("a.rs")).unwrap().into(),
+                    ),
                     stage,
                     completion: Some(saved_tx),
                 },

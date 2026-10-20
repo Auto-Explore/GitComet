@@ -7,6 +7,7 @@ use crate::view::markdown_preview::{
 use gitcomet_core::text_format::{
     ContentSniffer, SideKind, SideTextFormat, TextAttributes, TextEncoding,
 };
+use gitcomet_state::msg::WorktreeSaveBaseline;
 #[cfg(test)]
 use std::borrow::Cow;
 
@@ -2542,7 +2543,8 @@ impl DiffRenderer {
                 });
             match std::fs::read(&abs_path) {
                 Ok(bytes) => {
-                    let expected_contents = Some(Arc::<[u8]>::from(bytes.as_slice()));
+                    let expected_contents =
+                        WorktreeSaveBaseline::Present(Arc::<[u8]>::from(bytes.as_slice()));
                     match toggle_task_marker_in_format(bytes, task, format) {
                         Some((contents, bytes)) => {
                             self.store.dispatch(Msg::SaveWorktreeFile {

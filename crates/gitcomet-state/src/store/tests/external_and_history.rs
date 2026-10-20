@@ -1,5 +1,7 @@
 use super::*;
-use crate::msg::{ControlEffect, PersistenceEffect, ReferenceEffect, StatusEffect};
+use crate::msg::{
+    ControlEffect, PersistenceEffect, ReferenceEffect, StatusEffect, WorktreeSaveBaseline,
+};
 use crate::store::repository_runtime::RepositoryRuntimes;
 
 #[test]
@@ -4730,7 +4732,7 @@ fn repo_command_finished_bumps_local_worktree_write_rev_only_for_checkout_writer
             repo_id: RepoId(1),
             path: PathBuf::from("a.txt"),
             contents: "new\n".to_string().into(),
-            expected_contents: None,
+            expected_contents: WorktreeSaveBaseline::DeriveFromLoadedConflict,
             stage: false,
             completion: None,
         },

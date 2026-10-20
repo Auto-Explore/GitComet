@@ -1,4 +1,5 @@
 use super::*;
+use crate::msg::WorktreeSaveBaseline;
 
 #[test]
 fn markdown_save_uses_the_callers_disk_baseline_without_a_loaded_conflict() {
@@ -21,7 +22,7 @@ fn markdown_save_uses_the_callers_disk_baseline_without_a_loaded_conflict() {
             repo_id,
             path: PathBuf::from("README.md"),
             contents: "- [x] ship it\n".into(),
-            expected_contents: Some(original.clone()),
+            expected_contents: WorktreeSaveBaseline::Present(original.clone()),
             stage: false,
             completion: None,
         },
@@ -901,7 +902,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id,
             path: PathBuf::from("src/lib.rs"),
             contents: "fn main() {}".to_string().into(),
-            expected_contents: None,
+            expected_contents: WorktreeSaveBaseline::DeriveFromLoadedConflict,
             stage: true,
             completion: None,
         },

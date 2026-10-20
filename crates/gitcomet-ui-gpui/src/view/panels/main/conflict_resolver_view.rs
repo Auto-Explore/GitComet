@@ -498,11 +498,25 @@ impl DiffRenderer {
         let Some(contents) = self.conflict_output_bytes_for_save(text, cx) else {
             return;
         };
+        let Some(file) = self
+            .conflict_resolver
+            .cached_loaded_file_for_target(repo_id, &path)
+        else {
+            return;
+        };
+        let expected_contents = file
+            .current_bytes
+            .clone()
+            .or_else(|| file.current.as_ref().map(|text| Arc::from(text.as_bytes())))
+            .map_or(
+                gitcomet_state::msg::WorktreeSaveBaseline::Absent,
+                gitcomet_state::msg::WorktreeSaveBaseline::Present,
+            );
         self.store.dispatch(Msg::SaveWorktreeFile {
             repo_id,
             path,
             contents,
-            expected_contents: None,
+            expected_contents,
             stage,
             completion: None,
         });
