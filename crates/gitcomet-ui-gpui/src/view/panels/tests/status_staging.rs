@@ -106,7 +106,7 @@ fn wait_for(
     store: &AppStore,
     description: &str,
     ready: impl Fn(&RepoState) -> bool,
-) {
+) -> Arc<AppState> {
     crate::view::test_support::drain_store_worker(view, cx);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -119,16 +119,17 @@ fn wait_for(
         });
         draw_and_drain_test_window(cx);
         if is_ready {
-            return;
+            return snapshot;
         }
-        if ready(&store.snapshot().repos[0]) {
+        let latest = store.snapshot();
+        if ready(&latest.repos[0]) {
             cx.update(|_, app| {
                 view.update(app, |this, cx| {
-                    crate::view::test_support::sync_store_snapshot(this, cx);
+                    crate::view::test_support::push_test_state(this, Arc::clone(&latest), cx);
                 });
             });
             draw_and_drain_test_window(cx);
-            return;
+            return latest;
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -1240,6 +1241,37 @@ fn open_text_resolver(
     (dir, store, view, diff_renderer, cx)
 }
 
+fn wait_for_full_ours_choice(
+    cx: &mut gpui::VisualTestContext,
+    view: &View,
+    store: &AppStore,
+) -> Arc<AppState> {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+    use gitcomet_core::merge::MergeSource;
+
+    wait_for(
+        cx,
+        view,
+        store,
+        "the full conflict with the Ours choice",
+        |repo| {
+            repo.conflict_state.conflict_file_load_mode
+                == gitcomet_state::model::ConflictFileLoadMode::Full
+                && matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_)))
+                && repo
+                    .conflict_state
+                    .conflict_session
+                    .as_ref()
+                    .is_some_and(|session| {
+                        session.regions.first().is_some_and(|region| {
+                            region.resolution
+                                == ConflictRegionResolution::Sources(MergeSource::B.into())
+                        })
+                    })
+        },
+    )
+}
+
 /// The text resolver saves from the bottom bar's right end, Save & stage
 /// rightmost, and keeps both whole in a narrow pane. Both stay off while a
 /// conflict is open; once it is picked, Save & stage writes and stages it.
@@ -1404,8 +1436,8 @@ fn save_cached_resolver_during_reload(
             );
         });
     });
-    crate::view::test_support::drain_store_worker(&view, cx);
-    let mut loading_state = store.snapshot().as_ref().clone();
+    let picked = wait_for_full_ours_choice(cx, &view, &store);
+    let mut loading_state = picked.as_ref().clone();
     let conflict = &mut loading_state.repos[0].conflict_state;
     conflict.conflict_file = Loadable::Loading;
     conflict.session_pending_restore = conflict.conflict_session.take();
@@ -1485,7 +1517,7 @@ fn save_mixed_choices_after_refresh(cx: &mut gpui::TestAppContext, refresh: Mixe
             pane.conflict_resolver_pick_at(0, conflict_resolver::ConflictChoice::Ours, cx);
         });
     });
-    crate::view::test_support::drain_store_worker(&view, cx);
+    let picked = wait_for_full_ours_choice(cx, &view, &store);
     let expected_output = cx.update(|_, app| {
         renderer.update(app, |pane, cx| {
             pane.conflict_resolver_apply_pick_target(
@@ -1515,7 +1547,7 @@ fn save_mixed_choices_after_refresh(cx: &mut gpui::TestAppContext, refresh: Mixe
     });
     let original = std::fs::read(dir.path().join("a.txt")).unwrap();
     let external = b"external edit\n";
-    let mut reloaded = store.snapshot().as_ref().clone();
+    let mut reloaded = picked.as_ref().clone();
     let conflict = &mut reloaded.repos[0].conflict_state;
     let Loadable::Ready(Some(file)) = &mut conflict.conflict_file else {
         panic!("loaded fixture");
@@ -1565,6 +1597,11 @@ fn save_mixed_choices_after_refresh(cx: &mut gpui::TestAppContext, refresh: Mixe
                     .is_some_and(|error| error.contains("The file changed on disk"))
             );
             assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), external);
+            store.dispatch(Msg::LoadConflictFile {
+                repo_id: REPO,
+                path: PathBuf::from("a.txt"),
+                mode: gitcomet_state::model::ConflictFileLoadMode::Full,
+            });
             wait_for(
                 cx,
                 &view,
@@ -1608,6 +1645,11 @@ fn save_mixed_choices_after_refresh(cx: &mut gpui::TestAppContext, refresh: Mixe
         }
     }
     if matches!(refresh, MixedChoiceRefresh::EditedAfterSave) {
+        store.dispatch(Msg::LoadConflictFile {
+            repo_id: REPO,
+            path: PathBuf::from("a.txt"),
+            mode: gitcomet_state::model::ConflictFileLoadMode::Full,
+        });
         wait_for(
             cx,
             &view,
