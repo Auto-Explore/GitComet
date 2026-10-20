@@ -30,6 +30,11 @@ original shaders and compiles before encoding the first frame that needs them.
 It supports reuse, resource rebuilds, failure rollback, and retries. A future
 feature requesting smoothing can still incur a one-time compilation delay.
 
+The tested renderer is integrated through `vendor/gpui-wgpu`, with a Cargo
+git-source patch affecting only `gpui_ce_wgpu`. Other GPUI crates retain the
+baseline revision. This avoids depending on an unpublished local commit.
+See `vendor/gpui-wgpu/UPSTREAM.md` for its provenance and removal procedure.
+
 ## Controlled measurements
 
 Five alternating baseline/candidate pairs used the same `release-with-debug`

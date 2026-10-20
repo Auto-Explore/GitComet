@@ -4244,7 +4244,6 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0665fb07d59cf7af185e58f44b9f890590abe204#0665fb07d59cf7af185e58f44b9f890590abe204"
 dependencies = [
  "anyhow",
  "core-foundation",

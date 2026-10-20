@@ -47,6 +47,24 @@ text-storage patch previously vendored in `gpui/`, so that crate and the Cargo
 patch are no longer needed. Platform, renderer and test text-backend crates use
 the same upstream revision.
 
+## GPUI WGPU renderer
+
+`gpui-wgpu/` contains the Apache-2.0-licensed `gpui_ce_wgpu` crate from GPUI
+revision `0665fb07d59cf7af185e58f44b9f890590abe204`, with lazy creation of the
+four smoothing pipelines from local GPUI commit
+`9362a02d98324c6d91a1bec58b90ab22ab667252`. Normal frames no longer compile
+those shaders at renderer initialization. A frame that uses smoothing creates
+the pipelines before drawing, with the same shaders and error recovery.
+
+Only this renderer crate is patched. All other GPUI crates retain the existing
+git revision, and Windows continues to use DX12. Its manifest expands upstream
+workspace dependencies so the vendor directory is portable; the source,
+examples, tests, and license match the tested GPUI commit. The crate is excluded
+from this workspace's formatting and lint configuration.
+
+See [`gpui-wgpu/UPSTREAM.md`](gpui-wgpu/UPSTREAM.md) for provenance, validation,
+and the procedure for updating or removing the patch.
+
 ## Difftastic
 
 `difftastic/` is Difftastic 0.71.0 (MIT) as a library, for

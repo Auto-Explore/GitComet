@@ -31,6 +31,7 @@ members = [
 exclude = [
   "vendor/block",
   "vendor/block/test_utils",
+  "vendor/gpui-wgpu",
   "vendor/mermaid-rs-renderer",
   "crates/gitcomet-filesystem-native",
   "crates/win32-window-utils",
@@ -108,6 +109,10 @@ rust-version = "1.99.1"
 [patch.crates-io]
 # block 0.1.6 has no released fix for its uninhabited extern class static.
 block = { path = "vendor/block" }
+
+[patch."https://github.com/Havunen/gpui-ce.git"]
+# Defer unused smoothing shaders while retaining DX12; see vendor/gpui-wgpu/UPSTREAM.md.
+gpui_ce_wgpu = { path = "vendor/gpui-wgpu" }
 
 [workspace.dependencies]
 # Internal crates
