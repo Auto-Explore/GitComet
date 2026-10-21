@@ -367,6 +367,7 @@ impl PreparedWindowBootstrap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::path_utils::canonicalize_or_original;
     use gitcomet_core::process::{
         GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
     };
@@ -638,7 +639,7 @@ mod tests {
     ) {
         let (store, events, opens) = store(false, false);
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().to_path_buf();
+        let path = canonicalize_or_original(directory.path().to_path_buf());
         let mut bootstrap = prepare(
             &store,
             restored_config(vec![path.clone()]),
@@ -814,21 +815,23 @@ mod tests {
         let (focused_store, _focused_events, focused_opens) = store(false, false);
         let session_directory = tempfile::tempdir().unwrap();
         let focused_directory = tempfile::tempdir().unwrap();
+        let session_path = canonicalize_or_original(session_directory.path().to_path_buf());
+        let focused_path = canonicalize_or_original(focused_directory.path().to_path_buf());
         let mut session_bootstrap = prepare(
             &session_store,
-            restored_config(vec![session_directory.path().to_path_buf()]),
+            restored_config(vec![session_path.clone()]),
             session::UiSession::default(),
             cx,
         );
         let mut focused_bootstrap = prepare(
             &focused_store,
             GitCometViewConfig {
-                initial_path: Some(focused_directory.path().to_path_buf()),
+                initial_path: Some(focused_path.clone()),
                 view_mode: GitCometViewMode::FocusedMergetool,
                 ..Default::default()
             },
             session::UiSession {
-                open_repos: vec![session_directory.path().to_path_buf()],
+                open_repos: vec![session_path],
                 ..Default::default()
             },
             cx,
@@ -865,7 +868,7 @@ mod tests {
         assert_eq!(focused_store.snapshot().repos.len(), 1);
         assert_eq!(
             focused_store.snapshot().repos[0].spec.workdir,
-            focused_directory.path(),
+            focused_path,
             "a focused tool must not restore the browser's session tabs"
         );
         shutdown(&session_store);
@@ -962,8 +965,8 @@ mod tests {
         let (store, events, opens) = store(true, false);
         let active_directory = tempfile::tempdir().unwrap();
         let inactive_directory = tempfile::tempdir().unwrap();
-        let path = active_directory.path().to_path_buf();
-        let inactive = inactive_directory.path().to_path_buf();
+        let path = canonicalize_or_original(active_directory.path().to_path_buf());
+        let inactive = canonicalize_or_original(inactive_directory.path().to_path_buf());
         let bootstrap = prepare(
             &store,
             restored_config(vec![path.clone(), inactive.clone()]),
@@ -1118,9 +1121,9 @@ mod tests {
         cx.update(|app| super::super::extension_host::install_registry(registry, app));
         let denied = tempfile::tempdir().unwrap();
         std::fs::write(denied.path().join(DENY_MARKER), "").unwrap();
-        let denied_path = denied.path().to_path_buf();
+        let denied_path = canonicalize_or_original(denied.path().to_path_buf());
         let allowed_directory = tempfile::tempdir().unwrap();
-        let allowed = allowed_directory.path().to_path_buf();
+        let allowed = canonicalize_or_original(allowed_directory.path().to_path_buf());
         let (store, _events, opens) = store(false, false);
         let mut config = restored_config(vec![denied_path.clone(), allowed.clone()]);
         config.initial_path = Some(denied_path);
