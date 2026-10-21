@@ -4,7 +4,7 @@ Document previews and extension descriptions share Markdown rendering, text sele
 
 Common HTML formatting renders alongside Markdown: headings, paragraphs, emphasis, links, lists, quotes, preformatted code, tables, and images. Character references decode into their text. Unsupported HTML keeps the parser's inert fallback.
 
-In document previews and embedded descriptions, `<details>` starts closed unless it has an `open` attribute. Click its arrow, or focus the arrow and press Enter or Space, to toggle it. Nested sections retain their own state. The summary remains selectable. Inline and split diff previews show every section expanded.
+In document previews and embedded descriptions, `<details>` starts closed unless it has an `open` attribute. Click anywhere on its heading, or focus the heading and press Enter or Space, to toggle it. Dragging selects the summary text, and links within the summary keep their usual behavior. Nested sections retain their own state. Inline and split diff previews show every section expanded.
 
 Drag to select text, double-click to select a word, or triple-click to select a row. Copy and Select All use Cmd-C and Cmd-A on macOS, or Ctrl-C and Ctrl-A elsewhere. Copy includes only visible content. Closing a section clears a selection that includes its hidden content. Searching a document or following a heading link opens the enclosing sections before revealing the target.
 

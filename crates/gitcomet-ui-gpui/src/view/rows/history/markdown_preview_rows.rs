@@ -3,12 +3,12 @@ use crate::kit::interaction as controls;
 pub(in crate::view) use crate::view::markdown_preview::markdown_preview_row_marker;
 
 pub(in crate::view) const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 12.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 16.0;
 pub(in crate::view) const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
 pub(in crate::view) const MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX: f32 = 22.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX: f32 = 10.0;
-pub(in crate::view) const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 12.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX: f32 = 6.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 8.0;
 
 pub(in crate::view) fn markdown_preview_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
     crate::ui_scale::design_px_from_percent(value, ui_scale_percent)

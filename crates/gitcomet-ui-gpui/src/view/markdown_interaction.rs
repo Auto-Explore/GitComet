@@ -55,6 +55,45 @@ impl MarkdownInteraction {
         }
     }
 
+    pub(in crate::view) fn activate_disclosure(
+        &self,
+        id: usize,
+        row: usize,
+        region: DiffTextRegion,
+        event: &gpui::ClickEvent,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let gpui::ClickEvent::Mouse(mouse) = event {
+            let selected = match self {
+                Self::Diff(view) => view.read(cx).diff_text_has_selection(),
+                Self::Hosted(view) => view.read(cx).has_selection(),
+            };
+            if mouse.down.click_count != 1 || selected {
+                return;
+            }
+            let link_at = |position| match self {
+                Self::Diff(view) => view
+                    .read(cx)
+                    .markdown_preview_link_span_at(row, region, position),
+                Self::Hosted(view) => view.read(cx).link_at(row, position),
+            };
+            if link_at(mouse.down.position).is_some() || link_at(mouse.up.position).is_some() {
+                self.link_click(
+                    row,
+                    region,
+                    mouse.down.position,
+                    mouse.down.click_count,
+                    mouse.down.modifiers.secondary(),
+                    window,
+                    cx,
+                );
+                return;
+            }
+        }
+        self.toggle_disclosure(id, cx);
+    }
+
     pub(in crate::view) fn notify(&self, cx: &mut App) {
         match self {
             Self::Diff(view) => view.update(cx, |_, cx| cx.notify()),

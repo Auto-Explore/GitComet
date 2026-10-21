@@ -173,7 +173,7 @@ impl MarkdownView {
             .then_some(start.saturating_sub(visual.start)..end.saturating_sub(visual.start))
     }
 
-    fn has_selection(&self) -> bool {
+    pub(in crate::view) fn has_selection(&self) -> bool {
         normalized_selection(self.anchor, self.head).is_some_and(|(start, end)| start != end)
     }
 
@@ -350,7 +350,11 @@ impl MarkdownView {
         );
     }
 
-    fn link_at(&self, row: usize, position: Point<Pixels>) -> Option<(SharedString, Range<usize>)> {
+    pub(in crate::view) fn link_at(
+        &self,
+        row: usize,
+        position: Point<Pixels>,
+    ) -> Option<(SharedString, Range<usize>)> {
         let hitbox = self.hitboxes.get(&(row, DiffTextRegion::Inline))?;
         if !hitbox.bounds.contains(&position) {
             return None;

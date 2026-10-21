@@ -103,12 +103,15 @@ impl MarkdownChangeExtents {
     }
 }
 
-/// Gap between two blocks, and the extra break a heading opens above itself.
-const BLOCK_GAP_PX: f32 = 10.0;
-const HEADING_GAP_PX: f32 = 22.0;
-const CODE_BLOCK_PAD_Y_PX: f32 = 8.0;
-const TABLE_CELL_PAD_X_PX: f32 = 10.0;
-const TABLE_CELL_PAD_Y_PX: f32 = 4.0;
+const BLOCK_GAP_PX: f32 = 8.0;
+const HEADING_GAP_PX: f32 = 16.0;
+const CODE_BLOCK_PAD_Y_PX: f32 = 6.0;
+const TABLE_CELL_PAD_X_PX: f32 = 8.0;
+const TABLE_CELL_PAD_Y_PX: f32 = 3.0;
+const BLOCKQUOTE_CONTENT_GAP_PX: f32 = 6.0;
+const DISCLOSURE_ICON_SIZE_PX: f32 = 14.0;
+const DISCLOSURE_ICON_SLOT_PX: f32 = 16.0;
+const DISCLOSURE_TITLE_GAP_PX: f32 = 4.0;
 
 /// Width of the gutter marking a wholly added or removed file.
 const MARKDOWN_DOCUMENT_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
@@ -449,7 +452,19 @@ fn estimated_block_height(
         }
         MarkdownBlock::List(_) | MarkdownBlock::Blockquote(_) => rows
             .iter()
-            .map(|(_, row)| lines(&row.text, 40.0 * f32::from(row.indent_level)) * line)
+            .map(|(_, row)| {
+                let list_indent = if row.indent_level > 0 {
+                    list_content_indent(row.indent_level, context)
+                } else {
+                    px(0.0)
+                };
+                let quote_indent = scaled(
+                    f32::from(row.blockquote_level)
+                        * (MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX + BLOCKQUOTE_CONTENT_GAP_PX),
+                    context,
+                );
+                lines(&row.text, f32::from(list_indent + quote_indent)) * line
+            })
             .sum(),
         MarkdownBlock::Code(_) => listing(),
         MarkdownBlock::Diagram(_) => rows
@@ -716,11 +731,16 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
         return column.into_any_element();
     };
     let boxes = context.row_boxes.clone();
+    let disclosures = context.disclosures.clone();
     column
         .id("markdown_preview_document")
         .on_mouse_move({
             let (view, boxes) = (view.clone(), boxes.clone());
+            let disclosures = disclosures.clone();
             move |event, _window, cx| {
+                if let Some(disclosures) = &disclosures {
+                    disclosures.pointer_moved(event);
+                }
                 let hit = boxes.hit_at(event.position);
                 let row = match hit {
                     Some(MarkdownBoxHit {
@@ -734,8 +754,12 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
         })
         .on_hover({
             let view = view.clone();
+            let disclosures = disclosures.clone();
             move |hovered, _window, cx| {
                 if !*hovered {
+                    if let Some(disclosures) = &disclosures {
+                        disclosures.cancel_click();
+                    }
                     view.hover(None, point(px(0.0), px(0.0)), false, cx);
                 }
             }
@@ -752,7 +776,10 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
                     crate::press_gesture::claim_press(cx);
                     cx.stop_propagation();
                 }
-                view.focus(window, cx);
+                let summary = matches!(kind, MarkdownBoxKind::Row(row) if disclosures.as_ref().is_some_and(|disclosures| disclosures.is_summary(row)));
+                if !summary {
+                    view.focus(window, cx);
+                }
                 match kind {
                     MarkdownBoxKind::Row(row) | MarkdownBoxKind::RowPadding(row) => {
                         view.row_mouse_down(row, region, event, window, cx)
@@ -760,6 +787,9 @@ fn document_pointer_listeners(column: gpui::Div, context: &MarkdownDocumentConte
                     MarkdownBoxKind::Gap(row) => {
                         view.gap_mouse_down(row, region, event.position, window, cx)
                     }
+                }
+                if summary {
+                    cx.stop_propagation();
                 }
             }
         })
@@ -1522,6 +1552,36 @@ fn render_block(
     }
 }
 
+#[derive(IntoElement)]
+struct DisclosureIcon {
+    open: bool,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+}
+
+impl RenderOnce for DisclosureIcon {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let scaled = |value| self.theme.markdown_px(value, self.ui_scale_percent);
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(scaled(DISCLOSURE_ICON_SLOT_PX))
+            .h(window.text_style().line_height_in_pixels(window.rem_size()))
+            .mr(scaled(DISCLOSURE_TITLE_GAP_PX))
+            .child(svg_icon(
+                if self.open {
+                    "icons/chevron_down.svg"
+                } else {
+                    "icons/chevron_right.svg"
+                },
+                self.theme.colors.foreground.secondary,
+                scaled(DISCLOSURE_ICON_SIZE_PX),
+            ))
+    }
+}
+
 fn render_disclosure_row(
     tab_width: usize,
     row_ix: usize,
@@ -1536,7 +1596,7 @@ fn render_disclosure_row(
             .as_ref()
             .is_none_or(|disclosures| disclosures.is_open(section))
     });
-    let marker = div()
+    let header = row_shell(row_ix, row, context)
         .id(("markdown_disclosure", row_ix))
         .debug_selector(move || {
             if interactive {
@@ -1545,34 +1605,46 @@ fn render_disclosure_row(
                 format!("markdown_disclosure_expanded_{row_ix}")
             }
         })
-        .flex_none()
-        .w(scaled(MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX, context))
-        .mr(scaled(MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX, context))
-        .text_color(context.theme.colors.foreground.secondary)
-        .child(if open { "▾" } else { "▸" });
-    let marker = match (context.disclosures.as_ref(), context.view.clone(), section) {
-        (Some(_), Some(view), Some(section)) => {
+        .child(DisclosureIcon {
+            open,
+            theme: context.theme,
+            ui_scale_percent: context.ui_scale_percent,
+        })
+        .child(render_row_line(tab_width, row_ix, row, context));
+    let header = match (context.disclosures.clone(), context.view.clone(), section) {
+        (Some(disclosures), Some(view), Some(section)) => {
             let id = section.id;
-            marker
+            let region = context.text_region;
+            let press_disclosures = disclosures.clone();
+            header
                 .control_interaction(
                     crate::kit::interaction::InteractionStyle::new(context.theme),
                     Default::default(),
                 )
                 .on_activate(
                     false,
-                    crate::kit::interaction::ControlActivation::Nested,
-                    move |_, _, cx| view.toggle_disclosure(id, cx),
+                    crate::kit::interaction::ControlActivation::Action,
+                    move |event, window, cx| {
+                        if let gpui::ClickEvent::Mouse(mouse) = event
+                            && !disclosures.complete_click(id, &mouse.up)
+                        {
+                            return;
+                        }
+                        view.activate_disclosure(id, row_ix, region, event, window, cx);
+                    },
                 )
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                    crate::kit::text_selection_owner::preserve(cx);
+                .on_mouse_down(gpui::MouseButton::Left, move |event, _, _| {
+                    press_disclosures.begin_click(id, event);
                 })
         }
-        _ => marker,
+        _ => header,
     };
     recorded(
-        row_shell(row_ix, row, context)
-            .child(marker)
-            .child(render_row_line(tab_width, row_ix, row, context)),
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .debug_selector(move || format!("markdown_preview_row_box_{row_ix}"))
+            .child(header),
         MarkdownBoxKind::Row(row_ix),
         context,
     )
@@ -2212,7 +2284,7 @@ fn render_blockquote(
             div()
                 .flex_none()
                 .w(scaled(MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX, context))
-                .mr(scaled(MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX, context))
+                .mr(scaled(BLOCKQUOTE_CONTENT_GAP_PX, context))
                 .bg(bar_color)
                 .rounded(scaled(2.0, context)),
         )

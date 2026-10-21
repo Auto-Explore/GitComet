@@ -217,6 +217,177 @@ fn hosted_markdown_unrelated_disclosure_keeps_visible_selection(cx: &mut gpui::T
 }
 
 #[gpui::test]
+fn hosted_markdown_disclosure_whole_heading_toggles(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_markdown(
+        cx,
+        "<details><summary>**Selectable** `title`</summary>\n\nBody\n\n</details>",
+    );
+    let summary = row_ix(&view, cx, "Selectable title");
+    let body = row_ix(&view, cx, "Body");
+    let title = text_point(&view, cx, summary, 3);
+    click_count(cx, title, 1, Default::default());
+    bounds(cx, "markdown_preview_text_box", body);
+    let header = bounds(cx, "markdown_preview_row_box", summary);
+    let title_bounds = bounds(cx, "markdown_preview_text_box", summary);
+    let title_offset = AppTheme::gitcomet_dark().markdown_px(20.0, 100);
+    assert!((title_bounds.left() - header.left() - title_offset).abs() < px(1.0));
+    let background = point(header.right() - px(4.0), header.center().y);
+    click_count(cx, background, 1, Default::default());
+    cx.update(|_, app| {
+        let view = view.read(app);
+        assert!(
+            !view
+                .disclosures
+                .is_visible(&view.document.as_ref().unwrap().rows[body])
+        );
+    });
+    let icon = point(header.left() + px(6.0), header.center().y);
+    click_count(cx, icon, 1, Default::default());
+    bounds(cx, "markdown_preview_text_box", body);
+    let control = bounds(cx, "markdown_disclosure", summary);
+    assert_eq!(control, bounds(cx, "markdown_preview_row_box", summary));
+    activate_key(cx, "space");
+    cx.update(|_, app| {
+        let view = view.read(app);
+        assert!(
+            !view
+                .disclosures
+                .is_visible(&view.document.as_ref().unwrap().rows[body])
+        );
+    });
+    activate_key(cx, "enter");
+    bounds(cx, "markdown_preview_text_box", body);
+}
+
+#[gpui::test]
+fn hosted_markdown_disclosure_title_selection_and_cancelled_click_keep_state(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = open_markdown(
+        cx,
+        "<details open><summary>Select these words</summary>\n\nBody\n\n</details>",
+    );
+    let summary = row_ix(&view, cx, "Select these words");
+    let body = row_ix(&view, cx, "Body");
+    let from = text_point(&view, cx, summary, 0);
+    let to = text_point(&view, cx, summary, "Select these".len());
+    cx.simulate_mouse_down(from, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(to, MouseButton::Left, Default::default());
+    redraw(cx);
+    bounds(cx, "markdown_preview_text_box", body);
+    cx.simulate_keystrokes("secondary-c");
+    assert_eq!(clipboard(&view, cx), Some("Select these".into()));
+    let word = text_point(&view, cx, summary, 8);
+    click_count(cx, word, 2, Default::default());
+    cx.simulate_keystrokes("secondary-c");
+    assert_eq!(clipboard(&view, cx), Some("these".into()));
+    click_count(cx, word, 3, Default::default());
+    cx.simulate_keystrokes("secondary-c");
+    assert_eq!(clipboard(&view, cx), Some("Select these words".into()));
+    bounds(cx, "markdown_preview_text_box", body);
+    let outside = text_point(&view, cx, body, 1);
+    cx.simulate_mouse_down(word, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(outside, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(outside, MouseButton::Left, Default::default());
+    redraw(cx);
+    bounds(cx, "markdown_preview_text_box", body);
+    cx.simulate_mouse_down(from, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_move(from, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(from, MouseButton::Left, Default::default());
+    redraw(cx);
+    bounds(cx, "markdown_preview_text_box", body);
+    let header = bounds(cx, "markdown_disclosure", summary);
+    let blank = point(header.right() - px(80.0), header.center().y);
+    let moved = point(blank.x - px(24.0), blank.y);
+    cx.simulate_mouse_down(blank, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(moved, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_move(blank, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(blank, MouseButton::Left, Default::default());
+    redraw(cx);
+    bounds(cx, "markdown_preview_text_box", body);
+}
+
+#[gpui::test]
+fn hosted_markdown_disclosure_summary_links_take_priority(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_markdown(
+        cx,
+        "<details open><summary>[Project](https://example.test/docs) [Local](./private.md) title</summary>\n\nBody\n\n</details>",
+    );
+    let menus = Rc::new(std::cell::RefCell::new(Vec::new()));
+    cx.update(|_, app| {
+        view.update(app, |view, _| {
+            let menus = menus.clone();
+            view.commands.dispatch = Some(Rc::new(move |command, _| {
+                if let DiffCommand::OpenPopover { request, .. } = command {
+                    menus.borrow_mut().push(request.kind);
+                }
+            }));
+        });
+    });
+    let summary = row_ix(&view, cx, "Project Local title");
+    let body = row_ix(&view, cx, "Body");
+    let project = text_point(&view, cx, summary, 2);
+    click_count(cx, project, 1, Default::default());
+    assert!(
+        matches!(menus.borrow().as_slice(), [PopoverKind::WebLinkMenu { url, .. }] if url.as_ref() == "https://example.test/docs")
+    );
+    bounds(cx, "markdown_preview_text_box", body);
+    crate::view::panes::diff::take_opened_web_links_for_tests();
+    click_count(cx, project, 1, gpui::Modifiers::secondary_key());
+    assert_eq!(
+        crate::view::panes::diff::take_opened_web_links_for_tests(),
+        ["https://example.test/docs"]
+    );
+    bounds(cx, "markdown_preview_text_box", body);
+    let local = text_point(&view, cx, summary, 10);
+    click_count(cx, local, 1, Default::default());
+    assert_eq!(menus.borrow().len(), 1);
+    bounds(cx, "markdown_preview_text_box", body);
+}
+
+#[gpui::test]
+fn hosted_markdown_compact_list_geometry_scales_with_the_preview(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_markdown(
+        cx,
+        "Paragraph\n\n- Outer\n  - Inner\n    - Deep\n\n9. Nine\n10. Ten\n\n- [ ] Task\n\n1. Install:\n\n   ```sh\n   command\n   ```\n",
+    );
+    for width in [400.0, 900.0] {
+        cx.simulate_resize(gpui::size(px(width), px(1200.0)));
+        for percent in [100, 150] {
+            cx.update(|_, app| {
+                crate::ui_scale::set_default(app, percent);
+                view.update(app, |_, cx| cx.notify());
+            });
+            redraw(cx);
+            draw_scheduled_frames(cx);
+            let paragraph = row_ix(&view, cx, "Paragraph");
+            let outer = row_ix(&view, cx, "Outer");
+            let inner = row_ix(&view, cx, "Inner");
+            let deep = row_ix(&view, cx, "Deep");
+            let left = |cx: &mut gpui::VisualTestContext, row| {
+                bounds(cx, "markdown_preview_text_box", row).left()
+            };
+            let step = AppTheme::gitcomet_dark().markdown_px(16.0, percent);
+            assert!((left(cx, inner) - left(cx, outer) - step).abs() < px(1.0));
+            assert!((left(cx, deep) - left(cx, inner) - step).abs() < px(1.0));
+            let first_indent = AppTheme::gitcomet_dark().markdown_px(44.0, percent);
+            assert!((left(cx, outer) - left(cx, paragraph) - first_indent).abs() < px(1.0));
+            let install = row_ix(&view, cx, "Install:");
+            let code = row_ix(&view, cx, "command");
+            let code = bounds(cx, "markdown_preview_code_shell", code);
+            assert!((code.left() - left(cx, install)).abs() < px(1.0));
+            let nine = row_ix(&view, cx, "Nine");
+            let ten = row_ix(&view, cx, "Ten");
+            let task = row_ix(&view, cx, "Task");
+            assert!((left(cx, nine) - left(cx, ten)).abs() < px(1.0));
+            assert!((left(cx, task) - left(cx, outer)).abs() < px(1.0));
+        }
+    }
+}
+
+#[gpui::test]
 fn hosted_markdown_nested_disclosures_toggle_and_reset_only_for_changed_source(
     cx: &mut gpui::TestAppContext,
 ) {

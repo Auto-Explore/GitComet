@@ -3,6 +3,90 @@
 use super::*;
 
 #[gpui::test]
+fn full_markdown_disclosure_title_toggles_and_keeps_selection_gestures(
+    cx: &mut gpui::TestAppContext,
+) {
+    gitcomet_ui_kit::test_support::use_real_text_backend(cx);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(7143),
+        "markdown_disclosure_title",
+        "<details><summary>Selectable title</summary>\n\nVisible body\n\n</details>",
+    );
+    let summary = fixture.row_ix("Selectable title");
+    let body = fixture.row_ix("Visible body");
+    let title = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{summary}"
+        )))
+        .unwrap();
+    cx.simulate_click(
+        point(title.left() + px(12.0), title.center().y),
+        Default::default(),
+    );
+    draw_frames(cx, 2);
+    assert!(
+        cx.debug_bounds(leaked_selector(format!("markdown_preview_text_box_{body}")))
+            .is_some()
+    );
+    for (key, visible) in [("space", false), ("enter", true)] {
+        cx.simulate_keystrokes(key);
+        cx.update(|window, app| {
+            window.dispatch_event(
+                gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse(key).unwrap(),
+                }),
+                app,
+            );
+        });
+        draw_frames(cx, 2);
+        assert_eq!(
+            cx.debug_bounds(leaked_selector(format!("markdown_preview_text_box_{body}")))
+                .is_some(),
+            visible
+        );
+    }
+    let title = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{summary}"
+        )))
+        .unwrap();
+    let from = point(title.left() + px(1.0), title.center().y);
+    let to = point(title.left() + px(55.0), title.center().y);
+    cx.simulate_mouse_down(from, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(to, MouseButton::Left, Default::default());
+    draw_frames(cx, 2);
+    cx.update(|_, app| {
+        assert!(
+            view.read(app)
+                .diff_renderer
+                .read(app)
+                .diff_text_has_selection()
+        );
+    });
+    assert!(
+        cx.debug_bounds(leaked_selector(format!("markdown_preview_text_box_{body}")))
+            .is_some()
+    );
+    let header = cx
+        .debug_bounds(leaked_selector(format!("markdown_disclosure_{summary}")))
+        .unwrap();
+    cx.simulate_click(header.center(), Default::default());
+    draw_frames(cx, 2);
+    assert!(
+        cx.debug_bounds(leaked_selector(format!("markdown_preview_text_box_{body}")))
+            .is_none()
+    );
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn full_markdown_copy_and_search_respect_closed_disclosures(cx: &mut gpui::TestAppContext) {
     gitcomet_ui_kit::test_support::use_real_text_backend(cx);
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

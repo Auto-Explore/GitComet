@@ -13,9 +13,39 @@ struct DisclosureState {
     source: Option<Arc<MarkdownPreviewDocument>>,
     expanded: FxHashMap<usize, bool>,
     projected: Option<Arc<MarkdownPreviewDocument>>,
+    click: crate::kit::click::SubtargetClick<usize>,
 }
 
 impl MarkdownDisclosures {
+    pub(in crate::view) fn is_summary(&self, row: usize) -> bool {
+        self.0
+            .borrow()
+            .source
+            .as_ref()
+            .and_then(|document| document.rows.get(row))
+            .is_some_and(|row| row.kind == MarkdownPreviewRowKind::DetailsSummary)
+    }
+
+    pub(in crate::view) fn begin_click(&self, id: usize, event: &gpui::MouseDownEvent) {
+        self.0.borrow_mut().click.press(Some(id), event);
+    }
+
+    pub(in crate::view) fn pointer_moved(&self, event: &gpui::MouseMoveEvent) {
+        self.0.borrow_mut().click.moved(event);
+    }
+
+    pub(in crate::view) fn cancel_click(&self) {
+        self.0.borrow_mut().click = Default::default();
+    }
+
+    pub(in crate::view) fn complete_click(&self, id: usize, event: &gpui::MouseUpEvent) -> bool {
+        self.0
+            .borrow_mut()
+            .click
+            .release(Some(&id), event)
+            .is_some()
+    }
+
     pub(in crate::view) fn project(
         &self,
         document: &Arc<MarkdownPreviewDocument>,
