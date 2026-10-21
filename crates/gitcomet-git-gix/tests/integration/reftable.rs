@@ -121,25 +121,37 @@ fn files_and_reftable_twins_have_the_same_refs_status_history_and_reflogs() {
                 .unwrap()
                 .is_some()
             );
-            let snapshot = format!(
-                "{branches:?} {tags:?} {:?} {logs:?} {status:?}",
-                repo.list_remote_branches(&gitcomet_core::services::CancellationToken::new())
-                    .unwrap()
-            );
+            let remote_branches = repo
+                .list_remote_branches(&gitcomet_core::services::CancellationToken::new())
+                .unwrap();
+            let snapshot = format!("{branches:?} {tags:?} {remote_branches:?} {logs:?} {status:?}");
             snapshots.push(snapshot);
-            if refs == "reftable" {
-                git(
-                    dir.path(),
-                    &["symbolic-ref", "refs/heads/dangling", "refs/heads/missing"],
-                );
-                assert!(
-                    !repo
-                        .list_branches(&gitcomet_core::services::CancellationToken::new())
-                        .unwrap()
-                        .iter()
-                        .any(|b| b.name == "dangling")
-                );
-            }
+            // Both storages skip dangling symrefs, such as the `origin/HEAD`
+            // a pruning fetch leaves behind, as Git's for-each-ref does.
+            git(
+                dir.path(),
+                &["symbolic-ref", "refs/heads/dangling", "refs/heads/missing"],
+            );
+            git(
+                dir.path(),
+                &[
+                    "symbolic-ref",
+                    "refs/remotes/fork/HEAD",
+                    "refs/remotes/fork/main",
+                ],
+            );
+            assert!(
+                !repo
+                    .list_branches(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap()
+                    .iter()
+                    .any(|b| b.name == "dangling")
+            );
+            assert_eq!(
+                repo.list_remote_branches(&gitcomet_core::services::CancellationToken::new())
+                    .unwrap(),
+                remote_branches
+            );
             git(dir.path(), &["reset", "--hard"]);
             // Mutating refs outside the backend invalidates the reader and metadata cache.
             git(

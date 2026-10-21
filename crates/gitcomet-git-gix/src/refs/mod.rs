@@ -450,7 +450,12 @@ impl<'r> RefsView<'r> {
                 self.files()?.prefixed(prefix.as_bstr())
             }
             .map_err(failure)?;
-            return Ok(RefIter::Files(Box::new(iter)));
+            return Ok(RefIter::Files {
+                iter: Box::new(iter),
+                // One snapshot per walk, as gix's own peeling iterator keeps.
+                packed: self.repo.refs.cached_packed_buffer().map_err(failure)?,
+                peel: false,
+            });
         }
         self.cancellation.check_cancelled()?;
         let common = records_with_prefix(self.common.as_deref(), prefix)
@@ -508,7 +513,11 @@ fn records_with_prefix<'v>(
 type ReftableRecords<'v> = Box<dyn Iterator<Item = (&'v Vec<u8>, &'v reftable::Record)> + 'v>;
 
 pub(crate) enum RefIter<'v, 'r> {
-    Files(Box<gix::reference::iter::Iter<'v, 'r>>),
+    Files {
+        iter: Box<gix::reference::iter::Iter<'v, 'r>>,
+        packed: Option<gix::refs::file::packed::SharedBufferSnapshot>,
+        peel: bool,
+    },
     Reftable {
         iter: ReftableRecords<'v>,
         view: &'v RefsView<'r>,
@@ -516,24 +525,46 @@ pub(crate) enum RefIter<'v, 'r> {
     },
 }
 impl<'v, 'r> RefIter<'v, 'r> {
-    pub fn peeled(self) -> Result<Self> {
-        Ok(match self {
-            Self::Files(iter) => Self::Files(Box::new(iter.peeled().map_err(failure)?)),
+    pub fn peeled(self) -> Self {
+        match self {
+            Self::Files { iter, packed, .. } => Self::Files {
+                iter,
+                packed,
+                peel: true,
+            },
             Self::Reftable { iter, view, .. } => Self::Reftable {
                 iter,
                 view,
                 peel: true,
             },
-        })
+        }
     }
 }
 impl<'r> Iterator for RefIter<'_, 'r> {
     type Item = Result<Reference<'r>>;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Files(iter) => iter
-                .next()
-                .map(|r| r.map(Reference::from_gix).map_err(failure)),
+            Self::Files { iter, packed, peel } => loop {
+                let mut reference = match iter.next()? {
+                    Ok(reference) => Reference::from_gix(reference),
+                    Err(error) => return Some(Err(failure(error))),
+                };
+                let packed = packed.as_ref().map(|buffer| &***buffer);
+                // Resolve symrefs like the reftable arm. As in Git's
+                // for-each-ref, one whose chain ends at a missing ref (say
+                // origin/HEAD after a prune) is skipped, not an error.
+                if matches!(reference.target(), gix::refs::TargetRef::Symbolic(_)) {
+                    match reference.inner.follow_to_object_packed(packed) {
+                        Ok(_) => {}
+                        Err(error) if error.is_not_found() => continue,
+                        Err(error) => return Some(Err(failure(error))),
+                    }
+                }
+                if *peel && let Err(error) = reference.inner.peel_to_id_packed(packed) {
+                    return Some(Err(failure(error)));
+                }
+                return Some(Ok(reference));
+            },
             Self::Reftable { iter, view, peel } => loop {
                 let (name, record) = iter.next()?;
                 if let Err(error) = view.cancellation.check_cancelled() {
@@ -553,7 +584,7 @@ impl<'r> Iterator for RefIter<'_, 'r> {
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
-            Self::Files(i) => i.size_hint(),
+            Self::Files { iter, .. } => (0, iter.size_hint().1),
             Self::Reftable { iter, .. } => (0, iter.size_hint().1),
         }
     }

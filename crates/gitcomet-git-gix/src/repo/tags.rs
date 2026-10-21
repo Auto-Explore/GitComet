@@ -74,10 +74,7 @@ impl GixRepo {
         let iter = refs
             .tags()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tags: {e}"))).with_source(e))?
-            .peeled()
-            .map_err(|e| {
-                Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))).with_source(e)
-            })?;
+            .peeled();
 
         let mut tags = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {

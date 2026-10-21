@@ -937,6 +937,79 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
     );
 }
 
+// Pointing `origin` at a fork without the branch `origin/HEAD` names makes the
+// pruning fetch leave that symref dangling, exactly as Git does.
+#[test]
+fn pruning_after_switching_to_a_fork_leaves_remote_branches_listable() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let upstream = root.join("upstream.git");
+    let fork = root.join("fork.git");
+    let work = root.join("work");
+    for path in [&upstream, &fork, &work] {
+        fs::create_dir_all(path).expect("create repo dir");
+    }
+    run_git(&upstream, &["init", "--bare", "-b", "main"]);
+    run_git(&fork, &["init", "--bare", "-b", "master"]);
+
+    run_git(&work, &["init", "-b", "main"]);
+    configure_repo_with_user(&work);
+    fs::write(work.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work, &["add", "file.txt"]);
+    run_git(&work, &["commit", "-m", "base"]);
+    run_git(
+        &work,
+        &["remote", "add", "origin", &git_remote_url(&upstream)],
+    );
+    run_git(&work, &["push", "-u", "origin", "main"]);
+    run_git(&work, &["remote", "set-head", "origin", "main"]);
+    run_git(&work, &["push", &git_remote_url(&fork), "main:master"]);
+    run_git(&work, &["checkout", "-b", "upgrade_deps"]);
+    run_git(
+        &work,
+        &["remote", "set-url", "origin", &git_remote_url(&fork)],
+    );
+    run_git(&work, &["push", "-u", "origin", "upgrade_deps"]);
+    run_git(&work, &["pack-refs", "--all"]);
+
+    let opened = GixBackend.open(&work).expect("open work repo");
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+    let remote_branches = || {
+        opened
+            .list_remote_branches(&cancellation)
+            .expect("list remote branches")
+            .into_iter()
+            .map(|branch| format!("{}/{}", branch.remote, branch.name))
+            .collect::<Vec<_>>()
+    };
+
+    opened
+        .pull(PullMode::Default, true)
+        .expect("pull with pruning");
+    assert_eq!(
+        run_git_capture(&work, &["symbolic-ref", "refs/remotes/origin/HEAD"]).trim(),
+        "refs/remotes/origin/main"
+    );
+    assert!(
+        !run_git_status(
+            &work,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/remotes/origin/main"
+            ]
+        )
+        .success(),
+        "the pruning pull must delete the branch origin/HEAD names"
+    );
+    assert_eq!(remote_branches(), ["origin/master", "origin/upgrade_deps"]);
+
+    opened.fetch_all(true).expect("fetch all with pruning");
+    assert_eq!(remote_branches(), ["origin/master", "origin/upgrade_deps"]);
+}
+
 #[test]
 fn pruning_fetch_preserves_upstreams_outside_a_narrow_fetch_refspec() {
     let _guard = remote_management_test_lock();
