@@ -28,6 +28,7 @@ impl SettingsWindowView {
             window_controls_mode: Some(self.window_controls_mode.key().to_string()),
             // Renderer changes are persisted separately; ordinary preferences must not overwrite a fallback.
             windows_renderer: None,
+            linux_renderer: None,
             browser_open_target: Some(self.browser_open_target.key().to_string()),
             ui_density: Some(self.appearance_metrics.density.key().to_string()),
             ui_font_size_px: Some(self.appearance_metrics.ui_font_size_px),

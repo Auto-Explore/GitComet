@@ -585,10 +585,14 @@ pub(crate) fn close_active_window_or_warn(cx: &mut App) {
 pub(crate) struct PendingRestart(pub(crate) bool);
 impl gpui::Global for PendingRestart {}
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn request_restart(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    use crate::linux_renderer::RendererSession;
+    #[cfg(target_os = "windows")]
+    use crate::windows_renderer::RendererSession;
     if cx
-        .try_global::<crate::windows_renderer::RendererSession>()
+        .try_global::<RendererSession>()
         .is_none_or(|session| !session.0.borrow().restart_allowed)
     {
         return;
@@ -811,6 +815,23 @@ mod restart_tests {
             assert!(!cx.global::<PendingRestart>().0);
             assert_eq!(session.0.borrow().saved, RendererPreference::Dx11);
             assert!(session.0.borrow().restart_required());
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn focused_renderer_changes_cannot_request_an_application_restart(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::linux_renderer::{RendererPreference, RendererSession, RendererState};
+        cx.update(|cx| {
+            let mut state = RendererState::new(RendererPreference::Auto, false);
+            state.saved = RendererPreference::Gl;
+            let session = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(state)));
+            cx.set_global(session.clone());
+            request_restart(cx);
+            assert!(cx.try_global::<PendingRestart>().is_none());
+            assert_eq!(session.0.borrow().saved, RendererPreference::Gl);
         });
     }
 }

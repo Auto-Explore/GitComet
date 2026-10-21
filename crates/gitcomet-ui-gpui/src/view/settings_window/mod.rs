@@ -306,7 +306,7 @@ fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     GraphicsRenderer,
     UiScale,
     WindowControls,
@@ -341,7 +341,7 @@ impl SettingsSection {
     /// mapping keeps the visible page and the expanded row in sync.
     fn category(self) -> SettingsCategory {
         match self {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             Self::GraphicsRenderer => SettingsCategory::General,
             Self::UiScale | Self::WindowControls | Self::UiFont | Self::EditorFont => {
                 SettingsCategory::Appearance
@@ -545,6 +545,10 @@ impl SettingsCategory {
         if self == Self::General
             && "graphics renderer directx 11 directx 12 dx11 dx12 compatibility".contains(&query)
         {
+            return true;
+        }
+        #[cfg(target_os = "linux")]
+        if self == Self::General && "graphics renderer vulkan opengl".contains(&query) {
             return true;
         }
         self.search_haystack().contains(query.as_str())
@@ -1617,7 +1621,7 @@ mod cards;
 pub(crate) mod close_guards;
 mod extension_host;
 mod extension_pages;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod graphics_renderer;
 mod prefs;
 mod render;
