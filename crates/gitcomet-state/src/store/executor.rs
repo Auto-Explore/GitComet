@@ -55,6 +55,8 @@ pub(super) fn metadata_worker_threads() -> usize {
 pub(super) enum StoreExecutorPool {
     Primary,
     Metadata,
+    /// Optional network discovery must not queue ahead of local metadata.
+    RemoteMetadata,
     Signatures,
     SessionPersist,
     /// `git maintenance`, which can run for hours; one thread of its own.
@@ -215,6 +217,13 @@ impl TaskExecutor {
         static PRIMARY: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static SIGNATURES: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+        static REMOTE_METADATA: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+        static REMOTE_METADATA_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            format!(
+                "{}-store-remote-metadata",
+                gitcomet_core::identity::current().executable_name()
+            )
+        });
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
         static MAINTENANCE: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
@@ -222,6 +231,7 @@ impl TaskExecutor {
             StoreExecutorPool::Primary => (&PRIMARY, "gitcomet-store-primary"),
             StoreExecutorPool::Signatures => (&SIGNATURES, "gitcomet-store-signatures"),
             StoreExecutorPool::Metadata => (&METADATA, "gitcomet-store-metadata"),
+            StoreExecutorPool::RemoteMetadata => (&REMOTE_METADATA, REMOTE_METADATA_NAME.as_str()),
             StoreExecutorPool::SessionPersist => {
                 (&SESSION_PERSIST, "gitcomet-store-session-persist")
             }

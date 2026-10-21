@@ -31,6 +31,7 @@ impl Render for GitCometView {
                 | GitCometViewMode::FocusedMergetool
                 | GitCometViewMode::FocusedDiff
         ));
+        self.sync_sidebar_header_layout(window, cx);
         let next_window_size = window.viewport_size();
         let previous_window_width = self.last_window_size.width;
         let window_width_changed = previous_window_width != next_window_size.width;
@@ -874,10 +875,18 @@ impl Render for GitCometView {
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
 
         if crate::startup_probe::is_enabled() {
-            root = root.on_children_prepainted(|_children_bounds, window, _cx| {
-                if crate::startup_probe::mark_first_paint() {
-                    window.on_next_frame(|_window, cx| {
-                        crate::startup_probe::mark_first_interactive();
+            let home_ready = self.is_home_screen_active() && self.state.git_runtime.is_available();
+            root = root.on_children_prepainted(move |_children_bounds, window, _cx| {
+                let first_paint = crate::startup_probe::mark_first_paint();
+                let home_frame = home_ready && !crate::startup_probe::home_ready_recorded();
+                if first_paint || home_frame {
+                    window.on_next_frame(move |_window, cx| {
+                        if first_paint {
+                            crate::startup_probe::mark_first_interactive();
+                        }
+                        if home_frame {
+                            crate::startup_probe::mark_home_ready();
+                        }
                         if crate::startup_probe::should_exit_after_first_interactive() {
                             crate::app::mark_clean_shutdown_requested(cx);
                             cx.quit();
@@ -950,15 +959,26 @@ impl GitCometView {
                             this.details_render_width = this.details_width;
                         }
                     }
-                    this.pane_resize = Some(PaneResizeState::new(
-                        handle,
-                        e.position.x,
-                        this.sidebar_width,
-                        this.details_width,
-                        this.last_window_size.width,
-                        this.sidebar_collapsed,
-                        this.details_collapsed,
-                    ));
+                    let minimum = match handle {
+                        PaneResizeHandle::Sidebar => this.sidebar_min_width(),
+                        PaneResizeHandle::Details => this.details_min_width(),
+                    };
+                    this.pane_resize = Some(
+                        PaneResizeState::new(
+                            handle,
+                            e.position.x,
+                            this.sidebar_width,
+                            this.details_width,
+                            this.last_window_size.width,
+                            this.sidebar_collapsed,
+                            this.details_collapsed,
+                        )
+                        .with_minimums(
+                            minimum,
+                            this.main_min_width(),
+                            this.pane_collapsed_width(),
+                        ),
+                    );
                     cx.notify();
                 }),
             )

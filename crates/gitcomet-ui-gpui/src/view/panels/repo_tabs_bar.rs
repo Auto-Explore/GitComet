@@ -350,8 +350,16 @@ impl RepoTabsBarView {
     }
 
     fn is_repo_busy(repo: &RepoState) -> bool {
+        // Focus and filesystem refreshes retain the usable primary view.
+        // Their checks must not make the whole tab appear to load again.
+        // Opening, explicit Reload and history-filter changes replace these
+        // values with Loading; pagination has its own explicit pending flag.
+        let primary_view_ready = matches!(repo.head_branch, Loadable::Ready(_))
+            && matches!(repo.status, Loadable::Ready(_))
+            && matches!(repo.log, Loadable::Ready(_));
         matches!(repo.open, Loadable::Loading)
-            || repo.loads_in_flight.any_foreground_in_flight()
+            || (repo.loads_in_flight.any_foreground_in_flight()
+                && (!primary_view_ready || repo.log_loading_more))
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0
@@ -1441,6 +1449,53 @@ mod tests {
                 "pressed plate must lean further toward danger than hover"
             );
         }
+    }
+
+    #[test]
+    fn remote_tag_discovery_does_not_keep_the_repository_tab_busy() {
+        use gitcomet_state::model::{LoadKind, Loadable};
+        let mut repo = repo_state("/tmp/remote-tag-loading");
+        repo.open = Loadable::Ready(());
+        repo.loads_in_flight.request(LoadKind::RemoteTags);
+        assert!(!RepoTabsBarView::is_repo_busy(&repo));
+
+        // Local data and user operations still own the tab's progress mark.
+        let mut local_load = repo.clone();
+        local_load.loads_in_flight.request(LoadKind::Tags);
+        assert!(RepoTabsBarView::is_repo_busy(&local_load));
+        repo.local_actions_in_flight = 1;
+        assert!(RepoTabsBarView::is_repo_busy(&repo));
+    }
+
+    #[test]
+    fn retained_primary_data_keeps_background_refreshes_out_of_the_tab_spinner() {
+        use gitcomet_state::model::{LoadKind, Loadable};
+        let mut repo = repo_state("/tmp/focus-refresh");
+        repo.open = Loadable::Ready(());
+        repo.head_branch = Loadable::Ready("main".into());
+        repo.status = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
+            staged: Default::default(),
+            unstaged: Default::default(),
+        }));
+        repo.log = Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        }));
+        repo.loads_in_flight.request(LoadKind::WorktreeStatus);
+        repo.loads_in_flight.request(LoadKind::Tags);
+        assert!(!RepoTabsBarView::is_repo_busy(&repo));
+
+        let mut reload = repo.clone();
+        reload.status = Loadable::Loading;
+        assert!(RepoTabsBarView::is_repo_busy(&reload));
+        let mut history_filter = repo.clone();
+        history_filter.log = Loadable::Loading;
+        assert!(RepoTabsBarView::is_repo_busy(&history_filter));
+        let mut pagination = repo.clone();
+        pagination.log_loading_more = true;
+        assert!(RepoTabsBarView::is_repo_busy(&pagination));
+        repo.local_actions_in_flight = 1;
+        assert!(RepoTabsBarView::is_repo_busy(&repo));
     }
 
     #[test]

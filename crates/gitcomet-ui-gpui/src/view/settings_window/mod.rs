@@ -697,6 +697,8 @@ pub(crate) struct SettingsWindowView {
     signing_tools_probe: Option<gpui::Task<()>>,
     signing_tools_cancellation: gitcomet_core::services::CancellationToken,
     large_file_tools_probe: Option<gpui::Task<()>>,
+    large_file_tools_closed: bool,
+    _large_file_tools_window_closed: gpui::Subscription,
     large_file_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
@@ -1380,6 +1382,17 @@ impl SettingsWindowView {
         workspace_name_input.update(cx, |input, cx| {
             input.set_text(workspace_name_draft.clone(), cx);
         });
+        let closing_view = cx.weak_entity();
+        let probe_window = window.window_handle().window_id();
+        let large_file_tools_window_closed = cx.on_window_closed(move |cx, closed| {
+            if closed == probe_window {
+                let _ = closing_view.update(cx, |view, _| {
+                    view.large_file_tools_closed = true;
+                    view.large_file_tools_cancellation.cancel();
+                    view.large_file_tools_probe = None;
+                });
+            }
+        });
         Self {
             extension_window: extension_host::SettingsExtensions::new(window, theme, cx),
             window_gates: super::window_gates::WindowGates::new(cx),
@@ -1469,6 +1482,8 @@ impl SettingsWindowView {
             signing_tools_probe,
             signing_tools_cancellation: Default::default(),
             large_file_tools_probe: None,
+            large_file_tools_closed: false,
+            _large_file_tools_window_closed: large_file_tools_window_closed,
             large_file_tools_cancellation: Default::default(),
             git_executable_mode,
             git_custom_path_draft,

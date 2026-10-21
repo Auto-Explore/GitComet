@@ -200,7 +200,7 @@ fn full_chrome_layout_caches_the_pane_subviews() {
         "expected the cached compositor to render its retained diff renderer"
     );
     assert!(
-        normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
+        normalized.contains("content.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
         "expected the expanded sidebar pane to mount behind the stable cache boundary"
     );
     assert!(

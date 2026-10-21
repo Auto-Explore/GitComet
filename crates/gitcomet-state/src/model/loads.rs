@@ -170,13 +170,19 @@ impl RepoLoadsInFlight {
         self.line_stats.active.is_some()
     }
 
-    /// Linked-checkout scans do not keep the active tab's spinner running.
+    /// Optional remote tag discovery and linked-checkout scans do not keep the
+    /// active tab's spinner running after its local contents are available.
     pub fn any_foreground_in_flight(&self) -> bool {
-        self.in_flight != 0 || self.log_in_flight() || self.line_stats_in_flight()
+        (self.in_flight & !LoadKind::RemoteTags.mask()) != 0
+            || self.log_in_flight()
+            || self.line_stats_in_flight()
     }
 
     pub fn any_in_flight(&self) -> bool {
-        self.any_foreground_in_flight() || self.worktree_dirty_in_flight()
+        self.in_flight != 0
+            || self.log_in_flight()
+            || self.line_stats_in_flight()
+            || self.worktree_dirty_in_flight()
     }
 
     pub fn clear(&mut self) {
@@ -384,6 +390,27 @@ impl LineStatsLoads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_tags_stay_tracked_without_delaying_local_readiness() {
+        let mut loads = RepoLoadsInFlight::default();
+        assert!(loads.request(LoadKind::RemoteTags));
+        assert!(loads.any_in_flight());
+        assert!(!loads.any_foreground_in_flight());
+
+        assert!(loads.request(LoadKind::WorktreeStatus));
+        assert!(loads.any_foreground_in_flight());
+        assert!(!loads.finish(LoadKind::WorktreeStatus));
+        assert!(!loads.any_foreground_in_flight());
+
+        // Background classification must preserve coalescing and completion.
+        assert!(!loads.request(LoadKind::RemoteTags));
+        assert!(loads.finish(LoadKind::RemoteTags));
+        assert!(loads.any_in_flight());
+        assert!(!loads.any_foreground_in_flight());
+        assert!(!loads.finish(LoadKind::RemoteTags));
+        assert!(!loads.any_in_flight());
+    }
 
     #[test]
     fn promoted_log_bookkeeping_matches_the_prepared_effect_request() {

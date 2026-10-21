@@ -142,6 +142,7 @@ impl AppLaunch {
 
     /// Runs with `args` (including the program name) and returns the exit code.
     pub fn run_with_args(self, args: Vec<OsString>) -> i32 {
+        gitcomet_core::startup_trace::mark("app_entry");
         let Self {
             identity,
             about,
@@ -157,9 +158,16 @@ impl AppLaunch {
         }
 
         #[cfg(feature = "ui-gpui-runtime")]
-        crashlog::install();
+        {
+            let _stage = gitcomet_core::startup_trace::span("crashlog_install");
+            crashlog::install();
+        }
 
-        dispatch(cli::parse_cli(args, &about), on_prepare, move |mode| {
+        let parsed = {
+            let _stage = gitcomet_core::startup_trace::span("parse_cli");
+            cli::parse_cli(args, &about)
+        };
+        dispatch(parsed, on_prepare, move |mode| {
             launch::run_mode(mode, extensions, repository_options, backend)
         })
     }

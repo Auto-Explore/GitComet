@@ -920,10 +920,10 @@ pub(in crate::view) fn file_row_icon_slot(
                     .rounded_full()
                     .bg(disc.resting)
                     .when_some(disc.hover, |badge, (group, hovered)| {
-                        badge.group_hover(group, |badge| badge.bg(hovered))
+                        badge.group_hover_style(group, |badge| badge.bg(hovered))
                     })
                     .when_some(disc.pressed, |badge, (group, pressed)| {
-                        badge.group_active(group, |badge| badge.bg(pressed))
+                        badge.group_active_style(group, |badge| badge.bg(pressed))
                     })
                     .flex()
                     .items_center()

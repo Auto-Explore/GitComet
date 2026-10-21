@@ -78,6 +78,18 @@ pub(in crate::view) trait DiffNavigation {
     ) -> Option<Vec<PathBuf>>;
     fn selected_single(&self, repo: RepoId, area: DiffArea, path: &Path, cx: &App) -> bool;
     fn change_tracking(&self, cx: &App) -> ChangeTrackingView;
+    /// Outer `None` means the list owner is unavailable, so the renderer can
+    /// fall back to source order. `Some(None)` is a resolved missing file.
+    fn status_position(
+        &self,
+        _repo: &gitcomet_state::model::RepoState,
+        _path: &Path,
+        _area: DiffArea,
+        _view: ChangeTrackingView,
+        _cx: &App,
+    ) -> Option<Option<(StatusSection, usize, usize)>> {
+        None
+    }
     fn status_order(&self, repo: RepoId, section: StatusSection, cx: &App) -> Option<Arc<[usize]>>;
     fn file_order(&self, repo: RepoId, range: bool, cx: &App) -> Option<Arc<[usize]>>;
     fn worktree_order(&self, repo: RepoId, path: &Path, cx: &App) -> Option<Arc<[usize]>>;

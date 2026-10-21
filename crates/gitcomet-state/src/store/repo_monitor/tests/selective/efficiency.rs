@@ -355,6 +355,121 @@ fn external_excludes_edit_applies_on_revalidate() {
 }
 
 #[test]
+fn activation_checks_missed_changes_without_reloading_unchanged_git_metadata() {
+    let (_temp, root) = repository();
+    struct CountingBackend(Arc<AtomicU64>);
+    impl GitBackend for CountingBackend {
+        fn open(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>>
+        {
+            gitcomet_git_gix::GixBackend.open(root)
+        }
+        fn repository_watch_info(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Option<gitcomet_core::services::RepositoryWatchInfo>>
+        {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            gitcomet_git_gix::GixBackend.repository_watch_info(root)
+        }
+        fn worktree_ignore_matcher(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Option<Box<dyn WorktreeIgnoreMatcher>>> {
+            gitcomet_git_gix::GixBackend.worktree_ignore_matcher(root)
+        }
+    }
+    let discoveries = Arc::new(AtomicU64::new(0));
+    // Hold native callbacks away from the monitor to exercise the same
+    // fallback needed when an external editor's events do not cross a mount.
+    let (native_tx, _native_rx) = mpsc::channel();
+    let monitor = RunningMonitor::start_with_callback(
+        &root,
+        Arc::new(CountingBackend(discoveries.clone())),
+        MonitorConfig::default(),
+        Some(native_tx),
+    );
+    let activate = || {
+        monitor
+            .tx
+            .send(MonitorMsg::RefreshOnActivation(
+                ActivationContext::ready_for_test(),
+            ))
+            .unwrap();
+        let mut worktree_scan = false;
+        loop {
+            match monitor.rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+                Msg::LoadWorktreeDirty { repo_id: RepoId(1) } => worktree_scan = true,
+                Msg::RepoExternallyChanged {
+                    repo_id: RepoId(1),
+                    change,
+                } => {
+                    return (change, worktree_scan);
+                }
+                other => panic!("unexpected activation result: {other:?}"),
+            }
+        }
+    };
+    assert!(activate().0.git_state, "first focus establishes a baseline");
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        2,
+        "the first readable activation baseline needs one exact-input discovery"
+    );
+    let (unchanged, worktree_scan) = activate();
+    assert!(!unchanged.git_state && !unchanged.tags);
+    assert!(unchanged.worktree && unchanged.index);
+    assert!(
+        !worktree_scan,
+        "the store decides about linked scans after validating this reply"
+    );
+    fs::write(root.join("source.txt"), "unseen working edit").unwrap();
+    assert!(!activate().0.git_state);
+    run_git(&root, &["add", "source.txt"]);
+    let (index_change, _) = activate();
+    assert!(index_change.index && !index_change.git_state && !index_change.tags);
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        3,
+        "index validation needs one discovery, without an activation duplicate"
+    );
+    run_git(&root, &["branch", "unseen-branch"]);
+    assert!(
+        activate().0.git_state,
+        "missed ref writes must refresh history"
+    );
+    assert!(!activate().0.git_state);
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        3,
+        "ref changes do not change discovery inputs"
+    );
+    run_git(&root, &["tag", "unseen-tag"]);
+    assert!(
+        activate().0.tags,
+        "missed tag writes must refresh decorations"
+    );
+    fs::write(
+        root.join(".git/info/attributes"),
+        vec![b'#'; 4 * 1024 * 1024 + 1],
+    )
+    .unwrap();
+    for _ in 0..2 {
+        assert!(
+            activate().0.git_state,
+            "oversized metadata needs a full data refresh"
+        );
+    }
+    assert_eq!(
+        discoveries.load(Ordering::Relaxed),
+        3,
+        "an unavailable metadata probe must not rebuild healthy watcher coverage"
+    );
+}
+
+#[test]
 fn external_excludes_edit_applies_on_existing_idle_tick() {
     let (_temp, root) = repository();
     let external = unique_temp_dir("gitcomet-idle-excludes");

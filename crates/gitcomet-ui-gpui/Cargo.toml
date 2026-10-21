@@ -117,6 +117,9 @@ gitcomet-ui-terminal = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gpui_wgpu = { workspace = true, features = ["test-support"] }
+
 [build-dependencies]
 resvg = { workspace = true }
 

@@ -132,14 +132,14 @@ mod windows {
             }
             self.restart_required() && self.restart_allowed
         }
-        fn record_fallback(&mut self, runtime: bool, result: std::io::Result<bool>) {
+        /// GPUI falls back to DirectX 11 itself, at startup or by switching a failed
+        /// window in place, so the running app already uses the saved renderer.
+        fn record_fallback(&mut self, result: std::io::Result<bool>) {
             self.fallback = true;
             match result {
                 Ok(true) => {
                     self.saved = RendererPreference::Dx11;
-                    if !runtime {
-                        self.applied = RendererPreference::Dx11;
-                    }
+                    self.applied = RendererPreference::Dx11;
                     self.error = None;
                 }
                 Ok(false) => unreachable!("foreground fallback is the latest renderer write"),
@@ -165,18 +165,27 @@ mod windows {
             },
             on_event: Some(Rc::new(move |event| match event {
                 Event::Failed { runtime, .. } => {
-                    // Rare failure path: finish the narrow transaction before GPUI's fallback/fatal handling.
+                    gitcomet_core::startup_trace::mark(if runtime {
+                        "renderer_runtime_failure"
+                    } else {
+                        "renderer_startup_fallback"
+                    });
+                    // Rare failure path: finish the narrow transaction before GPUI falls back to DirectX 11.
                     let writer = observer.borrow().writer.clone();
                     let sequence = writer.next();
                     let result = writer.persist(sequence, || {
                         session::persist_ui_settings(preference_settings(RendererPreference::Dx11))
                     });
-                    observer.borrow_mut().record_fallback(runtime, result);
+                    observer.borrow_mut().record_fallback(result);
                 }
                 Event::Selected {
                     backend,
                     overridden,
                 } => {
+                    gitcomet_core::startup_trace::mark(match backend {
+                        Backend::Dx11 => "renderer_dx11",
+                        Backend::Dx12 => "renderer_dx12",
+                    });
                     let mut state = observer.borrow_mut();
                     state.active = Some(backend);
                     state.overridden = overridden;
@@ -193,13 +202,15 @@ mod windows {
     mod tests {
         use super::*;
         #[test]
-        fn fallback_updates_saved_selection_but_runtime_keeps_applied_selection() {
-            for runtime in [false, true] {
-                let mut state = RendererState::new(RendererPreference::Auto, true);
-                state.record_fallback(runtime, Ok(true));
-                assert_eq!(state.saved, RendererPreference::Dx11);
-                assert_eq!(state.restart_required(), runtime);
-            }
+        fn fallback_saves_dx11_without_requiring_a_restart() {
+            // A runtime DirectX 12 failure switches the window to DirectX 11 in place,
+            // so neither a startup nor a runtime fallback needs a restart.
+            let mut state = RendererState::new(RendererPreference::Auto, true);
+            state.record_fallback(Ok(true));
+            assert_eq!(state.saved, RendererPreference::Dx11);
+            assert_eq!(state.applied, RendererPreference::Dx11);
+            assert!(!state.restart_required());
+            assert!(state.status_message().contains("DirectX 12 unavailable."));
         }
         #[test]
         fn save_failure_keeps_previous_selection_and_disables_restart_prompt() {
@@ -214,7 +225,7 @@ mod windows {
             assert!(!state.saving);
             assert_eq!(state.saved, RendererPreference::Auto);
             assert!(state.error.is_some());
-            state.record_fallback(false, Err(std::io::Error::other("read only")));
+            state.record_fallback(Err(std::io::Error::other("read only")));
             assert_eq!(state.saved, RendererPreference::Auto);
             assert_eq!(state.applied, RendererPreference::Auto);
             assert!(!state.restart_required());
@@ -242,7 +253,7 @@ mod windows {
             state.writer.persist(manual, || Ok(())).unwrap();
             let fallback = state.writer.next();
             state.writer.persist(fallback, || Ok(())).unwrap();
-            state.record_fallback(false, Ok(true));
+            state.record_fallback(Ok(true));
             assert!(!state.complete_manual_save(manual, RendererPreference::Auto, Ok(true)));
             assert_eq!(state.saved, RendererPreference::Dx11);
         }

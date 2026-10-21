@@ -51,7 +51,9 @@ fn production_limit(
     ) else {
         return Ok(Some(bounded_limit()));
     };
-    let mut outcome = gix::attrs::search::Outcome::default();
+    // Only the effective filter controls this policy. Let gix stop matching
+    // once it resolves that attribute, including through macros and overrides.
+    let mut outcome = attributes.selected_attribute_matches(["filter"]);
     let mut filtered = 0usize;
     let mut bytes = 0u64;
     for entry in index.entries().iter().filter(regular) {
@@ -61,8 +63,8 @@ fn production_limit(
             return Ok(Some(bounded_limit()));
         };
         platform.matching_attributes(&mut outcome);
-        let lfs = outcome.iter().any(|matched| {
-            matched.assignment.name.as_str() == "filter" && matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == super::super::large_files::LFS_FILTER_DRIVER)
+        let lfs = outcome.iter_selected().any(|matched| {
+            matches!(matched.assignment.state, gix::attrs::StateRef::Value(value) if value.as_bstr() == super::super::large_files::LFS_FILTER_DRIVER)
         });
         if !lfs {
             continue;
@@ -160,13 +162,50 @@ mod tests {
 
     #[test]
     fn resolves_effective_attributes_and_index_fallback() {
-        let (dir, repo) = fixture("[attr]asset filter=lfs\n*.bin asset\n");
+        let (dir, repo) =
+            fixture("[attr]asset filter=lfs -diff -text\n*.bin asset\n*.bin eol=lf\n");
         assert_eq!(policy(&repo), Some(1));
-        std::fs::write(dir.path().join(".git/info/attributes"), b"a.bin -filter\n").unwrap();
-        assert_eq!(policy(&repo), None);
+        for assignment in ["-filter", "!filter", "filter", "filter=other"] {
+            std::fs::write(
+                dir.path().join(".git/info/attributes"),
+                format!("a.bin {assignment} text eol=lf\n"),
+            )
+            .unwrap();
+            assert_eq!(policy(&repo), None, "override: {assignment}");
+        }
         std::fs::remove_file(dir.path().join(".git/info/attributes")).unwrap();
         std::fs::remove_file(dir.path().join(".gitattributes")).unwrap();
         assert_eq!(policy(&repo), Some(1));
+    }
+
+    #[test]
+    fn selection_discovers_nested_filter_and_preserves_worktree_over_index_precedence() {
+        let (dir, _) = fixture("* text=auto\n");
+        let root = dir.path();
+        std::fs::create_dir(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/b.bin"), "asset").unwrap();
+        git_success(root, &["add", "nested/b.bin"]);
+        let repo = open_gix(root);
+        assert_eq!(policy(&repo), None);
+
+        // The selection is created before at_entry discovers this first
+        // definition of filter. Unrelated later rules must not hide its value.
+        let nested_attributes = root.join("nested/.gitattributes");
+        std::fs::write(
+            &nested_attributes,
+            "*.bin filter=lfs\n*.bin text eol=lf -diff\n",
+        )
+        .unwrap();
+        assert_eq!(policy(&repo), Some(bounded_limit()));
+
+        git_success(root, &["add", "nested/.gitattributes"]);
+        let repo = open_gix(root);
+        std::fs::remove_file(&nested_attributes).unwrap();
+        assert_eq!(policy(&repo), Some(bounded_limit()));
+        std::fs::write(&nested_attributes, "*.bin !filter\n").unwrap();
+        assert_eq!(policy(&repo), None);
+        std::fs::remove_file(&nested_attributes).unwrap();
+        assert_eq!(policy(&repo), Some(bounded_limit()));
     }
 
     #[test]

@@ -1,21 +1,10 @@
 use super::super::path_display;
 use super::super::*;
 use crate::kit::text_truncation::path_alignment_visible_signature;
+use crate::view::pending_commit::PendingCommit;
 use gitcomet_core::history_find::HistoryFindQuery;
-use gitcomet_state::model::{AuthRetryOperation, CommandLogEntry};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PendingCommitAmend {
-    repo_id: RepoId,
-    /// The repository's `command_log_seq` when the amend started; its result
-    /// is a later entry.
-    command_log_seq: u64,
-    /// The amend failed while a retry took over. The store drops the failed
-    /// entry once the window has shown it, so the outcome is kept here.
-    failed_awaiting_retry: bool,
-}
 
 /// The cached [`WorktreeFileListInputs`] and the scan they were derived from:
 /// repo, worktree-dirty revision, and the worktree's own path.
@@ -113,7 +102,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_drafts: FxHashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
-    pending_commit_amend: Option<PendingCommitAmend>,
+    pub(in super::super) pending_commits: FxHashMap<RepoId, PendingCommit>,
     pending_amend_prefill: Option<RepoId>,
     /// Suggestion (repo and rev) already offered to the commit box, so git's
     /// prepared message is applied once and never re-applied.
@@ -151,6 +140,9 @@ pub(in super::super) struct DetailsPaneView {
     /// One slot per status section: three of them render every frame and a
     /// single slot would have them evicting each other's sort.
     status_section_order: std::cell::RefCell<[StatusSectionOrderSlot; 4]>,
+    pub(in crate::view) status_footer_position: std::cell::RefCell<
+        crate::view::status_position_cache::StatusPositionCache<crate::view::rows::FileListPlan>,
+    >,
     pub(in super::super) status_file_sort:
         FxHashMap<StatusSection, crate::view::rows::CommitFileSort>,
     /// Sort and filter for the lists without dedicated fields. Repo-keyed like
@@ -367,6 +359,9 @@ impl DetailsPaneView {
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint(&next);
+            if this.advance_pending_commits(&next, cx) {
+                cx.notify();
+            }
             if next_fingerprint == this.notify_fingerprint {
                 this.state = next;
                 return;
@@ -529,7 +524,7 @@ impl DetailsPaneView {
             commit_message_drafts: FxHashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
-            pending_commit_amend: None,
+            pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),
             commit_message_user_edited: false,
@@ -550,6 +545,7 @@ impl DetailsPaneView {
             file_list_layout_override: FxHashMap::default(),
             file_controllers: Default::default(),
             status_section_order: std::cell::RefCell::new(Default::default()),
+            status_footer_position: Default::default(),
             status_file_sort: FxHashMap::default(),
             list_sort: FxHashMap::default(),
             list_filter: FxHashMap::default(),
@@ -762,7 +758,6 @@ impl DetailsPaneView {
 
         self.commit_amend_enabled = enabled;
         if !enabled {
-            self.pending_commit_amend = None;
             self.pending_amend_prefill = None;
         } else {
             self.prefill_commit_message_for_amend(cx);
@@ -866,90 +861,47 @@ impl DetailsPaneView {
         });
     }
 
-    fn should_preserve_pending_commit_amend_after_failed_log_entry(
-        state: &AppState,
-        repo_id: RepoId,
-    ) -> bool {
-        let auth_prompt_retries_amend = state.auth_prompt.as_ref().is_some_and(|prompt| {
-            matches!(
-                &prompt.operation,
-                AuthRetryOperation::Commit {
-                    repo_id: retry_repo_id,
-                    amend: true,
-                    ..
-                } if *retry_repo_id == repo_id
-            )
+    /// Follows dispatched commits to their result. Runs on every snapshot,
+    /// before the store drops the result entries. Returns whether it changed
+    /// something.
+    fn advance_pending_commits(&mut self, next: &AppState, cx: &mut gpui::Context<Self>) -> bool {
+        let mut pending_commits = std::mem::take(&mut self.pending_commits);
+        let before = pending_commits.len();
+        let mut changed = false;
+        pending_commits.retain(|repo_id, pending| {
+            // Without git the store drops the commit and never logs a result.
+            if !next.git_runtime.is_available()
+                || !next.repos.iter().any(|repo| repo.id == *repo_id)
+            {
+                return false;
+            }
+            let result = pending.advance(next);
+            if result == Some(true) {
+                if self.state.active_repo == Some(*repo_id) {
+                    let unchanged = self.commit_message_input.read(cx).text().trim()
+                        == pending.message.as_ref();
+                    if unchanged {
+                        self.set_commit_message_programmatically(String::new(), cx);
+                        changed = true;
+                    }
+                    if pending.amend && self.commit_amend_enabled {
+                        self.commit_amend_enabled = false;
+                        self.sync_commit_amend_enabled_to_root(false, cx);
+                        changed = true;
+                    }
+                } else if self
+                    .commit_message_drafts
+                    .get(repo_id)
+                    .is_some_and(|draft| draft.trim() == pending.message.as_ref())
+                {
+                    self.commit_message_drafts.remove(repo_id);
+                }
+            }
+            !(result.is_some() && pending.settled())
         });
-        let commit_retry_in_flight = state
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .is_some_and(|repo| {
-                repo.pending
-                    .commit_retry
-                    .as_ref()
-                    .is_some_and(|pending| pending.amend)
-            });
-
-        auth_prompt_retries_amend || commit_retry_in_flight
-    }
-
-    fn should_clear_pending_commit_amend_after_log_entry(
-        state: &AppState,
-        repo_id: RepoId,
-        entry_ok: bool,
-    ) -> bool {
-        entry_ok
-            || !Self::should_preserve_pending_commit_amend_after_failed_log_entry(state, repo_id)
-    }
-
-    pub(in super::super) fn mark_pending_commit_amend(&mut self, repo_id: RepoId) {
-        let command_log_seq = self
-            .state
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .map_or(0, |repo| repo.feedback.command_log_seq);
-        self.pending_commit_amend = Some(PendingCommitAmend {
-            repo_id,
-            command_log_seq,
-            failed_awaiting_retry: false,
-        });
-    }
-
-    fn pending_commit_amend_completed_entry<'a>(
-        pending: &PendingCommitAmend,
-        repo: &'a RepoState,
-    ) -> Option<&'a CommandLogEntry> {
-        repo.feedback
-            .command_log_after(pending.command_log_seq)
-            .iter()
-            .rfind(|entry| entry.command == "Amend")
-    }
-
-    /// Follows a pending amend into `state`: `Some(ok)` once its result is in.
-    /// The amend stays pending only while a retry will produce another result;
-    /// the store drops the failed entry once shown, so its outcome is kept.
-    fn advance_pending_commit_amend(
-        pending_amend: &mut Option<PendingCommitAmend>,
-        state: &AppState,
-        active_repo_id: Option<RepoId>,
-    ) -> Option<bool> {
-        let pending = pending_amend.as_mut()?;
-        if Some(pending.repo_id) != active_repo_id {
-            return None;
-        }
-        let repo = state.repos.iter().find(|repo| repo.id == pending.repo_id)?;
-        let entry_ok = Self::pending_commit_amend_completed_entry(pending, repo)
-            .map(|entry| entry.ok)
-            .or(pending.failed_awaiting_retry.then_some(false))?;
-        if Self::should_clear_pending_commit_amend_after_log_entry(state, pending.repo_id, entry_ok)
-        {
-            *pending_amend = None;
-        } else {
-            pending.failed_awaiting_retry = true;
-        }
-        Some(entry_ok)
+        changed |= pending_commits.len() != before;
+        self.pending_commits = pending_commits;
+        changed
     }
 
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
@@ -1841,6 +1793,8 @@ impl DetailsPaneView {
             return Some(Arc::clone(indexes));
         }
         let base = StatusSectionEntries::source_order_indexes(repo, section)?;
+        #[cfg(test)]
+        Self::record_status_footer_work(|work| work.projection_builds += 1);
         let entries = match section {
             StatusSection::Staged => repo.staged_status_entries()?,
             _ => repo.worktree_status_entries()?,
@@ -2321,6 +2275,8 @@ impl DetailsPaneView {
         if !plan.reorders() {
             return Some(projection);
         }
+        #[cfg(test)]
+        Self::record_status_footer_work(|work| work.order_materializations += 1);
         Some(
             plan.ordered()
                 .iter()
@@ -2363,7 +2319,9 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         let collapsed_groups = controller.collapsed_groups().to_vec();
         let labels = controller.kind_labels();
-        controller.plan_cache.plan_for(
+        #[cfg(test)]
+        let previous_builds = controller.plan_cache.builds();
+        let plan = controller.plan_cache.plan_for(
             key,
             crate::view::rows::PlanShape {
                 layout,
@@ -2406,7 +2364,12 @@ impl DetailsPaneView {
                     labels,
                 )
             },
-        )
+        );
+        #[cfg(test)]
+        Self::record_status_footer_work(|work| {
+            work.plan_builds += controller.plan_cache.builds() - previous_builds;
+        });
+        plan
     }
 
     fn status_section_alignment_key(section: StatusSection) -> u8 {
@@ -2423,6 +2386,9 @@ impl DetailsPaneView {
             .borrow_mut()
             .retain(|(id, _), _| next.repos.iter().any(|repo| repo.id == *id));
         let prev_active_repo_id = self.state.active_repo;
+        if prev_active_repo_id != next.active_repo || next.active_repo.is_none() {
+            *self.status_footer_position.borrow_mut() = Default::default();
+        }
         let prev_selected_commit = prev_active_repo_id.and_then(|repo_id| {
             self.state
                 .repos
@@ -2552,19 +2518,10 @@ impl DetailsPaneView {
         if switched_repo {
             let was_amend_enabled = self.commit_amend_enabled;
             self.commit_amend_enabled = false;
-            self.pending_commit_amend = None;
             self.pending_amend_prefill = None;
             if was_amend_enabled {
                 self.sync_commit_amend_enabled_to_root(false, cx);
             }
-        } else if Self::advance_pending_commit_amend(
-            &mut self.pending_commit_amend,
-            &self.state,
-            next_repo_id,
-        ) == Some(true)
-        {
-            self.commit_amend_enabled = false;
-            self.sync_commit_amend_enabled_to_root(false, cx);
         }
         if switched_repo {
             if let Some(prev_repo_id) = prev_active_repo_id {

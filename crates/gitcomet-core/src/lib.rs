@@ -1,5 +1,7 @@
 // Core re-exports gitcomet-base's modules at `gitcomet_core::` paths.
-pub use gitcomet_base::{environment, fs_utils, history_perf, identity, op_trace, panic, platform};
+pub use gitcomet_base::{
+    environment, fs_utils, history_perf, identity, op_trace, panic, platform, startup_trace,
+};
 
 pub mod annex;
 pub mod auth;

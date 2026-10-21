@@ -706,6 +706,16 @@ pub(super) fn append_ready_line_stats_effect(
         else {
             unreachable!("start_line_stats requires ready status lanes");
         };
+        if staged.is_empty() && unstaged.is_empty() {
+            // Both fresh lanes and their replays have settled. There are no
+            // rows to count or classify, so finish through the same generation
+            // protocol without another backend task and completion message.
+            let current = repo_state.loads_in_flight.finish_line_stats(generation);
+            debug_assert!(current);
+            repo_state.set_uncommitted_line_stats(Loadable::Ready(Arc::default()));
+            repo_state.set_uncommitted_large_files(Arc::default());
+            return;
+        }
         crate::store::repo_load_trace::trace!(
             "line_stats_start repo_id={:?} generation={} snapshot=reused staged={} unstaged={}",
             repo_id,

@@ -334,6 +334,7 @@ mod pane_store;
 mod panels;
 mod panes;
 mod patch_split;
+mod pending_commit;
 mod perf;
 mod permalink;
 pub(super) mod platform_open;
@@ -357,6 +358,7 @@ mod sidebar_sticky;
 mod splash;
 mod state_apply;
 mod status_actions;
+mod status_position_cache;
 pub(in crate::view) use gitcomet_text::tab_width;
 mod terminal_panel;
 mod terminal_preferences;
@@ -364,6 +366,7 @@ mod terminal_preferences;
 pub(crate) mod test_support;
 mod toast_host;
 mod ui_persistence;
+pub(crate) mod window_bootstrap;
 mod window_gates;
 use gitcomet_ui_kit::zoom_wheel;
 pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};
@@ -795,8 +798,8 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
         other_width,
         other_collapsed,
         total_w,
-        sidebar_collapsed,
-        details_collapsed,
+        px(MAIN_MIN_PX),
+        px(PANE_COLLAPSED_PX),
     )
 }
 
@@ -806,12 +809,9 @@ pub(in crate::view) fn pane_resize_drag_width_bounds_for_other_pane(
     other_width: Pixels,
     other_collapsed: bool,
     total_w: Pixels,
-    _sidebar_collapsed: bool,
-    _details_collapsed: bool,
+    main_min: Pixels,
+    collapsed_w: Pixels,
 ) -> (Pixels, Pixels) {
-    let main_min = px(MAIN_MIN_PX);
-    let collapsed_w = px(PANE_COLLAPSED_PX);
-    // Both pane resize handles overlay their boundaries and consume no layout width.
     let available_w = total_w - main_min;
     let other_width = if other_collapsed {
         collapsed_w
@@ -900,6 +900,7 @@ mod gitcomet_view;
 mod gitcomet_view_commands;
 mod gitcomet_view_render;
 mod gitcomet_view_requests;
+mod large_file_tools_probe;
 mod runtime_probe;
 
 #[cfg(test)]

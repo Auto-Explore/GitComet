@@ -146,7 +146,10 @@ pub(crate) fn run_mode(
     #[cfg(not(feature = "ui-gpui-runtime"))]
     let () = extensions;
 
-    install_configured_git_executable_preference(&mode);
+    {
+        let _stage = gitcomet_core::startup_trace::span("git_executable_preference");
+        install_configured_git_executable_preference(&mode);
+    }
     #[cfg(feature = "ui-gpui-runtime")]
     let backend = || build_backend(&repository_options, backend_override.clone());
     #[cfg(not(feature = "ui-gpui-runtime"))]
@@ -261,7 +264,11 @@ fn run_browser(
     }
 
     let path = browser_instance::normalize_browser_path(path);
-    let browser_open_target = gitcomet_state::session::load()
+    let session = {
+        let _stage = gitcomet_core::startup_trace::span("browser_session_load");
+        gitcomet_state::session::load()
+    };
+    let browser_open_target = session
         .browser_open_target
         .as_deref()
         .and_then(gitcomet_ui_gpui::BrowserOpenTarget::from_key)
@@ -270,18 +277,21 @@ fn run_browser(
         path: path.clone(),
         target: browser_open_target,
     };
-    let mut browser_instance =
-        match browser_instance::start_or_forward(initial_browser_request.clone()) {
-            Ok(browser_instance::StartResult::Forwarded) => return exit_code::SUCCESS,
-            Ok(browser_instance::StartResult::Primary(primary)) => Some(primary),
-            Err(err) => {
-                eprintln!(
-                    "Could not initialize the {name} browser-instance broker; \
+    let instance_result = {
+        let _stage = gitcomet_core::startup_trace::span("browser_instance_broker");
+        browser_instance::start_or_forward(initial_browser_request.clone())
+    };
+    let mut browser_instance = match instance_result {
+        Ok(browser_instance::StartResult::Forwarded) => return exit_code::SUCCESS,
+        Ok(browser_instance::StartResult::Primary(primary)) => Some(primary),
+        Err(err) => {
+            eprintln!(
+                "Could not initialize the {name} browser-instance broker; \
                      launching this process independently: {err}"
-                );
-                None
-            }
-        };
+            );
+            None
+        }
+    };
     let browser_requests = browser_instance
         .as_mut()
         .and_then(browser_instance::PrimaryBrowserInstance::take_requests);
@@ -295,17 +305,25 @@ fn run_browser(
         let _ = std::thread::Builder::new()
             .name("git-probe".into())
             .spawn(move || {
+                let _stage = gitcomet_core::startup_trace::span("git_runtime_probe_background");
                 let _ = probe.run();
             });
     }
 
-    let startup_crash_report = crashlog::take_startup_report();
+    let startup_crash_report = {
+        let _stage = gitcomet_core::startup_trace::span("startup_crash_report");
+        crashlog::take_startup_report()
+    };
     if let Some(report) = startup_crash_report.as_ref() {
         // Keep the recovery path visible even if WSLg cannot create
         // a window for the in-app notification.
         print_startup_crash_report_hint(report);
     }
-    if let Err(err) = crashlog::begin_session() {
+    let crash_session_result = {
+        let _stage = gitcomet_core::startup_trace::span("crashlog_begin_session");
+        crashlog::begin_session()
+    };
+    if let Err(err) = crash_session_result {
         eprintln!("Failed to create {name} crash-recovery marker before UI launch: {err}");
     }
     let startup_report = startup_crash_report.map(|report| gitcomet_ui_gpui::StartupCrashReport {

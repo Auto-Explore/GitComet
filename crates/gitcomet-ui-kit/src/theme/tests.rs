@@ -5,8 +5,8 @@ use super::{
     composite_over, content_header_bg, derived_syntax_color, fill_missing_color_tokens,
     has_theme_key, hsla_from_hue_fraction, layer_over, load_theme_specs_from_json,
     merged_theme_options, resolved_runtime_themes_dir, runtime_theme_issues_with_dir,
-    runtime_themes_with_dir, test_theme_bundle_value, test_theme_json_with_syntax, theme_label,
-    theme_preview_colors, with_alpha,
+    runtime_theme_lookups_for_test, runtime_themes_with_dir, test_theme_bundle_value,
+    test_theme_json_with_syntax, theme_label, theme_preview_colors, with_alpha,
 };
 use palette::IntoColor;
 use std::{fs, path::PathBuf};
@@ -1996,9 +1996,13 @@ fn embedded_theme_registry_exposes_default_keys() {
     let themes = available_themes();
 
     assert!(!themes.is_empty());
-    assert!(has_theme_key(DEFAULT_DARK_THEME_KEY));
-    assert!(has_theme_key(DEFAULT_LIGHT_THEME_KEY));
-    assert!(has_theme_key(AMBER_DARK_THEME_KEY));
+    let runtime_lookups = runtime_theme_lookups_for_test();
+    for (key, _) in bundled_theme_keys() {
+        assert!(has_theme_key(&key), "{key}");
+    }
+    assert_eq!(runtime_theme_lookups_for_test(), runtime_lookups);
+    assert!(!has_theme_key("no_such_theme"));
+    assert_eq!(runtime_theme_lookups_for_test(), runtime_lookups + 1);
     assert_eq!(
         theme_label(DEFAULT_DARK_THEME_KEY),
         Some("GitComet Dark".to_string())

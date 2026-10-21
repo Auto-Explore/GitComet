@@ -300,7 +300,9 @@ you misspell is still an error — the file is rejected rather than half-applied
 - `graph_lane_palette` and `graph_lane_hues` are optional
 
 `surface.canvas` is the central content area. `surface.chrome` is the surrounding
-title/action/sidebar/status band. Necessary input and button outlines should use
+title/action/sidebar-body/status band. The sidebar heading shares the diff toolbar's
+content-header color: `surface.canvas` in dark themes and `surface.raised` in light
+themes, with the historical tint while browsing Files at a commit. Necessary input and button outlines should use
 `stroke.control`; `stroke.subtle` is for decorative separators.
 
 ### Color value format

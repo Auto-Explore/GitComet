@@ -1,5 +1,5 @@
-use gitcomet_core::domain::{Upstream, UpstreamDivergence};
-use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend};
+use gitcomet_core::domain::{HistoryMode, Upstream, UpstreamDivergence};
+use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::test_support::git_fixture::{
     FixtureTimer, LinearCommit, append_config, import_linear_history,
 };
@@ -107,6 +107,90 @@ fn overlapping_remote_names_keep_exact_branch_identities() {
             .map(|branch| (branch.remote.as_str(), branch.name.as_str()))
             .collect::<Vec<_>>(),
         vec![("team", "alice/main"), ("team/alice", "main")]
+    );
+}
+
+// `fetch --prune` leaves `origin/HEAD` dangling when it deletes the branch the
+// symref names. Git's for-each-ref skips such refs; so must every listing.
+#[test]
+fn dangling_symrefs_are_left_out_of_every_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    initialize_repo_with_commit(&repo);
+    run_git(&repo, &["config", "remote.origin.url", "."]);
+    run_git(
+        &repo,
+        &[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ],
+    );
+    run_git(&repo, &["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    for (name, target) in [
+        ("refs/remotes/origin/HEAD", "refs/remotes/origin/main"),
+        ("refs/heads/dangling", "refs/heads/missing"),
+        ("refs/tags/dangling", "refs/tags/missing"),
+    ] {
+        run_git(&repo, &["symbolic-ref", name, target]);
+    }
+
+    let opened = GixBackend.open(&repo).unwrap();
+    let cancellation = CancellationToken::new();
+    let remote_branches = opened
+        .list_remote_branches(&cancellation)
+        .expect("list remote branches");
+    assert_eq!(
+        remote_branches
+            .iter()
+            .map(|branch| (branch.remote.as_str(), branch.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("origin", "master")]
+    );
+    // No `[branch]` config: the gix listing runs, not `git for-each-ref`.
+    let branches = opened
+        .list_branches(&cancellation)
+        .expect("list local branches");
+    assert_eq!(
+        branches.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        vec!["main"]
+    );
+    assert!(
+        opened
+            .list_tags(&cancellation)
+            .expect("list tags")
+            .is_empty()
+    );
+    assert_eq!(
+        opened
+            .log_all_branches_page(10, None, &cancellation)
+            .expect("all-branches history")
+            .commits
+            .len(),
+        1
+    );
+    assert_eq!(
+        opened
+            .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+            .expect("all-branches history index")
+            .expect("indexed history")
+            .len(),
+        1
+    );
+
+    // Only a missing ref is skipped: a ref naming a missing object still fails.
+    let missing_object = "1".repeat(40);
+    fs::write(
+        repo.join(".git/refs/tags/broken"),
+        format!("{missing_object}\n"),
+    )
+    .unwrap();
+    assert!(
+        GixBackend
+            .open(&repo)
+            .unwrap()
+            .list_tags(&cancellation)
+            .is_err()
     );
 }
 

@@ -396,23 +396,23 @@ fn a_running_pull_refuses_a_reviewed_apply_but_a_fetch_does_not() {
                 prepared: prepared.clone(),
             },
         ));
+        let result = loop {
+            if let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                command: crate::msg::RepoCommandKind::StageHunk,
+                result,
+                ..
+            }) = recv_effect_message(&rx, Duration::from_secs(2)).unwrap()
+            {
+                break result;
+            }
+        };
+        assert_eq!(result.is_err(), refused, "{label}: {result:?}");
         if refused {
-            let result = loop {
-                if let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-                    command: crate::msg::RepoCommandKind::StageHunk,
-                    result,
-                    ..
-                }) = recv_effect_message(&rx, Duration::from_secs(2)).unwrap()
-                {
-                    break result;
-                }
-            };
-            assert!(result.is_err(), "{label}: {result:?}");
             assert!(apply_started_rx.try_recv().is_err(), "{label}");
         } else {
             apply_started_rx
-                .recv_timeout(Duration::from_secs(2))
-                .unwrap_or_else(|_| panic!("{label}: the apply was refused"));
+                .try_recv()
+                .unwrap_or_else(|_| panic!("{label}: the apply did not reach the backend"));
         }
         drop(BlockingReleaseGuard {
             release: remote_release.clone(),
