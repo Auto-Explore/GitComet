@@ -350,8 +350,8 @@ pub mod source_guards {
 
     /// Discrete controls must style and activate through the shared
     /// interaction APIs: no ad-hoc `.hover_style(|..`/`.active_style(|..`
-    /// (including their deprecated aliases), raw
-    /// `.on_click`, bare `.on_mouse_up`, or raw button presses.
+    /// (or their deprecated `.hover`/`.active` names), raw `.on_click`, bare
+    /// `.on_mouse_up`, or raw button presses.
     pub fn discrete_control_violations(
         src_dir: &Path,
         allow: &DiscreteControlAllowlist<'_>,
