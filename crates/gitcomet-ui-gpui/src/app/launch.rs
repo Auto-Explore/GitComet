@@ -789,13 +789,14 @@ pub(super) fn open_gitcomet_window(
         )
     })
     .unwrap_or_else(|err| {
-        let name = identity::current().display_name();
-        panic!(
-            "failed to open main {name} window: {err}\n\
-             This is usually a GPU/display problem, not a {name} bug. \
-             If you just updated your system (kernel, mesa, or vulkan drivers), reboot. \
-             For diagnostics, include the crash report from the next launch."
-        )
+        #[cfg(target_os = "linux")]
+        let renderer_help = cx
+            .try_global::<crate::linux_renderer::RendererSession>()
+            .map(|session| session.0.borrow().startup_failure_help())
+            .unwrap_or_default();
+        #[cfg(not(target_os = "linux"))]
+        let renderer_help = String::new();
+        panic!("{}", window_open_failure_message(&err, &renderer_help))
     });
 
     #[cfg(target_os = "macos")]
@@ -805,6 +806,17 @@ pub(super) fn open_gitcomet_window(
     }
 
     window
+}
+
+pub(super) fn window_open_failure_message(err: &anyhow::Error, renderer_help: &str) -> String {
+    let name = identity::current().display_name();
+    let mut message = format!("failed to open main {name} window: {err:#}");
+    if !renderer_help.is_empty() {
+        message.push('\n');
+        message.push_str(renderer_help);
+    }
+    message.push_str("\nFor diagnostics, include the crash report from the next launch.");
+    message
 }
 
 /// Client-side decorations inset a rounded frame into the surface; the pixels

@@ -26,3 +26,11 @@ Preserve the other session data. GitComet normally uses
 `$XDG_STATE_HOME/gitcomet/session.json`, falling back to
 `~/.local/state/gitcomet/session.json`. If `GITCOMET_SESSION_FILE` is set, edit
 that file instead. Launch without `WGPU_BACKEND` to use Automatic again.
+
+OpenGL can fail even when the driver supports it. On Linux, wgpu's
+[EGL configuration selection](https://github.com/gfx-rs/wgpu/blob/v30.0.1/wgpu-hal/src/gles/egl.rs#L99-L163)
+requires a native-renderable window configuration. Some NVIDIA EGL
+configurations do not provide one, leaving no compatible surface formats and
+producing `No GPU adapter found that can configure the display surface`.
+Use **Automatic** or **Vulkan**; if the app cannot open, reset the saved choice
+as described above.

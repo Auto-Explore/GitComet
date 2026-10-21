@@ -12,6 +12,17 @@ use std::time::{Duration, Instant};
 
 struct TestBackend;
 
+#[test]
+fn window_startup_failure_retains_the_gpu_cause_and_renderer_recovery_help() {
+    let err = anyhow::anyhow!("Gl: No GPU adapter found that can configure the display surface")
+        .context("failed to initialize a GPU context");
+    let message = launch::window_open_failure_message(&err, "renderer recovery instructions");
+    assert!(message.contains("failed to initialize a GPU context"));
+    assert!(message.contains("Gl: No GPU adapter found that can configure the display surface"));
+    assert!(message.contains("renderer recovery instructions"));
+    assert!(!message.contains("not a GitComet bug"));
+}
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[gpui::test]
 fn dismissing_a_restart_terminal_guard_retains_the_saved_renderer(cx: &mut gpui::TestAppContext) {

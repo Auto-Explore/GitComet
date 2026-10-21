@@ -3,7 +3,7 @@ use gitcomet_state::session;
 use gpui_platform::{
     LinuxRendererBackend, LinuxRendererEvent, LinuxRendererOptions, LinuxRendererPreference,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum RendererPreference {
@@ -55,6 +55,8 @@ pub(crate) struct RendererState {
     pub saving: bool,
     pub error: Option<String>,
     pub restart_allowed: bool,
+    startup_session_path: Option<PathBuf>,
+    startup_backend_override: Option<String>,
 }
 
 #[derive(Clone)]
@@ -72,7 +74,58 @@ impl RendererState {
             saving: false,
             error: None,
             restart_allowed,
+            startup_session_path: None,
+            startup_backend_override: None,
         }
+    }
+
+    fn from_startup(
+        session_path: Option<PathBuf>,
+        backend_override: Option<String>,
+        restart_allowed: bool,
+    ) -> Self {
+        let session_path = session_path.map(|path| std::path::absolute(&path).unwrap_or(path));
+        let session = session_path
+            .as_deref()
+            .map(session::load_from_path)
+            .unwrap_or_default();
+        let saved = RendererPreference::parse(session.linux_renderer.as_deref());
+        let mut state = Self::new(saved, restart_allowed);
+        state.startup_session_path = session_path;
+        state.startup_backend_override = backend_override;
+        state
+    }
+
+    pub(crate) fn startup_failure_help(&self) -> String {
+        let mut help = format!(
+            "Linux graphics renderer preference: {} ({}).",
+            self.applied.label(),
+            self.applied.key()
+        );
+        if let Some(value) = &self.startup_backend_override {
+            help.push_str(&format!(
+                " WGPU_BACKEND={value:?} overrides the saved preference for this launch. \
+                 Unset WGPU_BACKEND to use the saved preference."
+            ));
+        }
+        let Some(path) = &self.startup_session_path else {
+            help.push_str(
+                " No session settings file was loaded; persistence is disabled or unavailable.",
+            );
+            return help;
+        };
+        if path.is_absolute() {
+            help.push_str(&format!(" Settings file: {path:?}."));
+        } else {
+            help.push_str(&format!(
+                " Settings file (relative path; startup working directory could not be resolved): {path:?}."
+            ));
+        }
+        help.push_str(
+            " Close the app, then set \"linux_renderer\": \"auto\" or remove only that key in this file, \
+             preserving the other session data. Then launch the app again."
+        );
+        help
     }
 
     pub(crate) fn restart_required(&self) -> bool {
@@ -128,8 +181,13 @@ impl RendererState {
 }
 
 pub(crate) fn application(restart_allowed: bool) -> (gpui::Application, RendererSession) {
-    let saved = RendererPreference::parse(session::load().linux_renderer.as_deref());
-    let state = Rc::new(RefCell::new(RendererState::new(saved, restart_allowed)));
+    let state = RendererState::from_startup(
+        session::default_session_file_path(),
+        std::env::var("WGPU_BACKEND").ok(),
+        restart_allowed,
+    );
+    let saved = state.applied;
+    let state = Rc::new(RefCell::new(state));
     let observer = state.clone();
     let options = LinuxRendererOptions {
         preference: match saved {
@@ -157,6 +215,75 @@ pub(crate) fn application(restart_allowed: bool) -> (gpui::Application, Renderer
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_failure_help_identifies_the_saved_renderer_and_its_exact_session_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("custom-session.json");
+        for (key, label) in [
+            ("auto", "Automatic"),
+            ("vulkan", "Vulkan"),
+            ("gl", "OpenGL"),
+        ] {
+            let contents =
+                format!(r#"{{"version":6,"linux_renderer":"{key}","theme_mode":"light"}}"#);
+            std::fs::write(&path, &contents).unwrap();
+            let mut state = RendererState::from_startup(Some(path.clone()), None, true);
+            state.saved = RendererPreference::Vulkan;
+            assert_eq!(state.active, None);
+            assert!(!state.overridden);
+            let help = state.startup_failure_help();
+            assert!(help.contains(&format!(
+                "Linux graphics renderer preference: {label} ({key})."
+            )));
+            assert!(help.contains(&format!("Settings file: {path:?}")));
+            assert!(help.contains(r#"set "linux_renderer": "auto" or remove only that key"#));
+            assert!(help.contains("preserving the other session data"));
+            assert!(!help.contains("WGPU_BACKEND"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+        }
+    }
+
+    #[test]
+    fn startup_override_is_reported_even_before_a_backend_was_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        std::fs::write(&path, r#"{"version":6,"linux_renderer":"gl"}"#).unwrap();
+        let state = RendererState::from_startup(Some(path), Some("vulkan,gl".into()), false);
+        assert!(!state.overridden);
+        assert_eq!(state.active, None);
+        let help = state.startup_failure_help();
+        assert!(help.contains("Linux graphics renderer preference: OpenGL (gl)."));
+        assert!(help.contains(r#"WGPU_BACKEND="vulkan,gl" overrides the saved preference"#));
+        assert!(help.contains("Unset WGPU_BACKEND"));
+    }
+
+    #[test]
+    fn startup_relative_settings_path_is_anchored_without_requiring_the_file_to_exist() {
+        let cwd = std::env::current_dir().unwrap();
+        let dir = tempfile::tempdir_in(&cwd).unwrap();
+        let relative = dir
+            .path()
+            .strip_prefix(&cwd)
+            .unwrap()
+            .join("missing-session.json");
+        let expected = cwd.join(&relative);
+        let state = RendererState::from_startup(Some(relative), None, true);
+        assert!(
+            state
+                .startup_failure_help()
+                .contains(&format!("Settings file: {expected:?}"))
+        );
+    }
+
+    #[test]
+    fn startup_without_session_persistence_does_not_invent_a_settings_file() {
+        let state = RendererState::from_startup(None, None, true);
+        let help = state.startup_failure_help();
+        assert!(help.contains("No session settings file was loaded"));
+        assert!(!help.contains("Settings file:"));
+        assert!(!help.contains("remove only that key"));
+    }
 
     #[test]
     fn persisted_preferences_select_each_backend_and_unknown_values_use_automatic() {

@@ -789,7 +789,7 @@ fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
     gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
 
-fn default_session_file_path() -> Option<PathBuf> {
+pub fn default_session_file_path() -> Option<PathBuf> {
     #[cfg(test)]
     if let Some(path) = test_session_file_path_override() {
         return path;
