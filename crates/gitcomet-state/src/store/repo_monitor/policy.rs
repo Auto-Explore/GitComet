@@ -747,91 +747,95 @@ mod tests {
 
     #[test]
     fn ancestor_replaced_by_symlink_invalidates_cached_pass_and_next_pass_resolves_it() {
-        // Moving the link refreshes its ctime on Unix, so the cached stamp only
-        // equals the replacement when the move lands in the same filesystem
-        // clock tick as the stamp. Retry until a pass sets that case up.
-        for _ in 0..50 {
-            let temp = tempfile::tempdir().unwrap();
-            let root = normalized(&temp.path().canonicalize().unwrap());
-            let ancestor = root.join("ancestor");
-            let destination = root.join("destination");
-            fs::create_dir(&ancestor).unwrap();
-            fs::create_dir(&destination).unwrap();
-            let incoming = root.join("incoming-link");
-            let fixture_kind =
-                if gitcomet_core::test_support::symlink::directory(&destination, &incoming) {
-                    "directory-symlink"
-                } else {
-                    #[cfg(windows)]
-                    {
-                        // Fixed relative names avoid shell interpolation and a
-                        // junction exercises the reparse race without privileges.
-                        let result = std::process::Command::new("cmd")
-                            .current_dir(&root)
-                            .args(["/d", "/c", "mklink", "/J", "incoming-link", "destination"])
-                            .output()
-                            .unwrap();
-                        assert!(
-                            result.status.success(),
-                            "junction fixture failed: {result:?}"
-                        );
-                        "directory-junction"
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        unreachable!("only Windows may lack the symlink fixture privilege")
-                    }
-                };
-            let requested = vec![ancestor.join("first"), ancestor.join("second")];
-            let mut replaced = false;
-            let mut stamps = Stamps::default();
-            // A previously stamped input can equal the eventual current identity
-            // even though this pass observes an intervening ordinary directory.
-            // Local invalidation must override that old stamp rather than let it
-            // conceal the mismatch.
-            let replacement_stamp = stamp(&incoming);
-            stamps.0.insert(ancestor.clone(), replacement_stamp.clone());
-            let mut incomplete = false;
-            expand_watch_paths_with_metadata(
-                requested.clone(),
-                &mut Vec::new(),
-                &mut incomplete,
-                &mut stamps,
-                |path| {
-                    let result = fs::symlink_metadata(path);
-                    if path == requested[0] && !replaced {
-                        fs::rename(&ancestor, root.join("retired-ancestor")).unwrap();
-                        fs::rename(&incoming, &ancestor).unwrap();
-                        replaced = true;
-                    }
-                    result
-                },
-            );
-            assert!(replaced);
-            assert!(!incomplete);
-            if stamp(&ancestor) != replacement_stamp {
-                continue;
-            }
-            assert!(
-                stamps.changed(),
-                "setup must reject an expansion that reused a replaced ancestor"
-            );
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(&temp.path().canonicalize().unwrap());
+        // Swap the parent so the link itself never moves: moving it would
+        // refresh its ctime and break the equal-stamp setup below.
+        let parent = root.join("parent");
+        let staging = root.join("staging");
+        let ancestor = parent.join("ancestor");
+        let destination = root.join("destination");
+        fs::create_dir_all(&ancestor).unwrap();
+        fs::create_dir(&staging).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let incoming = staging.join("ancestor");
+        let fixture_kind =
+            if gitcomet_core::test_support::symlink::directory(&destination, &incoming) {
+                "directory-symlink"
+            } else {
+                #[cfg(windows)]
+                {
+                    // Fixed relative names avoid shell interpolation and a
+                    // junction exercises the reparse race without privileges.
+                    let result = std::process::Command::new("cmd")
+                        .current_dir(&root)
+                        .args([
+                            "/d",
+                            "/c",
+                            "mklink",
+                            "/J",
+                            r"staging\ancestor",
+                            "destination",
+                        ])
+                        .output()
+                        .unwrap();
+                    assert!(
+                        result.status.success(),
+                        "junction fixture failed: {result:?}"
+                    );
+                    "directory-junction"
+                }
+                #[cfg(not(windows))]
+                {
+                    unreachable!("only Windows may lack the symlink fixture privilege")
+                }
+            };
+        let requested = vec![ancestor.join("first"), ancestor.join("second")];
+        let mut replaced = false;
+        let mut stamps = Stamps::default();
+        // A previously stamped input can equal the eventual current identity
+        // even though this pass observes an intervening ordinary directory.
+        // Local invalidation must override that old stamp rather than let it
+        // conceal the mismatch.
+        let replacement_stamp = stamp(&incoming);
+        stamps.0.insert(ancestor.clone(), replacement_stamp.clone());
+        let mut incomplete = false;
+        expand_watch_paths_with_metadata(
+            requested.clone(),
+            &mut Vec::new(),
+            &mut incomplete,
+            &mut stamps,
+            |path| {
+                let result = fs::symlink_metadata(path);
+                if path == requested[0] && !replaced {
+                    fs::rename(&parent, root.join("retired-parent")).unwrap();
+                    fs::rename(&staging, &parent).unwrap();
+                    replaced = true;
+                }
+                result
+            },
+        );
+        assert!(replaced);
+        assert!(!incomplete);
+        assert_eq!(stamp(&ancestor), replacement_stamp);
+        // The swapped parent is invalidated as well, so check the ancestor's own entry.
+        assert!(
+            stamps.is_directory(&ancestor),
+            "setup must reject an expansion that reused a replaced ancestor"
+        );
+        assert!(stamps.changed());
 
-            let mut fresh_stamps = Stamps::default();
-            let mut links = Vec::new();
-            let paths =
-                expand_watch_paths(requested, &mut links, &mut incomplete, &mut fresh_stamps);
-            assert!(links.contains(&ancestor));
-            assert!(paths.contains(&destination.join("first")));
-            assert!(paths.contains(&destination.join("second")));
-            assert!(
-                !fresh_stamps.changed(),
-                "an independent invocation must accept the stable replacement"
-            );
-            assert!(fresh_stamps.0.is_empty(), "stable passes must not loop");
-            println!("WATCH_PREFIX_REPLACEMENT_RACE exercised=true kind={fixture_kind}");
-            return;
-        }
-        panic!("no pass moved the link within one filesystem clock tick");
+        let mut fresh_stamps = Stamps::default();
+        let mut links = Vec::new();
+        let paths = expand_watch_paths(requested, &mut links, &mut incomplete, &mut fresh_stamps);
+        assert!(links.contains(&ancestor));
+        assert!(paths.contains(&destination.join("first")));
+        assert!(paths.contains(&destination.join("second")));
+        assert!(
+            !fresh_stamps.changed(),
+            "an independent invocation must accept the stable replacement"
+        );
+        assert!(fresh_stamps.0.is_empty(), "stable passes must not loop");
+        println!("WATCH_PREFIX_REPLACEMENT_RACE exercised=true kind={fixture_kind}");
     }
 }
