@@ -1,4 +1,6 @@
 use super::*;
+use crate::view::pending_commit::PendingCommit;
+use crate::view::test_support::TestBackend;
 use gitcomet_core::domain::{Branch, CommitId, LogPage, RepoSpec};
 use gitcomet_state::model::{Loadable, RepoId, RepoState};
 use std::path::PathBuf;
@@ -387,6 +389,35 @@ fn branch(name: &str, target: &str) -> Branch {
     }
 }
 
+fn with_commit_pane(
+    cx: &mut gpui::TestAppContext,
+    repo: RepoState,
+    check: impl FnOnce(&mut DetailsPaneView),
+) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.clone();
+        pane.update(app, |pane, _cx| {
+            pane.state = Arc::new(AppState {
+                active_repo: Some(repo.id),
+                repos: vec![repo],
+                ..AppState::test_default()
+            });
+            check(pane);
+        });
+    });
+}
+
+fn staged_commit_repo() -> RepoState {
+    repo_with_status(RepoStatus {
+        staged: Arc::new(vec![file_status("staged.txt", FileStatusKind::Modified)]),
+        unstaged: Arc::new(Vec::new()),
+    })
+}
+
 #[test]
 fn commit_allowed_when_staged_changes_exist() {
     assert!(commit_allowed(false, 1));
@@ -404,8 +435,8 @@ fn commit_not_allowed_without_staged_changes_or_merge() {
     assert!(!commit_allowed(false, 0));
 }
 
-#[test]
-fn amend_allowed_when_filtered_log_is_empty_but_head_branch_exists() {
+#[gpui::test]
+fn amend_allowed_when_filtered_log_is_empty_but_head_branch_exists(cx: &mut gpui::TestAppContext) {
     let mut repo = test_repo();
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "abc123")]));
@@ -414,15 +445,14 @@ fn amend_allowed_when_filtered_log_is_empty_but_head_branch_exists() {
         next_cursor: None,
     }));
 
-    assert!(DetailsPaneView::can_submit_commit(
-        Some(&repo),
-        "message",
-        true
-    ));
+    with_commit_pane(cx, repo, |pane| {
+        pane.commit_amend_enabled = true;
+        assert!(pane.can_submit_commit("message"));
+    });
 }
 
-#[test]
-fn amend_not_allowed_on_unborn_head_branch() {
+#[gpui::test]
+fn amend_not_allowed_on_unborn_head_branch(cx: &mut gpui::TestAppContext) {
     let mut repo = test_repo();
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
@@ -431,15 +461,14 @@ fn amend_not_allowed_on_unborn_head_branch() {
         next_cursor: None,
     }));
 
-    assert!(!DetailsPaneView::can_submit_commit(
-        Some(&repo),
-        "message",
-        true
-    ));
+    with_commit_pane(cx, repo, |pane| {
+        pane.commit_amend_enabled = true;
+        assert!(!pane.can_submit_commit("message"));
+    });
 }
 
-#[test]
-fn amend_allowed_on_detached_head_without_visible_log_entry() {
+#[gpui::test]
+fn amend_allowed_on_detached_head_without_visible_log_entry(cx: &mut gpui::TestAppContext) {
     let mut repo = test_repo();
     repo.head_branch = Loadable::Ready("HEAD".to_string());
     repo.log = Loadable::Ready(Arc::new(LogPage {
@@ -447,11 +476,51 @@ fn amend_allowed_on_detached_head_without_visible_log_entry() {
         next_cursor: None,
     }));
 
-    assert!(DetailsPaneView::can_submit_commit(
-        Some(&repo),
-        "message",
-        true
-    ));
+    with_commit_pane(cx, repo, |pane| {
+        pane.commit_amend_enabled = true;
+        assert!(pane.can_submit_commit("message"));
+    });
+}
+
+#[gpui::test]
+fn can_submit_commit_checks_pending_state_for_active_repository(cx: &mut gpui::TestAppContext) {
+    with_commit_pane(cx, staged_commit_repo(), |pane| {
+        assert!(pane.can_submit_commit("message"));
+
+        let repo_id = pane.state.repos[0].id;
+        let pending = PendingCommit::new(&pane.state, repo_id, false, "message".into());
+        pane.pending_commits.insert(repo_id, pending);
+        assert!(!pane.can_submit_commit("message"));
+
+        let mut other_repo = pane.state.repos[0].clone();
+        other_repo.id = RepoId(2);
+        let state = Arc::make_mut(&mut pane.state);
+        state.active_repo = Some(other_repo.id);
+        state.repos.push(other_repo);
+        assert!(pane.can_submit_commit("message"));
+    });
+}
+
+#[gpui::test]
+fn can_submit_commit_refuses_commit_in_flight_without_pending_tracker(
+    cx: &mut gpui::TestAppContext,
+) {
+    with_commit_pane(cx, staged_commit_repo(), |pane| {
+        assert!(pane.can_submit_commit("message"));
+
+        Arc::make_mut(&mut pane.state).repos[0].commit_in_flight = 1;
+        assert!(!pane.can_submit_commit("message"));
+    });
+}
+
+#[gpui::test]
+fn can_submit_commit_requires_active_repository(cx: &mut gpui::TestAppContext) {
+    with_commit_pane(cx, staged_commit_repo(), |pane| {
+        assert!(pane.can_submit_commit("message"));
+
+        Arc::make_mut(&mut pane.state).active_repo = None;
+        assert!(!pane.can_submit_commit("message"));
+    });
 }
 
 #[test]

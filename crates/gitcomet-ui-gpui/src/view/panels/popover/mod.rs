@@ -410,6 +410,7 @@ pub(in super::super) struct PopoverHost {
     stash_picker_search_input: Option<Entity<components::TextInput>>,
     _stash_picker_search_input_subscription: Option<gpui::Subscription>,
     commit_prompt_message_drafts: FxHashMap<RepoId, SharedString>,
+    pending_commit_prompts: FxHashMap<RepoId, crate::view::pending_commit::PendingCommit>,
     commit_prompt_message_input: Entity<components::TextInput>,
     commit_prompt_message_scroll: ScrollHandle,
     commit_prompt_focus: DialogFocus,
