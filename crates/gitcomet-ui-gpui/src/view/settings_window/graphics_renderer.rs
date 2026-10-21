@@ -1,10 +1,6 @@
 use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
-#[cfg(target_os = "linux")]
-use crate::linux_renderer as renderer;
-#[cfg(target_os = "windows")]
-use crate::windows_renderer as renderer;
-use renderer::{RendererPreference, RendererSession};
+use crate::windows_renderer::{RendererPreference, RendererSession};
 
 impl SettingsWindowView {
     pub(super) fn graphics_renderer_rows(
@@ -43,8 +39,7 @@ impl SettingsWindowView {
             return card;
         }
         let mut detail = self.detail_container("settings_graphics_renderer_options", theme);
-        #[cfg(target_os = "windows")]
-        let options = [
+        for (value, id, description) in [
             (
                 RendererPreference::Auto,
                 "settings_graphics_renderer_auto",
@@ -55,26 +50,7 @@ impl SettingsWindowView {
                 "settings_graphics_renderer_dx11",
                 "Use DirectX 11 directly",
             ),
-        ];
-        #[cfg(target_os = "linux")]
-        let options = [
-            (
-                RendererPreference::Auto,
-                "settings_graphics_renderer_auto",
-                "Vulkan when available, otherwise OpenGL",
-            ),
-            (
-                RendererPreference::Vulkan,
-                "settings_graphics_renderer_vulkan",
-                "Use Vulkan directly",
-            ),
-            (
-                RendererPreference::Gl,
-                "settings_graphics_renderer_gl",
-                "Use OpenGL directly",
-            ),
-        ];
-        for (value, id, description) in options {
+        ] {
             detail = detail.child(
                 self.option_row(
                     id,
@@ -125,7 +101,7 @@ impl SettingsWindowView {
         let sequence = writer.next();
         let write = cx.background_spawn(async move {
             writer.persist(sequence, || {
-                session::persist_ui_settings(renderer::preference_settings(value))
+                session::persist_ui_settings(crate::windows_renderer::preference_settings(value))
             })
         });
         let window_handle = window.window_handle();

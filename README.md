@@ -254,13 +254,6 @@ To install GnuPG, trust GitHub's signing key, and configure SSH allowed signers,
 
 Choose **Settings → Diff → Diff Engine** to make Difftastic the default, or use the diff viewer's cog for a temporary override. Both Split and Inline layouts support it. See [Difftastic](docs/difftastic.md) for partial staging and fallbacks.
 
-### Graphics renderer
-
-On Linux and Windows, choose **Settings → General → Graphics → Graphics renderer**
-to change the renderer for the next launch. See the [Linux](docs/linux-renderer.md) and
-[Windows](docs/windows-renderer.md) guides for backend choices and diagnostic
-overrides.
-
 ### Themes
 
 GitComet supports built-in themes and user-provided custom themes.

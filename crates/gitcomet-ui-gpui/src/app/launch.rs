@@ -480,11 +480,7 @@ pub(super) fn run_windowed_app(
     let (application, renderer_session) = crate::windows_renderer::application(
         launch.view_config.view_mode == GitCometViewMode::Normal,
     );
-    #[cfg(target_os = "linux")]
-    let (application, renderer_session) = crate::linux_renderer::application(
-        launch.view_config.view_mode == GitCometViewMode::Normal,
-    );
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(not(target_os = "windows"))]
     let application = gpui_platform::application();
     drop(platform_stage);
     let http_stage = gitcomet_core::startup_trace::span("http_client");
@@ -520,7 +516,7 @@ pub(super) fn run_windowed_app(
     application.run(move |cx: &mut App| {
         gitcomet_core::startup_trace::mark("event_loop_callback");
         cx.set_global(clean_shutdown_tracker);
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         cx.set_global(renderer_session);
         crate::ui_probe::start_if_enabled(cx);
         crate::environment::initialize(cx);
@@ -812,16 +808,7 @@ pub(super) fn open_gitcomet_window(
             },
         )
     })
-    .unwrap_or_else(|err| {
-        #[cfg(target_os = "linux")]
-        let renderer_help = cx
-            .try_global::<crate::linux_renderer::RendererSession>()
-            .map(|session| session.0.borrow().startup_failure_help())
-            .unwrap_or_default();
-        #[cfg(not(target_os = "linux"))]
-        let renderer_help = String::new();
-        panic!("{}", window_open_failure_message(&err, &renderer_help))
-    });
+    .unwrap_or_else(|err| panic!("{}", window_open_failure_message(&err)));
 
     #[cfg(target_os = "macos")]
     refresh_macos_app_menus(cx);
@@ -832,15 +819,12 @@ pub(super) fn open_gitcomet_window(
     window
 }
 
-pub(super) fn window_open_failure_message(err: &anyhow::Error, renderer_help: &str) -> String {
+pub(super) fn window_open_failure_message(err: &anyhow::Error) -> String {
     let name = identity::current().display_name();
-    let mut message = format!("failed to open main {name} window: {err:#}");
-    if !renderer_help.is_empty() {
-        message.push('\n');
-        message.push_str(renderer_help);
-    }
-    message.push_str("\nFor diagnostics, include the crash report from the next launch.");
-    message
+    format!(
+        "failed to open main {name} window: {err:#}\n\
+         For diagnostics, include the crash report from the next launch."
+    )
 }
 
 /// Windows and macOS use their default opaque surfaces. Linux client-side

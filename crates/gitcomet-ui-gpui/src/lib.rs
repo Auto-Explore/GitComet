@@ -15,8 +15,6 @@ mod environment;
 mod external_editor;
 pub mod http;
 mod launch_guard;
-#[cfg(target_os = "linux")]
-mod linux_renderer;
 mod menu_labels;
 #[doc(hidden)]
 pub mod perf_alloc;

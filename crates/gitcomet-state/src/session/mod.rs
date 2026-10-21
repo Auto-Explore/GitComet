@@ -42,7 +42,6 @@ pub struct UiSession {
     pub image_smooth_filter: Option<String>,
     pub window_controls_mode: Option<String>,
     pub windows_renderer: Option<String>,
-    pub linux_renderer: Option<String>,
     pub browser_open_target: Option<String>,
     pub ui_density: Option<String>,
     pub ui_font_size_px: Option<u32>,
@@ -193,8 +192,6 @@ pub(crate) struct UiSessionFile {
     window_controls_mode: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     windows_renderer: Option<String>,
-    #[serde(default, deserialize_with = "lenient")]
-    linux_renderer: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     browser_open_target: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
@@ -500,7 +497,6 @@ pub fn load_from_path(path: &Path) -> UiSession {
         image_smooth_filter: file.image_smooth_filter,
         window_controls_mode: file.window_controls_mode,
         windows_renderer: file.windows_renderer,
-        linux_renderer: file.linux_renderer,
         browser_open_target: file.browser_open_target,
         ui_density: file.ui_density,
         ui_font_size_px: file.ui_font_size_px,
@@ -789,7 +785,7 @@ fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
     gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
 
-pub fn default_session_file_path() -> Option<PathBuf> {
+fn default_session_file_path() -> Option<PathBuf> {
     #[cfg(test)]
     if let Some(path) = test_session_file_path_override() {
         return path;

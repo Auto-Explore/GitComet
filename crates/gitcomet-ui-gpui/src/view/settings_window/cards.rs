@@ -41,7 +41,7 @@ impl SettingsWindowView {
         let card = self.card("settings_window_general", "General", theme);
         let card = self.general_integration_rows(card, theme, cx);
         let card = self.general_date_time_rows(card, theme, cx);
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         let card = self.graphics_renderer_rows(card, theme, cx);
         card
     }

@@ -32,8 +32,6 @@ mod appearance;
 mod chrome_and_layout;
 mod executables;
 mod extensions;
-#[cfg(target_os = "linux")]
-mod graphics_renderer;
 mod large_file_tools_lifecycle;
 mod preferences;
 mod restoration;

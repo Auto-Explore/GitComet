@@ -191,7 +191,6 @@ impl GitCometView {
                             image_smooth_filter: None,
                             // Owned by the settings window; None preserves it.
                             windows_renderer: None,
-                            linux_renderer: None,
                             window_controls_mode: None,
                             browser_open_target: None,
                             ui_density: Some(crate::appearance::current(cx).density.key().to_string()),
