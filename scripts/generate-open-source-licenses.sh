@@ -39,10 +39,7 @@ BUNDLED_ASSET_LICENSE_ROWS=(
 # Crates whose manifest names a licence file instead of an SPDX id, keyed by
 # name@version so an upgrade has to confirm the licence again.
 LICENSE_OVERRIDES='{
-  "tree-sitter-newick@1.1.0": "CECILL-C",
-  "wgsl-rs@0.1.0": "MIT",
-  "wgsl-rs-ir@0.1.0": "MIT",
-  "wgsl-rs-macros@0.1.0": "MIT"
+  "tree-sitter-newick@1.1.0": "CECILL-C"
 }'
 
 cleanup() {
