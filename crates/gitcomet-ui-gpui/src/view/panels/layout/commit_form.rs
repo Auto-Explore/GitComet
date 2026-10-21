@@ -1,6 +1,7 @@
 //! The commit message form: submit gating, submission, and the commit box.
 
 use super::*;
+use crate::view::pending_commit::PendingCommit;
 
 pub(super) fn merge_active(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
@@ -26,17 +27,17 @@ impl DetailsPaneView {
         }
     }
 
-    pub(super) fn can_submit_commit(repo: Option<&RepoState>, message: &str, amend: bool) -> bool {
-        let Some(repo) = repo else {
+    pub(super) fn can_submit_commit(&self, message: &str) -> bool {
+        let Some(repo) = self.active_repo() else {
             return false;
         };
-        if repo.commit_in_flight > 0 {
+        if self.pending_commits.contains_key(&repo.id) || repo.commit_in_flight > 0 {
             return false;
         }
         if message.trim().is_empty() {
             return false;
         }
-        if amend {
+        if self.commit_amend_enabled {
             return !merge_active(Some(repo))
                 && !matches!(repo.rebase_in_progress, Loadable::Ready(true))
                 && Self::repo_has_head_commit(repo);
@@ -56,12 +57,20 @@ impl DetailsPaneView {
             .commit_message_input
             .read_with(cx, |input, _| input.text().to_string());
         let amend = self.commit_amend_enabled;
-        if !Self::can_submit_commit(self.active_repo(), &message, amend) {
+        if !self.can_submit_commit(&message) {
             return false;
         }
 
+        self.pending_commits.insert(
+            repo_id,
+            PendingCommit::new(
+                &self.state,
+                repo_id,
+                amend,
+                message.trim().to_string().into(),
+            ),
+        );
         if amend {
-            self.mark_pending_commit_amend(repo_id);
             self.store.dispatch(Msg::CommitAmend {
                 repo_id,
                 message: message.trim().to_string(),
@@ -74,11 +83,6 @@ impl DetailsPaneView {
                 push_after_commit: self.commit_push_after_enabled,
             });
         }
-        self.commit_message_programmatic_change = true;
-        self.commit_message_input
-            .update(cx, |input, cx| input.set_text(String::new(), cx));
-        self.commit_message_scroll
-            .set_offset(point(px(0.0), px(0.0)));
         cx.notify();
         true
     }
@@ -109,11 +113,7 @@ impl DetailsPaneView {
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
         let commit_message_text = self.commit_message_input.read(cx).text().to_string();
-        let can_submit_commit = Self::can_submit_commit(
-            self.active_repo(),
-            &commit_message_text,
-            self.commit_amend_enabled,
-        );
+        let can_submit_commit = self.can_submit_commit(&commit_message_text);
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
         let icon_color = theme.colors.accent.foreground;
         let icon = |path: &'static str| svg_icon(path, icon_color, scaled_px(14.0));

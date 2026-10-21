@@ -125,15 +125,20 @@ fn commit_prompt_restores_drafts_per_repo(cx: &mut gpui::TestAppContext) {
     });
 }
 
-#[gpui::test]
-fn successful_commit_prompt_submission_clears_draft(cx: &mut gpui::TestAppContext) {
+fn submit_prompt_with_staged_repo(
+    cx: &mut gpui::TestAppContext,
+    repo_id: RepoId,
+) -> (
+    gpui::Entity<GitCometView>,
+    RepoState,
+    &mut gpui::VisualTestContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let repo_id = RepoId(21);
     let mut repo = open_repo(repo_id, "/tmp/commit-prompt-submit");
     repo.staged_status = Loadable::Ready(Arc::new(Vec::new()));
     repo.merge_commit_message = Loadable::Ready(Some("Merge branch 'topic'".to_string()));
     store.replace_snapshot_for_test(Arc::new(AppState {
-        repos: vec![repo],
+        repos: vec![repo.clone()],
         active_repo: Some(repo_id),
         ..AppState::test_default()
     }));
@@ -151,12 +156,75 @@ fn successful_commit_prompt_submission_clears_draft(cx: &mut gpui::TestAppContex
                     .update(cx, |input, cx| input.set_text("finish merge", cx));
                 assert!(host.can_submit_commit_prompt(cx));
                 host.submit_commit_prompt(window, cx);
-
-                host.open_popover_at(PopoverKind::CommitPrompt { repo_id }, anchor, window, cx);
-                assert_eq!(host.commit_prompt_message_input.read(cx).text(), "");
             });
         });
     });
+    (view, repo, cx)
+}
+
+fn reopened_prompt_text(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    repo_id: RepoId,
+) -> String {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                let anchor = gpui::point(gpui::px(120.0), gpui::px(72.0));
+                host.open_popover_at(PopoverKind::CommitPrompt { repo_id }, anchor, window, cx);
+                host.commit_prompt_message_input.read(cx).text().to_string()
+            })
+        })
+    })
+}
+
+#[gpui::test]
+fn successful_commit_prompt_submission_clears_draft(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(21);
+    let (view, mut repo, cx) = submit_prompt_with_staged_repo(cx, repo_id);
+
+    repo.feedback_mut()
+        .push_command_result(gitcomet_state::model::CommandLogEntry {
+            time: std::time::UNIX_EPOCH,
+            ok: true,
+            command: "Commit".to_string(),
+            summary: "Commit: test".to_string(),
+            stdout: "".into(),
+            stderr: "".into(),
+            announce_success: true,
+            handled_by_auth_prompt: false,
+            failure_id: None,
+            hook_operation_id: None,
+        });
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..AppState::test_default()
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::push_test_state(this, state, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    assert_eq!(reopened_prompt_text(&view, cx, repo_id), "");
+}
+
+#[gpui::test]
+fn failed_commit_prompt_submission_keeps_draft(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(22);
+    let (view, _repo, cx) = submit_prompt_with_staged_repo(cx, repo_id);
+
+    crate::view::test_support::drain_store_worker(&view, cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    assert_eq!(reopened_prompt_text(&view, cx, repo_id), "finish merge");
 }
 
 /// The "Merge into current" entry and the dialog it opens must agree.

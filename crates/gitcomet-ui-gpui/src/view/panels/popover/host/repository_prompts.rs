@@ -2,6 +2,7 @@
 //! and submodules.
 
 use super::*;
+use crate::view::pending_commit::PendingCommit;
 
 impl PopoverHost {
     /// Validates the repo's current multi-selection against its loaded log and
@@ -280,17 +281,57 @@ impl PopoverHost {
         if message.is_empty() {
             return;
         }
+        let pending = PendingCommit::new(&self.state, repo_id, false, message.clone().into());
         self.store.dispatch(Msg::Commit {
             repo_id,
             message,
             push_after_commit: false,
         });
-        self.commit_prompt_message_drafts.remove(&repo_id);
-        self.commit_prompt_message_input
-            .update(cx, |input, cx| input.set_text(String::new(), cx));
-        self.commit_prompt_message_scroll
-            .set_offset(point(px(0.0), px(0.0)));
+        self.pending_commit_prompts.insert(repo_id, pending);
         self.dismiss_inline_popover(window, cx);
+    }
+
+    pub(in crate::view::panels::popover) fn advance_pending_commit_prompts(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let state = Arc::clone(&self.state);
+        let mut pending_commits = std::mem::take(&mut self.pending_commit_prompts);
+        let before = pending_commits.len();
+        pending_commits.retain(|repo_id, pending| {
+            // Without git the store drops the commit and never logs a result.
+            if !state.git_runtime.is_available()
+                || !state.repos.iter().any(|repo| repo.id == *repo_id)
+            {
+                return false;
+            }
+            let result = pending.advance(&state);
+            if result == Some(true) {
+                if self
+                    .commit_prompt_message_drafts
+                    .get(repo_id)
+                    .is_some_and(|draft| draft.trim() == pending.message.as_ref())
+                {
+                    self.commit_prompt_message_drafts.remove(repo_id);
+                }
+                if self.popover == Some(PopoverKind::CommitPrompt { repo_id: *repo_id })
+                    && self.commit_prompt_message_input.read(cx).text().trim()
+                        == pending.message.as_ref()
+                {
+                    self.commit_prompt_message_input
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    self.commit_prompt_message_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
+                }
+            }
+            !(result.is_some() && pending.settled())
+        });
+        // The host fingerprint does not cover the submit gate, so re-render
+        // the Commit button once a commit settles.
+        if pending_commits.len() != before {
+            cx.notify();
+        }
+        self.pending_commit_prompts = pending_commits;
     }
 
     pub(in crate::view::panels::popover) fn save_commit_prompt_draft(
@@ -318,9 +359,12 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         self.active_repo().is_some_and(|repo| {
-            repo.staged_status_entries()
-                .is_some_and(|entries| !entries.is_empty())
-                || matches!(repo.merge_commit_message, Loadable::Ready(Some(_)))
+            repo.commit_in_flight == 0
+                && !self.pending_commit_prompts.contains_key(&repo.id)
+                && (repo
+                    .staged_status_entries()
+                    .is_some_and(|entries| !entries.is_empty())
+                    || matches!(repo.merge_commit_message, Loadable::Ready(Some(_))))
         }) && self
             .commit_prompt_message_input
             .read_with(cx, |input, _| !input.text().trim().is_empty())
