@@ -767,6 +767,34 @@ impl RepoState {
         )
     }
 
+    /// Where `commit_id` sits on HEAD's first-parent history, judged from the
+    /// loaded history like [`Self::history_squash_plan`].
+    pub fn first_parent_position_from_head(
+        &self,
+        commit_id: &CommitId,
+    ) -> gitcomet_core::squash::FirstParentPosition {
+        use gitcomet_core::squash::FirstParentPosition;
+        let Some(head) = self.head_commit_id() else {
+            return FirstParentPosition::NotFound;
+        };
+        if head == *commit_id {
+            return FirstParentPosition::Linear { distance: 0 };
+        }
+        if let Some(index) = self
+            .history_state
+            .indexed
+            .index
+            .as_ref()
+            .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+        {
+            return gitcomet_core::squash::first_parent_position_indexed(index, &head, commit_id);
+        }
+        let Loadable::Ready(page) = &self.log else {
+            return FirstParentPosition::NotFound;
+        };
+        gitcomet_core::squash::first_parent_position(&page.commits, &head, commit_id)
+    }
+
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
         if self.history_state.multi_selection == v {
             return;

@@ -774,6 +774,43 @@ pub(super) fn squash_commits(
     }]
 }
 
+pub(super) fn reword_commit(
+    inputs: &ReducerInputs,
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    message: String,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // Rewording rewrites history like a rebase, so it waits for any running
+    // history operation; this also drops a second submit of the same edit.
+    let refusal = if repo_state.history_rewrite_busy() {
+        Some("Wait for the running Git operation to finish, then edit the commit message.")
+    } else if message.trim().is_empty() {
+        Some("Enter the new commit message first.")
+    } else {
+        None
+    };
+    if let Some(refusal) = refusal {
+        super::util::push_notification(
+            inputs,
+            state,
+            crate::model::AppNotificationKind::Warning,
+            refusal.to_string(),
+        );
+        return Vec::new();
+    }
+    super::begin_local_action(state, repo_id);
+    vec![Effect::RepoCommand(RepoCommandEffect::RewordCommit {
+        repo_id,
+        commit_id,
+        message,
+        auth: None,
+    })]
+}
+
 pub(super) fn rebase(repo_id: RepoId, onto: String) -> Vec<Effect> {
     vec![Effect::RepoCommand(RepoCommandEffect::Rebase {
         repo_id,
@@ -1268,6 +1305,8 @@ fn command_may_change_large_file_support(command: &RepoCommandKind) -> bool {
         | RepoCommandKind::StageHunk
         | RepoCommandKind::UnstageHunk
         | RepoCommandKind::ApplyWorktreePatch { .. }
+        // Rewording keeps every tree as it was.
+        | RepoCommandKind::RewordCommit { .. }
         | RepoCommandKind::RunMaintenance => false,
     }
 }
@@ -1279,6 +1318,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::Reset { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1323,6 +1363,7 @@ pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool
         RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Reset { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
@@ -1350,6 +1391,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::ForcePushWithLease { .. }
             | RepoCommandKind::PushSetUpstream { .. }
             | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1367,6 +1409,7 @@ pub(super) fn command_clears_diff_selection(command: &RepoCommandKind) -> bool {
         command,
         RepoCommandKind::Reset { .. }
             | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::RewordCommit { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -1474,6 +1517,7 @@ pub(super) fn repo_command_finished(
     }
 
     let mut extra_effects = Vec::new();
+    let mut reselect = None;
     if let RepoCommandKind::LargeFile { command } = &command {
         if command.pulls() {
             repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
@@ -1568,6 +1612,22 @@ pub(super) fn repo_command_finished(
                 repo_state.set_commit_details(Loadable::NotLoaded);
                 repo_state.history_state.squash_preview_pending = None;
                 repo_state.set_squash_preview(Loadable::NotLoaded);
+            }
+            if let RepoCommandKind::RewordCommit {
+                commit_id,
+                rewritten_id,
+                ..
+            } = &command
+            {
+                // The reworded commit and its descendants have new ids. Follow
+                // the reworded commit when it is the one being shown; another
+                // selection is left to the log reload, which prunes it if
+                // the rewrite took it away.
+                if repo_state.history_state.selected_commit.as_ref() == Some(commit_id) {
+                    repo_state.set_selected_commit(None);
+                    repo_state.set_commit_details(Loadable::NotLoaded);
+                    reselect = rewritten_id.clone();
+                }
             }
             push_command_log(inputs, repo_state, true, &command, &output, None, false);
         }
@@ -1740,6 +1800,9 @@ pub(super) fn repo_command_finished(
     }
     let mut effects = refresh_full_effects(repo_state, state.git_log_settings);
     effects.extend(extra_effects);
+    if let Some(commit_id) = reselect {
+        effects.extend(super::effects::select_commit(state, repo_id, commit_id));
+    }
     effects
 }
 

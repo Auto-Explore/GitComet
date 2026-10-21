@@ -786,6 +786,9 @@ mod repo_tabs_bar;
 pub(in crate::view) use action_bar::action_bar_breakpoints;
 pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
 pub(super) use bottom_status_bar::{BottomStatusBarView, bottom_status_bar_height};
+pub(in crate::view) use layout::commit_reword_submittable;
+#[cfg(test)]
+pub(in crate::view) use layout::{commit_reword_availability, commit_reword_blocker};
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};

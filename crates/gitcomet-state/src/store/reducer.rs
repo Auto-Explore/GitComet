@@ -163,6 +163,7 @@ fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
         Effect::RepoCommand(RepoCommandEffect::MergeRef { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::SquashRef { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::SquashCommits { repo_id, .. })
+        | Effect::RepoCommand(RepoCommandEffect::RewordCommit { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::Reset { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::Rebase { repo_id, .. })
         | Effect::RepoCommand(RepoCommandEffect::RebaseContinue { repo_id, .. })
@@ -343,6 +344,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::Reset { .. }
             | Msg::PrepareSquash { .. }
             | Msg::SquashCommits { .. }
+            | Msg::RewordCommit { .. }
             | Msg::Rebase { .. }
             | Msg::RebaseContinue { .. }
             | Msg::RebaseAbort { .. }
@@ -1831,6 +1833,11 @@ fn reduce_inner(
             message,
             count,
         ),
+        Msg::RewordCommit {
+            repo_id,
+            commit_id,
+            message,
+        } => actions_emit_effects::reword_commit(inputs, state, repo_id, commit_id, message),
         Msg::Rebase { repo_id, onto } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase(repo_id, onto)

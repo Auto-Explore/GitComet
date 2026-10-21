@@ -13,9 +13,9 @@ use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome,
     ConflictFileStages, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry,
-    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, RewordCommitOutcome,
+    SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1348,6 +1348,14 @@ impl GitRepository for GixRepo {
         entries: &[InteractiveRebaseEntry],
     ) -> Result<CommandOutput> {
         self.interactive_rebase_with_output_impl(base, entries)
+    }
+
+    fn reword_commit_with_output(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        self.reword_commit_with_output_impl(commit_id, message)
     }
 
     fn interactive_cherry_pick_with_output(

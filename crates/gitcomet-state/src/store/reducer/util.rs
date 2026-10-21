@@ -1283,6 +1283,7 @@ fn summarize_command(
             RepoCommandKind::DeleteRemoteTag { .. } => "Delete remote tag",
             RepoCommandKind::Reset { .. } => "Reset",
             RepoCommandKind::SquashCommits { .. } => "Squash",
+            RepoCommandKind::RewordCommit { .. } => "Edit commit message",
             RepoCommandKind::Rebase { .. } => "Rebase",
             RepoCommandKind::RebaseContinue | RepoCommandKind::RebaseAbort => {
                 sequencer_operation_label(output, error)
@@ -1560,6 +1561,7 @@ fn summarize_command(
         RepoCommandKind::SquashCommits { count, .. } => {
             format!("Squash {count} commits: Completed")
         }
+        RepoCommandKind::RewordCommit { .. } => "Edit commit message: Completed".to_string(),
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => {
             let operation = sequencer_operation_label(output, None);

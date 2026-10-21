@@ -366,6 +366,21 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             message,
             count,
         },
+        // An older commit is reworded by a rebase, which a signing failure
+        // leaves paused with the new message persisted: continue it like the
+        // interactive rebase below. A failure that left nothing behind (an
+        // amend of HEAD, or a rebase that never started) replays whole.
+        RepoCommandKind::RewordCommit {
+            rebase_paused: true,
+            ..
+        } => Msg::RebaseContinue { repo_id },
+        RepoCommandKind::RewordCommit {
+            commit_id, message, ..
+        } => Msg::RewordCommit {
+            repo_id,
+            commit_id,
+            message,
+        },
         RepoCommandKind::Rebase { onto } => Msg::Rebase { repo_id, onto },
         RepoCommandKind::RebaseContinue => Msg::RebaseContinue { repo_id },
         RepoCommandKind::RebaseAbort => Msg::RebaseAbort { repo_id },

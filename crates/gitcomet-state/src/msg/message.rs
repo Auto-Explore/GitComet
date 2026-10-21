@@ -1084,6 +1084,13 @@ pub enum Msg {
         message: String,
         count: usize,
     },
+    /// Replaces the message of `commit_id`: HEAD, or a commit on HEAD's
+    /// linear first-parent history. The backend re-validates the target.
+    RewordCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        message: String,
+    },
     Rebase {
         repo_id: RepoId,
         onto: String,
