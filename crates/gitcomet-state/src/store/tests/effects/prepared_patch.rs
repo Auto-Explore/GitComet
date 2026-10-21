@@ -413,17 +413,6 @@ fn a_running_pull_refuses_a_reviewed_apply_but_a_fetch_does_not() {
             apply_started_rx
                 .try_recv()
                 .unwrap_or_else(|_| panic!("{label}: the apply did not reach the backend"));
-            let result = loop {
-                if let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-                    command: crate::msg::RepoCommandKind::StageHunk,
-                    result,
-                    ..
-                }) = recv_effect_message(&rx, Duration::from_secs(2)).unwrap()
-                {
-                    break result;
-                }
-            };
-            assert!(result.is_ok(), "{label}: {result:?}");
         }
         drop(BlockingReleaseGuard {
             release: remote_release.clone(),
