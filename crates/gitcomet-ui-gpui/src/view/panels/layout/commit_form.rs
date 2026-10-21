@@ -27,22 +27,17 @@ impl DetailsPaneView {
         }
     }
 
-    pub(super) fn can_submit_commit(
-        repo: Option<&RepoState>,
-        message: &str,
-        amend: bool,
-        commit_pending: bool,
-    ) -> bool {
-        let Some(repo) = repo else {
+    pub(super) fn can_submit_commit(&self, message: &str) -> bool {
+        let Some(repo) = self.active_repo() else {
             return false;
         };
-        if commit_pending || repo.commit_in_flight > 0 {
+        if self.pending_commits.contains_key(&repo.id) || repo.commit_in_flight > 0 {
             return false;
         }
         if message.trim().is_empty() {
             return false;
         }
-        if amend {
+        if self.commit_amend_enabled {
             return !merge_active(Some(repo))
                 && !matches!(repo.rebase_in_progress, Loadable::Ready(true))
                 && Self::repo_has_head_commit(repo);
@@ -62,8 +57,7 @@ impl DetailsPaneView {
             .commit_message_input
             .read_with(cx, |input, _| input.text().to_string());
         let amend = self.commit_amend_enabled;
-        let commit_pending = self.pending_commits.contains_key(&repo_id);
-        if !Self::can_submit_commit(self.active_repo(), &message, amend, commit_pending) {
+        if !self.can_submit_commit(&message) {
             return false;
         }
 
@@ -119,13 +113,7 @@ impl DetailsPaneView {
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
         let commit_message_text = self.commit_message_input.read(cx).text().to_string();
-        let can_submit_commit = Self::can_submit_commit(
-            self.active_repo(),
-            &commit_message_text,
-            self.commit_amend_enabled,
-            self.active_repo_id()
-                .is_some_and(|id| self.pending_commits.contains_key(&id)),
-        );
+        let can_submit_commit = self.can_submit_commit(&commit_message_text);
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
         let icon_color = theme.colors.accent.foreground;
         let icon = |path: &'static str| svg_icon(path, icon_color, scaled_px(14.0));
