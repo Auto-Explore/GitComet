@@ -4,7 +4,7 @@ use super::{
     repo_file_stamp,
 };
 use crate::util::{
-    git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_paths, run_git_raw_output,
+    git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_paths, run_git_background_output,
 };
 use gitcomet_core::domain::{
     FileConflictKind, FileStatus, FileStatusKind, RepoStatus, UpstreamDivergence,
@@ -21,6 +21,10 @@ mod worker_limit;
 #[cfg(test)]
 #[path = "status/cancellation_tests.rs"]
 mod cancellation_tests;
+
+#[cfg(test)]
+#[path = "status/refresh_tests.rs"]
+mod refresh_tests;
 
 use cancellation::StatusCancellation;
 
@@ -82,21 +86,31 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RepoStatus> {
         cancellation.check_cancelled()?;
+        #[cfg(feature = "benchmarks")]
+        let timing = crate::status_trace::StageTimer::new("repository-config");
         let repo = self.status_repo();
+        #[cfg(feature = "benchmarks")]
+        drop(timing);
         // Bare repositories can display history, but have no checkout whose
         // changes we can report. Do not walk the Git directory or compare HEAD
         // against a missing index (which would report every file as deleted).
         if repo.workdir().is_none() {
             return Ok(RepoStatus::default());
         }
+        #[cfg(feature = "benchmarks")]
+        let timing = crate::status_trace::StageTimer::new("index-fingerprint-gitlinks");
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         cancellation.check_cancelled()?;
+        #[cfg(feature = "benchmarks")]
+        drop(timing);
 
         // Check whether HEAD and the index file are unchanged since the last
         // status call.  When both match, the staged (Tree→Index) result is
         // identical and we can skip the tree comparison entirely, using the
         // cheaper index-worktree-only iterator.
+        #[cfg(feature = "benchmarks")]
+        let timing = crate::status_trace::StageTimer::new("staged-status");
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
         cancellation.check_cancelled()?;
 
@@ -119,6 +133,8 @@ impl GixRepo {
             collect_staged_status_from_tree_index(&repo, &tree)?
         };
         cancellation.check_cancelled()?;
+        #[cfg(feature = "benchmarks")]
+        drop(timing);
         // Use the same direct worktree walk on the first scan as on cached
         // scans. The generic status iterator keeps its stat updates private
         // and can only persist them to disk; status must remain read-only.
@@ -129,11 +145,12 @@ impl GixRepo {
             &repo,
             &self.stat_refreshed_index,
             &mut unstaged,
-            may_have_gitlinks,
             cancellation,
         )?;
         cancellation.check_cancelled()?;
 
+        #[cfg(feature = "benchmarks")]
+        let _timing = crate::status_trace::StageTimer::new("finalize-and-gitlink-supplement");
         if !used_cached_staged {
             *self
                 .tree_index_cache
@@ -153,6 +170,7 @@ impl GixRepo {
             staged,
             unstaged,
             direct.has_conflicted_unstaged,
+            cancellation,
         )
     }
 
@@ -172,7 +190,6 @@ impl GixRepo {
             &repo,
             &self.stat_refreshed_index,
             &mut unstaged,
-            may_have_gitlinks,
             cancellation,
         )?;
         cancellation.check_cancelled()?;
@@ -191,6 +208,7 @@ impl GixRepo {
                 &repo,
                 &mut Vec::new(),
                 &mut unstaged,
+                cancellation,
             )?;
             cancellation.check_cancelled()?;
         }
@@ -233,6 +251,7 @@ impl GixRepo {
                 &repo,
                 &mut staged,
                 &mut Vec::new(),
+                cancellation,
             )?;
             cancellation.check_cancelled()?;
         }
@@ -335,6 +354,7 @@ fn finalize_status(
     mut staged: Vec<FileStatus>,
     mut unstaged: Vec<FileStatus>,
     has_conflicted_unstaged: bool,
+    cancellation: &CancellationToken,
 ) -> Result<RepoStatus> {
     // Some platforms may omit certain unmerged shapes (notably stage-1-only both-deleted
     // conflicts) from gix status output. Supplement conflict entries from the index's unmerged
@@ -351,8 +371,15 @@ fn finalize_status(
     // or gitlinks. This avoids a full `git status` subprocess on every refresh for the common
     // case.
     if may_have_gitlinks {
-        supplement_gitlink_status_from_porcelain(workdir, repo, &mut staged, &mut unstaged)?;
+        supplement_gitlink_status_from_porcelain(
+            workdir,
+            repo,
+            &mut staged,
+            &mut unstaged,
+            cancellation,
+        )?;
     }
+    cancellation.check_cancelled()?;
 
     sort_and_dedup_status_entries(&mut staged);
     sort_and_dedup_status_entries(&mut unstaged);
@@ -672,18 +699,21 @@ pub(super) struct StatRefreshedIndex {
     index: gix::index::File,
 }
 
-/// Re-hashing less than this per walk is cheaper than holding a second copy of
-/// the index.
+/// Avoid a second large index for a few inexpensive content checks.
 const STAT_REFRESH_MIN_BYTES: u64 = 256 * 1024;
 const STAT_REFRESH_MIN_ENTRIES: usize = 64;
+/// Small indexes are cheap to retain, even when a few small files took costly
+/// external clean filters to verify. Byte count alone does not capture that cost.
+const STAT_REFRESH_SMALL_INDEX_ENTRIES: usize = 128;
 
 fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
     stat_refresh: &std::sync::Mutex<Option<StatRefreshedIndex>>,
     unstaged: &mut Vec<FileStatus>,
-    may_have_gitlinks: bool,
     cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("index-snapshot");
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
@@ -701,13 +731,14 @@ fn collect_index_worktree_status_direct(
     #[cfg(test)]
     let walk_started = tests::STAT_REFRESH_CLOCK.with(|clock| clock.get().unwrap_or(walk_started));
     let stamp = filetime::FileTime::from_unix_time(walk_started.unix_seconds() - 1, 0);
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
     let result = collect_index_worktree_status_direct_from_index(
         repo,
         refreshed
             .as_ref()
             .map_or(&index, |refreshed| &refreshed.index),
         unstaged,
-        may_have_gitlinks,
         cancellation,
     )
     .and_then(|result| {
@@ -726,6 +757,8 @@ fn collect_index_worktree_status_direct(
             return Err(error);
         }
     };
+    #[cfg(feature = "benchmarks")]
+    let _timing = crate::status_trace::StageTimer::new("retain-index-stats");
     let refreshed = apply_stat_refresh(refreshed, &index, changes, stamp);
     *stat_refresh
         .lock()
@@ -755,7 +788,10 @@ fn apply_stat_refresh(
                     IndexWorktreeApplyChange::SetSizeToZero { .. } => 0,
                 })
                 .sum();
-            if rehashed_bytes < STAT_REFRESH_MIN_BYTES && changes.len() < STAT_REFRESH_MIN_ENTRIES {
+            if base.entries().len() > STAT_REFRESH_SMALL_INDEX_ENTRIES
+                && rehashed_bytes < STAT_REFRESH_MIN_BYTES
+                && changes.len() < STAT_REFRESH_MIN_ENTRIES
+            {
                 return None;
             }
             StatRefreshedIndex {
@@ -787,9 +823,10 @@ fn collect_index_worktree_status_direct_from_index(
     repo: &gix::Repository,
     index: &gix::index::File,
     unstaged: &mut Vec<FileStatus>,
-    may_have_gitlinks: bool,
     cancellation: &CancellationToken,
 ) -> Result<(DirectIndexWorktreeStatus, Vec<IndexWorktreeApplyChange>)> {
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("walk-options");
     let dirwalk_options = repo
         .dirwalk_options()
         .map_err(|e| {
@@ -798,33 +835,19 @@ fn collect_index_worktree_status_direct_from_index(
             )))
         })?
         .emit_untracked(gix::dir::walk::EmissionMode::Matching);
-    let collection = if may_have_gitlinks && crate::refs::has_modules(repo)? {
-        let submodule = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
-            repo.clone().into_sync(),
-            gix::status::Submodule::Given {
-                ignore: gix::submodule::config::Ignore::All,
-                check_dirty: false,
-            },
-        )
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status submodules: {e}"))))?;
-        collect_index_worktree_status_direct_with_submodule(
-            repo,
-            index,
-            dirwalk_options,
-            unstaged,
-            submodule,
-            cancellation,
-        )?
-    } else {
-        collect_index_worktree_status_direct_with_submodule(
-            repo,
-            index,
-            dirwalk_options,
-            unstaged,
-            NoopSubmoduleStatus,
-            cancellation,
-        )?
-    };
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    // Git supplies child status below. The previous built-in provider used
+    // Ignore::All, which also always returns None but still loads .gitmodules
+    // and inspects each child's repository layout before ignoring the result.
+    let collection = collect_index_worktree_status_direct_with_submodule(
+        repo,
+        index,
+        dirwalk_options,
+        unstaged,
+        NoopSubmoduleStatus,
+        cancellation,
+    )?;
     Ok((
         DirectIndexWorktreeStatus {
             has_conflicted_unstaged: collection.has_conflicted_unstaged,
@@ -849,6 +872,14 @@ impl gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus for NoopS
     }
 }
 
+fn filesystem_cache_enabled(repo: &gix::Repository) -> bool {
+    // Match gix's normal status path. Repository opens use its lenient config
+    // policy, so an absent or invalid value gets the platform default.
+    repo.config_snapshot()
+        .boolean(gix::config::tree::Core::FS_CACHE)
+        .unwrap_or(cfg!(windows))
+}
+
 fn collect_index_worktree_status_direct_with_submodule<S>(
     repo: &gix::Repository,
     index: &gix::index::File,
@@ -863,6 +894,8 @@ where
         > + Send
         + Clone,
 {
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("attributes-and-excludes");
     let workdir = repo
         .workdir()
         .ok_or_else(|| Error::new(ErrorKind::Backend("gix status missing workdir".into())))?;
@@ -874,6 +907,10 @@ where
             None,
         )
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status attributes: {e}"))))?;
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("pathspec-realpath-fs-options");
     let (pathspec, _pathspec_attr_stack) = gix::Pathspec::new(
         repo,
         false,
@@ -898,7 +935,16 @@ where
     let fs_caps = repo
         .filesystem_options()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status fs options: {e}"))))?;
+    let fscache = filesystem_cache_enabled(repo);
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("case-insensitive-index");
     let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("resource-cache");
     let resource_cache = gix::diff::resource_cache(
         repo,
         gix::diff::blob::pipeline::Mode::ToGit,
@@ -913,10 +959,23 @@ where
             "gix status resource cache: {e}"
         )))
     })?;
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("cancellation-watcher");
     let mut collector = StatusEntryCollector::new(unstaged);
     let interrupt = StatusCancellation::new(cancellation)?;
     let mut progress = cancellation::progress(&interrupt.interrupt);
-    gix::status::plumbing::index_as_worktree_with_renames(
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("worker-policy");
+    let thread_limit = worker_limit::for_index(repo, index, cancellation)?;
+    #[cfg(feature = "benchmarks")]
+    drop(timing);
+    #[cfg(feature = "benchmarks")]
+    let timing = crate::status_trace::StageTimer::new("native-walk");
+    let outcome = gix::status::plumbing::index_as_worktree_with_renames(
         index,
         workdir,
         &mut collector,
@@ -939,11 +998,11 @@ where
         },
         gix::status::plumbing::index_as_worktree_with_renames::Options {
             sorting: None,
-            fscache: false,
+            fscache,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
-                thread_limit: worker_limit::for_index(repo, index, cancellation)?,
-                fscache: false,
+                thread_limit,
+                fscache,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
                 })?,
@@ -961,6 +1020,13 @@ where
             )))
         }
     })?;
+    #[cfg(feature = "benchmarks")]
+    {
+        drop(timing);
+        crate::status_trace::record_walk(&outcome, fscache, thread_limit);
+    }
+    #[cfg(not(feature = "benchmarks"))]
+    let _ = outcome;
     cancellation.check_cancelled()?;
 
     collector.finish()
@@ -1342,7 +1408,9 @@ fn supplement_gitlink_status_from_porcelain(
     repo: &gix::Repository,
     staged: &mut Vec<FileStatus>,
     unstaged: &mut Vec<FileStatus>,
+    cancellation: &CancellationToken,
 ) -> Result<()> {
+    cancellation.check_cancelled()?;
     let mut command = git_workdir_cmd_for(workdir);
     command
         .arg("--no-optional-locks")
@@ -1356,7 +1424,8 @@ fn supplement_gitlink_status_from_porcelain(
         }
         push_literal_paths(&mut command, paths);
     }
-    let output = match run_git_raw_output(command, "git status --porcelain=v2") {
+    let output = match run_git_background_output(command, "git status --porcelain=v2", cancellation)
+    {
         Ok(output) => output,
         // Gitlink supplementation is best-effort parity glue on top of the primary
         // gix status result. If the subprocess itself times out, keep the base status.
@@ -1401,7 +1470,25 @@ fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option
     let mut paths = Vec::new();
     for entry in index.entries() {
         if entry.mode == gix::index::entry::Mode::COMMIT {
-            paths.push(path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?);
+            let path = path_buf_from_git_bytes(entry.path(&index), "gitlink status path").ok()?;
+            // An unchanged gitlink with an empty checkout has no child status
+            // to inspect. Recheck the filesystem each time: initializing the
+            // child must restore the Git query without an index rewrite.
+            if entry.stage_raw() == 0
+                && !entry.flags.intersects(
+                    gix::index::entry::Flags::SKIP_WORKTREE
+                        | gix::index::entry::Flags::INTENT_TO_ADD,
+                )
+                && !staged
+                    .iter()
+                    .any(|change| change.path.starts_with(&path) || path.starts_with(&change.path))
+                && repo
+                    .workdir()
+                    .is_some_and(|workdir| is_empty_gitlink_checkout(workdir, &path))
+            {
+                continue;
+            }
+            paths.push(path);
         }
     }
     // Deleted/replaced gitlinks are absent from the index. Check only the
@@ -1430,6 +1517,47 @@ fn gitlink_status_paths(repo: &gix::Repository, staged: &[FileStatus]) -> Option
         .map(|path| path.as_os_str().len() * 2 + 3)
         .sum();
     (bytes < 16_000).then_some(paths)
+}
+
+fn is_empty_gitlink_checkout(workdir: &Path, path: &Path) -> bool {
+    if path.as_os_str().is_empty() {
+        return false;
+    }
+    let mut absolute = workdir.to_path_buf();
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        absolute.push(name);
+        // Do not follow symlinks/junctions in the checkout or its ancestors.
+        // Missing paths, replacements and unreadable metadata stay with Git.
+        let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
+            return false;
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return false;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+            // FILE_ATTRIBUTE_REPARSE_POINT also covers junctions and other
+            // redirects which need not be exposed as Rust symlink types.
+            if metadata.file_attributes() & 0x400 != 0 {
+                return false;
+            }
+        }
+        if components.peek().is_some() {
+            // A nested repository boundary makes this layout uncertain.
+            match std::fs::symlink_metadata(absolute.join(".git")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return false,
+            }
+        }
+    }
+    // Even a broken .git file, another hidden file, or an enumeration error
+    // retains the existing query. Only a positively empty directory is safe.
+    std::fs::read_dir(absolute).is_ok_and(|mut entries| entries.next().is_none())
 }
 
 #[cfg(test)]

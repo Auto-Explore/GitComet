@@ -140,6 +140,9 @@ pub(in super::super) struct DetailsPaneView {
     /// One slot per status section: three of them render every frame and a
     /// single slot would have them evicting each other's sort.
     status_section_order: std::cell::RefCell<[StatusSectionOrderSlot; 4]>,
+    pub(in crate::view) status_footer_position: std::cell::RefCell<
+        crate::view::status_position_cache::StatusPositionCache<crate::view::rows::FileListPlan>,
+    >,
     pub(in super::super) status_file_sort:
         FxHashMap<StatusSection, crate::view::rows::CommitFileSort>,
     /// Sort and filter for the lists without dedicated fields. Repo-keyed like
@@ -542,6 +545,7 @@ impl DetailsPaneView {
             file_list_layout_override: FxHashMap::default(),
             file_controllers: Default::default(),
             status_section_order: std::cell::RefCell::new(Default::default()),
+            status_footer_position: Default::default(),
             status_file_sort: FxHashMap::default(),
             list_sort: FxHashMap::default(),
             list_filter: FxHashMap::default(),
@@ -1789,6 +1793,8 @@ impl DetailsPaneView {
             return Some(Arc::clone(indexes));
         }
         let base = StatusSectionEntries::source_order_indexes(repo, section)?;
+        #[cfg(test)]
+        Self::record_status_footer_work(|work| work.projection_builds += 1);
         let entries = match section {
             StatusSection::Staged => repo.staged_status_entries()?,
             _ => repo.worktree_status_entries()?,
@@ -2269,6 +2275,8 @@ impl DetailsPaneView {
         if !plan.reorders() {
             return Some(projection);
         }
+        #[cfg(test)]
+        Self::record_status_footer_work(|work| work.order_materializations += 1);
         Some(
             plan.ordered()
                 .iter()
@@ -2311,7 +2319,9 @@ impl DetailsPaneView {
         let mut controller = controller.borrow_mut();
         let collapsed_groups = controller.collapsed_groups().to_vec();
         let labels = controller.kind_labels();
-        controller.plan_cache.plan_for(
+        #[cfg(test)]
+        let previous_builds = controller.plan_cache.builds();
+        let plan = controller.plan_cache.plan_for(
             key,
             crate::view::rows::PlanShape {
                 layout,
@@ -2354,7 +2364,12 @@ impl DetailsPaneView {
                     labels,
                 )
             },
-        )
+        );
+        #[cfg(test)]
+        Self::record_status_footer_work(|work| {
+            work.plan_builds += controller.plan_cache.builds() - previous_builds;
+        });
+        plan
     }
 
     fn status_section_alignment_key(section: StatusSection) -> u8 {
@@ -2371,6 +2386,9 @@ impl DetailsPaneView {
             .borrow_mut()
             .retain(|(id, _), _| next.repos.iter().any(|repo| repo.id == *id));
         let prev_active_repo_id = self.state.active_repo;
+        if prev_active_repo_id != next.active_repo || next.active_repo.is_none() {
+            *self.status_footer_position.borrow_mut() = Default::default();
+        }
         let prev_selected_commit = prev_active_repo_id.and_then(|repo_id| {
             self.state
                 .repos

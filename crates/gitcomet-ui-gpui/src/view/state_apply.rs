@@ -221,47 +221,25 @@ impl GitCometView {
         }
     }
 
-    pub(super) fn apply_state_snapshot(
-        &mut self,
-        next: Arc<AppState>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        note_opened_repos_for_activation(
-            &self.state,
-            &next,
-            &mut self.last_repo_activation_dispatch_at,
-            Instant::now(),
-        );
-        let workspace_membership_changed = self.state.active_repo != next.active_repo
-            || !Arc::ptr_eq(&self.state.repo_open_failures, &next.repo_open_failures)
-            || !self
-                .state
-                .repos
-                .iter()
-                .map(|repo| {
-                    (
-                        repo.id,
-                        &repo.spec.workdir,
-                        repo.is_provisional_external_drop_open(),
-                    )
-                })
-                .eq(next.repos.iter().map(|repo| {
-                    (
-                        repo.id,
-                        &repo.spec.workdir,
-                        repo.is_provisional_external_drop_open(),
-                    )
-                }));
-        let git_runtime_changed = self.state.git_runtime != next.git_runtime;
-        let prev_git_runtime_available = self.state.git_runtime.is_available();
-        let prev_had_repos = !self.state.repos.is_empty();
-        let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
-        let prev_auth_prompt = self.state.auth_prompt.clone();
-        let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
-        let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
-        let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
-        let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
+    /// Store workers may finish before the window attaches. Report only the
+    /// feedback still retained for this window, then acknowledge it just as a
+    /// live update would; the populated repository/runtime state stays intact.
+    pub(super) fn consume_initial_store_feedback(&mut self, cx: &mut gpui::Context<Self>) {
+        let initial = Arc::clone(&self.state);
         let mut follow_up_msgs = Vec::new();
+        self.consume_store_feedback(None, &initial, &mut follow_up_msgs, cx);
+        for msg in follow_up_msgs {
+            self.store.dispatch(msg);
+        }
+    }
+
+    fn consume_store_feedback(
+        &mut self,
+        previous: Option<&AppState>,
+        next: &AppState,
+        follow_up_msgs: &mut Vec<Msg>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let hook_activity_workflow_repo = self
             .hook_activity_workflow_repo_id(cx)
             .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
@@ -270,7 +248,7 @@ impl GitCometView {
         // as a notification and as a diagnostic, and one event is one error.
         let mut error_reports: Vec<ErrorReport> = Vec::new();
         let new_notifications = next
-            .notifications_after(self.state.notifications_seq)
+            .notifications_after(previous.map_or(0, |state| state.notifications_seq))
             .to_vec();
         if !new_notifications.is_empty() {
             follow_up_msgs.push(Msg::AcknowledgeNotifications {
@@ -294,10 +272,9 @@ impl GitCometView {
         for next_repo in &next.repos {
             let feedback = &next_repo.feedback;
             // The numbering restarts with each lifetime of the repository.
-            let (old_diagnostics_seq, old_command_log_seq) = self
-                .state
-                .repos
-                .iter()
+            let (old_diagnostics_seq, old_command_log_seq) = previous
+                .into_iter()
+                .flat_map(|state| state.repos.iter())
                 .find(|r| r.id == next_repo.id && r.lifetime() == next_repo.lifetime())
                 .map_or((0, 0), |r| {
                     (r.feedback.diagnostics_seq, r.feedback.command_log_seq)
@@ -389,9 +366,15 @@ impl GitCometView {
                 }
             }
 
-            let previous_repo = self.state.repos.iter().find(|repo| repo.id == next_repo.id);
+            let previous_repo = previous
+                .into_iter()
+                .flat_map(|state| state.repos.iter())
+                .find(|repo| repo.id == next_repo.id);
             for operation in next_repo.feedback.hook_activity.iter().filter(|operation| {
-                operation.is_reportable()
+                // Hook activity is retained history, not an unacknowledged
+                // feedback buffer. Attachment must not replay old completions.
+                previous.is_some()
+                    && operation.is_reportable()
                     && !operation.status.is_active()
                     && !operation.handled_by_auth_prompt
             }) {
@@ -451,6 +434,53 @@ impl GitCometView {
                 self.report_error(report, cx);
             }
         }
+    }
+
+    pub(super) fn apply_state_snapshot(
+        &mut self,
+        next: Arc<AppState>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        note_opened_repos_for_activation(
+            &self.state,
+            &next,
+            &mut self.last_repo_activation_dispatch_at,
+            Instant::now(),
+        );
+        let workspace_membership_changed = self.state.active_repo != next.active_repo
+            || !Arc::ptr_eq(&self.state.repo_open_failures, &next.repo_open_failures)
+            || !self
+                .state
+                .repos
+                .iter()
+                .map(|repo| {
+                    (
+                        repo.id,
+                        &repo.spec.workdir,
+                        repo.is_provisional_external_drop_open(),
+                    )
+                })
+                .eq(next.repos.iter().map(|repo| {
+                    (
+                        repo.id,
+                        &repo.spec.workdir,
+                        repo.is_provisional_external_drop_open(),
+                    )
+                }));
+        let repo_open_failed =
+            next.repo_open_failure_revision > self.state.repo_open_failure_revision;
+        let git_runtime_changed = self.state.git_runtime != next.git_runtime;
+        let prev_git_runtime_available = self.state.git_runtime.is_available();
+        let prev_had_repos = !self.state.repos.is_empty();
+        let prev_annex_rail = CollapsedSidebarSection::Annex.is_available(self.active_repo());
+        let prev_auth_prompt = self.state.auth_prompt.clone();
+        let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
+        let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
+        let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
+        let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
+        let mut follow_up_msgs = Vec::new();
+        let previous = Arc::clone(&self.state);
+        self.consume_store_feedback(Some(previous.as_ref()), &next, &mut follow_up_msgs, cx);
 
         let next_submodule_add_progress = next
             .repos
@@ -634,12 +664,8 @@ impl GitCometView {
         {
             self.refresh_signing_tools(false, cx);
         }
-        if matches!(
-            self.state.large_file_tools.git_lfs,
-            gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
-        ) {
-            self.refresh_large_file_tools(cx);
-        }
+        self.reconcile_large_file_tools_runtime();
+        self.refresh_large_file_tools(cx);
         // Only an open palette shows enablement; `open` takes a fresh context.
         if self.command_palette_open {
             let context = self.command_palette_context(cx);
@@ -674,7 +700,15 @@ impl GitCometView {
         }
         self.sync_terminal_sessions_with_state(cx);
         self.sync_reflog_panels_with_state();
-        if !prev_git_runtime_available && self.state.git_runtime.is_available() {
+        let bootstrap_adopted_runtime = git_runtime_changed
+            && self
+                .startup_repo_runtime_adoption
+                .take()
+                .is_some_and(|runtime| runtime == self.state.git_runtime);
+        if !prev_git_runtime_available
+            && self.state.git_runtime.is_available()
+            && !bootstrap_adopted_runtime
+        {
             self.resume_after_git_runtime_recovery();
         }
         if git_runtime_changed {
@@ -683,7 +717,7 @@ impl GitCometView {
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
         }
-        if !self.state.repos.is_empty() {
+        if !self.state.repos.is_empty() || repo_open_failed {
             self.startup_repo_bootstrap_pending = false;
         }
         if prev_auth_prompt != self.state.auth_prompt {

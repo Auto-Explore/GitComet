@@ -1077,11 +1077,12 @@ impl GitCometView {
             }
             PreferenceChange::ResetHistoryColumnWidths => self.reset_history_column_widths(cx),
             PreferenceChange::GitRuntime(runtime) => {
+                self.cancel_large_file_tools_probe();
                 self.cancel_signing_tools_probe();
                 self.store.dispatch(Msg::SetGitRuntimeState(runtime));
             }
-            PreferenceChange::LargeFileTools(tools) => {
-                self.store.dispatch(Msg::SetLargeFileToolsState(tools));
+            PreferenceChange::LargeFileTools(publication) => {
+                self.accept_large_file_tools_publication(publication, cx);
             }
         }
     }

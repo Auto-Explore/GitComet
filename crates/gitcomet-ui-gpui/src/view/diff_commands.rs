@@ -225,6 +225,23 @@ impl DiffNavigation for WindowNavigation {
             .ok()
             .flatten()
     }
+    fn status_position(
+        &self,
+        repo: &RepoState,
+        path: &Path,
+        area: DiffArea,
+        view: ChangeTrackingView,
+        cx: &App,
+    ) -> Option<Option<(StatusSection, usize, usize)>> {
+        self.0
+            .read_with(cx, |root, cx| {
+                root.details_pane
+                    .read(cx)
+                    .status_footer_position(repo, path, area, view)
+            })
+            .ok()
+            .flatten()
+    }
     fn file_order(&self, repo: RepoId, range: bool, cx: &App) -> Option<Arc<[usize]>> {
         self.0
             .read_with(cx, |root, cx| {

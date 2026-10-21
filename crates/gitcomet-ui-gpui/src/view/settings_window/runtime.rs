@@ -80,6 +80,7 @@ impl SettingsWindowView {
         runtime: GitRuntimeState,
         cx: &mut gpui::Context<Self>,
     ) {
+        super::super::large_file_tools_probe::supersede_settings_tool_probe(cx);
         self.git_executable_mode = GitExecutableMode::from_preference(&runtime.preference);
         if let GitExecutablePreference::Custom(path) = &runtime.preference {
             let next_draft = if path.as_os_str().is_empty() {
@@ -99,6 +100,8 @@ impl SettingsWindowView {
         // A different Git resolves gpg, ssh-keygen, git-lfs and git-annex with
         // a different PATH.
         self.cancel_signing_tools_probe();
+        self.large_file_tools_cancellation.cancel();
+        self.large_file_tools_probe = None;
         self.runtime_info.large_file_tools = Some(Default::default());
         self.persist_preferences(cx);
         self.broadcast_preference(PreferenceChange::GitRuntime(runtime), cx);
@@ -138,6 +141,10 @@ impl SettingsWindowView {
     }
 
     pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.large_file_tools_closed {
+            return;
+        }
+        let generation = super::super::large_file_tools_probe::supersede_settings_tool_probe(cx);
         self.large_file_tools_cancellation.cancel();
         self.large_file_tools_probe = None;
         self.runtime_info.large_file_tools = Some(Default::default());
@@ -147,30 +154,67 @@ impl SettingsWindowView {
         self.large_file_tools_cancellation = Default::default();
         let cancellation = self.large_file_tools_cancellation.clone();
         let runtime = current_git_runtime();
+        let worker_runtime = runtime.clone();
+        let worker_cancellation = cancellation.clone();
         self.runtime_info.large_file_tools = None;
         let detection = cx.background_spawn(async move {
-            gitcomet_core::large_file_tools::detect_large_file_tools_cancellable(&cancellation)
+            gitcomet_core::large_file_tools::detect_large_file_tools_for_runtime_cancellable(
+                &worker_runtime,
+                &worker_cancellation,
+            )
         });
         self.large_file_tools_probe = Some(cx.spawn(async move |view, cx| {
             let tools = detection.await;
             let _ = view.update(cx, |this, cx| {
-                if current_git_runtime() != runtime {
+                if cancellation.is_cancelled() || current_git_runtime() != runtime {
                     return;
                 }
-                this.apply_large_file_tools_probe(tools, cx);
+                this.apply_large_file_tools_probe_for_request(runtime, generation, tools, cx);
             });
         }));
     }
 
     /// Main windows probe once per Git runtime; a recheck here is how they
     /// learn a tool was installed or removed since.
+    #[cfg(test)]
     pub(super) fn apply_large_file_tools_probe(
         &mut self,
         tools: gitcomet_core::large_file_tools::LargeFileToolsState,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.apply_large_file_tools_probe_for_request(
+            current_git_runtime(),
+            super::super::large_file_tools_probe::settings_tool_probe_generation(cx),
+            tools,
+            cx,
+        );
+    }
+
+    pub(super) fn apply_large_file_tools_probe_for_request(
+        &mut self,
+        runtime: GitRuntimeState,
+        generation: u64,
+        tools: gitcomet_core::large_file_tools::LargeFileToolsState,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.large_file_tools_closed
+            || current_git_runtime() != runtime
+            || generation
+                != super::super::large_file_tools_probe::settings_tool_probe_generation(cx)
+        {
+            return;
+        }
         self.runtime_info.large_file_tools = Some(tools.clone());
-        self.broadcast_preference(PreferenceChange::LargeFileTools(tools), cx);
+        self.broadcast_preference(
+            PreferenceChange::LargeFileTools(
+                super::super::large_file_tools_probe::LargeFileToolsPublication {
+                    runtime,
+                    generation,
+                    tools,
+                },
+            ),
+            cx,
+        );
         cx.notify();
     }
 

@@ -59,5 +59,5 @@ pub(in crate::view) enum PreferenceChange {
     ResetHistoryColumnWidths,
     /// A new Git executable was probed; the window's signing probe restarts.
     GitRuntime(gitcomet_core::process::GitRuntimeState),
-    LargeFileTools(gitcomet_core::large_file_tools::LargeFileToolsState),
+    LargeFileTools(super::large_file_tools_probe::LargeFileToolsPublication),
 }

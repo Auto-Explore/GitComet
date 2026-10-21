@@ -111,6 +111,15 @@ impl GitRepository for TrackingRepo {
         Ok(Vec::new())
     }
 
+    // The view reports startup load errors, so a fake with no submodules must say so.
+    fn list_submodules(
+        &self,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::Submodule>> {
+        cancellation.check_cancelled()?;
+        Ok(Vec::new())
+    }
+
     fn current_branch(
         &self,
         cancellation: &gitcomet_core::services::CancellationToken,

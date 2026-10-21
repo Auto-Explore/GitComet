@@ -5,6 +5,9 @@ mod ignore;
 mod open;
 mod refs;
 mod repo;
+#[cfg(feature = "benchmarks")]
+#[doc(hidden)]
+pub mod status_trace;
 #[cfg(any(test, feature = "test-support"))]
 mod test_support;
 mod util;

@@ -479,6 +479,7 @@ impl GitCometView {
         Self::new_with_config(store, events, config, window, cx)
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn new_with_config(
         store: AppStore,
         events: smol::channel::Receiver<StoreEvent>,
@@ -486,20 +487,47 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let bootstrap = super::window_bootstrap::PreparedWindowBootstrap::new(&store, config, cx);
+        Self::new_with_bootstrap(store, events, bootstrap, window, cx)
+    }
+
+    pub(crate) fn new_with_bootstrap(
+        store: AppStore,
+        events: smol::channel::Receiver<StoreEvent>,
+        mut bootstrap: super::window_bootstrap::PreparedWindowBootstrap,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let _stage = gitcomet_core::startup_trace::span("view_init");
+        let mut startup_repo_runtime_adoption = bootstrap.attach_git_probe_handoff();
+        let super::window_bootstrap::PreparedWindowBootstrap {
+            config,
+            ui_session,
+            mut ui_preferences,
+            workspace_id,
+            persisted_workspace_repo_paths,
+            persisted_workspace_active_repository,
+            initial_window_placement,
+            workspace_theme_key,
+            entry_denials,
+            mut startup_repo_bootstrap_pending,
+            startup_repo_open_failure_revision,
+            deferred_repo_bootstrap,
+            pending_repo_open_reservations,
+            pending_repo_open_active,
+            ..
+        } = bootstrap;
         let GitCometViewConfig {
-            mut initial_path,
-            initial_repository_launch_mode,
+            initial_path: _,
+            initial_repository_launch_mode: _,
             view_mode,
             focused_diff,
             focused_mergetool,
             focused_mergetool_exit_code,
             startup_crash_report,
-            workspace,
+            workspace: _,
         } = config;
         crate::environment::track_window(window, cx);
-        if initial_path.is_none() {
-            initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
-        }
         let focused_mergetool_labels = focused_mergetool.as_ref().map(|cfg| cfg.labels.clone());
         let focused_mergetool_bootstrap = if view_mode == GitCometViewMode::FocusedMergetool {
             focused_mergetool
@@ -510,75 +538,6 @@ impl GitCometView {
         };
         let store = Arc::new(store);
 
-        let mut ui_session = session::load();
-        let (
-            workspace_id,
-            persisted_workspace_repo_paths,
-            persisted_workspace_active_repository,
-            initial_window_placement,
-            workspace_theme_key,
-        ) = match workspace {
-            WorkspaceBootstrap::LegacySession => (None, Vec::new(), None, None, None),
-            WorkspaceBootstrap::Empty => {
-                ui_session.open_repos.clear();
-                ui_session.active_repo = None;
-                ui_session.sidebar_width = None;
-                ui_session.details_width = None;
-                ui_session.sidebar_collapsed = Some(false);
-                ui_session.change_tracking_height = None;
-                ui_session.untracked_height = None;
-                (None, Vec::new(), None, None, None)
-            }
-            WorkspaceBootstrap::Saved(workspace) => {
-                let workspace = *workspace;
-                ui_session.open_repos.clone_from(&workspace.repositories);
-                ui_session
-                    .active_repo
-                    .clone_from(&workspace.active_repository);
-                ui_session.sidebar_width = workspace.layout.sidebar_width;
-                ui_session.details_width = workspace.layout.details_width;
-                ui_session.sidebar_collapsed = Some(workspace.layout.sidebar_collapsed);
-                ui_session.change_tracking_height = workspace.layout.change_tracking_height;
-                ui_session.untracked_height = workspace.layout.untracked_height;
-                (
-                    Some(workspace.id),
-                    workspace.repositories,
-                    workspace.active_repository,
-                    Some(workspace.placement),
-                    workspace.theme_mode,
-                )
-            }
-        };
-        // Every repository this window would open passes the entry gates
-        // here, before any bootstrap is dispatched or deferred.
-        let mut entry_denials = Vec::new();
-        if view_mode == GitCometViewMode::Normal {
-            if let Some(path) = initial_path.as_ref()
-                && let gitcomet_extension_api::GateDecision::Deny { reason } =
-                    super::extension_host::entry_decision(
-                        path,
-                        gitcomet_extension_api::EntryOrigin::CommandLine,
-                        cx,
-                    )
-            {
-                entry_denials.push(reason);
-                initial_path = None;
-            }
-            let (allowed, denied) = super::extension_host::filter_entries(
-                std::mem::take(&mut ui_session.open_repos),
-                gitcomet_extension_api::EntryOrigin::WorkspaceRestore,
-                cx,
-            );
-            ui_session.open_repos = allowed;
-            entry_denials.extend(denied);
-            if ui_session
-                .active_repo
-                .as_ref()
-                .is_some_and(|active| !ui_session.open_repos.contains(active))
-            {
-                ui_session.active_repo = None;
-            }
-        }
         image_preview::Preferences {
             mode: image_preview::ImageSamplingMode::parse(
                 ui_session.image_sampling_mode.as_deref(),
@@ -588,27 +547,16 @@ impl GitCometView {
             ),
         }
         .initialize(cx);
-        let mut ui_preferences = UiPreferences::from_session(&ui_session);
         crate::session_ui::initialize_appearance(&ui_session, cx);
         ui_preferences.appearance.metrics = crate::appearance::current(cx);
         crate::session_ui::ui_scale(&ui_session, cx);
         // This window's scale: the default, unless the window has its own zoom.
         let ui_scale = crate::ui_scale::current(cx);
         ui_preferences.appearance.ui_scale_percent = ui_scale.percent;
-        let _font_preferences = crate::session_ui::font_preferences(window, &ui_session, cx);
-        if should_seed_initial_repository_from_session(
-            view_mode,
-            initial_path.as_deref(),
-            initial_repository_launch_mode,
-            !ui_session.open_repos.is_empty(),
-        ) && let Some(path) = initial_path.as_ref()
-        {
-            if !ui_session.open_repos.iter().any(|p| p == path) {
-                ui_session.open_repos.push(path.clone());
-            }
-            ui_session.active_repo = Some(path.clone());
-        }
-
+        let _font_preferences = {
+            let _stage = gitcomet_core::startup_trace::span("font_preferences");
+            crate::session_ui::font_preferences(window, &ui_session, cx)
+        };
         let restored_sidebar_width = ui_preferences.window.sidebar_width;
         let restored_details_width = ui_preferences.window.details_width;
         let restored_sidebar_collapsed = ui_preferences.window.sidebar_collapsed;
@@ -646,99 +594,12 @@ impl GitCometView {
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
-        let history_show_tags = ui_preferences.history.show_tags;
-        let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
-        let default_tag_type = ui_preferences.repository.default_tag_type;
-        let remote_settings = RemoteSettings {
-            prune_deleted_remote_branches_on_fetch: ui_preferences
-                .remotes
-                .prune_deleted_remote_branches_on_fetch,
-        };
-        store.dispatch(Msg::SetRemoteUrlPolicy(remote_url_policy));
-        store.dispatch(Msg::SetGitLogSettings {
-            show_history_tags: history_show_tags,
-            tag_fetch_mode: history_tag_fetch_mode,
-            verify_commit_signatures: ui_preferences.history.verify_commit_signatures,
-        });
-        store.dispatch(Msg::SetDefaultTagType(default_tag_type));
-        store.dispatch(Msg::SetRemoteSettings(remote_settings));
-        store.dispatch(Msg::SetMaintenanceSettings(MaintenanceSettings {
-            recommend: ui_preferences.maintenance.recommend,
-        }));
-        store.dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
-            follow_selected_commit: ui_preferences.history.files_follow_selected_commit,
-        }));
-        store.dispatch(Msg::SetLargeFileSettings(ui_preferences.large_files));
-        let saved_open_repos = ui_session.open_repos.clone();
-        let saved_active_repo = ui_session.active_repo.clone();
-        let mut startup_repo_bootstrap_pending = false;
-        let mut deferred_repo_bootstrap = None;
-
-        // Only auto-restore/open on startup if the store hasn't already been preloaded.
-        // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
-        // already-initialized store (notably in `gpui::test` setup).
-        let initial_store_state = store.snapshot();
-        let store_preloaded = !initial_store_state.repos.is_empty();
-        let git_runtime_available = initial_store_state.git_runtime.is_available();
-        let mut pending_repo_open_reservations = FxHashMap::default();
-        let mut pending_repo_open_active = None;
-        if initial_repository_launch_mode == InitialRepositoryLaunchMode::OpenExplicitly
-            && let Some(path) = initial_path.as_ref()
-        {
-            let failure_revision = initial_store_state.repo_open_failure_revision;
-            pending_repo_open_reservations.insert(
-                path.clone(),
-                PendingRepoOpen {
-                    failure_revision,
-                    persist_in_workspace: true,
-                },
-            );
-            pending_repo_open_active = Some(path.clone());
-        }
-        let should_auto_restore = !crate::startup_probe::disable_auto_restore()
-            && view_mode != GitCometViewMode::FocusedMergetool
-            && crate::ui_runtime::current().auto_restores_session()
-            && !store_preloaded;
-
-        if should_auto_restore {
-            if !saved_open_repos.is_empty() {
-                if git_runtime_available {
-                    store.dispatch(Msg::RestoreSession {
-                        open_repos: saved_open_repos,
-                        active_repo: saved_active_repo,
-                    });
-                    startup_repo_bootstrap_pending = true;
-                } else {
-                    deferred_repo_bootstrap = Some(DeferredRepoBootstrap::RestoreSession {
-                        open_repos: saved_open_repos,
-                        active_repo: saved_active_repo,
-                    });
-                }
-            }
-        } else if store_preloaded {
-            if let Some(path) = initial_path.as_ref() {
-                if git_runtime_available {
-                    store.dispatch(Msg::OpenRepo(path.clone()));
-                } else {
-                    deferred_repo_bootstrap =
-                        Some(DeferredRepoBootstrap::OpenRepos(vec![path.clone()]));
-                }
-            }
-        } else if let Some(path) = initial_path.as_ref() {
-            if git_runtime_available {
-                store.dispatch(Msg::OpenRepo(path.clone()));
-                startup_repo_bootstrap_pending = true;
-            } else {
-                deferred_repo_bootstrap =
-                    Some(DeferredRepoBootstrap::OpenRepos(vec![path.clone()]));
-            }
-        }
-
-        if deferred_repo_bootstrap.is_some() {
-            startup_repo_bootstrap_pending = true;
-        }
-
         let initial_state = store.snapshot();
+        // The worker queued Git adoption before the restore. If it is already
+        // reflected here, no later snapshot needs to suppress that transition.
+        if startup_repo_runtime_adoption.as_ref() == Some(&initial_state.git_runtime) {
+            startup_repo_runtime_adoption = None;
+        }
         let ui_model = cx.new(|cx| {
             AppUiModel::new_with_preferences(
                 Arc::clone(&initial_state),
@@ -811,7 +672,9 @@ impl GitCometView {
                 labels: [config.label_left.into(), config.label_right.into()],
             })
         });
-        if !initial_state.repos.is_empty() {
+        if !initial_state.repos.is_empty()
+            || initial_state.repo_open_failure_revision > startup_repo_open_failure_revision
+        {
             startup_repo_bootstrap_pending = false;
         }
 
@@ -830,6 +693,8 @@ impl GitCometView {
         });
 
         let weak_view = cx.weak_entity();
+        // The receiver retains a coalesced StateChanged even if repository loading
+        // finished before this view existed. Its first poll observes startup readiness.
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
         let title_bar = cx.new(|cx| {
@@ -1285,6 +1150,14 @@ impl GitCometView {
                 .update(cx, |host, cx| host.error_notices_changed(errors, cx));
         });
 
+        let closing_view = cx.weak_entity();
+        let probe_window = window.window_handle().window_id();
+        let large_file_tools_window_closed = cx.on_window_closed(move |cx, closed| {
+            if closed == probe_window {
+                let _ = closing_view.update(cx, |view, _| view.close_large_file_tools_probe());
+            }
+        });
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
@@ -1345,6 +1218,7 @@ impl GitCometView {
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
+            startup_repo_runtime_adoption,
             pending_repo_open_reservations,
             pending_repo_open_active,
             startup_repo_bootstrap_pending,
@@ -1366,7 +1240,10 @@ impl GitCometView {
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,
             signing_tools_probe_cancellation: Default::default(),
-            large_file_tools_probe_in_flight: false,
+            large_file_tools_probe: Default::default(),
+            _large_file_tools_window_closed: large_file_tools_window_closed,
+            #[cfg(test)]
+            large_file_tools_detector_for_test: None,
             date_time_format,
             timezone,
             show_timezone,
@@ -1468,6 +1345,7 @@ impl GitCometView {
 
         view.set_theme(initial_theme, cx);
         view.sync_terminal_button_target(cx);
+        view.consume_initial_store_feedback(cx);
         for reason in entry_denials {
             view.push_toast(components::ToastKind::Warning, reason.to_string(), cx);
         }
@@ -1479,6 +1357,7 @@ impl GitCometView {
         view.drive_submodule_diff_bootstrap();
         runtime_probe::request(cx, false);
         view.refresh_signing_tools(false, cx);
+        view.schedule_large_file_tools_after_initial_frame(window, cx);
 
         view.sync_workspace_and_registry(cx);
         if view.is_home_screen_active() {
@@ -2678,35 +2557,6 @@ impl GitCometView {
         self.signing_tools_probe_cancellation.cancel();
         self.signing_tools_probe_seq = self.signing_tools_probe_seq.wrapping_add(1);
         self.signing_tools_probe_in_flight = false;
-    }
-
-    /// Probe `git lfs` / `git annex` once per Git runtime. Not gated by any
-    /// preference: the answer decides whether their commands are offered.
-    pub(super) fn refresh_large_file_tools(&mut self, cx: &mut gpui::Context<Self>) {
-        if cfg!(test)
-            || self.large_file_tools_probe_in_flight
-            || !current_git_runtime().is_available()
-        {
-            return;
-        }
-        self.large_file_tools_probe_in_flight = true;
-        let runtime = current_git_runtime();
-        let detection =
-            cx.background_spawn(async move {
-                gitcomet_core::large_file_tools::detect_large_file_tools_cancellable(
-                    &Default::default(),
-                )
-            });
-        cx.spawn(async move |view, cx| {
-            let tools = detection.await;
-            let _ = view.update(cx, |this, _cx| {
-                this.large_file_tools_probe_in_flight = false;
-                if current_git_runtime() == runtime {
-                    this.store.dispatch(Msg::SetLargeFileToolsState(tools));
-                }
-            });
-        })
-        .detach();
     }
 
     /// Discover signing tools after opt-in, on opted-in startup, or diagnostics.

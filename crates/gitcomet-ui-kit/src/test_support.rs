@@ -349,13 +349,15 @@ pub mod source_guards {
     }
 
     /// Discrete controls must style and activate through the shared
-    /// interaction APIs: no ad-hoc `.hover(|..`/`.active(|..`, raw
-    /// `.on_click`, bare `.on_mouse_up`, or raw button presses.
+    /// interaction APIs: no ad-hoc `.hover_style(|..`/`.active_style(|..`
+    /// (or their deprecated `.hover`/`.active` names), raw `.on_click`, bare
+    /// `.on_mouse_up`, or raw button presses.
     pub fn discrete_control_violations(
         src_dir: &Path,
         allow: &DiscreteControlAllowlist<'_>,
     ) -> Vec<String> {
-        let pattern = regex::Regex::new(r"\.(?:hover|active)\(\s*(?:move\s+)?\|").unwrap();
+        let pattern =
+            regex::Regex::new(r"\.(?:hover|active)(?:_style)?\(\s*(?:move\s+)?\|").unwrap();
         let raw_click =
             regex::Regex::new(r"\.on_click\(\s*(?:cx\.listener|on_click\b|(?:move\s+)?\|)")
                 .unwrap();
@@ -439,6 +441,53 @@ pub mod source_guards {
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn discrete_control_guard_covers_current_and_legacy_style_methods() {
+            let sources = tempfile::tempdir().unwrap();
+            let fixture = sources.path().join("control.rs");
+            for method in ["hover", "active", "hover_style", "active_style"] {
+                for closure in ["|style| style", "move |style| style"] {
+                    std::fs::write(&fixture, format!("div().{method}({closure})")).unwrap();
+                    let allow = super::DiscreteControlAllowlist {
+                        custom_styling: &[],
+                        release_gestures: &[],
+                        primary_press: &[],
+                        context_press: &[],
+                    };
+                    assert_eq!(
+                        super::discrete_control_violations(sources.path(), &allow),
+                        ["control.rs: custom hover/press styling"],
+                        "{method}: {closure}"
+                    );
+                    assert!(
+                        super::discrete_control_violations(
+                            sources.path(),
+                            &super::DiscreteControlAllowlist {
+                                custom_styling: &["control.rs"],
+                                ..allow
+                            },
+                        )
+                        .is_empty(),
+                        "{method}: allowlist remains necessary"
+                    );
+                }
+            }
+            std::fs::write(&fixture, "InteractionStyle::new().hover(feedback)").unwrap();
+            assert!(
+                super::discrete_control_violations(
+                    sources.path(),
+                    &super::DiscreteControlAllowlist {
+                        custom_styling: &[],
+                        release_gestures: &[],
+                        primary_press: &[],
+                        context_press: &[],
+                    },
+                )
+                .is_empty(),
+                "the shared interaction API remains allowed"
+            );
+        }
+
         #[test]
         fn allowlist_entries_that_are_missing_or_unneeded_are_violations() {
             let sources = tempfile::tempdir().unwrap();

@@ -166,6 +166,7 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
         StoreWorkerCommand::Msg(msg) | StoreWorkerCommand::Traced(msg, _) => is_control_msg(msg),
         StoreWorkerCommand::Shutdown => true,
         StoreWorkerCommand::Repository { .. } => true,
+        StoreWorkerCommand::ActivationRefresh(_) => false,
         #[cfg(any(test, feature = "test-support"))]
         StoreWorkerCommand::InsertRepoForTest { .. } => true,
         #[cfg(any(test, feature = "test-support"))]
@@ -177,6 +178,7 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
 
 fn can_control_command_overtake(command: &StoreWorkerCommand) -> bool {
     matches!(command.msg(), Some(Msg::Internal(_)))
+        || matches!(command, StoreWorkerCommand::ActivationRefresh(_))
 }
 
 fn first_control_command_before_order_barrier(
@@ -756,6 +758,22 @@ impl AppStore {
                 let (mut msg, stamp) = match command {
                     StoreWorkerCommand::Msg(msg) => (*msg, None),
                     StoreWorkerCommand::Traced(msg, stamp) => (*msg, Some(stamp)),
+                    StoreWorkerCommand::ActivationRefresh(refresh) => {
+                        let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                        let repo_id = refresh.repo_id;
+                        let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+                            continue;
+                        };
+                        let Some(refresh) = refresh.into_refresh(repo) else {
+                            continue;
+                        };
+                        if refresh.refresh_worktree_dirty && state.active_repo == Some(repo_id) {
+                            deferred_commands.push_front(StoreWorkerCommand::Msg(Box::new(
+                                Msg::LoadWorktreeDirty { repo_id },
+                            )));
+                        }
+                        (Msg::RepoExternallyChanged { repo_id, change: refresh.change }, None)
+                    }
                     StoreWorkerCommand::Shutdown => break,
                     StoreWorkerCommand::Repository {
                         repo_id,
@@ -875,7 +893,7 @@ impl AppStore {
                     }
                     Msg::RepoActivated { repo_id } => {
                         repo_load_trace::trace!(
-                            "repo_activated_full_refresh repo_id={:?} monitor_running={}",
+                            "repo_activated repo_id={:?} monitor_running={}",
                             repo_id,
                             repo_monitors.is_running(*repo_id)
                         );
@@ -942,8 +960,8 @@ impl AppStore {
                         }
                         let unchanged = switching
                             && worker_ctx.repo_monitors.unchanged_since_inactive(repo_id);
-                        let (_, inputs) = PreparedReduction::for_worker(
-                            Msg::SetActiveRepo { repo_id }, worker_ctx.thread_state, &repos,
+                        let (_, inputs) = PreparedReduction::for_repo_switch(
+                            repo_id, worker_ctx.thread_state, &repos, unchanged,
                         ).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,
@@ -1028,20 +1046,21 @@ impl AppStore {
                         });
                     }
                     Msg::RepoActivated { repo_id } => {
-                        // Do a FULL refresh on activation (window focus). The filesystem monitor is
-                        // best-effort and cannot be the sole refresh trigger: in sandboxed/Flatpak
-                        // runs an external editor's or terminal's writes to the bind-mounted repo do
-                        // not propagate inotify events into the sandbox, so the monitor — even when
-                        // its thread is "running" — sees neither worktree edits NOR git-state changes
-                        // (commits, checkouts, fetches). Refreshing only the working-changes lanes
-                        // here would leave the log/branches/HEAD/divergence stale forever in exactly
-                        // that case. A full refresh keeps every view correct regardless of whether,
-                        // or how reliably, the watcher is delivering events; activation is throttled
-                        // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
-                        worker_ctx.repo_monitors.revalidate(repo_id);
-                        let change = RepoExternalChange::all();
+                        // Native notifications can be lost (including across sandbox mounts).
+                        // Always check working changes, but compare Git metadata before making
+                        // every focus event reload the same history and reference lists.
+                        let context = worker_ctx.thread_state.read().unwrap_or_else(|e| e.into_inner())
+                            .repos.iter().find(|repo| repo.id == repo_id)
+                            .map(repo_monitor::ActivationContext::for_repo);
+                        let refresh_message = if context.is_some_and(|context| worker_ctx.repo_monitors.refresh_on_activation(repo_id, context)) {
+                            // The monitor will report the checked change. Retain
+                            // the cheap periodic maintenance request below.
+                            Msg::RepoActivated { repo_id }
+                        } else {
+                            Msg::RepoExternallyChanged { repo_id, change: RepoExternalChange::all() }
+                        };
                         let (message, inputs) = PreparedReduction::for_worker(
-                            Msg::RepoExternallyChanged { repo_id, change }, worker_ctx.thread_state, &repos,
+                            refresh_message, worker_ctx.thread_state, &repos,
                         ).into_parts();
                         worker_ctx.reduce_and_handle(
                             &mut repos,

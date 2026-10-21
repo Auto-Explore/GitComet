@@ -342,7 +342,6 @@ fn reference_snapshot_benchmark() {
         .tags()
         .unwrap()
         .peeled()
-        .unwrap()
         .collect::<Result<Vec<_>>>()
         .unwrap();
     eprintln!(

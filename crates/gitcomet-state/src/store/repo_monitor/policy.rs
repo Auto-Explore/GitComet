@@ -141,8 +141,36 @@ impl PolicySnapshot {
     }
 
     pub fn is_git_directory_modify(&self, path: &Path, event: &notify::Event) -> bool {
-        matches!(event.kind, notify::EventKind::Modify(kind) if !matches!(kind, notify::event::ModifyKind::Name(_)))
-            && self.git_roots.contains(path)
+        if !matches!(event.kind, notify::EventKind::Modify(kind) if !matches!(kind, notify::event::ModifyKind::Name(_)))
+        {
+            return false;
+        }
+        if self.git_roots.contains(path) {
+            return true;
+        }
+        // Git/LFS can touch the hooks directory while reading status. Match
+        // only the immediate hooks boundary of a discovered Git directory;
+        // names elsewhere and structural events must retain their coverage.
+        if path.file_name().is_none_or(|name| name != "hooks")
+            || !path
+                .parent()
+                .is_some_and(|parent| self.git_roots.contains(parent))
+        {
+            return false;
+        }
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            // Junctions and other reparse entries can also report directories.
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return false;
+            }
+        }
+        metadata.is_dir() && !metadata.file_type().is_symlink()
     }
 }
 
@@ -204,35 +232,37 @@ enum Stamp {
 
 fn stamp(path: &Path) -> Stamp {
     match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            let directory = metadata.is_dir();
-            // A .git directory changes mtime whenever a lock file changes.
-            // Revalidate its identity, not its entries, to avoid self-reloads.
-            Stamp::Present {
-                len: if directory { 0 } else { metadata.len() },
-                modified: (!directory).then(|| metadata.modified().ok()).flatten(),
-                created: metadata.created().ok(),
-                directory,
-                link: metadata
-                    .file_type()
-                    .is_symlink()
-                    .then(|| fs::read_link(path).ok())
-                    .flatten(),
-                #[cfg(unix)]
-                inode: std::os::unix::fs::MetadataExt::ino(&metadata),
-                #[cfg(unix)]
-                ctime: if directory {
-                    (0, 0)
-                } else {
-                    (
-                        std::os::unix::fs::MetadataExt::ctime(&metadata),
-                        std::os::unix::fs::MetadataExt::ctime_nsec(&metadata),
-                    )
-                },
-            }
-        }
+        Ok(metadata) => metadata_stamp(path, &metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Stamp::Missing,
         Err(error) => Stamp::Failed(error.kind()),
+    }
+}
+
+fn metadata_stamp(path: &Path, metadata: &fs::Metadata) -> Stamp {
+    let directory = metadata.is_dir();
+    // A .git directory changes mtime whenever a lock file changes.
+    // Revalidate its identity, not its entries, to avoid self-reloads.
+    Stamp::Present {
+        len: if directory { 0 } else { metadata.len() },
+        modified: (!directory).then(|| metadata.modified().ok()).flatten(),
+        created: metadata.created().ok(),
+        directory,
+        link: metadata
+            .file_type()
+            .is_symlink()
+            .then(|| fs::read_link(path).ok())
+            .flatten(),
+        #[cfg(unix)]
+        inode: std::os::unix::fs::MetadataExt::ino(metadata),
+        #[cfg(unix)]
+        ctime: if directory {
+            (0, 0)
+        } else {
+            (
+                std::os::unix::fs::MetadataExt::ctime(metadata),
+                std::os::unix::fs::MetadataExt::ctime_nsec(metadata),
+            )
+        },
     }
 }
 
@@ -275,6 +305,7 @@ impl Stamps {
 #[derive(Default)]
 pub(super) struct WatchInputs {
     pub info: RepositoryWatchInfo,
+    pub backend_discovered: bool,
     pub inputs: Vec<PathBuf>,
     pub stamps: Stamps,
     pub indexes: Stamps,
@@ -297,7 +328,9 @@ impl WatchInputs {
             stamps.add(root.join("config"));
             indexes.add(root.join("index"));
         }
-        let info = backend.repository_watch_info(workdir)?.unwrap_or_else(|| {
+        let discovered = backend.repository_watch_info(workdir)?;
+        let backend_discovered = discovered.is_some();
+        let info = discovered.unwrap_or_else(|| {
             let mut info = RepositoryWatchInfo::default();
             if let Some(root) = root_git {
                 info.cache_dirs.extend(
@@ -314,6 +347,7 @@ impl WatchInputs {
         });
         let mut inputs = Self {
             info,
+            backend_discovered,
             stamps,
             indexes,
             index_file,
@@ -321,8 +355,12 @@ impl WatchInputs {
         };
         let mut links = Vec::new();
         let mut incomplete = inputs.info.discovery_incomplete;
-        inputs.cache_roots =
-            expand_watch_paths(inputs.info.cache_dirs.clone(), &mut links, &mut incomplete);
+        inputs.cache_roots = expand_watch_paths(
+            inputs.info.cache_dirs.clone(),
+            &mut links,
+            &mut incomplete,
+            &mut inputs.stamps,
+        );
         let mut controls = inputs.info.ignore_inputs.clone();
         controls.extend(links);
         controls.extend([workdir.join(".git"), workdir.join(".gitignore")]);
@@ -344,7 +382,12 @@ impl WatchInputs {
 
     pub fn add_inputs(&mut self, paths: Vec<PathBuf>) {
         let mut links = Vec::new();
-        let expanded = expand_watch_paths(paths, &mut links, &mut self.info.discovery_incomplete);
+        let expanded = expand_watch_paths(
+            paths,
+            &mut links,
+            &mut self.info.discovery_incomplete,
+            &mut self.stamps,
+        );
         for path in expanded.into_iter().chain(links) {
             if fs::metadata(&path).is_ok_and(|metadata| !metadata.is_file() && !metadata.is_dir()) {
                 continue;
@@ -389,9 +432,27 @@ fn expand_watch_paths(
     inputs: Vec<PathBuf>,
     links: &mut Vec<PathBuf>,
     incomplete: &mut bool,
+    stamps: &mut Stamps,
+) -> Vec<PathBuf> {
+    expand_watch_paths_with_metadata(inputs, links, incomplete, stamps, |path| {
+        fs::symlink_metadata(path)
+    })
+}
+
+fn expand_watch_paths_with_metadata(
+    inputs: Vec<PathBuf>,
+    links: &mut Vec<PathBuf>,
+    incomplete: &mut bool,
+    stamps: &mut Stamps,
+    mut metadata: impl FnMut(&Path) -> std::io::Result<fs::Metadata>,
 ) -> Vec<PathBuf> {
     let mut paths = FxHashSet::default();
     let mut visited = FxHashSet::default();
+    // Sibling inputs share most directory prefixes. Reuse only ordinary
+    // ancestor directories within this expansion, then validate reused entries
+    // before returning. Never reuse a missing input, error, symlink, or terminal
+    // cache entry such as index.lock.
+    let mut ancestors = FxHashMap::<PathBuf, (fs::Metadata, bool)>::default();
     for input in inputs {
         let mut current = input;
         for hop in 0..=64 {
@@ -432,7 +493,23 @@ fn expand_watch_paths(
             let mut target = None;
             while let Some(component) = components.next() {
                 prefix.push(component);
-                match fs::symlink_metadata(&prefix) {
+                let prefix_metadata = if !components.as_path().as_os_str().is_empty() {
+                    if let Some((metadata, reused)) = ancestors.get_mut(&prefix) {
+                        *reused = true;
+                        Ok(metadata.clone())
+                    } else {
+                        let result = metadata(&prefix);
+                        if let Ok(metadata) = &result
+                            && cacheable_ancestor(metadata)
+                        {
+                            ancestors.insert(prefix.clone(), (metadata.clone(), false));
+                        }
+                        result
+                    }
+                } else {
+                    metadata(&prefix)
+                };
+                match prefix_metadata {
                     Ok(metadata) if metadata.file_type().is_symlink() => {
                         links.push(normalized(&prefix));
                         match fs::read_link(&prefix) {
@@ -466,9 +543,40 @@ fn expand_watch_paths(
             }
         }
     }
+    for (path, (first, reused)) in ancestors {
+        if !reused {
+            continue;
+        }
+        let first = metadata_stamp(&path, &first);
+        let current = match metadata(&path) {
+            Ok(metadata) => metadata_stamp(&path, &metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Stamp::Missing,
+            Err(error) => Stamp::Failed(error.kind()),
+        };
+        if current != first {
+            // Preserve a changed first observation so setup retries rather than
+            // accepting mixed identities. Stable per-call cache entries never
+            // become extra steady-state polling work.
+            // An earlier input stamp can already equal `current` after an ABA
+            // replacement; explicitly retain this mismatching observation.
+            stamps.0.insert(path, first);
+        }
+    }
     let mut paths: Vec<_> = paths.into_iter().collect();
     paths.sort();
     paths
+}
+
+fn cacheable_ancestor(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
+    metadata.is_dir() && !metadata.file_type().is_symlink()
 }
 
 #[cfg(test)]
@@ -516,6 +624,7 @@ mod tests {
             vec![direct.clone(), link.join("../ignore")],
             &mut links,
             &mut incomplete,
+            &mut Stamps::default(),
         );
         // link/../ignore resolves against the link's destination. It is a
         // different input from root/ignore despite the same lexical spelling.
@@ -523,5 +632,210 @@ mod tests {
         assert!(paths.contains(&direct));
         assert!(links.contains(&link));
         assert!(!incomplete);
+    }
+
+    #[test]
+    fn sibling_inputs_share_ancestor_reads_including_validation_without_polling_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(&temp.path().canonicalize().unwrap());
+        let requested: Vec<_> = (0..8)
+            .map(|index| root.join(format!("ignore-{index}")))
+            .collect();
+        let mut reads = FxHashMap::<PathBuf, usize>::default();
+        let mut stamps = Stamps::default();
+        let mut incomplete = false;
+        let paths = expand_watch_paths_with_metadata(
+            requested.clone(),
+            &mut Vec::new(),
+            &mut incomplete,
+            &mut stamps,
+            |path| {
+                *reads.entry(path.to_path_buf()).or_default() += 1;
+                fs::symlink_metadata(path)
+            },
+        );
+        assert!(requested.iter().all(|path| paths.contains(path)));
+        assert_eq!(reads[&root], 2, "one read plus final identity validation");
+        assert!(
+            reads.values().sum::<usize>()
+                < requested.iter().map(|path| path.components().count()).sum(),
+            "validation must preserve a net reduction in metadata calls: {reads:?}"
+        );
+        assert!(!incomplete);
+        assert!(
+            stamps.0.is_empty(),
+            "stable cached ancestors must not add steady-state stamp reads"
+        );
+
+        let mut inputs = WatchInputs::default();
+        inputs.add_inputs(requested.clone());
+        fs::write(root.join("unrelated.txt"), "ordinary directory churn").unwrap();
+        assert!(
+            !inputs.stamps.changed(),
+            "creating an unrelated sibling must not invalidate ignore policy"
+        );
+        fs::write(&requested[0], "*.log\n").unwrap();
+        assert!(
+            inputs.stamps.changed(),
+            "actual input changes still invalidate"
+        );
+    }
+
+    #[test]
+    fn missing_ancestor_created_during_expansion_is_read_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(&temp.path().canonicalize().unwrap());
+        let ancestor = root.join("created-during-expansion");
+        let mut ancestor_reads = 0;
+        let mut stamps = Stamps::default();
+        let mut incomplete = false;
+        let paths = expand_watch_paths_with_metadata(
+            vec![ancestor.join("first"), ancestor.join("second")],
+            &mut Vec::new(),
+            &mut incomplete,
+            &mut stamps,
+            |path| {
+                let result = fs::symlink_metadata(path);
+                if path == ancestor {
+                    ancestor_reads += 1;
+                    if ancestor_reads == 1 {
+                        assert_eq!(
+                            result.as_ref().unwrap_err().kind(),
+                            std::io::ErrorKind::NotFound
+                        );
+                        fs::create_dir(&ancestor).unwrap();
+                    } else {
+                        assert!(result.as_ref().unwrap().is_dir());
+                    }
+                }
+                result
+            },
+        );
+        assert_eq!(ancestor_reads, 2, "missing ancestors are never cached");
+        assert!(paths.contains(&ancestor.join("first")));
+        assert!(paths.contains(&ancestor.join("second")));
+        assert!(!incomplete);
+        assert!(!stamps.changed());
+    }
+
+    #[test]
+    fn failed_ancestor_metadata_is_not_reused() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(&temp.path().canonicalize().unwrap());
+        let mut failures = 0;
+        let mut incomplete = false;
+        expand_watch_paths_with_metadata(
+            vec![root.join("first"), root.join("second")],
+            &mut Vec::new(),
+            &mut incomplete,
+            &mut Stamps::default(),
+            |path| {
+                if path == root {
+                    failures += 1;
+                    Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                } else {
+                    fs::symlink_metadata(path)
+                }
+            },
+        );
+        assert_eq!(failures, 2);
+        assert!(
+            incomplete,
+            "errors must retain degraded discovery semantics"
+        );
+    }
+
+    #[test]
+    fn ancestor_replaced_by_symlink_invalidates_cached_pass_and_next_pass_resolves_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = normalized(&temp.path().canonicalize().unwrap());
+        // Swap the parent so the link itself never moves: moving it would
+        // refresh its ctime and break the equal-stamp setup below.
+        let parent = root.join("parent");
+        let staging = root.join("staging");
+        let ancestor = parent.join("ancestor");
+        let destination = root.join("destination");
+        fs::create_dir_all(&ancestor).unwrap();
+        fs::create_dir(&staging).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let incoming = staging.join("ancestor");
+        let fixture_kind =
+            if gitcomet_core::test_support::symlink::directory(&destination, &incoming) {
+                "directory-symlink"
+            } else {
+                #[cfg(windows)]
+                {
+                    // Fixed relative names avoid shell interpolation and a
+                    // junction exercises the reparse race without privileges.
+                    let result = std::process::Command::new("cmd")
+                        .current_dir(&root)
+                        .args([
+                            "/d",
+                            "/c",
+                            "mklink",
+                            "/J",
+                            r"staging\ancestor",
+                            "destination",
+                        ])
+                        .output()
+                        .unwrap();
+                    assert!(
+                        result.status.success(),
+                        "junction fixture failed: {result:?}"
+                    );
+                    "directory-junction"
+                }
+                #[cfg(not(windows))]
+                {
+                    unreachable!("only Windows may lack the symlink fixture privilege")
+                }
+            };
+        let requested = vec![ancestor.join("first"), ancestor.join("second")];
+        let mut replaced = false;
+        let mut stamps = Stamps::default();
+        // A previously stamped input can equal the eventual current identity
+        // even though this pass observes an intervening ordinary directory.
+        // Local invalidation must override that old stamp rather than let it
+        // conceal the mismatch.
+        let replacement_stamp = stamp(&incoming);
+        stamps.0.insert(ancestor.clone(), replacement_stamp.clone());
+        let mut incomplete = false;
+        expand_watch_paths_with_metadata(
+            requested.clone(),
+            &mut Vec::new(),
+            &mut incomplete,
+            &mut stamps,
+            |path| {
+                let result = fs::symlink_metadata(path);
+                if path == requested[0] && !replaced {
+                    fs::rename(&parent, root.join("retired-parent")).unwrap();
+                    fs::rename(&staging, &parent).unwrap();
+                    replaced = true;
+                }
+                result
+            },
+        );
+        assert!(replaced);
+        assert!(!incomplete);
+        assert_eq!(stamp(&ancestor), replacement_stamp);
+        // The swapped parent is invalidated as well, so check the ancestor's own entry.
+        assert!(
+            stamps.is_directory(&ancestor),
+            "setup must reject an expansion that reused a replaced ancestor"
+        );
+        assert!(stamps.changed());
+
+        let mut fresh_stamps = Stamps::default();
+        let mut links = Vec::new();
+        let paths = expand_watch_paths(requested, &mut links, &mut incomplete, &mut fresh_stamps);
+        assert!(links.contains(&ancestor));
+        assert!(paths.contains(&destination.join("first")));
+        assert!(paths.contains(&destination.join("second")));
+        assert!(
+            !fresh_stamps.changed(),
+            "an independent invocation must accept the stable replacement"
+        );
+        assert!(fresh_stamps.0.is_empty(), "stable passes must not loop");
+        println!("WATCH_PREFIX_REPLACEMENT_RACE exercised=true kind={fixture_kind}");
     }
 }

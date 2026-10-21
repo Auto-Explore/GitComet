@@ -875,10 +875,18 @@ impl Render for GitCometView {
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
 
         if crate::startup_probe::is_enabled() {
-            root = root.on_children_prepainted(|_children_bounds, window, _cx| {
-                if crate::startup_probe::mark_first_paint() {
-                    window.on_next_frame(|_window, cx| {
-                        crate::startup_probe::mark_first_interactive();
+            let home_ready = self.is_home_screen_active() && self.state.git_runtime.is_available();
+            root = root.on_children_prepainted(move |_children_bounds, window, _cx| {
+                let first_paint = crate::startup_probe::mark_first_paint();
+                let home_frame = home_ready && !crate::startup_probe::home_ready_recorded();
+                if first_paint || home_frame {
+                    window.on_next_frame(move |_window, cx| {
+                        if first_paint {
+                            crate::startup_probe::mark_first_interactive();
+                        }
+                        if home_frame {
+                            crate::startup_probe::mark_home_ready();
+                        }
                         if crate::startup_probe::should_exit_after_first_interactive() {
                             crate::app::mark_clean_shutdown_requested(cx);
                             cx.quit();

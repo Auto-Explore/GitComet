@@ -1,19 +1,69 @@
 use super::GixRepo;
 use crate::util::{
-    path_buf_from_git_bytes, run_git_capture_bytes, run_git_with_output, validate_ref_like_arg,
+    path_buf_from_git_bytes, run_git_capture_bytes_cancellable, run_git_with_output,
+    validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, Worktree};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::services::{CommandOutput, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
+use gix::bstr::ByteSlice as _;
 use std::path::Path;
 use std::process::Command;
 
+mod native_config;
+#[cfg(test)]
+mod native_config_tests;
+
 impl GixRepo {
     pub(super) fn list_worktrees_impl(&self) -> Result<Vec<Worktree>> {
+        self.list_worktrees_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn list_worktrees_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Worktree>> {
+        cancellation.check_cancelled()?;
+        // The existing layout can only reject the optimization. In particular,
+        // linked checkouts should not reparse configuration before invoking Git.
+        // A positive still refreshes refs/config and rechecks the whole layout;
+        // registrations and configuration can change while this handle is open.
+        if !worktree_environment_overridden()
+            && self.may_be_sole_primary_worktree()
+            && let Some(repo) = native_config::reopen(self)
+        {
+            cancellation.check_cancelled()?;
+            if let Some(worktree) = sole_primary_worktree(&repo) {
+                cancellation.check_cancelled()?;
+                return Ok(vec![worktree]);
+            }
+        }
+        cancellation.check_cancelled()?;
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("worktree").arg("list").arg("--porcelain").arg("-z");
-        let output = run_git_capture_bytes(cmd, "git worktree list --porcelain -z")?;
+        let output = run_git_capture_bytes_cancellable(
+            cmd,
+            "git worktree list --porcelain -z",
+            cancellation,
+        )?;
         parse_git_worktree_list_porcelain_z(&output)
+    }
+
+    /// A stale negative only forgoes the native path; a positive is not evidence
+    /// that a listing can be returned without the fresh authoritative checks.
+    fn may_be_sole_primary_worktree(&self) -> bool {
+        let common_dir = {
+            let store = self.store.read().expect("repo store");
+            let git_dir = store.repo.git_dir();
+            let common_dir = store.repo.common_dir.as_deref().unwrap_or(git_dir);
+            if git_dir != common_dir {
+                return false;
+            }
+            common_dir.to_path_buf()
+        };
+        // The store guard must not outlive the path read: filesystem I/O and
+        // the subsequent fresh open must not delay a store replacement.
+        no_worktree_registrations(&common_dir)
     }
 
     pub(super) fn add_worktree_with_output_impl(
@@ -40,6 +90,92 @@ impl GixRepo {
         let label = push_worktree_args(&mut cmd, &["remove", "--force"], path, None)?;
         run_git_with_output(cmd, &label)
     }
+}
+
+fn worktree_environment_overridden() -> bool {
+    [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+    ]
+    .iter()
+    .any(|name| std::env::var_os(name).is_some())
+}
+
+fn no_worktree_registrations(common_dir: &Path) -> bool {
+    let registrations = common_dir.join("worktrees");
+    match std::fs::symlink_metadata(&registrations) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Ok(metadata) if plain_directory(&metadata) => {
+            // An entry or a failed enumeration may represent another checkout.
+            std::fs::read_dir(&registrations).is_ok_and(|mut entries| entries.next().is_none())
+        }
+        _ => false,
+    }
+}
+
+/// Only the conventional primary checkout with a resolved HEAD is handled
+/// here. Git remains authoritative for linked, bare and unusual layouts.
+fn sole_primary_worktree(repo: &gix::Repository) -> Option<Worktree> {
+    if repo.git_dir_trust() != gix::sec::Trust::Full
+        || repo.is_bare()
+        || repo.git_dir() != repo.common_dir()
+        || crate::refs::backend(repo).ok()? != crate::refs::RefBackend::Files
+        || repo.config_snapshot().string("core.worktree").is_some()
+    {
+        return None;
+    }
+    let workdir = repo.workdir()?;
+    let dot_git = workdir.join(".git");
+    if !plain_directory(&std::fs::symlink_metadata(workdir).ok()?)
+        || !plain_directory(&std::fs::symlink_metadata(&dot_git).ok()?)
+        || !same_file::is_same_file(repo.git_dir(), &dot_git).ok()?
+    {
+        return None;
+    }
+
+    if !no_worktree_registrations(repo.common_dir()) {
+        return None;
+    }
+
+    let refs = crate::refs::view(repo).ok()?;
+    let (id, branch, detached) = match refs.find_exact(b"HEAD").ok()??.target {
+        gix::refs::Target::Symbolic(name) => {
+            let branch = name.as_bstr().strip_prefix(b"refs/heads/")?;
+            // Symbolic chains and unborn refs retain Git's existing behavior.
+            let gix::refs::Target::Object(id) = refs.find_exact(name.as_bstr()).ok()??.target
+            else {
+                return None;
+            };
+            (id, Some(branch.to_str_lossy().into_owned()), false)
+        }
+        gix::refs::Target::Object(id) => (id, None, true),
+    };
+    // Like Git's porcelain listing, return the ref's OID without loading its
+    // object. Missing objects and detached tag targets still have a worktree row.
+    let mut worktree = Worktree {
+        path: workdir.to_path_buf(),
+        head: Some(CommitId(super::oid_to_arc_str(&id))),
+        branch,
+        detached,
+    };
+    canonicalize_worktree_path(&mut worktree);
+    Some(worktree)
+}
+
+fn plain_directory(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        // Junctions and other reparse points are not all exposed as symlinks.
+        if metadata.file_attributes() & 0x400 != 0 {
+            return false;
+        }
+    }
+    metadata.is_dir() && !metadata.file_type().is_symlink()
 }
 
 /// Append `git worktree <args> -- <path> [<reference>]` and return the display
@@ -131,11 +267,244 @@ fn canonicalize_worktree_path(worktree: &mut Worktree) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_git_worktree_list_porcelain_z, push_worktree_args};
+    use super::{
+        GixRepo, Worktree, parse_git_worktree_list_porcelain_z, push_worktree_args,
+        sole_primary_worktree,
+    };
+    use crate::test_support::{git_output, git_stdout, git_success, init_test_repo, open_repo};
     use gitcomet_core::path_utils::canonicalize_or_original;
+    use gitcomet_core::services::{CancellationToken, GitRepository as _};
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+
+    fn committed_primary() -> (tempfile::TempDir, GixRepo) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("repository space");
+        std::fs::create_dir(&path).unwrap();
+        init_test_repo(&path);
+        git_success(&path, &["commit", "--allow-empty", "-m", "initial"]);
+        git_success(&path, &["branch", "-M", "main"]);
+        let repo = open_repo(&path);
+        (root, repo)
+    }
+
+    fn oracle(repo: &GixRepo) -> Vec<Worktree> {
+        let output = git_output(
+            &repo.spec.workdir,
+            &["worktree", "list", "--porcelain", "-z"],
+        );
+        assert!(output.status.success(), "{output:?}");
+        parse_git_worktree_list_porcelain_z(&output.stdout).unwrap()
+    }
+
+    fn assert_listing(repo: &GixRepo, commands: usize) {
+        let (actual, trace) =
+            crate::command_trace::capture(|| repo.list_worktrees(&CancellationToken::new()));
+        assert_eq!(actual.unwrap(), oracle(repo));
+        assert_eq!(trace.len(), commands, "{trace:?}");
+    }
+
+    #[test]
+    fn native_single_worktree_matches_git_after_head_changes() {
+        let (_root, repo) = committed_primary();
+        assert_listing(&repo, 0);
+        git_success(&repo.spec.workdir, &["checkout", "-b", "topic/nested"]);
+        git_success(
+            &repo.spec.workdir,
+            &["commit", "--allow-empty", "-m", "second"],
+        );
+        git_success(&repo.spec.workdir, &["pack-refs", "--all"]);
+        assert_listing(&repo, 0);
+        git_success(&repo.spec.workdir, &["checkout", "--detach", "HEAD~1"]);
+        assert_listing(&repo, 0);
+        git_success(&repo.spec.workdir, &["checkout", "main"]);
+        assert_listing(&repo, 0);
+    }
+
+    #[test]
+    fn native_single_worktree_rechecks_linked_registrations_each_time() {
+        let (root, repo) = committed_primary();
+        assert!(repo.may_be_sole_primary_worktree());
+        assert_listing(&repo, 0);
+        let linked = root.path().join("linked checkout");
+        git_success(
+            &repo.spec.workdir,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        assert!(!repo.may_be_sole_primary_worktree());
+        assert_listing(&repo, 1);
+        let linked_repo = open_repo(&linked);
+        assert!(!linked_repo.may_be_sole_primary_worktree());
+        assert_listing(&linked_repo, 1);
+        drop(linked_repo);
+        git_success(
+            &repo.spec.workdir,
+            &["worktree", "lock", linked.to_str().unwrap()],
+        );
+        assert_listing(&repo, 1);
+        git_success(
+            &repo.spec.workdir,
+            &["worktree", "unlock", linked.to_str().unwrap()],
+        );
+        git_success(
+            &repo.spec.workdir,
+            &["worktree", "remove", linked.to_str().unwrap()],
+        );
+        assert!(repo.may_be_sole_primary_worktree());
+        assert_listing(&repo, 0);
+    }
+
+    #[test]
+    fn native_single_worktree_keeps_git_for_unborn_and_separate_git_dirs() {
+        let unborn = tempfile::tempdir().unwrap();
+        init_test_repo(unborn.path());
+        assert_listing(&open_repo(unborn.path()), 1);
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("checkout");
+        std::fs::create_dir(&path).unwrap();
+        let separate = root.path().join("separate metadata");
+        git_success(
+            &path,
+            &["init", "--separate-git-dir", separate.to_str().unwrap()],
+        );
+        git_success(
+            &path,
+            &[
+                "-c",
+                "user.name=Test User",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+        );
+        assert_listing(&open_repo(&path), 1);
+    }
+
+    #[test]
+    fn native_single_worktree_reads_oid_without_requiring_its_object() {
+        let (_root, repo) = committed_primary();
+        git_success(&repo.spec.workdir, &["tag", "-a", "tagged", "-m", "tag"]);
+        let tag = git_stdout(&repo.spec.workdir, &["rev-parse", "refs/tags/tagged"]);
+        std::fs::write(repo.spec.workdir.join(".git/HEAD"), format!("{tag}\n")).unwrap();
+        assert_listing(&repo, 0);
+        let absent = "1111111111111111111111111111111111111111";
+        std::fs::write(repo.spec.workdir.join(".git/HEAD"), format!("{absent}\n")).unwrap();
+        assert_listing(&repo, 0);
+        std::fs::write(
+            repo.spec.workdir.join(".git/refs/heads/main"),
+            format!("{absent}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            repo.spec.workdir.join(".git/HEAD"),
+            b"ref: refs/heads/main\n",
+        )
+        .unwrap();
+        assert_listing(&repo, 0);
+    }
+
+    #[test]
+    fn native_single_worktree_defers_reduced_trust_to_git() {
+        let (_root, repo) = committed_primary();
+        let reduced = gix::open_opts(
+            repo.spec.workdir.join(".git"),
+            gix::open::Options::default()
+                .permissions(gix::open::Permissions::isolated())
+                .with(gix::sec::Trust::Reduced),
+        )
+        .unwrap();
+        assert_eq!(reduced.git_dir_trust(), gix::sec::Trust::Reduced);
+        assert!(sole_primary_worktree(&reduced).is_none());
+    }
+
+    #[test]
+    fn native_single_worktree_defers_uncertain_layouts_and_symbolic_chains() {
+        let (_root, repo) = committed_primary();
+        let registrations = repo.spec.workdir.join(".git/worktrees");
+        std::fs::write(&registrations, b"not a registration directory").unwrap();
+        assert!(!repo.may_be_sole_primary_worktree());
+        assert!(sole_primary_worktree(&repo.reopen_repo().unwrap()).is_none());
+        let (_, trace) =
+            crate::command_trace::capture(|| repo.list_worktrees(&CancellationToken::new()));
+        assert_eq!(trace.len(), 1);
+        std::fs::remove_file(&registrations).unwrap();
+        std::fs::create_dir(&registrations).unwrap();
+        std::fs::create_dir(registrations.join("unknown checkout")).unwrap();
+        assert!(!repo.may_be_sole_primary_worktree());
+        assert!(sole_primary_worktree(&repo.reopen_repo().unwrap()).is_none());
+        std::fs::remove_dir(registrations.join("unknown checkout")).unwrap();
+        assert!(repo.may_be_sole_primary_worktree());
+        assert_listing(&repo, 0);
+
+        git_success(
+            &repo.spec.workdir,
+            &["symbolic-ref", "refs/heads/alias", "refs/heads/main"],
+        );
+        git_success(
+            &repo.spec.workdir,
+            &["symbolic-ref", "HEAD", "refs/heads/alias"],
+        );
+        assert_listing(&repo, 1);
+        git_success(
+            &repo.spec.workdir,
+            &["symbolic-ref", "HEAD", "refs/heads/main"],
+        );
+        git_success(&repo.spec.workdir, &["config", "core.worktree", "."]);
+        // The layout-only preflight remains positive, but the fresh config
+        // must still reject the native path after a same-handle change.
+        assert!(repo.may_be_sole_primary_worktree());
+        assert!(sole_primary_worktree(&repo.reopen_repo().unwrap()).is_none());
+        assert_listing(&repo, 1);
+    }
+
+    #[test]
+    fn native_single_worktree_pre_cancelled_load_never_starts_git() {
+        let (_root, repo) = committed_primary();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let (result, trace) = crate::command_trace::capture(|| repo.list_worktrees(&cancellation));
+        assert!(matches!(
+            result.unwrap_err().kind(),
+            gitcomet_core::error::ErrorKind::Cancelled
+        ));
+        assert!(trace.is_empty());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_single_worktree_does_not_follow_registration_directory_links() {
+        let (root, repo) = committed_primary();
+        let target = root.path().join("registration target");
+        std::fs::create_dir(&target).unwrap();
+        let registrations = repo.spec.workdir.join(".git/worktrees");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &registrations).unwrap();
+        #[cfg(windows)]
+        {
+            let output = Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&registrations)
+                .arg(&target)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        assert!(!repo.may_be_sole_primary_worktree());
+        assert_listing(&repo, 1);
+    }
 
     #[test]
     fn worktree_add_places_separator_before_path_and_reference() {

@@ -469,7 +469,7 @@ impl BarItemOwner for BottomStatusBarView {
                     .h(scaled_px(12.0))
                     .flex_shrink_0()
                     .text_color(theme.colors.foreground.secondary)
-                    .group_hover("bottom_status_bar_discord", move |s| {
+                    .group_hover_style("bottom_status_bar_discord", move |s| {
                         s.text_color(theme.colors.accent.foreground)
                     }),
             )
@@ -539,7 +539,7 @@ impl BarItemOwner for BottomStatusBarView {
         // so the mark keeps its brand color regardless of the theme.
         //
         // The color lives on the link itself and the wordmark inherits it, so
-        // one `.hover()` on this stateful element tints the text. A style on the
+        // one `.hover_style()` on this stateful element tints the text. A style on the
         // stateless child could not do it: gpui only repaints on hover for
         // elements that carry state, so the child's own hover would compute a
         // tint that never reaches the screen.

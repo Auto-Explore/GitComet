@@ -27,7 +27,18 @@ pub(crate) fn open_worktree_repo_with(
     workdir: &Path,
     permissions: gix::open::Permissions,
 ) -> gix::Result<gix::Repository> {
-    let options = gix::open::Options::default().permissions(permissions);
+    open_worktree_repo_with_options(
+        workdir,
+        gix::open::Options::default().permissions(permissions),
+    )
+}
+
+/// As [`open_worktree_repo_with`], with caller-selected opening options.
+/// Path handling and conditional include reloads remain shared by every opener.
+pub(crate) fn open_worktree_repo_with_options(
+    workdir: &Path,
+    options: gix::open::Options,
+) -> gix::Result<gix::Repository> {
     let mut repo = gix::open_opts(git_dir_for_workdir(workdir), options)?;
     crate::refs::reload_conditional_includes(&mut repo)?;
     Ok(repo)

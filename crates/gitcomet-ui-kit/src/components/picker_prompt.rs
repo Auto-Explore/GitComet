@@ -1842,7 +1842,7 @@ pub fn remove_row_button<V: 'static>(
         .when(!always_visible, |button| {
             button
                 .invisible()
-                .group_hover(row_group, |style| style.visible())
+                .group_hover_style(row_group, |style| style.visible())
         })
         .control_interaction(
             InteractionStyle::destructive(theme),
