@@ -17,7 +17,7 @@ pub(super) fn id(local: &'static str) -> ContributionId {
 
 /// A view with a details tab and a sidebar tab of its own, and a details
 /// tab listed everywhere.
-struct Panels;
+pub(super) struct Panels;
 
 impl Extension for Panels {
     fn id(&self) -> ExtensionId {
@@ -57,8 +57,16 @@ impl Extension for Panels {
             .sidebar_tab(
                 "files",
                 SidebarTabDescriptor::new("Changed files", view("panels_files"))
-                    .with_view(review)
+                    .with_view(review.clone())
                     .opens_with_view(),
+            )
+            .sidebar_tab(
+                "extra-history",
+                SidebarTabDescriptor::new(
+                    "Additional repository history",
+                    view("panels_extra_history"),
+                )
+                .with_view(review),
             )
             // A view whose own details tab replaces the pane's Details.
             .repository_view(
