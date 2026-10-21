@@ -291,6 +291,7 @@ fn preview_does_not_consume_credentials_staged_for_a_push() {
     };
     let fixture = Fixture::new();
     let repo = GixBackend.open(&fixture.local).unwrap();
+    let _auth_lock = crate::auth_test_lock();
     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
         challenge: None,
         kind: GitAuthKind::UsernamePassword,

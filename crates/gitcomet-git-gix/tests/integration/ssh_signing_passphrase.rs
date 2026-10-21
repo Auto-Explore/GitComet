@@ -12,17 +12,10 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{Mutex, MutexGuard};
 
-use crate::test_git_env;
+use crate::{auth_test_lock, test_git_env};
 
 const PASSPHRASE: &str = "correct horse battery staple";
-
-// These tests reset the process-wide staged-auth and session-passphrase slots.
-fn auth_test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|error| error.into_inner())
-}
 
 fn run_git(repo: &Path, args: &[&str]) {
     let mut cmd = gitcomet_core::test_support::git_fixture::git_command();

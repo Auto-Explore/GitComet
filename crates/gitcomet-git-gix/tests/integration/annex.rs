@@ -1257,6 +1257,7 @@ fn support_load_does_not_consume_credentials_staged_for_a_command() {
     let dir = tempfile::tempdir().unwrap();
     let repo = init_annex_repo(dir.path());
     let opened = open(&repo);
+    let _auth_lock = crate::auth_test_lock();
     let _auth = ScopedStagedGitAuth::stage(StagedGitAuth {
         challenge: None,
         kind: GitAuthKind::UsernamePassword,

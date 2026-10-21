@@ -46,3 +46,10 @@ mod text_encoding;
 mod upstream;
 mod upstream_divergence;
 mod worktrees;
+
+// Staged auth and cached passphrases are process-wide: hold this while staging
+// or clearing either.
+pub(crate) fn auth_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|error| error.into_inner())
+}
