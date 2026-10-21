@@ -469,7 +469,7 @@ impl BarItemOwner for BottomStatusBarView {
                     .h(scaled_px(12.0))
                     .flex_shrink_0()
                     .text_color(theme.colors.foreground.secondary)
-                    .group_hover("bottom_status_bar_discord", move |s| {
+                    .group_hover_style("bottom_status_bar_discord", move |s| {
                         s.text_color(theme.colors.accent.foreground)
                     }),
             )

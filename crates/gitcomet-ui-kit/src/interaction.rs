@@ -301,7 +301,7 @@ impl InteractionStyle {
         }
 
         let outline = interaction_outline(self.theme.colors.interaction.focus_ring);
-        control = control.focus_visible(move |style| style.shadow(vec![outline]));
+        control = control.focus_visible_style(move |style| style.shadow(vec![outline]));
         if !self.pointer_feedback {
             return control.cursor(CursorStyle::Arrow);
         }
@@ -311,12 +311,12 @@ impl InteractionStyle {
         control
             .cursor(CursorStyle::PointingHand)
             .when(self.hover_feedback, |control| {
-                control.hover(move |mut style| {
+                control.hover_style(move |mut style| {
                     style.refine(&hover);
                     style
                 })
             })
-            .active(move |mut style| {
+            .active_style(move |mut style| {
                 style.refine(&pressed);
                 style
             })

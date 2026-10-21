@@ -349,13 +349,15 @@ pub mod source_guards {
     }
 
     /// Discrete controls must style and activate through the shared
-    /// interaction APIs: no ad-hoc `.hover(|..`/`.active(|..`, raw
-    /// `.on_click`, bare `.on_mouse_up`, or raw button presses.
+    /// interaction APIs: no ad-hoc `.hover_style(|..`/`.active_style(|..`
+    /// (or their deprecated `.hover`/`.active` names), raw `.on_click`, bare
+    /// `.on_mouse_up`, or raw button presses.
     pub fn discrete_control_violations(
         src_dir: &Path,
         allow: &DiscreteControlAllowlist<'_>,
     ) -> Vec<String> {
-        let pattern = regex::Regex::new(r"\.(?:hover|active)\(\s*(?:move\s+)?\|").unwrap();
+        let pattern =
+            regex::Regex::new(r"\.(?:hover|active)(?:_style)?\(\s*(?:move\s+)?\|").unwrap();
         let raw_click =
             regex::Regex::new(r"\.on_click\(\s*(?:cx\.listener|on_click\b|(?:move\s+)?\|)")
                 .unwrap();
@@ -458,6 +460,37 @@ pub mod source_guards {
                 [
                     "plain.rs: allowlisted but no longer needed",
                     "moved.rs: allowlisted but missing",
+                ]
+            );
+        }
+
+        #[test]
+        fn custom_styling_is_found_under_both_style_builder_names() {
+            let sources = tempfile::tempdir().unwrap();
+            for (file, call) in [
+                ("hover.rs", ".hover(|s| s)"),
+                ("hover_style.rs", ".hover_style(move |s| s)"),
+                ("active_style.rs", ".active_style(|s| s)"),
+                ("refine.rs", "style.refine(&hover)"),
+            ] {
+                std::fs::write(sources.path().join(file), call).unwrap();
+            }
+            let mut violations = super::discrete_control_violations(
+                sources.path(),
+                &super::DiscreteControlAllowlist {
+                    custom_styling: &[],
+                    release_gestures: &[],
+                    primary_press: &[],
+                    context_press: &[],
+                },
+            );
+            violations.sort();
+            assert_eq!(
+                violations,
+                [
+                    "active_style.rs: custom hover/press styling",
+                    "hover.rs: custom hover/press styling",
+                    "hover_style.rs: custom hover/press styling",
                 ]
             );
         }
