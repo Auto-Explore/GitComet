@@ -597,9 +597,7 @@ impl ThemeCatalog {
 }
 
 pub fn has_theme_key(key: &str) -> bool {
-    merged_theme_options(None)
-        .iter()
-        .any(|option| option.key == key)
+    embedded_theme_cache().contains_key(key) || runtime_themes().contains_key(key)
 }
 
 pub fn theme_label(key: &str) -> Option<String> {

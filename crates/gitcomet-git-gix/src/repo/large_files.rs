@@ -15,6 +15,7 @@ use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Larger status snapshots are not classified: each row costs an attribute
 /// lookup and a small read, and such trees are rarely all large files.
@@ -247,7 +248,7 @@ impl CommittedPointerScan {
         // Global filter config only means LFS is installed. Use the same
         // attribute sources as the support summary, including nested ones.
         let lfs = stores.lfs.join("objects").is_dir()
-            || scan_lfs_attributes(repo, &CancellationToken::new(), |pattern, _| {
+            || scan_lfs_attributes(repo, &CancellationToken::new(), None, |pattern, _| {
                 pattern.is_some()
             })
             .unwrap_or(false);
@@ -328,6 +329,68 @@ impl LockableLookup<'_> {
     }
 }
 
+/// Only descriptors are cached: attribute contents are read afresh each scan.
+/// A weak key cannot retain the parsed index, and cannot match another snapshot.
+pub(super) struct AttributeSources {
+    index: Weak<gix::fs::FileSnapshot<gix::index::File>>,
+    sources: Arc<[(PathBuf, gix::ObjectId)]>,
+}
+
+fn tracked_attribute_sources(
+    index: &gix::worktree::Index,
+) -> impl Iterator<Item = (PathBuf, gix::ObjectId)> + '_ {
+    index.entries().iter().filter_map(move |entry| {
+        let path = entry.path(index);
+        (path == ".gitattributes" || path.ends_with(b"/.gitattributes"))
+            .then(|| {
+                gix::path::from_bstr(path)
+                    .ok()
+                    .map(|path| (path.into_owned(), entry.id))
+            })
+            .flatten()
+    })
+}
+
+fn cached_attribute_sources(
+    index: &gix::worktree::Index,
+    cache: &Mutex<Option<AttributeSources>>,
+    cancellation: &CancellationToken,
+) -> Result<Arc<[(PathBuf, gix::ObjectId)]>> {
+    cancellation.check_cancelled()?;
+    let index_key = Arc::downgrade(index);
+    {
+        let cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = cache
+            .as_ref()
+            .filter(|cached| cached.index.ptr_eq(&index_key))
+        {
+            return Ok(Arc::clone(&cached.sources));
+        }
+    }
+
+    // The index walk does not hold the cache lock. Only full support scans use
+    // this path; cold row classification must retain its lazy early exit.
+    let mut sources = Vec::new();
+    for source in tracked_attribute_sources(index) {
+        cancellation.check_cancelled()?;
+        sources.push(source);
+    }
+    let sources: Arc<[(PathBuf, gix::ObjectId)]> = sources.into();
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    cancellation.check_cancelled()?;
+    if let Some(cached) = cache
+        .as_ref()
+        .filter(|cached| cached.index.ptr_eq(&index_key))
+    {
+        return Ok(Arc::clone(&cached.sources));
+    }
+    *cache = Some(AttributeSources {
+        index: index_key,
+        sources: Arc::clone(&sources),
+    });
+    Ok(sources)
+}
+
 /// Visit `filter=lfs` patterns and independent `lockable` rules in tracked
 /// `.gitattributes`, an untracked root one, and `info/attributes`. Macros are
 /// not expanded here; per-file state uses the real attribute stack.
@@ -336,22 +399,37 @@ impl LockableLookup<'_> {
 fn scan_lfs_attributes(
     repo: &gix::Repository,
     cancellation: &CancellationToken,
-    mut found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
+    cache: Option<&Mutex<Option<AttributeSources>>>,
+    found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
 ) -> Result<bool> {
-    let workdir = repo.workdir().unwrap_or(repo.common_dir());
     let index = repo
         .index_or_empty()
         .map_err(|e| backend_error("read index for LFS patterns", e))?;
-    let sources = index.entries().iter().filter_map(|entry| {
-        let path = entry.path(&index);
-        (path == ".gitattributes" || path.ends_with(b"/.gitattributes"))
-            .then(|| {
-                gix::path::from_bstr(path)
-                    .ok()
-                    .map(|path| (path.into_owned(), Some(entry.id)))
-            })
-            .flatten()
-    });
+    if let Some(cache) = cache {
+        let sources = cached_attribute_sources(&index, cache, cancellation)?;
+        scan_lfs_attribute_sources(
+            repo,
+            cancellation,
+            sources.iter().map(|(path, id)| (path.clone(), Some(*id))),
+            found,
+        )
+    } else {
+        scan_lfs_attribute_sources(
+            repo,
+            cancellation,
+            tracked_attribute_sources(&index).map(|(path, id)| (path, Some(id))),
+            found,
+        )
+    }
+}
+
+fn scan_lfs_attribute_sources(
+    repo: &gix::Repository,
+    cancellation: &CancellationToken,
+    sources: impl Iterator<Item = (PathBuf, Option<gix::ObjectId>)>,
+    mut found: impl FnMut(Option<LfsTrackedPattern>, bool) -> bool,
+) -> Result<bool> {
+    let workdir = repo.workdir().unwrap_or(repo.common_dir());
     // Include the untracked root and the local attribute overrides too.
     let sources = sources.chain([
         (PathBuf::from(".gitattributes"), None),
@@ -641,11 +719,16 @@ impl super::GixRepo {
             storage_dir,
             ..LfsRepoInfo::default()
         };
-        scan_lfs_attributes(&repo, cancellation, |pattern, lockable| {
-            lfs.tracked_patterns.extend(pattern);
-            lfs.has_lockable_patterns |= lockable;
-            false
-        })?;
+        scan_lfs_attributes(
+            &repo,
+            cancellation,
+            Some(&self.attribute_sources),
+            |pattern, lockable| {
+                lfs.tracked_patterns.extend(pattern);
+                lfs.has_lockable_patterns |= lockable;
+                false
+            },
+        )?;
 
         let annex = AnnexRepoInfo {
             has_annex_dir: repo.common_dir().join("annex").is_dir(),
@@ -781,3 +864,7 @@ impl super::GixRepo {
             .map(|classified| (classified, LargeFileWorktree::Content))
     }
 }
+
+#[cfg(test)]
+#[path = "large_files_attribute_source_tests.rs"]
+mod attribute_source_tests;

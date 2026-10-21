@@ -165,6 +165,11 @@ mod windows {
             },
             on_event: Some(Rc::new(move |event| match event {
                 Event::Failed { runtime, .. } => {
+                    gitcomet_core::startup_trace::mark(if runtime {
+                        "renderer_runtime_failure"
+                    } else {
+                        "renderer_startup_fallback"
+                    });
                     // Rare failure path: finish the narrow transaction before GPUI's fallback/fatal handling.
                     let writer = observer.borrow().writer.clone();
                     let sequence = writer.next();
@@ -177,6 +182,10 @@ mod windows {
                     backend,
                     overridden,
                 } => {
+                    gitcomet_core::startup_trace::mark(match backend {
+                        Backend::Dx11 => "renderer_dx11",
+                        Backend::Dx12 => "renderer_dx12",
+                    });
                     let mut state = observer.borrow_mut();
                     state.active = Some(backend);
                     state.overridden = overridden;

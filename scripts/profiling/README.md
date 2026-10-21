@@ -27,6 +27,68 @@ instrumented captures separate from latency measurements. Paired drivers
 alternate execution order and retain raw samples and metadata. Use fresh output
 directories, normally under `target/` or `tmp/`.
 
+## Capture a slow startup from the normal app
+
+Use a build that includes startup tracing; no benchmark features are required.
+Close existing GitComet windows first so the new process does not forward its
+request to an already running instance. On Windows, run:
+
+```powershell
+./scripts/profiling/capture-startup.ps1 -Binary ./target/release/gitcomet.exe
+```
+
+This uses the usual saved settings, leaves the app open, and prints the capture
+directory. Share `startup.jsonl`, `capture.json`, and `stderr.log` from that
+directory. The startup trace contains stage names and timings; stderr can include
+local paths or other diagnostic details, so review it before sharing. The helper
+stops observing after the first interactive frame or 90 seconds; the trace keeps
+recording if the picker is still waiting for Git. A timeout does not terminate
+the app. The helper restores all environment variables it sets.
+
+To measure the empty repository picker independently of saved settings, use:
+
+```powershell
+./scripts/profiling/capture-startup.ps1 -Binary ./target/release/gitcomet.exe -EmptyProfile -AutoExit
+```
+
+`-EmptyProfile` uses a fresh `GITCOMET_PROFILE_ROOT` below the capture directory,
+isolating session, themes, browser-instance broker and crash data. `-AutoExit`
+records the first interactive frame (the ready Home picker with `-EmptyProfile`),
+waits one second, then requests normal main-window closure. It waits up to five
+seconds for exit and warns if the app remains open; it never force-kills the app.
+This uses the normal shutdown lifecycle so background startup work can finish.
+It does not wait for repository loading. Without `-AutoExit`, the app stays open.
+Compare matching release binaries without concurrent builds. The helper's
+`markerObservedMs` is a coarse parent-observed upper bound including process
+creation and up to 100 ms polling delay, not a precise benchmark measurement.
+The marker time is recorded before the optional shutdown delay.
+
+The same opt-in trace works on Linux and macOS without the PowerShell helper:
+
+```sh
+GITCOMET_STARTUP_TRACE="$PWD/startup.jsonl" ./target/release/gitcomet
+```
+
+Choose a file in an existing local directory. The app appends JSON lines tagged
+with its process id. `elapsed_ms` starts at the first trace call in application
+entry, so it excludes OS executable loading before `main`. `begin`/`end` pairs
+identify a slow or stalled stage; `duration_ms` is that stage's wall time. Nested
+and background spans overlap and must not be added together. In particular,
+`git_runtime_probe_background` does not block window creation, but the Home picker
+displays a loading screen until Git validation completes.
+`native_application` covers native platform, GPU and native font-system setup;
+Windows additionally reports renderer choice and fallback. `system_font_catalog`
+covers font-family discovery through GPUI when font preferences or the font
+picker require the installed-font catalog.
+`first_paint` marks prepaint of the initial view and `first_interactive` its next
+frame callback, not an OS presentation timestamp or measured input latency. These
+may refer to the Git-checking loading screen. `home_ready` is the frame after the
+Home picker was prepainted with Git available, so use it for empty-picker startup
+latency. `GITCOMET_PERF_STARTUP_WAIT_FOR_HOME_READY=1` makes probe autoexit wait for
+that milestone; the default remains the original first-interactive behavior.
+Trace writes are synchronous and opt-in; use untraced runs for final latency
+comparisons and traced runs to locate the delay.
+
 ## Application investigation and regression workflow
 
 `performance.py` joins corpus preparation, native UI scenarios, Git/LFS/annex
@@ -258,6 +320,26 @@ Harness verification: `python3 -m unittest discover -s scripts/profiling -p
 'test_*.py' -v`, plus the Rust scenario-driver and platform-directory tests.
 
 ## Backend measurements
+
+For a slow repository open or unchanged refresh, `repository-load-probe` times
+the individual backend stages against an existing repository. Build and run:
+
+```sh
+cargo build --release -p gitcomet-git-gix --features benchmarks --example repository-load-probe
+target/release/examples/repository-load-probe REPO --refreshes 2 > target/repository-load-local.jsonl
+target/release/examples/repository-load-probe REPO --refreshes 2 --remote-tags > target/repository-load-with-remotes.jsonl
+```
+
+The default run reads local repository data. `--remote-tags` also queries the
+configured remotes, so use it explicitly when investigating network delay.
+`--all-branches` selects history across all branches. Each stage emits a start
+record immediately and a finish record with elapsed time, a result witness,
+errors and captured Git-command timings. Iteration zero is the initial load;
+later iterations reuse the repository handle. Stages run sequentially to expose
+expensive operations: their sum does not measure the application's concurrent
+startup or foreground latency. Command capture is thread-local, so remote-tag
+subprocesses on child threads contribute to stage elapsed time but are absent
+from the command breakdown. On Windows append `.exe` to the executable path.
 
 `application-probe.py` enables `benchmarks,test-support` for the backend's
 `operation-context-probe`, whose Git subprocesses use an isolated test environment.
@@ -643,6 +725,24 @@ forwards additional Cargo build arguments.
 | `benchmark-indexed-history-frames.py` | Paired frame probes; `--case columns:pixels:scale` selects graph geometry. |
 | `calibrate-indexed-history.py` | Record five accepted release Criterion roots for budget calibration. |
 | `windows-workflow-probe.py` | Cache traversal and linker launch timing with `--baseline`, `--output` and `--samples`; both checkouts need the corresponding CI helpers. |
+
+App-launch sidecars distinguish the initial window from usable repository data:
+
+| Metric | Completion condition |
+| --- | --- |
+| `first_paint_ms` | The first root view reaches the end of prepaint. |
+| `first_interactive_ms` | The frame callback after that first prepaint runs; repository contents may still be loading. |
+| `repos_loaded` | Number of repository handles opened; inactive restored tabs load their contents on selection. |
+| `active_repo_ready_ms` | The active repository has status and history, with its foreground loads and actions settled. Optional remote-tag discovery and other-checkout scans may continue. |
+
+Repository launch scenarios and their warmup passes wait for `active_repo_ready`
+as well as the expected open handles. Empty-workspace scenarios omit this
+milestone. It measures model readiness, not a subsequent rendered frame or a
+complete history index. `compare-perf-runs.sh` includes this timing by default;
+older archives without it have no comparable value. For a directly launched app,
+enable `GITCOMET_PERF_STARTUP_PROBE=1` to emit these events. With automatic exit,
+`GITCOMET_PERF_STARTUP_WAIT_FOR_ACTIVE_REPO=1` waits for repository contents;
+the launch harness sets it for repository scenarios.
 
 Results are labelled by what they time (sidecar `measurement.kind`):
 `backend_operation`, `prepared_row_work` (row preparation, no layout or

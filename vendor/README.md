@@ -47,6 +47,14 @@ text-storage patch previously vendored in `gpui/`, so that crate and the Cargo
 patch are no longer needed. Platform, renderer and test text-backend crates use
 the same upstream revision.
 
+## GPUI WGPU renderer
+
+GPUI revision `18e1b2f65899ccbc36304fbb8f9ee703ea86adc4` includes lazy creation
+of the four smoothing pipelines and bounded parallel creation of ordinary DX12
+pipelines. This supersedes the renderer previously vendored in `gpui-wgpu/`.
+The renderer and other GPUI crates now use the same pinned upstream revision,
+without a renderer patch. Windows continues to use DX12.
+
 ## Difftastic
 
 `difftastic/` is Difftastic 0.71.0 (MIT) as a library, for

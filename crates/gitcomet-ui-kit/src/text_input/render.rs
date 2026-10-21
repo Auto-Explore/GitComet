@@ -315,10 +315,10 @@ impl Render for TextInput {
             } else {
                 input = input
                     .border_color(style.border)
-                    .hover(move |s| s.border_color(style.hover_border));
+                    .hover_style(move |s| s.border_color(style.hover_border));
             }
 
-            input = input.focus(move |s| s.border_color(style.focus_border));
+            input = input.focus_style(move |s| s.border_color(style.focus_border));
         }
 
         let mut outer = div().id(ElementId::from(("text_input_root", entity_id)));

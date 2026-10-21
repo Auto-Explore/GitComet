@@ -1,5 +1,103 @@
 use super::*;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct StatusFooterWork {
+    pub(in crate::view) section_resolutions: u64,
+    pub(in crate::view) position_lookups: u64,
+    pub(in crate::view) projection_builds: u64,
+    pub(in crate::view) plan_builds: u64,
+    pub(in crate::view) order_materializations: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static STATUS_FOOTER_WORK: std::cell::Cell<StatusFooterWork> = Default::default();
+}
+
+impl DetailsPaneView {
+    #[cfg(test)]
+    pub(in crate::view) fn record_status_footer_work(update: impl FnOnce(&mut StatusFooterWork)) {
+        STATUS_FOOTER_WORK.with(|work| {
+            let mut next = work.get();
+            update(&mut next);
+            work.set(next);
+        });
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn take_status_footer_work() -> StatusFooterWork {
+        STATUS_FOOTER_WORK.with(|work| work.replace(StatusFooterWork::default()))
+    }
+
+    /// Resolve the footer from the same source and plan as the status rows.
+    /// Unchanged renders compare retained identities before locating the file's
+    /// section or materializing its drawn order.
+    pub(in crate::view) fn status_footer_position(
+        &self,
+        renderer_repo: &RepoState,
+        path: &std::path::Path,
+        area: DiffArea,
+        view: ChangeTrackingView,
+    ) -> Option<Option<(StatusSection, usize, usize)>> {
+        use crate::view::status_position_cache::{OrderSnapshot, PositionQuery};
+
+        let repo_id = renderer_repo.id;
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        // The panes observe snapshots independently. Use the retained lookup
+        // only when its source is also the source the renderer is navigating.
+        let same_source = match (
+            repo.status_entries_for_area(area),
+            renderer_repo.status_entries_for_area(area),
+        ) {
+            (Some(displayed), Some(rendered)) => std::ptr::eq(displayed, rendered),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_source {
+            return None;
+        }
+        // Match RepoState::status_entries_for_area, including the legacy
+        // Ready status used while a split lane has no ready value of its own.
+        let lane = match area {
+            DiffArea::Unstaged => &repo.worktree_status,
+            DiffArea::Staged => &repo.staged_status,
+        };
+        let source = match lane {
+            Loadable::Ready(source) => Some(source),
+            _ => match &repo.status {
+                Loadable::Ready(status) => Some(match area {
+                    DiffArea::Unstaged => &status.unstaged,
+                    DiffArea::Staged => &status.staged,
+                }),
+                _ => None,
+            },
+        };
+        Some(self.status_footer_position.borrow_mut().lookup(
+            PositionQuery {
+                repo: repo_id.0,
+                source,
+                path,
+                area,
+                view,
+            },
+            |section| {
+                Some(OrderSnapshot {
+                    projection: self.status_section_order(repo, section)?,
+                    plan: self.status_file_plan(repo, section),
+                })
+            },
+            || status_navigation_section(repo, path, area, view),
+            |section, _| {
+                let order = self.active_status_section_order(repo_id, section);
+                let target = DiffTarget::working_tree(path.to_owned(), area);
+                status_navigation_position(repo, &target, view, order.as_deref())
+                    .map(|(_, index, count)| (index, count))
+            },
+        ))
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct StatusNavigationContext<'a> {
     section: StatusSection,
@@ -106,6 +204,8 @@ pub(super) fn status_navigation_section(
     area: DiffArea,
     change_tracking_view: ChangeTrackingView,
 ) -> Option<StatusSection> {
+    #[cfg(test)]
+    DetailsPaneView::record_status_footer_work(|work| work.section_resolutions += 1);
     Some(match area {
         DiffArea::Staged => StatusSection::Staged,
         DiffArea::Unstaged => match change_tracking_view {
@@ -161,6 +261,8 @@ pub(super) fn status_navigation_position(
     change_tracking_view: ChangeTrackingView,
     section_order: Option<&[usize]>,
 ) -> Option<(StatusSection, usize, usize)> {
+    #[cfg(test)]
+    DetailsPaneView::record_status_footer_work(|work| work.position_lookups += 1);
     let DiffTarget::WorkingTree { path, area, .. } = diff_target else {
         return None;
     };
@@ -538,8 +640,21 @@ impl DiffRenderer {
                 context: context.into(),
             });
         }
-        let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
         let change_tracking_view = self.active_change_tracking_view(cx);
+        if let Some(repo) = self.active_repo()
+            && let Some(DiffTarget::WorkingTree { path, area, .. }) =
+                self.bound_diff_state(repo).diff_target.as_ref()
+            && let Some(position) = self.commands.navigation.as_ref().and_then(|navigation| {
+                navigation.status_position(repo, path, *area, change_tracking_view, cx)
+            })
+        {
+            return position.map(|(section, index, count)| DiffFilePlace {
+                index,
+                count,
+                context: status_section_label(section).into(),
+            });
+        }
+        let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
         let status_section_order =
             self.active_status_section_order(repo_id, change_tracking_view, cx);
         let repo = self.active_repo()?;
@@ -550,6 +665,28 @@ impl DiffRenderer {
             change_tracking_view,
             file_list_source_indices.as_deref(),
             status_section_order.as_deref(),
+        )
+    }
+
+    /// The previous footer path, retained for equivalence and allocation
+    /// measurements through the actual pane/navigation implementation.
+    #[cfg(test)]
+    pub(in crate::view) fn uncached_diff_file_place_for_test(
+        &self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<DiffFilePlace> {
+        let file_list_source_indices = self.active_file_list_source_indices(repo_id, cx);
+        let view = self.active_change_tracking_view(cx);
+        let order = self.active_status_section_order(repo_id, view, cx);
+        let repo = self.active_repo()?;
+        let target = self.bound_diff_state(repo).diff_target.as_ref()?;
+        diff_file_position_for_repo(
+            repo,
+            target,
+            view,
+            file_list_source_indices.as_deref(),
+            order.as_deref(),
         )
     }
 

@@ -414,6 +414,8 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     /// Shared by row, diff and preview readers; refreshed with support metadata.
     large_file_scan: std::sync::Mutex<Option<Arc<large_files::CommittedPointerScan>>>,
+    /// Ordered tracked attribute descriptors for full support scans, not contents.
+    attribute_sources: std::sync::Mutex<Option<large_files::AttributeSources>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     history_cache: log::cache::HistoryCache,
     divergence_cache: DivergenceCache,
@@ -468,6 +470,7 @@ impl GixRepo {
             gitlink_status_capability: std::sync::Mutex::new(None),
             branch_tracking_config: std::sync::Mutex::new(None),
             large_file_scan: Default::default(),
+            attribute_sources: Default::default(),
             tree_index_cache: std::sync::Mutex::new(None),
             history_cache: Default::default(),
             divergence_cache: DivergenceCache::default(),
@@ -1529,7 +1532,7 @@ impl GitRepository for GixRepo {
 
     fn list_worktrees(&self, cancellation: &CancellationToken) -> Result<Vec<Worktree>> {
         cancellation.check_cancelled()?;
-        let worktrees = self.list_worktrees_impl()?;
+        let worktrees = self.list_worktrees_cancellable_impl(cancellation)?;
         cancellation.check_cancelled()?;
         Ok(worktrees)
     }

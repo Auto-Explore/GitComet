@@ -3,7 +3,8 @@
 //! PATH, which is what every filter, hook and command will use.
 
 use crate::process::{
-    bytes_to_text_preserving_utf8, current_git_runtime, git_command_for_preference, probe_output,
+    GitExecutablePreference, GitRuntimeState, bytes_to_text_preserving_utf8, current_git_runtime,
+    git_command_for_preference, probe_output,
 };
 use crate::services::CancellationToken;
 pub use crate::signing_tools::SigningToolAvailability as ToolAvailability;
@@ -33,14 +34,27 @@ impl Default for LargeFileToolsState {
 pub fn detect_large_file_tools_cancellable(
     cancellation: &CancellationToken,
 ) -> LargeFileToolsState {
-    let runtime = current_git_runtime();
+    detect_large_file_tools_for_runtime_cancellable(&current_git_runtime(), cancellation)
+}
+
+/// Probe the runtime captured when the request was created, even if the
+/// configured executable changes before its worker starts.
+pub fn detect_large_file_tools_for_runtime_cancellable(
+    runtime: &GitRuntimeState,
+    cancellation: &CancellationToken,
+) -> LargeFileToolsState {
+    detect_for_runtime_with_factory(runtime, &git_command_for_preference, cancellation)
+}
+
+fn detect_for_runtime_with_factory(
+    runtime: &GitRuntimeState,
+    git: &(dyn Fn(&GitExecutablePreference) -> Command + Sync),
+    cancellation: &CancellationToken,
+) -> LargeFileToolsState {
     if !runtime.is_available() || cancellation.is_cancelled() {
         return LargeFileToolsState::default();
     }
-    detect_large_file_tools_with(
-        &|| git_command_for_preference(&runtime.preference),
-        cancellation,
-    )
+    detect_large_file_tools_with(&|| git(&runtime.preference), cancellation)
 }
 
 /// Injectable factory for deterministic tests.
@@ -157,3 +171,6 @@ mod tests {
         assert_eq!(state, LargeFileToolsState::default());
     }
 }
+
+#[cfg(test)]
+mod runtime_tests;

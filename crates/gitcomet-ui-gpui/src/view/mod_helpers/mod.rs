@@ -1025,6 +1025,7 @@ pub struct GitCometView {
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
+    pub(super) startup_repo_runtime_adoption: Option<gitcomet_core::process::GitRuntimeState>,
     pub(super) pending_repo_open_reservations: FxHashMap<std::path::PathBuf, PendingRepoOpen>,
     pub(super) pending_repo_open_active: Option<std::path::PathBuf>,
     pub(super) startup_repo_bootstrap_pending: bool,
@@ -1048,7 +1049,11 @@ pub struct GitCometView {
     pub(super) signing_tools_probe_in_flight: bool,
     pub(super) signing_tools_probe_cancellation: gitcomet_core::services::CancellationToken,
     /// Background `git lfs` / `git annex` detection; rerun after a Git change.
-    pub(super) large_file_tools_probe_in_flight: bool,
+    pub(super) large_file_tools_probe: super::large_file_tools_probe::LargeFileToolsProbeOwner,
+    pub(super) _large_file_tools_window_closed: gpui::Subscription,
+    #[cfg(test)]
+    pub(super) large_file_tools_detector_for_test:
+        Option<super::large_file_tools_probe::HeldLargeFileToolsDetector>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,

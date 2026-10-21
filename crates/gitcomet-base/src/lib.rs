@@ -11,6 +11,7 @@ mod loadable;
 pub mod op_trace;
 pub mod panic;
 pub mod platform;
+pub mod startup_trace;
 
 pub use loadable::Loadable;
 

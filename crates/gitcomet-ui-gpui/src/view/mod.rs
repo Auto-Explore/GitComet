@@ -326,6 +326,7 @@ mod sidebar_sticky;
 mod splash;
 mod state_apply;
 mod status_actions;
+mod status_position_cache;
 pub(in crate::view) use gitcomet_text::tab_width;
 mod terminal_panel;
 mod terminal_preferences;
@@ -333,6 +334,7 @@ mod terminal_preferences;
 pub(crate) mod test_support;
 mod toast_host;
 mod ui_persistence;
+pub(crate) mod window_bootstrap;
 mod window_gates;
 use gitcomet_ui_kit::zoom_wheel;
 pub(crate) use gitcomet_ui_kit::{file_icons, icons, tooltip, tooltip_host};
@@ -866,6 +868,7 @@ mod gitcomet_view;
 mod gitcomet_view_commands;
 mod gitcomet_view_render;
 mod gitcomet_view_requests;
+mod large_file_tools_probe;
 mod runtime_probe;
 
 #[cfg(test)]
