@@ -15,6 +15,7 @@ pub struct UiSettings {
     pub image_smooth_filter: Option<String>,
     pub window_controls_mode: Option<String>,
     pub windows_renderer: Option<String>,
+    pub linux_renderer: Option<String>,
     pub browser_open_target: Option<String>,
     pub ui_density: Option<String>,
     pub ui_font_size_px: Option<u32>,
@@ -121,6 +122,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, image_smooth_filter);
         apply_setting!(settings, file, window_controls_mode);
         apply_setting!(settings, file, windows_renderer);
+        apply_setting!(settings, file, linux_renderer);
         apply_setting!(settings, file, browser_open_target);
         apply_setting!(settings, file, ui_density);
         apply_setting!(settings, file, ui_font_size_px);

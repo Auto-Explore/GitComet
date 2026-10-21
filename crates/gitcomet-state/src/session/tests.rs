@@ -3067,6 +3067,61 @@ fn persist_ui_settings_round_trips_window_controls_mode() {
 }
 
 #[test]
+fn linux_renderer_roundtrips_without_changing_the_windows_preference() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    assert_eq!(load_from_path(&path).linux_renderer, None);
+    persist_ui_settings_to_path(
+        UiSettings {
+            windows_renderer: Some("dx11".into()),
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    for value in ["gl", "vulkan", "auto"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                linux_renderer: Some(value.into()),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.linux_renderer.as_deref(), Some(value));
+        assert_eq!(loaded.windows_renderer.as_deref(), Some("dx11"));
+        assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
+    }
+}
+
+#[test]
+fn linux_renderer_survives_settings_and_workspace_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.json");
+    std::fs::write(
+        &path,
+        r#"{"version":6,"linux_renderer":"gl","windows_renderer":"dx11","extensions":{"example":{"draft":"keep"}}}"#,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("dark".into()),
+            ..Default::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_workspaces_to_path(&[Workspace::new(vec![dir.path().to_path_buf()])], &path).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(json["linux_renderer"], "gl");
+    assert_eq!(json["windows_renderer"], "dx11");
+    assert_eq!(json["extensions"]["example"]["draft"], "keep");
+    assert_eq!(load_from_path(&path).workspaces.len(), 1);
+}
+
+#[test]
 fn windows_renderer_fallback_survives_other_settings_and_workspace_writes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.json");
