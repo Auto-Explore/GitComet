@@ -33,4 +33,4 @@ pub use sidebar::SidebarStickyFrameFixture;
 pub(in crate::view) use sidebar::explorer_operations::ExplorerDrag;
 pub(in crate::view) use sidebar::file_browser_search_is_active;
 pub(super) use sidebar::{CollapsedSidebarSection, SidebarPaneView};
-pub(in crate::view) use sidebar::{ExplorerAction, SidebarExtensionTabs};
+pub(in crate::view) use sidebar::{ExplorerAction, SidebarExtensionTabs, SidebarHeaderChanged};

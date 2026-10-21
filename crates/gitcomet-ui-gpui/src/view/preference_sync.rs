@@ -108,6 +108,48 @@ impl GitCometView {
 
     pub(super) fn sidebar_min_width(&self) -> Pixels {
         self.scaled_px(SIDEBAR_MIN_PX)
+            .max(self.sidebar_header_minimum)
+    }
+
+    pub(super) fn sync_sidebar_header_layout(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let scale = self.ui_scale();
+        let theme = self.theme;
+        let minimum = self.sidebar_pane.update(cx, |pane, cx| {
+            pane.header_minimum_width(theme, scale, window, cx)
+        });
+        if self.sidebar_header_minimum != minimum {
+            self.sidebar_header_minimum = minimum;
+            self.pane_resize = None;
+        }
+        if self.sidebar_collapsed || !renders_full_chrome(self.view_mode) {
+            self.sidebar_window_size_request = None;
+            return;
+        }
+        let details = if self.details_collapsed {
+            self.pane_collapsed_width()
+        } else {
+            self.details_min_width()
+        };
+        let base_minimum = crate::app::main_window_min_size_for_percent(self.ui_scale_percent);
+        let current = window.viewport_size();
+        let divider_allowance =
+            self.pane_resize_handle_width() * if self.details_collapsed { 1.0 } else { 2.0 };
+        let required = gpui::size(
+            base_minimum.width.max(
+                self.sidebar_min_width() + self.main_min_width() + details + divider_allowance,
+            ),
+            current.height,
+        );
+        if current.width >= required.width {
+            self.sidebar_window_size_request = None;
+        } else if self.sidebar_window_size_request != Some((required, current)) {
+            self.sidebar_window_size_request = Some((required, current));
+            crate::app::ensure_window_respects_min_size(window, required);
+        }
     }
 
     pub(super) fn details_min_width(&self) -> Pixels {

@@ -896,6 +896,10 @@ impl GitCometView {
             pane.set_expanded_branches_visible(!restored_sidebar_collapsed, cx);
             pane
         });
+        let sidebar_header_subscription = cx.subscribe(
+            &sidebar_pane,
+            |_, _, _: &panes::SidebarHeaderChanged, cx| cx.notify(),
+        );
         let diff_renderer = cx.new(|cx| {
             DiffRenderer::new(
                 super::panes::diff::input::DiffPaneInput::selected(initial_state.clone()),
@@ -1419,6 +1423,9 @@ impl GitCometView {
             sidebar_width_design: initial_sidebar_width_design,
             details_width_design: initial_details_width_design,
             sidebar_width: initial_sidebar_width,
+            sidebar_header_minimum: px(0.0),
+            sidebar_window_size_request: None,
+            _sidebar_header_subscription: sidebar_header_subscription,
             details_width: initial_details_width,
             sidebar_render_width: initial_sidebar_render_width,
             details_render_width: initial_details_width,

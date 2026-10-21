@@ -764,8 +764,8 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
         other_width,
         other_collapsed,
         total_w,
-        sidebar_collapsed,
-        details_collapsed,
+        px(MAIN_MIN_PX),
+        px(PANE_COLLAPSED_PX),
     )
 }
 
@@ -775,12 +775,9 @@ pub(in crate::view) fn pane_resize_drag_width_bounds_for_other_pane(
     other_width: Pixels,
     other_collapsed: bool,
     total_w: Pixels,
-    _sidebar_collapsed: bool,
-    _details_collapsed: bool,
+    main_min: Pixels,
+    collapsed_w: Pixels,
 ) -> (Pixels, Pixels) {
-    let main_min = px(MAIN_MIN_PX);
-    let collapsed_w = px(PANE_COLLAPSED_PX);
-    // Both pane resize handles overlay their boundaries and consume no layout width.
     let available_w = total_w - main_min;
     let other_width = if other_collapsed {
         collapsed_w
