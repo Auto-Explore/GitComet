@@ -355,7 +355,8 @@ pub mod source_guards {
         src_dir: &Path,
         allow: &DiscreteControlAllowlist<'_>,
     ) -> Vec<String> {
-        let pattern = regex::Regex::new(r"\.(?:hover|active)\(\s*(?:move\s+)?\|").unwrap();
+        let pattern =
+            regex::Regex::new(r"\.(?:hover|active)(?:_style)?\(\s*(?:move\s+)?\|").unwrap();
         let raw_click =
             regex::Regex::new(r"\.on_click\(\s*(?:cx\.listener|on_click\b|(?:move\s+)?\|)")
                 .unwrap();
@@ -439,6 +440,40 @@ pub mod source_guards {
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn old_and_current_hover_press_methods_require_shared_ownership() {
+            let sources = tempfile::tempdir().unwrap();
+            for method in ["hover", "hover_style", "active", "active_style"] {
+                std::fs::write(
+                    sources.path().join("control.rs"),
+                    format!("div().{method}(move |style| style.bg(color))"),
+                )
+                .unwrap();
+                let allow = super::DiscreteControlAllowlist {
+                    custom_styling: &[],
+                    release_gestures: &[],
+                    primary_press: &[],
+                    context_press: &[],
+                };
+                assert_eq!(
+                    super::discrete_control_violations(sources.path(), &allow),
+                    ["control.rs: custom hover/press styling"],
+                    "{method} must go through shared interaction styling"
+                );
+                assert!(
+                    super::discrete_control_violations(
+                        sources.path(),
+                        &super::DiscreteControlAllowlist {
+                            custom_styling: &["control.rs"],
+                            ..allow
+                        },
+                    )
+                    .is_empty(),
+                    "{method} keeps its ownership exemption necessary"
+                );
+            }
+        }
+
         #[test]
         fn allowlist_entries_that_are_missing_or_unneeded_are_violations() {
             let sources = tempfile::tempdir().unwrap();
