@@ -12,14 +12,21 @@ use std::time::{Duration, Instant};
 
 struct TestBackend;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 #[gpui::test]
 fn dismissing_a_restart_terminal_guard_retains_the_saved_renderer(cx: &mut gpui::TestAppContext) {
+    #[cfg(target_os = "linux")]
+    use crate::linux_renderer::{RendererPreference, RendererSession, RendererState};
+    #[cfg(target_os = "windows")]
     use crate::windows_renderer::{RendererPreference, RendererSession, RendererState};
+    #[cfg(target_os = "linux")]
+    let saved = RendererPreference::Gl;
+    #[cfg(target_os = "windows")]
+    let saved = RendererPreference::Dx11;
     let renderer = RendererSession(std::rc::Rc::new(std::cell::RefCell::new(
         RendererState::new(RendererPreference::Auto, true),
     )));
-    renderer.0.borrow_mut().saved = RendererPreference::Dx11;
+    renderer.0.borrow_mut().saved = saved;
     cx.update(|app| {
         app.set_global(renderer.clone());
         app.set_global(windows::PendingRestart(true));
@@ -47,7 +54,7 @@ fn dismissing_a_restart_terminal_guard_retains_the_saved_renderer(cx: &mut gpui:
     window_cx.run_until_parked();
     window_cx.update(|_, app| {
         assert!(!app.global::<windows::PendingRestart>().0);
-        assert_eq!(renderer.0.borrow().saved, RendererPreference::Dx11);
+        assert_eq!(renderer.0.borrow().saved, saved);
         assert!(renderer.0.borrow().restart_required());
         assert_eq!(app.windows().len(), 1);
     });

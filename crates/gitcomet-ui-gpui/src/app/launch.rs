@@ -473,7 +473,11 @@ pub(super) fn run_windowed_app(
     let (application, renderer_session) = crate::windows_renderer::application(
         launch.view_config.view_mode == GitCometViewMode::Normal,
     );
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    let (application, renderer_session) = crate::linux_renderer::application(
+        launch.view_config.view_mode == GitCometViewMode::Normal,
+    );
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let application = gpui_platform::application();
     let application = application
         .with_assets(GitCometAssets::with_extensions(extensions.assets()))
@@ -504,7 +508,7 @@ pub(super) fn run_windowed_app(
 
     application.run(move |cx: &mut App| {
         cx.set_global(clean_shutdown_tracker);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         cx.set_global(renderer_session);
         crate::ui_probe::start_if_enabled(cx);
         crate::environment::initialize(cx);
