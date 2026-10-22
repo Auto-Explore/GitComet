@@ -2015,20 +2015,17 @@ fn pruning_pull_branch_fetches_a_requested_branch_excluded_by_remote_refspecs() 
 #[cfg(unix)]
 #[test]
 fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
-    const CHILD_ENV: &str = "GITCOMET_LOCALIZED_MISSING_REF_TEST_CHILD";
-    if std::env::var_os(CHILD_ENV).is_none() {
-        let mut child = Command::new(std::env::current_exe().expect("current test executable"));
-        child
-            .env(CHILD_ENV, "1")
-            // The wrapper below emits a localized diagnostic unless the caller
-            // explicitly pins the stable C locale. Running in a child keeps
-            // this process-wide setting isolated from concurrent tests.
-            .env("LC_ALL", "POSIX");
-        crate::child_test::run(
-            &mut child,
-            module_path!(),
-            "pruning_pull_branch_recognizes_a_localized_missing_remote_ref",
-        );
+    if !crate::child_test::in_child(
+        "GITCOMET_LOCALIZED_MISSING_REF_TEST_CHILD",
+        module_path!(),
+        "pruning_pull_branch_recognizes_a_localized_missing_remote_ref",
+        // The wrapper below emits a localized diagnostic unless the caller
+        // explicitly pins the stable C locale. Running in a child keeps this
+        // process-wide setting isolated from concurrent tests.
+        |child| {
+            child.env("LC_ALL", "POSIX");
+        },
+    ) {
         return;
     }
 

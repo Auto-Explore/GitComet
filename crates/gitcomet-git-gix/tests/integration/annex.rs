@@ -1344,17 +1344,16 @@ fn transfer_progress_is_coalesced_for_many_small_files() {
 /// child. PATH and the silence deadline are process-wide, so tests that change
 /// them must not share a process with the others.
 fn in_child(name: &str, env: &[(&str, std::ffi::OsString)]) -> bool {
-    const CHILD_ENV: &str = "GITCOMET_ANNEX_TEST_CHILD";
-    if std::env::var_os(CHILD_ENV).is_some() {
-        return true;
-    }
-    let mut command = Command::new(std::env::current_exe().expect("current test executable"));
-    command.env(CHILD_ENV, "1");
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    crate::child_test::run(&mut command, module_path!(), name);
-    false
+    crate::child_test::in_child(
+        "GITCOMET_ANNEX_TEST_CHILD",
+        module_path!(),
+        name,
+        |command| {
+            for (key, value) in env {
+                command.env(key, value);
+            }
+        },
+    )
 }
 
 #[cfg(unix)]

@@ -2408,3 +2408,114 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
         "a.txt should no longer be conflicted after keeping ours"
     );
 }
+
+/// The working directory is process-wide, so a test that moves it runs alone.
+#[cfg(unix)]
+const SUBDIRECTORY_CHILD: &str = "GITCOMET_STAGING_FROM_SUBDIRECTORY_TEST_CHILD";
+
+/// A repository with `root.txt` and `sub/inner.txt` committed, and the process
+/// moved into `sub` as an app started there would be.
+#[cfg(unix)]
+fn repository_entered_at_sub() -> tempfile::TempDir {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    write(repo, "root.txt", "one\n");
+    write(repo, "sub/inner.txt", "one\n");
+    run_git(repo, &["add", "."]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    std::env::set_current_dir(repo.join("sub")).unwrap();
+    dir
+}
+
+/// gix scopes a pathspec-less staged diff to the directory the process started
+/// in. An app launched from inside the repository it shows (`cargo run` in a
+/// subdirectory) must still list everything staged.
+#[cfg(unix)]
+#[test]
+fn staged_changes_outside_the_process_directory_are_listed() {
+    if !crate::child_test::in_child(
+        SUBDIRECTORY_CHILD,
+        module_path!(),
+        "staged_changes_outside_the_process_directory_are_listed",
+        |_| {},
+    ) {
+        return;
+    }
+    let dir = repository_entered_at_sub();
+    let repo = dir.path();
+    write(repo, "root.txt", "one\ntwo\n");
+    write(repo, "sub/inner.txt", "one\ntwo\n");
+    run_git(repo, &["add", "."]);
+
+    let opened = GixBackend.open(repo).unwrap();
+    let cancellation = gitcomet_core::services::CancellationToken::new();
+    let staged_paths = |entries: &[gitcomet_core::domain::FileStatus]| {
+        let mut paths: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
+        paths.sort();
+        paths
+    };
+    let expected = [PathBuf::from("root.txt"), PathBuf::from("sub/inner.txt")];
+
+    assert_eq!(
+        staged_paths(&opened.status(&cancellation).unwrap().staged),
+        expected
+    );
+    assert_eq!(
+        staged_paths(&opened.staged_status(&cancellation).unwrap()),
+        expected
+    );
+    let mut counted: Vec<PathBuf> = opened
+        .uncommitted_line_stats(&cancellation)
+        .unwrap()
+        .staged
+        .into_keys()
+        .collect();
+    counted.sort();
+    assert_eq!(counted, expected);
+}
+
+/// During a merge, unstaging everything resets the staged paths one by one;
+/// those outside the process's directory must be among them.
+#[cfg(unix)]
+#[test]
+fn unstaging_everything_during_a_merge_reaches_outside_the_process_directory() {
+    if !crate::child_test::in_child(
+        SUBDIRECTORY_CHILD,
+        module_path!(),
+        "unstaging_everything_during_a_merge_reaches_outside_the_process_directory",
+        |_| {},
+    ) {
+        return;
+    }
+    let dir = repository_entered_at_sub();
+    let repo = dir.path();
+    run_git(repo, &["checkout", "-b", "other"]);
+    write(repo, "root.txt", "one\ntwo\n");
+    write(repo, "sub/inner.txt", "one\ntwo\n");
+    run_git(repo, &["add", "."]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "other"],
+    );
+    run_git(repo, &["checkout", "main"]);
+    run_git(repo, &["merge", "--no-commit", "--no-ff", "other"]);
+    assert_eq!(
+        run_git_output(repo, &["diff", "--cached", "--name-only"]),
+        "root.txt\nsub/inner.txt"
+    );
+
+    GixBackend.open(repo).unwrap().unstage(&[]).unwrap();
+
+    assert_eq!(
+        run_git_output(repo, &["diff", "--cached", "--name-only"]),
+        ""
+    );
+    assert!(repo.join(".git/MERGE_HEAD").exists(), "the merge goes on");
+}
