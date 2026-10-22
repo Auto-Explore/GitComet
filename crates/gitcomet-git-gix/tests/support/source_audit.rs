@@ -44,18 +44,19 @@ pub fn has_test_cfg(attrs: &[Attribute]) -> bool {
     })
 }
 
-/// A call a source guard may name.
-pub enum Call<'a> {
+/// A place in the source a guard may name: a call or a string literal.
+pub enum Site<'a> {
     Method(&'a syn::ExprMethodCall),
     Function(&'a syn::ExprCall),
+    Literal(&'a syn::LitStr),
 }
 
-/// The calls `pick` names in production code under `root`, as
+/// The sites `pick` names in production code under `root`, as
 /// `(file relative to root, name)` in source order. Files named `tests` and
 /// items marked `#[cfg(test)]` are skipped.
-pub fn production_calls(
+pub fn production_sites(
     root: &Path,
-    pick: impl Fn(Call<'_>) -> Option<String>,
+    pick: impl Fn(Site<'_>) -> Option<String>,
 ) -> Vec<(String, String)> {
     let mut calls = Vec::new();
     for path in rust_source_files(root) {
@@ -69,7 +70,7 @@ pub fn production_calls(
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
         let relative = relative.to_string_lossy().replace('\\', "/");
         calls.extend(
-            calls_in(&file, &pick)
+            sites_in(&file, &pick)
                 .into_iter()
                 .map(|call| (relative.clone(), call)),
         );
@@ -77,22 +78,22 @@ pub fn production_calls(
     calls
 }
 
-/// The calls `pick` names in `file`, outside items marked `#[cfg(test)]`.
-pub fn calls_in(file: &syn::File, pick: impl Fn(Call<'_>) -> Option<String>) -> Vec<String> {
-    let mut finder = CallFinder {
+/// The sites `pick` names in `file`, outside items marked `#[cfg(test)]`.
+pub fn sites_in(file: &syn::File, pick: impl Fn(Site<'_>) -> Option<String>) -> Vec<String> {
+    let mut finder = SiteFinder {
         pick,
-        calls: Vec::new(),
+        sites: Vec::new(),
     };
     syn::visit::Visit::visit_file(&mut finder, file);
-    finder.calls
+    finder.sites
 }
 
-struct CallFinder<F> {
+struct SiteFinder<F> {
     pick: F,
-    calls: Vec<String>,
+    sites: Vec<String>,
 }
 
-impl<'a, F: Fn(Call<'_>) -> Option<String>> syn::visit::Visit<'a> for CallFinder<F> {
+impl<'a, F: Fn(Site<'_>) -> Option<String>> syn::visit::Visit<'a> for SiteFinder<F> {
     fn visit_item_mod(&mut self, node: &'a syn::ItemMod) {
         if !has_test_cfg(&node.attrs) {
             syn::visit::visit_item_mod(self, node);
@@ -114,11 +115,14 @@ impl<'a, F: Fn(Call<'_>) -> Option<String>> syn::visit::Visit<'a> for CallFinder
         }
     }
     fn visit_expr_method_call(&mut self, node: &'a syn::ExprMethodCall) {
-        self.calls.extend((self.pick)(Call::Method(node)));
+        self.sites.extend((self.pick)(Site::Method(node)));
         syn::visit::visit_expr_method_call(self, node);
     }
     fn visit_expr_call(&mut self, node: &'a syn::ExprCall) {
-        self.calls.extend((self.pick)(Call::Function(node)));
+        self.sites.extend((self.pick)(Site::Function(node)));
         syn::visit::visit_expr_call(self, node);
+    }
+    fn visit_lit_str(&mut self, node: &'a syn::LitStr) {
+        self.sites.extend((self.pick)(Site::Literal(node)));
     }
 }
