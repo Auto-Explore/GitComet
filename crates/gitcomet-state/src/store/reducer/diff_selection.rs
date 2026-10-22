@@ -608,6 +608,18 @@ pub(super) fn fill_select_diff_inline(
         load_submodule_summary: load_plan.load_submodule_summary,
         load_file_image: load_plan.load_file_image,
     });
+    // Without an extension only the bytes say whether a file is an image.
+    // The probe's answer is kept only when they do (`diff_file_image_loaded`).
+    if let Some(target) = &repo_state.diff_state.diff_target
+        && !load_plan.load_file_image
+        && !load_plan.load_submodule_summary
+        && super::util::probes_image_content(target)
+    {
+        effects.push(Effect::LoadDiffFileImage {
+            repo_id,
+            target: target.clone(),
+        });
+    }
 }
 
 pub(super) fn select_conflict_diff(
@@ -1156,7 +1168,16 @@ pub(super) fn diff_file_image_loaded(
         }
         let current_plan = selected_diff_load_plan(inputs, repo_state, &target);
         if !current_plan.load_file_image {
-            return Vec::new();
+            // The probe of a file whose name does not say it is an image.
+            let shows_image = super::util::probes_image_content(&target)
+                && matches!(&result, Ok(Some(image)) if [image.old.as_deref(), image.new.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(super::util::has_image_signature));
+            if !shows_image {
+                return Vec::new();
+            }
+            repo_state.diff_state.content_image_target = Some(target.clone());
         }
         let content_preview = repo_state.diff_state.content_preview;
         repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
