@@ -265,6 +265,7 @@ impl GixRepo {
             .arg("core.quotePath=false")
             .arg("log")
             .arg("--follow")
+            .arg("--no-show-signature")
             .arg("--name-status")
             .arg("-M")
             // Record separator (0x1e) before each commit hash so records can be
@@ -390,6 +391,9 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("log")
             .arg("--follow")
+            // `log.showSignature=true` would print the signature check ahead
+            // of each record, inside its hash field.
+            .arg("--no-show-signature")
             .arg("--date=unix")
             .arg("--pretty=format:%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1e");
         if let Some(max_count) = max_count {

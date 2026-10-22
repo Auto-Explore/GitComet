@@ -120,6 +120,9 @@ impl GixRepo {
                 cmd.arg("-m")
                     .arg("--first-parent")
                     .arg("--pretty=format:")
+                    // `log.showSignature=true` would print the signature check
+                    // ahead of the patch, where it parses as diff rows.
+                    .arg("--no-show-signature")
                     .arg(commit_id.as_ref());
                 Self::pathspec_with_source(&mut cmd, Some(path), old_path.as_deref());
             }
