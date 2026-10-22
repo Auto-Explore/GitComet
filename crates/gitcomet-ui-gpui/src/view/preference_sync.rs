@@ -111,7 +111,7 @@ impl GitCometView {
             .max(self.sidebar_header_minimum)
     }
 
-    pub(super) fn sync_sidebar_header_layout(
+    pub(super) fn sync_panel_header_layout(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -123,6 +123,13 @@ impl GitCometView {
         });
         if self.sidebar_header_minimum != minimum {
             self.sidebar_header_minimum = minimum;
+            self.pane_resize = None;
+        }
+        let details_minimum = self.details_header(cx).map_or(px(0.0), |(header, _)| {
+            header.minimum_width(theme, scale, window)
+        });
+        if self.details_header_minimum != details_minimum {
+            self.details_header_minimum = details_minimum;
             self.pane_resize = None;
         }
         if self.sidebar_collapsed || !renders_full_chrome(self.view_mode) {
@@ -154,6 +161,7 @@ impl GitCometView {
 
     pub(super) fn details_min_width(&self) -> Pixels {
         self.scaled_px(DETAILS_MIN_PX)
+            .max(self.details_header_minimum)
     }
 
     pub(super) fn pane_resize_handle_width(&self) -> Pixels {

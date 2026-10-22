@@ -362,6 +362,7 @@ mod hosted_file_lists;
 mod hosted_panes;
 mod invalidation;
 mod notifications;
+mod panel_headers;
 mod previews;
 mod repo_tab_incoming;
 mod routing_palette;
