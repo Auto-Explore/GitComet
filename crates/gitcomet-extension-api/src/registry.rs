@@ -1,9 +1,10 @@
 //! Collecting, validating, and freezing extension declarations.
 
 use crate::contributions::{
-    BottomPanelDescriptor, ChromeDescriptor, CloseGuard, CommandDescriptor, DetailsTabDescriptor,
-    MenuLocation, RepositoryEntryGate, RepositoryViewDescriptor, SettingsPageDescriptor,
-    SidebarSectionDescriptor, SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
+    BottomPanelDescriptor, ChromeDescriptor, CloseGuard, CommandDescriptor,
+    CommitBoxItemDescriptor, DetailsTabDescriptor, MenuLocation, RepositoryEntryGate,
+    RepositoryViewDescriptor, SettingsPageDescriptor, SidebarSectionDescriptor,
+    SidebarTabDescriptor, StatusItemDescriptor, WindowGateDescriptor,
 };
 use crate::id::{ContributionId, ExtensionId};
 use crate::{BarItemLocation, BuiltinBarItem, Extension, HistoryAnnotator};
@@ -72,6 +73,7 @@ pub struct Registrar {
     edition_strip: Vec<(ContributionId, ChromeDescriptor)>,
     title_bar_brand: Vec<(ContributionId, ChromeDescriptor)>,
     status_items: Vec<(ContributionId, StatusItemDescriptor)>,
+    commit_box_items: Vec<(ContributionId, CommitBoxItemDescriptor)>,
     settings_pages: Vec<(ContributionId, SettingsPageDescriptor)>,
     commands: Vec<(ContributionId, CommandDescriptor)>,
     key_bindings: Vec<KeyBindingDeclaration>,
@@ -99,6 +101,7 @@ impl Registrar {
             edition_strip: Vec::new(),
             title_bar_brand: Vec::new(),
             status_items: Vec::new(),
+            commit_box_items: Vec::new(),
             settings_pages: Vec::new(),
             commands: Vec::new(),
             key_bindings: Vec::new(),
@@ -273,6 +276,17 @@ impl Registrar {
         self
     }
 
+    pub fn commit_box_item(
+        &mut self,
+        local: impl Into<Cow<'static, str>>,
+        descriptor: CommitBoxItemDescriptor,
+    ) -> &mut Self {
+        if let Some(id) = self.id(local) {
+            self.commit_box_items.push((id, descriptor));
+        }
+        self
+    }
+
     pub fn settings_page(
         &mut self,
         local: impl Into<Cow<'static, str>>,
@@ -395,6 +409,7 @@ pub struct Registry {
     edition_strip: Vec<(ContributionId, ChromeDescriptor)>,
     title_bar_brand: Vec<(ContributionId, ChromeDescriptor)>,
     status_items: Vec<(ContributionId, StatusItemDescriptor)>,
+    commit_box_items: Vec<(ContributionId, CommitBoxItemDescriptor)>,
     settings_pages: Vec<(ContributionId, SettingsPageDescriptor)>,
     commands: Vec<(ContributionId, CommandDescriptor)>,
     key_bindings: Vec<KeyBindingDeclaration>,
@@ -456,6 +471,7 @@ impl Registry {
             registry.edition_strip.extend(registrar.edition_strip);
             registry.title_bar_brand.extend(registrar.title_bar_brand);
             registry.status_items.extend(registrar.status_items);
+            registry.commit_box_items.extend(registrar.commit_box_items);
             registry.settings_pages.extend(registrar.settings_pages);
             registry.commands.extend(registrar.commands);
             registry.key_bindings.extend(registrar.key_bindings);
@@ -511,6 +527,10 @@ impl Registry {
             (
                 "status item",
                 duplicates(registry.status_items.iter().map(|(id, _)| id)),
+            ),
+            (
+                "commit box item",
+                duplicates(registry.commit_box_items.iter().map(|(id, _)| id)),
             ),
             (
                 "settings page",
@@ -678,6 +698,10 @@ impl Registry {
 
     pub fn status_items(&self) -> &[(ContributionId, StatusItemDescriptor)] {
         &self.status_items
+    }
+
+    pub fn commit_box_items(&self) -> &[(ContributionId, CommitBoxItemDescriptor)] {
+        &self.commit_box_items
     }
 
     pub fn settings_pages(&self) -> &[(ContributionId, SettingsPageDescriptor)] {

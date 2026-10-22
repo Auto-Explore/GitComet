@@ -28,6 +28,10 @@ fn command(label: &'static str) -> CommandDescriptor {
     }
 }
 
+fn commit_box_item() -> CommitBoxItemDescriptor {
+    CommitBoxItemDescriptor::new(|_, _, _| unreachable!("registration builds no views"))
+}
+
 fn build(fixtures: Vec<Fixture>) -> Result<Registry, Vec<RegistrationError>> {
     let extensions: Vec<Box<dyn Extension>> = fixtures
         .into_iter()
@@ -46,18 +50,26 @@ fn contributions_keep_registration_order_across_extensions() {
                     .command("second", command("Second"))
                     .key_binding("secondary-shift-f", "first", None)
                     .menu_item(MenuLocation::Application, "second")
-                    .asset("icons/a.svg", b"<svg/>");
+                    .asset("icons/a.svg", b"<svg/>")
+                    .commit_box_item("write", commit_box_item());
             },
         },
         Fixture {
             id: "com.example.b",
             register: |r| {
                 r.command("first", command("B First"))
-                    .repository_entry_gate("gate", Rc::new(|_, _| GateDecision::Allow));
+                    .repository_entry_gate("gate", Rc::new(|_, _| GateDecision::Allow))
+                    .commit_box_item("write", commit_box_item());
             },
         },
     ])
     .expect("valid registrations");
+    let items: Vec<String> = registry
+        .commit_box_items()
+        .iter()
+        .map(|(id, _)| id.to_string())
+        .collect();
+    assert_eq!(items, ["com.example.a/write", "com.example.b/write"]);
     let labels: Vec<&str> = registry
         .commands()
         .iter()
@@ -88,7 +100,9 @@ fn duplicates_unknown_commands_and_bad_names_are_rejected_before_install() {
                     .asset("a.svg", b"")
                     .asset("a.svg", b"")
                     .asset("../escape.svg", b"")
-                    .command("Bad Name", command("Bad"));
+                    .command("Bad Name", command("Bad"))
+                    .commit_box_item("write", commit_box_item())
+                    .commit_box_item("write", commit_box_item());
             },
         },
         Fixture {
@@ -102,6 +116,7 @@ fn duplicates_unknown_commands_and_bad_names_are_rejected_before_install() {
     for expected in [
         "registered twice",
         "command com.example.a/run is declared twice",
+        "commit box item com.example.a/write is declared twice",
         "unknown command com.example.a/missing",
         "does not parse",
         "asset extensions/com.example.a/a.svg is declared twice",
