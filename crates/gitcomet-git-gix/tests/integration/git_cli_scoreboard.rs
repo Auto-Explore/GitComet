@@ -1,8 +1,6 @@
-use crate::source_audit::{Call, has_test_cfg, production_calls, rust_source_files};
-use std::fs;
+use crate::source_audit::{Site, production_sites, rust_source_files};
 use std::path::PathBuf;
-use syn::visit::{self, Visit};
-use syn::{Expr, ExprCall, ExprLit, File, ItemFn, ItemMod, Lit};
+use syn::{Expr, ExprCall, ExprLit, Lit};
 
 const GIT_COMMAND_BUDGET: usize = 105;
 
@@ -19,8 +17,8 @@ fn production_git_cli_call_scoreboard_with_budget_gate() {
     );
 
     let mut per_file: Vec<(String, usize)> = Vec::new();
-    for (path, _) in production_calls(&src_root, |call| match call {
-        Call::Function(call) if is_git_command_new_call(call) => Some(String::new()),
+    for (path, _) in production_sites(&src_root, |site| match site {
+        Site::Function(call) if is_git_command_new_call(call) => Some(String::new()),
         _ => None,
     }) {
         match per_file.last_mut() {
@@ -55,54 +53,26 @@ fn production_git_cli_call_scoreboard_with_budget_gate() {
 #[test]
 fn literal_pathspecs_are_switched_on_only_by_the_path_helpers() {
     let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut offenders = Vec::new();
-    for file in rust_source_files(&src_root) {
-        let relative = file.strip_prefix(&src_root).unwrap().to_path_buf();
-        if relative.as_path() == std::path::Path::new("util/process.rs") {
-            continue;
+    let mut offenders: Vec<String> = production_sites(&src_root, |site| match site {
+        Site::Literal(literal)
+            if matches!(
+                literal.value().as_str(),
+                "GIT_LITERAL_PATHSPECS" | "--literal-pathspecs"
+            ) =>
+        {
+            Some(String::new())
         }
-        let source = fs::read_to_string(&file)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
-        let parsed: File = syn::parse_file(&source)
-            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", file.display()));
-        let mut finder = LiteralPathspecSwitchFinder::default();
-        finder.visit_file(&parsed);
-        if finder.found {
-            offenders.push(relative);
-        }
-    }
+        _ => None,
+    })
+    .into_iter()
+    .map(|(path, _)| path)
+    .filter(|path| path != "util/process.rs")
+    .collect();
+    offenders.dedup();
     assert!(
         offenders.is_empty(),
         "pass user paths through push_literal_paths/push_literal_pathspec_file instead: {offenders:#?}"
     );
-}
-
-#[derive(Default)]
-struct LiteralPathspecSwitchFinder {
-    found: bool,
-}
-
-impl<'ast> Visit<'ast> for LiteralPathspecSwitchFinder {
-    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
-        if !has_test_cfg(&node.attrs) {
-            visit::visit_item_mod(self, node);
-        }
-    }
-
-    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
-        if !has_test_cfg(&node.attrs) {
-            visit::visit_item_fn(self, node);
-        }
-    }
-
-    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
-        if matches!(
-            node.value().as_str(),
-            "GIT_LITERAL_PATHSPECS" | "--literal-pathspecs"
-        ) {
-            self.found = true;
-        }
-    }
 }
 
 fn is_git_command_new_call(expr: &ExprCall) -> bool {
