@@ -1,9 +1,8 @@
-use crate::source_audit;
-use source_audit::{has_test_cfg, rust_source_files};
+use crate::source_audit::{Call, has_test_cfg, production_calls, rust_source_files};
 use std::fs;
 use std::path::PathBuf;
 use syn::visit::{self, Visit};
-use syn::{Expr, ExprCall, ExprLit, File, ImplItemFn, ItemFn, ItemImpl, ItemMod, Lit};
+use syn::{Expr, ExprCall, ExprLit, File, ItemFn, ItemMod, Lit};
 
 const GIT_COMMAND_BUDGET: usize = 105;
 
@@ -19,27 +18,17 @@ fn production_git_cli_call_scoreboard_with_budget_gate() {
         src_root.display()
     );
 
-    let mut per_file = Vec::new();
-    let mut total = 0usize;
-
-    for file in files {
-        let source = fs::read_to_string(&file)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
-        let parsed: File = syn::parse_file(&source)
-            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", file.display()));
-
-        let mut counter = GitCommandCounter::default();
-        counter.visit_file(&parsed);
-
-        if counter.count > 0 {
-            let rel = file
-                .strip_prefix(&crate_root)
-                .unwrap_or(file.as_path())
-                .to_path_buf();
-            per_file.push((rel, counter.count));
-            total += counter.count;
+    let mut per_file: Vec<(String, usize)> = Vec::new();
+    for (path, _) in production_calls(&src_root, |call| match call {
+        Call::Function(call) if is_git_command_new_call(call) => Some(String::new()),
+        _ => None,
+    }) {
+        match per_file.last_mut() {
+            Some((last, count)) if *last == path => *count += 1,
+            _ => per_file.push((path, 1)),
         }
     }
+    let total: usize = per_file.iter().map(|(_, count)| count).sum();
 
     per_file.sort_by(|(a_path, a_count), (b_path, b_count)| {
         b_count.cmp(a_count).then_with(|| a_path.cmp(b_path))
@@ -47,7 +36,7 @@ fn production_git_cli_call_scoreboard_with_budget_gate() {
 
     eprintln!("git CLI migration scoreboard: production Command::new(\"git\") calls = {total}");
     for (path, count) in &per_file {
-        eprintln!("  {count:>3} {}", path.display());
+        eprintln!("  {count:>3} src/{path}");
     }
     eprintln!("budget gate: <= {GIT_COMMAND_BUDGET}");
 
@@ -113,48 +102,6 @@ impl<'ast> Visit<'ast> for LiteralPathspecSwitchFinder {
         ) {
             self.found = true;
         }
-    }
-}
-
-#[derive(Default)]
-struct GitCommandCounter {
-    count: usize,
-}
-
-impl<'ast> Visit<'ast> for GitCommandCounter {
-    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
-        if has_test_cfg(&node.attrs) {
-            return;
-        }
-        visit::visit_item_mod(self, node);
-    }
-
-    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
-        if has_test_cfg(&node.attrs) {
-            return;
-        }
-        visit::visit_item_fn(self, node);
-    }
-
-    fn visit_item_impl(&mut self, node: &'ast ItemImpl) {
-        if has_test_cfg(&node.attrs) {
-            return;
-        }
-        visit::visit_item_impl(self, node);
-    }
-
-    fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
-        if has_test_cfg(&node.attrs) {
-            return;
-        }
-        visit::visit_impl_item_fn(self, node);
-    }
-
-    fn visit_expr_call(&mut self, node: &'ast ExprCall) {
-        if is_git_command_new_call(node) {
-            self.count += 1;
-        }
-        visit::visit_expr_call(self, node);
     }
 }
 
