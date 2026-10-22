@@ -140,7 +140,10 @@ fn a_wide_details_header_widens_the_window_with_the_sidebar_collapsed(
     }
     cx.update(|window, app| {
         let view = view.read(app);
-        let needed = view.pane_collapsed_width() + view.main_min_width() + view.details_min_width();
+        let needed = view.pane_collapsed_width()
+            + view.main_min_width()
+            + view.details_min_width()
+            + view.pane_resize_handle_width();
         let width = window.bounds().size.width;
         assert!(width >= needed, "{width:?} narrower than {needed:?}");
     });
