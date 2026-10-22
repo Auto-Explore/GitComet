@@ -43,3 +43,82 @@ pub fn has_test_cfg(attrs: &[Attribute]) -> bool {
         }
     })
 }
+
+/// A call a source guard may name.
+pub enum Call<'a> {
+    Method(&'a syn::ExprMethodCall),
+    Function(&'a syn::ExprCall),
+}
+
+/// The calls `pick` names in production code under `root`, as
+/// `(file relative to root, name)` in source order. Files named `tests` and
+/// items marked `#[cfg(test)]` are skipped.
+pub fn production_calls(
+    root: &Path,
+    pick: impl Fn(Call<'_>) -> Option<String>,
+) -> Vec<(String, String)> {
+    let mut calls = Vec::new();
+    for path in rust_source_files(root) {
+        let relative = path.strip_prefix(root).unwrap();
+        if relative.file_stem().is_some_and(|stem| stem == "tests") {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let file = syn::parse_file(&source)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        calls.extend(
+            calls_in(&file, &pick)
+                .into_iter()
+                .map(|call| (relative.clone(), call)),
+        );
+    }
+    calls
+}
+
+/// The calls `pick` names in `file`, outside items marked `#[cfg(test)]`.
+pub fn calls_in(file: &syn::File, pick: impl Fn(Call<'_>) -> Option<String>) -> Vec<String> {
+    let mut finder = CallFinder {
+        pick,
+        calls: Vec::new(),
+    };
+    syn::visit::Visit::visit_file(&mut finder, file);
+    finder.calls
+}
+
+struct CallFinder<F> {
+    pick: F,
+    calls: Vec<String>,
+}
+
+impl<'a, F: Fn(Call<'_>) -> Option<String>> syn::visit::Visit<'a> for CallFinder<F> {
+    fn visit_item_mod(&mut self, node: &'a syn::ItemMod) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_mod(self, node);
+        }
+    }
+    fn visit_item_fn(&mut self, node: &'a syn::ItemFn) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_fn(self, node);
+        }
+    }
+    fn visit_item_impl(&mut self, node: &'a syn::ItemImpl) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_item_impl(self, node);
+        }
+    }
+    fn visit_impl_item_fn(&mut self, node: &'a syn::ImplItemFn) {
+        if !has_test_cfg(&node.attrs) {
+            syn::visit::visit_impl_item_fn(self, node);
+        }
+    }
+    fn visit_expr_method_call(&mut self, node: &'a syn::ExprMethodCall) {
+        self.calls.extend((self.pick)(Call::Method(node)));
+        syn::visit::visit_expr_method_call(self, node);
+    }
+    fn visit_expr_call(&mut self, node: &'a syn::ExprCall) {
+        self.calls.extend((self.pick)(Call::Function(node)));
+        syn::visit::visit_expr_call(self, node);
+    }
+}
