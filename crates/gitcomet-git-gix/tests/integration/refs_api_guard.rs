@@ -1,9 +1,9 @@
 //! Every production ref-dependent gix API must pass through the storage adapter.
-use crate::source_audit::{Call, calls_in, production_calls};
+use crate::source_audit::{Site, production_sites, sites_in};
 use std::path::PathBuf;
 
-fn ref_dependent(call: Call<'_>) -> Option<String> {
-    let Call::Method(n) = call else {
+fn ref_dependent(site: Site<'_>) -> Option<String> {
+    let Site::Method(n) = site else {
         return None;
     };
     let method = n.method.to_string();
@@ -48,7 +48,7 @@ fn ref_dependent(call: Call<'_>) -> Option<String> {
 #[test]
 fn ref_dependent_calls_stay_in_the_storage_adapter() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let calls: Vec<(String, String)> = production_calls(&root, ref_dependent)
+    let calls: Vec<(String, String)> = production_sites(&root, ref_dependent)
         .into_iter()
         .filter(|(path, _)| !path.starts_with("refs/"))
         .collect();
@@ -61,7 +61,7 @@ fn ref_dependent_calls_stay_in_the_storage_adapter() {
 fn guard_recognizes_nested_calls_and_ignores_test_only_code() {
     let ast = syn::parse_file("fn f() { repo.head().unwrap(); repo.status(progress); repo.state(); repo.reference(a,b,c,d); repo.path().join(\"REVERT_HEAD\"); } #[cfg(test)] mod tests { fn t() { repo.head(); } }").unwrap();
     assert_eq!(
-        calls_in(&ast, ref_dependent),
+        sites_in(&ast, ref_dependent),
         ["head", "status", "state", "reference", "join(REVERT_HEAD)"]
     );
 }
