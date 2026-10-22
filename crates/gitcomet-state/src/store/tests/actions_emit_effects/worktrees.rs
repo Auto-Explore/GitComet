@@ -418,14 +418,16 @@ fn state_beside_new_worktree() -> (tempfile::TempDir, AppState, PathBuf) {
     std::fs::create_dir_all(&workdir).expect("workdir");
     std::fs::create_dir_all(&worktree).expect("worktree");
     let mut state = AppState::test_default();
+    // The repo's own canonicaliser, as repositories are opened: on Windows it
+    // drops the `\\?\` prefix `std::fs::canonicalize` adds.
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
-            workdir: std::fs::canonicalize(&workdir).expect("canonical workdir"),
+            workdir: gitcomet_core::path_utils::canonicalize_or_original(workdir),
         },
     ));
     state.active_repo = Some(RepoId(1));
-    let worktree = std::fs::canonicalize(&worktree).expect("canonical worktree");
+    let worktree = gitcomet_core::path_utils::canonicalize_or_original(worktree);
     (dir, state, worktree)
 }
 
