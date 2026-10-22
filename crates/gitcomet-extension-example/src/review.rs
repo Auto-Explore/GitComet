@@ -1,6 +1,6 @@
 //! The example's extension: marking repositories reviewed.
 //!
-//! It registers one of every contribution through the public API only:
+//! It registers most kinds of contribution, through the public API only:
 //! repository views (one of them hosting diff panes and a file list, see
 //! [`crate::changes`]), a bottom panel, a details tab, a sidebar section and
 //! sidebar rows, a history annotator, a status item, the edition strip and
