@@ -187,6 +187,68 @@ fn a_worktree_comparison_keeps_renames_and_lists_untracked_files_only_when_asked
     );
 }
 
+/// A file moved without `git mv` is a deleted file and an untracked one, as
+/// `git status` lists it. With untracked files in the comparison, the two
+/// are one rename, both in the list and in the file's diff.
+#[test]
+fn a_worktree_comparison_pairs_an_unstaged_move_into_a_rename() {
+    test_git_env::ensure_initialized();
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init(&repo);
+    fs::write(repo.join("old.txt"), body(20, "tail\n")).unwrap();
+    let base = commit_all(&repo, "base");
+    fs::remove_file(repo.join("old.txt")).unwrap();
+    fs::write(repo.join("new.txt"), body(20, "edited tail\n")).unwrap();
+    fs::write(repo.join("scratch.txt"), "one\ntwo\n").unwrap();
+    let opened = open(&repo);
+    let cancel = CancellationToken::new();
+
+    let comparison = opened
+        .compare_files(
+            &base,
+            None,
+            &ComparisonOptions::direct().with_untracked(true),
+            &cancel,
+        )
+        .expect("compare with untracked files");
+    let moved = change(&comparison.files, "new.txt");
+    assert_eq!(moved.kind, FileStatusKind::Renamed);
+    assert_eq!(moved.old_path.as_deref(), Some(Path::new("old.txt")));
+    assert!(
+        comparison
+            .files
+            .iter()
+            .all(|file| file.path != Path::new("old.txt")),
+        "the source is not listed again as deleted: {:?}",
+        comparison.files
+    );
+    let scratch = change(&comparison.files, "scratch.txt");
+    assert_eq!(scratch.kind, FileStatusKind::Untracked);
+    assert_eq!(
+        (scratch.line_stats.additions, scratch.line_stats.deletions),
+        (Some(2), Some(0))
+    );
+
+    let target = DiffTarget::commit_range(base.clone(), None, None).for_change(moved);
+    let unified = opened.diff_unified(&target).expect("diff of the move");
+    assert!(unified.contains("rename from old.txt"), "{unified}");
+    assert!(unified.contains("+edited tail"), "{unified}");
+
+    // Nothing reached the repository's own index.
+    assert_eq!(git(&repo, &["ls-files"]), "old.txt");
+
+    // Untracked files stay out by default, the move's copy with them.
+    let tracked = opened
+        .compare_files(&base, None, &ComparisonOptions::direct(), &cancel)
+        .expect("compare with the working tree");
+    assert_eq!(
+        change(&tracked.files, "old.txt").kind,
+        FileStatusKind::Deleted
+    );
+    assert_eq!(tracked.files.len(), 1, "{:?}", tracked.files);
+}
+
 #[test]
 fn merge_base_comparisons_show_only_what_the_branch_added() {
     test_git_env::ensure_initialized();

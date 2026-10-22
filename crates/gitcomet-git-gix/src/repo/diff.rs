@@ -59,6 +59,48 @@ impl GixRepo {
         self.build_unified_diff_command_with_policy(target, false)
     }
 
+    /// The unified diff command for `target`, and the index it reads when that
+    /// is not the repository's own. Against the working tree an untracked file
+    /// (the new copy of a file moved without `git mv`) is invisible to
+    /// `git diff`, so it goes into a copy of the index as intent-to-add. The
+    /// copy must outlive the command.
+    fn unified_diff_command(&self, target: &DiffTarget) -> (Command, Option<tempfile::TempPath>) {
+        let mut command = self.build_unified_diff_command(target);
+        let index = match target {
+            DiffTarget::CommitRange {
+                to_commit_id: None,
+                path: Some(path),
+                ..
+            } if self.is_untracked_worktree_file(path) => super::comparison::intent_to_add_index(
+                &self.spec.workdir,
+                &self.repo().index_path(),
+                std::slice::from_ref(path),
+            ),
+            _ => None,
+        };
+        if let Some(index) = &index {
+            command.env("GIT_INDEX_FILE", index);
+        }
+        (command, index)
+    }
+
+    /// Whether `path` is a file in the working tree that the index does not
+    /// hold.
+    fn is_untracked_worktree_file(&self, path: &Path) -> bool {
+        if !std::fs::symlink_metadata(self.spec.workdir.join(path))
+            .is_ok_and(|metadata| !metadata.is_dir())
+        {
+            return false;
+        }
+        let Ok(key) = gix::path::into_bstr(path) else {
+            return false;
+        };
+        let key = gix::path::to_unix_separators_on_windows(key);
+        self.repo()
+            .index_or_empty()
+            .is_ok_and(|index| index.entry_by_path(key.as_ref()).is_none())
+    }
+
     pub(super) fn build_unified_diff_command_with_policy(
         &self,
         target: &DiffTarget,
@@ -157,22 +199,18 @@ impl GixRepo {
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {
-        run_git_parsed_stdout(
-            self.build_unified_diff_command(target),
-            "git diff",
-            true,
-            |stdout| {
-                Diff::read_unified_text(stdout)
-                    .map(|(text, _notice)| text)
-                    .map_err(|err| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "failed to read unified git diff output: {err}"
-                        )))
-                        .with_source(err)
-                        .with_context("read unified Git diff output", None)
-                    })
-            },
-        )
+        let (command, _index) = self.unified_diff_command(target);
+        run_git_parsed_stdout(command, "git diff", true, |stdout| {
+            Diff::read_unified_text(stdout)
+                .map(|(text, _notice)| text)
+                .map_err(|err| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "failed to read unified git diff output: {err}"
+                    )))
+                    .with_source(err)
+                    .with_context("read unified Git diff output", None)
+                })
+        })
     }
 
     /// File text with both sides decoded to UTF-8 (see `text_decode`).
@@ -214,8 +252,9 @@ impl GixRepo {
             return Ok(diff);
         }
 
+        let (command, _index) = self.unified_diff_command(target);
         let (bytes, notice) = run_git_parsed_stdout_cancellable(
-            self.build_unified_diff_command(target),
+            command,
             "git diff",
             true,
             cancellation,
