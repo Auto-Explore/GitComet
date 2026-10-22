@@ -75,11 +75,11 @@ fn select(state: &mut AppState, repo_id: RepoId, id: &str, mode: CommitSelectMod
 fn selecting_two_commits_enters_ordered_range_comparison() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
-    let c0 = CommitId("c0".into());
+    let c1 = CommitId("c1".into());
     let c3 = CommitId("c3".into());
 
-    select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+    let effects = select(&mut state, repo_id, "c3", CommitSelectMode::Toggle);
 
     let range = repo(&state, repo_id)
         .history_state
@@ -88,7 +88,7 @@ fn selecting_two_commits_enters_ordered_range_comparison() {
         .expect("two selected commits should start a comparison");
     // The base is the *parent* of the oldest selected commit, regardless of
     // click order, so the merged diff includes that commit's own changes.
-    assert_eq!(range.from, c0);
+    assert_eq!(range.from, c1);
     assert_eq!(range.to, Some(c3.clone()));
 
     // The diff pane stays empty: the comparison presents the file
@@ -101,9 +101,9 @@ fn selecting_two_commits_enters_ordered_range_comparison() {
     assert!(
         effects.iter().any(|e| matches!(
             e,
-            Effect::LoadRangeFiles { from, to, .. } if *from == c0 && *to == Some(c3.clone())
+            Effect::LoadRangeFiles { from, to, .. } if *from == c1 && *to == Some(c3.clone())
         )),
-        "a LoadRangeFiles effect for c0->c3 should be issued"
+        "a LoadRangeFiles effect for c1->c3 should be issued"
     );
 }
 
@@ -112,6 +112,7 @@ fn range_files_loaded_populates_only_the_current_comparison() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
     select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
     let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
     let request = effects
         .iter()
@@ -192,7 +193,7 @@ fn single_selection_clears_an_active_comparison() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
     select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
     assert!(
         repo(&state, repo_id)
             .history_state
@@ -238,8 +239,8 @@ fn closing_a_comparison_reloads_the_focused_commits_details() {
     select(&mut state, repo_id, "c3", CommitSelectMode::Single);
     state.repos[0].history_state.commit_details = Loadable::Ready(Arc::new(loaded_details("c3")));
 
-    // Ctrl-click c1: comparison mode, focus moves to c1, details stay c3's.
-    select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    // Ctrl-click c2: comparison mode, focus moves to c2, details stay c3's.
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
     assert!(
         repo(&state, repo_id)
             .history_state
@@ -248,7 +249,7 @@ fn closing_a_comparison_reloads_the_focused_commits_details() {
     );
     assert_eq!(
         repo(&state, repo_id).history_state.selected_commit,
-        Some(CommitId("c1".into()))
+        Some(CommitId("c2".into()))
     );
 
     let effects = dispatch_effects(&mut state, Msg::ClearComparison { repo_id });
@@ -256,12 +257,12 @@ fn closing_a_comparison_reloads_the_focused_commits_details() {
     let r = repo(&state, repo_id);
     assert!(
         !matches!(&r.history_state.commit_details, Loadable::Ready(d) if d.id == CommitId("c3".into())),
-        "c3's details must not stay on screen under c1's selection"
+        "c3's details must not stay on screen under c2's selection"
     );
     assert!(
         effects.iter().any(|e| matches!(
             e,
-            Effect::LoadCommitDetails { commit_id, .. } if *commit_id == CommitId("c1".into())
+            Effect::LoadCommitDetails { commit_id, .. } if *commit_id == CommitId("c2".into())
         )),
         "closing the comparison should load the still-selected commit's details"
     );
@@ -276,7 +277,7 @@ fn an_explicit_comparison_drops_a_stale_multi_selection() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
     select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
     assert!(
         repo(&state, repo_id)
             .history_state
@@ -315,7 +316,7 @@ fn a_multi_selection_comparison_keeps_its_selection() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
     select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
 
     let r = repo(&state, repo_id);
     assert!(r.history_state.range_selection.is_some());
@@ -327,7 +328,7 @@ fn clear_comparison_dismisses_selection_and_diff() {
     let repo_id = RepoId(1);
     let mut state = state_with_log(repo_id);
     select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
     assert!(
         repo(&state, repo_id)
             .history_state
@@ -553,7 +554,7 @@ fn external_change_does_not_refresh_a_commit_comparison() {
     let mut state = state_with_log(repo_id);
     // Two-commit (immutable) comparison.
     select(&mut state, repo_id, "c3", CommitSelectMode::Single);
-    select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
     assert!(
         repo(&state, repo_id)
             .history_state
@@ -573,5 +574,64 @@ fn external_change_does_not_refresh_a_commit_comparison() {
             .iter()
             .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
         "a commit↔commit comparison is immutable and must not refresh"
+    );
+}
+
+/// `c3` and `c1` with `c2` between them: no diff holds exactly their changes,
+/// as `c0..c3` would add `c2`'s. The selection stays a plain list until it
+/// closes the gap.
+#[test]
+fn selecting_commits_with_a_gap_between_them_shows_no_merged_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+
+    select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+    let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+
+    let history = &repo(&state, repo_id).history_state;
+    assert!(history.multi_selection.is_multi());
+    assert_eq!(history.range_selection, None);
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+        "a selection with a gap must not load a merged diff"
+    );
+
+    select(&mut state, repo_id, "c2", CommitSelectMode::Toggle);
+    let range = repo(&state, repo_id)
+        .history_state
+        .range_selection
+        .clone()
+        .expect("closing the gap starts the comparison");
+    assert_eq!(range.from, CommitId("c0".into()));
+    assert_eq!(range.to, Some(CommitId("c3".into())));
+}
+
+/// Two branch tips listed next to each other are not consecutive commits: the
+/// diff from one's parent to the other is the difference between branches.
+#[test]
+fn selecting_commits_on_different_branches_shows_no_merged_diff() {
+    let repo_id = RepoId(1);
+    let mut state = state_with_log(repo_id);
+    state.repos[0].history_state.log = Loadable::Ready(Arc::new(LogPage {
+        commits: vec![
+            commit("a1", "base"),
+            commit("b1", "base"),
+            commit("base", "c0"),
+        ],
+        next_cursor: None,
+    }));
+
+    select(&mut state, repo_id, "a1", CommitSelectMode::Single);
+    let effects = select(&mut state, repo_id, "b1", CommitSelectMode::Toggle);
+
+    let history = &repo(&state, repo_id).history_state;
+    assert!(history.multi_selection.is_multi());
+    assert_eq!(history.range_selection, None);
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRangeFiles { .. }))
     );
 }

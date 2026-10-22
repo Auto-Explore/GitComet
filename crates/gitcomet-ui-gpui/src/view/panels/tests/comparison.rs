@@ -71,6 +71,39 @@ fn draw_comparison_view(
     gpui::Entity<super::super::GitCometView>,
     &mut gpui::VisualTestContext,
 ) {
+    // Oldest is the base, newest the tip — the same ordering the reducer
+    // produces for either flow.
+    let range = RangeSelection {
+        from: CommitId(sha(commit_count.saturating_sub(1)).into()),
+        to: Some(CommitId(sha(0).into())),
+        from_label: "base".into(),
+        to_label: "tip".into(),
+        options: Default::default(),
+        base: None,
+    };
+    draw_details(
+        cx,
+        repo_id,
+        commit_count,
+        &(0..selected).collect::<Vec<_>>(),
+        Some(range),
+        files,
+    )
+}
+
+/// Draw the details pane over a log of `commit_count` commits, with the log
+/// rows `selected` multi-selected and `range` as the active comparison.
+fn draw_details<'a>(
+    cx: &'a mut gpui::TestAppContext,
+    repo_id: RepoId,
+    commit_count: usize,
+    selected: &[usize],
+    range: Option<RangeSelection>,
+    files: Files,
+) -> (
+    gpui::Entity<super::super::GitCometView>,
+    &'a mut gpui::VisualTestContext,
+) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -88,22 +121,14 @@ fn draw_comparison_view(
             }));
             repo.log_rev = 1;
             repo.history_state.multi_selection = CommitMultiSelection {
-                commits: (0..selected)
-                    .map(|ix| CommitId(sha(ix).into()))
+                commits: selected
+                    .iter()
+                    .map(|&ix| CommitId(sha(ix).into()))
                     .collect::<Vec<_>>()
                     .into(),
                 ..Default::default()
             };
-            // Oldest is the base, newest the tip — the same ordering the
-            // reducer produces for either flow.
-            repo.history_state.range_selection = Some(RangeSelection {
-                from: CommitId(sha(commit_count.saturating_sub(1)).into()),
-                to: Some(CommitId(sha(0).into())),
-                from_label: "base".into(),
-                to_label: "tip".into(),
-                options: Default::default(),
-                base: None,
-            });
+            repo.history_state.range_selection = range;
             repo.history_state.range_files = files.into_loadable();
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -117,6 +142,25 @@ fn draw_comparison_view(
         let _ = window.draw(app);
     });
     (view, cx)
+}
+
+/// Commits that are not consecutive have no merged diff, so the reducer opens
+/// no comparison for them. The pane lists them and says why there is no diff,
+/// rather than leaving a list that reads as if the diff were still to come.
+#[gpui::test]
+fn a_selection_without_a_merged_diff_says_why(cx: &mut gpui::TestAppContext) {
+    let (_, cx) = draw_details(cx, RepoId(76), 3, &[0, 2], None, Files::Loading);
+
+    assert!(
+        cx.debug_bounds("multi_commit_no_merged_diff").is_some(),
+        "expected the hint that only consecutive commits have a combined diff"
+    );
+    assert!(cx.debug_bounds("commit_multi_row_0").is_some());
+    assert!(cx.debug_bounds("commit_multi_row_1").is_some());
+    assert!(
+        cx.debug_bounds("range_comparison_body").is_none(),
+        "no comparison body without a comparison"
+    );
 }
 
 /// A range comparison started via "mark + compare" (or a branch/tag/worktree
