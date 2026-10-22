@@ -798,6 +798,8 @@ impl PopoverHost {
         let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let filesystem_conflict_apply_to_all_focus_handle =
             cx.focus_handle().tab_index(0).tab_stop(true);
+        let worktree_remove_delete_branch_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_focus = DialogFocus::new(cx);
         let remote_edit_focus = DialogFocus::new(cx);
         let push_upstream_focus = DialogFocus::new(cx);
@@ -967,6 +969,8 @@ impl PopoverHost {
             create_tag_annotated_focus_handle,
             filesystem_conflict_apply_to_all: false,
             filesystem_conflict_apply_to_all_focus_handle,
+            worktree_remove_delete_branch: false,
+            worktree_remove_delete_branch_focus_handle,
             checkout_remote_branch_focus,
             stash_message_input,
             stash_focus,
@@ -2343,6 +2347,13 @@ impl PopoverHost {
                 }
                 PopoverKind::FilesystemConflict(_) => {
                     self.filesystem_conflict_apply_to_all = false;
+                    window.focus(&self.prompt_tab_group_focus_handle, cx);
+                }
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::RemoveConfirm { .. }),
+                    ..
+                } => {
+                    self.worktree_remove_delete_branch = false;
                     window.focus(&self.prompt_tab_group_focus_handle, cx);
                 }
                 // Must sit above the generic confirm-dialog arm below, which

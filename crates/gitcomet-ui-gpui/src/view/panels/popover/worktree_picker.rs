@@ -8,6 +8,20 @@
 use super::*;
 use std::rc::Rc;
 
+/// The branch checked out in the worktree at `path`, as the sidebar rows name it.
+pub(super) fn worktree_branch_for_path(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    path: &std::path::Path,
+) -> Option<String> {
+    let repo = this.state.repos.iter().find(|repo| repo.id == repo_id)?;
+    repo.worktrees
+        .ready()?
+        .iter()
+        .find(|worktree| worktree.path == path)
+        .and_then(|worktree| worktree.branch.clone())
+}
+
 /// A row for the open picker, which names the branch a worktree has checked out
 /// ahead of its path. The remove picker lists the paths alone.
 fn worktree_picker_item(
@@ -130,10 +144,9 @@ pub(super) fn activate(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     if is_remove {
-        let confirm = PopoverKind::worktree(
-            repo_id,
-            WorktreePopoverKind::RemoveConfirm { path, branch: None },
-        );
+        let branch = worktree_branch_for_path(this, repo_id, &path);
+        let confirm =
+            PopoverKind::worktree(repo_id, WorktreePopoverKind::RemoveConfirm { path, branch });
         match position {
             Some(position) => this.open_popover_at(confirm, position, window, cx),
             None => this.open_popover_centered(confirm, window, cx),

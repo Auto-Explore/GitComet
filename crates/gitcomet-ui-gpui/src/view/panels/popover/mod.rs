@@ -398,6 +398,9 @@ pub(in super::super) struct PopoverHost {
     /// "Apply to all remaining" in the open file-collision dialog.
     filesystem_conflict_apply_to_all: bool,
     filesystem_conflict_apply_to_all_focus_handle: FocusHandle,
+    /// "Also delete local branch" in the open Remove-worktree dialog; off on every open.
+    worktree_remove_delete_branch: bool,
+    worktree_remove_delete_branch_focus_handle: FocusHandle,
     checkout_remote_branch_focus: DialogFocus,
     stash_message_input: Entity<components::TextInput>,
     stash_focus: DialogFocus,
