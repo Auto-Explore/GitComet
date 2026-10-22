@@ -78,7 +78,6 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) timezone: crate::view::date_time::Timezone,
     pub(in super::super) show_timezone: bool,
     _ui_model_subscription: gpui::Subscription,
-    _commit_message_input_subscription: gpui::Subscription,
     _commit_reword_input_subscription: gpui::Subscription,
     _history_find_subscription: gpui::Subscription,
     /// The history find bar's query, highlighted in the commit details. It
@@ -136,9 +135,6 @@ pub(in super::super) struct DetailsPaneView {
     /// Suggestion (repo and rev) already offered to the commit box, so git's
     /// prepared message is applied once and never re-applied.
     applied_commit_suggestions: rustc_hash::FxHashMap<RepoId, (u64, Option<String>)>,
-    pub(in super::super) commit_message_user_edited: bool,
-    pub(in super::super) commit_message_last_text: SharedString,
-    pub(in super::super) commit_message_programmatic_change: bool,
     pub(in super::super) extension_commit_items: Vec<AnyView>,
 
     pub(in super::super) status_multi_selection: FxHashMap<RepoId, StatusMultiSelection>,
@@ -525,19 +521,6 @@ impl DetailsPaneView {
             )
         });
 
-        let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
-            let next: SharedString = input.read(cx).text().to_string().into();
-            if this.commit_message_programmatic_change {
-                this.commit_message_programmatic_change = false;
-                this.commit_message_last_text = next;
-                return;
-            }
-
-            if this.commit_message_last_text != next {
-                this.commit_message_last_text = next;
-                this.commit_message_user_edited = true;
-            }
-        });
         let history_find_query = history_view.read(cx).history_find_query().cloned();
         let history_find_subscription = cx.observe(&history_view, |this, history, cx| {
             let query = history.read(cx).history_find_query();
@@ -557,7 +540,6 @@ impl DetailsPaneView {
             timezone,
             show_timezone,
             _ui_model_subscription: subscription,
-            _commit_message_input_subscription: commit_message_subscription,
             _commit_reword_input_subscription: commit_reword_subscription,
             _history_find_subscription: history_find_subscription,
             history_find_query,
@@ -608,9 +590,6 @@ impl DetailsPaneView {
             pending_commits: FxHashMap::default(),
             pending_amend_prefill: None,
             applied_commit_suggestions: rustc_hash::FxHashMap::default(),
-            commit_message_user_edited: false,
-            commit_message_last_text: SharedString::default(),
-            commit_message_programmatic_change: false,
             extension_commit_items: Vec::new(),
             status_multi_selection: FxHashMap::default(),
             status_multi_selection_last_status: FxHashMap::default(),
@@ -864,9 +843,6 @@ impl DetailsPaneView {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_message_user_edited = false;
-        self.commit_message_programmatic_change = true;
-        self.commit_message_last_text = message.clone().into();
         self.commit_message_input
             .update(cx, |input, cx| input.set_text(message, cx));
         self.commit_message_scroll
@@ -960,9 +936,6 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_message_user_edited = true;
-        self.commit_message_programmatic_change = true;
-        self.commit_message_last_text = message.clone().into();
         self.commit_message_input
             .update(cx, |input, cx| input.set_text(message, cx));
         self.commit_message_scroll
@@ -2670,11 +2643,8 @@ impl DetailsPaneView {
                 .and_then(|repo_id| self.commit_message_drafts.get(&repo_id).cloned())
                 .unwrap_or_default();
             restored_commit_message = Some(restore.clone());
-            self.commit_message_user_edited = false;
-            self.commit_message_programmatic_change = true;
             self.commit_message_input
                 .update(cx, |input, cx| input.set_text(restore.to_string(), cx));
-            self.commit_message_last_text = restore;
         } else if switched_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
@@ -2705,9 +2675,6 @@ impl DetailsPaneView {
             && apply_merge_message
             && let Some(message) = next_merge_message
         {
-            self.commit_message_user_edited = false;
-            self.commit_message_programmatic_change = true;
-            self.commit_message_last_text = message.clone().into();
             self.commit_message_input
                 .update(cx, |input, cx| input.set_text(message, cx));
             self.commit_message_scroll
