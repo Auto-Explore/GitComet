@@ -45,18 +45,7 @@ impl SidebarPaneView {
                 SidebarMode::Files => SidebarTabTarget::Files,
             }
         };
-        let font_preferences = crate::font_preferences::current(cx);
-        let font = gpui::Font {
-            family: crate::font_preferences::applied_ui_font_family(
-                &font_preferences.ui_font_family,
-                cx,
-            )
-            .into(),
-            features: crate::font_preferences::applied_font_features(
-                font_preferences.use_font_ligatures,
-            ),
-            ..Default::default()
-        };
+        let font = crate::font_preferences::current_ui_font(cx);
         let mut tabs = Vec::new();
         let mut add = |target,
                        id: SharedString,
