@@ -2409,19 +2409,9 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
     );
 }
 
-/// Runs `name` again in a child process and returns true there. The working
-/// directory is process-wide, so a test that moves it must run alone.
+/// The working directory is process-wide, so a test that moves it runs alone.
 #[cfg(unix)]
-fn in_own_process(name: &str) -> bool {
-    const CHILD_ENV: &str = "GITCOMET_STAGING_FROM_SUBDIRECTORY_TEST_CHILD";
-    if std::env::var_os(CHILD_ENV).is_some() {
-        return true;
-    }
-    let mut child = Command::new(std::env::current_exe().expect("current test executable"));
-    child.env(CHILD_ENV, "1");
-    crate::child_test::run(&mut child, module_path!(), name);
-    false
-}
+const SUBDIRECTORY_CHILD: &str = "GITCOMET_STAGING_FROM_SUBDIRECTORY_TEST_CHILD";
 
 /// A repository with `root.txt` and `sub/inner.txt` committed, and the process
 /// moved into `sub` as an app started there would be.
@@ -2450,7 +2440,12 @@ fn repository_entered_at_sub() -> tempfile::TempDir {
 #[cfg(unix)]
 #[test]
 fn staged_changes_outside_the_process_directory_are_listed() {
-    if !in_own_process("staged_changes_outside_the_process_directory_are_listed") {
+    if !crate::child_test::in_child(
+        SUBDIRECTORY_CHILD,
+        module_path!(),
+        "staged_changes_outside_the_process_directory_are_listed",
+        |_| {},
+    ) {
         return;
     }
     let dir = repository_entered_at_sub();
@@ -2491,8 +2486,12 @@ fn staged_changes_outside_the_process_directory_are_listed() {
 #[cfg(unix)]
 #[test]
 fn unstaging_everything_during_a_merge_reaches_outside_the_process_directory() {
-    if !in_own_process("unstaging_everything_during_a_merge_reaches_outside_the_process_directory")
-    {
+    if !crate::child_test::in_child(
+        SUBDIRECTORY_CHILD,
+        module_path!(),
+        "unstaging_everything_during_a_merge_reaches_outside_the_process_directory",
+        |_| {},
+    ) {
         return;
     }
     let dir = repository_entered_at_sub();
