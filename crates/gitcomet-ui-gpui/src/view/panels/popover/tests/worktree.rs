@@ -209,3 +209,175 @@ fn remove_picker_names_the_worktree_branch(cx: &mut gpui::TestAppContext) {
     );
 }
 
+fn host_read<T>(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    read: impl FnOnce(&PopoverHost, &gpui::App) -> T,
+) -> T {
+    cx.update(|_window, app| read(view.read(app).popover_host.read(app), app))
+}
+
+/// `main` tracks `origin/main`, the remote's default; `feat/free` is checked out nowhere.
+fn repo_with_default_branch(repo_id: RepoId) -> RepoState {
+    let mut repo = repo_with_feature_worktree(repo_id);
+    let target = CommitId(Arc::from("1111111111111111111111111111111111111111"));
+    repo.branches = Loadable::Ready(Arc::new(vec![
+        gitcomet_core::domain::Branch {
+            name: "main".to_string(),
+            target: target.clone(),
+            upstream: Some(gitcomet_core::domain::Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        },
+        gitcomet_core::domain::Branch {
+            name: "feat/free".to_string(),
+            target,
+            upstream: None,
+            divergence: None,
+        },
+    ]));
+    repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
+        name: "origin".to_string(),
+        url: None,
+        default_branch: Some("main".to_string()),
+    }]));
+    repo
+}
+
+#[gpui::test]
+fn add_worktree_creates_a_branch_from_the_default_branch_by_default(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let (view, cx) = open_view(cx, repo_with_default_branch(repo_id), repo_id);
+    open_popover(
+        &view,
+        cx,
+        PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
+    );
+
+    let (create, source) = host_read(&view, cx, |host, _| {
+        (
+            host.worktree_add_create_branch,
+            host.worktree_ref_source_target.clone(),
+        )
+    });
+    assert!(create, "Create new branch starts ticked");
+    assert_eq!(
+        host_read(&view, cx, |host, app| host
+            .worktree_path_input_text_for_tests(app)),
+        MAIN,
+        "the folder starts as the current worktree's path"
+    );
+    assert_eq!(source, "main", "the remote's default branch is preselected");
+    assert!(cx.debug_bounds("worktree_add_new_branch").is_some());
+    assert!(cx.debug_bounds("worktree_add_refused").is_none());
+
+    click(cx, "worktree_add_create_branch");
+
+    assert!(!host_read(&view, cx, |host, _| host.worktree_add_create_branch));
+    assert!(
+        cx.debug_bounds("worktree_add_new_branch").is_none(),
+        "checking out a branch needs no new name"
+    );
+    assert!(
+        cx.debug_bounds("worktree_add_refused").is_some(),
+        "main is checked out in this worktree already"
+    );
+}
+
+#[gpui::test]
+fn branch_menu_opens_the_add_dialog_ready_to_check_the_branch_out(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let (view, cx) = open_view(cx, repo_with_default_branch(repo_id), repo_id);
+    let menu = PopoverKind::BranchMenu {
+        repo_id,
+        target: BranchMenuTarget::Local {
+            name: "feat/free".to_string(),
+        },
+    };
+    open_popover(&view, cx, menu.clone());
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                let action = host
+                    .context_menu_model(&menu, cx)
+                    .expect("branch menu model")
+                    .items
+                    .into_iter()
+                    .find_map(|item| match item {
+                        ContextMenuItem::Entry { label, action, .. }
+                            if label.as_ref() == "Open in new worktree" =>
+                        {
+                            Some(*action)
+                        }
+                        _ => None,
+                    })
+                    .expect("the branch menu offers a new worktree");
+                host.context_menu_activate_action(action, window, cx);
+            });
+        });
+    });
+    redraw(cx);
+
+    assert_eq!(
+        popover_kind(&view, cx),
+        Some(PopoverKind::worktree(
+            repo_id,
+            WorktreePopoverKind::AddPrompt
+        )),
+        "the dialog stays open after the menu closes"
+    );
+    let (path, source, create, open_after) = host_read(&view, cx, |host, app| {
+        (
+            host.worktree_path_input_text_for_tests(app),
+            host.worktree_ref_source_target.clone(),
+            host.worktree_add_create_branch,
+            host.worktree_add_open_after,
+        )
+    });
+    assert_eq!(
+        PathBuf::from(path),
+        PathBuf::from(MAIN),
+        "the folder starts as the current worktree's path"
+    );
+    assert_eq!(source, "feat/free");
+    assert!(!create, "an existing local branch is checked out as-is");
+    assert!(open_after, "the new worktree opens once git creates it");
+    assert!(cx.debug_bounds("worktree_add_refused").is_none());
+}
+
+#[gpui::test]
+fn checking_out_a_remote_ref_says_the_worktree_starts_detached(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let mut repo = repo_with_default_branch(repo_id);
+    // No local branch carries origin/main, so the dialog starts from the remote ref.
+    repo.branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+        remote: "origin".to_string(),
+        name: "main".to_string(),
+        target: CommitId(Arc::from("1111111111111111111111111111111111111111")),
+    }]));
+    let (view, cx) = open_view(cx, repo, repo_id);
+    open_popover(
+        &view,
+        cx,
+        PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
+    );
+    assert_eq!(
+        host_read(&view, cx, |host, _| host.worktree_ref_source_target.clone()),
+        "origin/main"
+    );
+    assert!(
+        cx.debug_bounds("worktree_add_detached").is_none(),
+        "a new branch from origin/main is not detached"
+    );
+
+    click(cx, "worktree_add_create_branch");
+
+    assert!(
+        cx.debug_bounds("worktree_add_detached").is_some(),
+        "git checks a remote ref out detached"
+    );
+}

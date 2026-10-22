@@ -331,6 +331,17 @@ pub enum CheckoutRemoteBranchMode {
     Overwrite,
 }
 
+/// What `git worktree add` checks out in the new worktree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorktreeCheckout {
+    /// An existing branch or commit: `git worktree add <path> <reference>`.
+    Existing { reference: String },
+    /// `git worktree add --no-track -b <name> <path> [<start>]`; no start means HEAD.
+    NewBranch { name: String, start: Option<String> },
+    /// `--track -b <name>` from the remote-tracking ref of `upstream`.
+    TrackRemote { name: String, upstream: Upstream },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteUrlKind {
     Fetch,
@@ -1834,7 +1845,7 @@ pub trait GitRepository: Send + Sync {
     fn add_worktree_with_output(
         &self,
         _path: &Path,
-        _reference: Option<&str>,
+        _checkout: &WorktreeCheckout,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "worktree add is not implemented for this backend",

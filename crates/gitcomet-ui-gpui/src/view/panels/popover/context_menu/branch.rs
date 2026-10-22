@@ -130,6 +130,9 @@ pub(super) fn model(
             },
         }),
     });
+    if let Some(repo) = repo {
+        items.push(worktree_entry(repo, repo_id, target));
+    }
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Entry {
             label: "Rename branch".into(),
@@ -401,4 +404,246 @@ pub(super) fn model(
     }
 
     ContextMenuModel::new(items)
+}
+
+/// What a new worktree for the branch starts from.
+enum WorktreeStart<'a> {
+    /// A local branch, checked out as-is.
+    Local(String),
+    /// A remote branch no local branch tracks yet.
+    Track { remote: &'a str, branch: &'a str },
+}
+
+/// Opens the worktree that already has the branch, or starts one for it.
+fn worktree_entry(repo: &RepoState, repo_id: RepoId, target: &BranchMenuTarget) -> ContextMenuItem {
+    let start = match target {
+        BranchMenuTarget::Local { name } => WorktreeStart::Local(name.clone()),
+        BranchMenuTarget::Remote { remote, branch } => repo
+            .branches
+            .ready()
+            .and_then(|branches| {
+                branches.iter().find(|candidate| {
+                    candidate.upstream.as_ref().is_some_and(|upstream| {
+                        upstream.remote == *remote && upstream.branch == *branch
+                    })
+                })
+            })
+            .map_or(WorktreeStart::Track { remote, branch }, |local| {
+                WorktreeStart::Local(local.name.clone())
+            }),
+    };
+    let local = match &start {
+        WorktreeStart::Local(local) => Some(local.as_str()),
+        WorktreeStart::Track { .. } => None,
+    };
+    if let Some(path) =
+        local.and_then(|local| crate::view::rows::branch_held_elsewhere(repo, local))
+    {
+        return ContextMenuItem::Entry {
+            label: "Open worktree".into(),
+            icon: Some("icons/git_worktree.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenRepo { path }),
+        };
+    }
+    // Git refuses a second worktree for the branch checked out here.
+    let is_head = local
+        .is_some_and(|local| matches!(&repo.head_branch, Loadable::Ready(head) if head == local));
+    let prefill = match start {
+        WorktreeStart::Local(local) => WorktreeAddPrefill {
+            source: local,
+            create_branch: false,
+            new_branch: String::new(),
+            open_after: true,
+        },
+        WorktreeStart::Track { remote, branch } => WorktreeAddPrefill {
+            source: format!("{remote}/{branch}"),
+            create_branch: true,
+            new_branch: branch.to_string(),
+            open_after: true,
+        },
+    };
+    ContextMenuItem::Entry {
+        label: "Open in new worktree".into(),
+        icon: Some("icons/git_worktree.svg".into()),
+        shortcut: None,
+        disabled: is_head,
+        action: Box::new(ContextMenuAction::OpenWorktreeAddPrompt { repo_id, prefill }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{Branch, RepoSpec, Worktree};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn branch(name: &str, upstream: Option<(&str, &str)>) -> Branch {
+        Branch {
+            name: name.to_string(),
+            target: CommitId(Arc::from("1111111111111111111111111111111111111111")),
+            upstream: upstream.map(|(remote, branch)| Upstream {
+                remote: remote.to_string(),
+                branch: branch.to_string(),
+            }),
+            divergence: None,
+        }
+    }
+
+    fn worktree(path: &str, branch: &str) -> Worktree {
+        Worktree {
+            path: PathBuf::from(path),
+            head: None,
+            branch: Some(branch.to_string()),
+            detached: false,
+        }
+    }
+
+    /// `/tmp/ws/main` on `main`, with `feat/held` checked out in `/tmp/ws/held`.
+    fn repo() -> RepoState {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/ws/main"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main", Some(("origin", "main"))),
+            branch("feat/free", None),
+            branch("feat/held", Some(("origin", "held"))),
+            branch("local-x", Some(("origin", "x"))),
+        ]));
+        repo.worktrees = Loadable::Ready(Arc::new(vec![
+            worktree("/tmp/ws/main", "main"),
+            worktree("/tmp/ws/held", "feat/held"),
+        ]));
+        repo
+    }
+
+    fn local(name: &str) -> BranchMenuTarget {
+        BranchMenuTarget::Local {
+            name: name.to_string(),
+        }
+    }
+
+    fn remote(remote: &str, branch: &str) -> BranchMenuTarget {
+        BranchMenuTarget::Remote {
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+        }
+    }
+
+    /// The entry's label, whether it is disabled, and its action.
+    fn entry(target: BranchMenuTarget) -> (String, bool, ContextMenuAction) {
+        match worktree_entry(&repo(), RepoId(1), &target) {
+            ContextMenuItem::Entry {
+                label,
+                disabled,
+                action,
+                ..
+            } => (label.to_string(), disabled, *action),
+            _ => panic!("the worktree item is an entry"),
+        }
+    }
+
+    fn prefill(action: ContextMenuAction) -> WorktreeAddPrefill {
+        match action {
+            ContextMenuAction::OpenWorktreeAddPrompt { repo_id, prefill } => {
+                assert_eq!(repo_id, RepoId(1));
+                prefill
+            }
+            _ => panic!("expected the Add-worktree action"),
+        }
+    }
+
+    #[test]
+    fn a_free_local_branch_is_checked_out_in_a_new_worktree() {
+        let (label, disabled, action) = entry(local("feat/free"));
+        assert_eq!(label, "Open in new worktree");
+        assert_eq!(
+            crate::view::menu_presentation::context_menu_tone(
+                &label,
+                Some("icons/git_worktree.svg")
+            ),
+            gitcomet_ui_kit::components::ContextMenuTone::Success,
+            "the menu's own label keeps the green icon"
+        );
+        assert!(!disabled);
+        assert_eq!(
+            prefill(action),
+            WorktreeAddPrefill {
+                source: "feat/free".to_string(),
+                create_branch: false,
+                new_branch: String::new(),
+                open_after: true,
+            }
+        );
+    }
+
+    #[test]
+    fn the_current_branch_cannot_get_another_worktree() {
+        let (label, disabled, _) = entry(local("main"));
+        assert_eq!(label, "Open in new worktree");
+        assert!(disabled, "git refuses a branch checked out here");
+    }
+
+    #[test]
+    fn the_current_branch_is_disabled_before_worktrees_load() {
+        let mut repo = repo();
+        repo.worktrees = Loadable::NotLoaded;
+        let item = worktree_entry(&repo, RepoId(1), &local("main"));
+        assert!(matches!(
+            item,
+            ContextMenuItem::Entry { disabled: true, .. }
+        ));
+    }
+
+    #[test]
+    fn a_branch_held_by_another_worktree_opens_that_worktree() {
+        let (label, disabled, action) = entry(local("feat/held"));
+        assert_eq!(label, "Open worktree");
+        assert!(!disabled);
+        assert!(matches!(
+            action,
+            ContextMenuAction::OpenRepo { path } if path == std::path::Path::new("/tmp/ws/held")
+        ));
+    }
+
+    #[test]
+    fn a_remote_branch_reuses_the_local_branch_tracking_it() {
+        let (_, disabled, action) = entry(remote("origin", "x"));
+        assert!(!disabled);
+        let prefill = prefill(action);
+        assert_eq!(prefill.source, "local-x");
+        assert!(!prefill.create_branch);
+    }
+
+    #[test]
+    fn a_remote_branch_whose_tracking_branch_is_held_opens_that_worktree() {
+        let (label, _, action) = entry(remote("origin", "held"));
+        assert_eq!(label, "Open worktree");
+        assert!(matches!(
+            action,
+            ContextMenuAction::OpenRepo { path } if path == std::path::Path::new("/tmp/ws/held")
+        ));
+    }
+
+    #[test]
+    fn an_untracked_remote_branch_gets_a_new_tracking_branch() {
+        let (label, disabled, action) = entry(remote("origin", "feat/new"));
+        assert_eq!(label, "Open in new worktree");
+        assert!(!disabled);
+        assert_eq!(
+            prefill(action),
+            WorktreeAddPrefill {
+                source: "origin/feat/new".to_string(),
+                create_branch: true,
+                new_branch: "feat/new".to_string(),
+                open_after: true,
+            }
+        );
+    }
 }

@@ -163,6 +163,9 @@ futures = "0.3.34"
 gix = { version = "0.89.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
 gix-quote = "0.10.0"
+# Git's ref-name rules for branch names the UI is about to hand to git. Already
+# in the graph through gix, so this adds no new compilation.
+gix-validate = "0.13.0"
 gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0", features = ["font-kit"] }
 gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }

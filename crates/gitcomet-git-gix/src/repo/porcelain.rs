@@ -230,9 +230,9 @@ fn branch_already_exists_error(command: &str, branch: &str) -> Error {
     )))
 }
 
-fn checkout_remote_branch_missing_error(remote: &str, branch: &str) -> Error {
+fn remote_branch_missing_error(command: &str, remote: &str, branch: &str) -> Error {
     Error::new(ErrorKind::Git(GitFailure::new(
-        "git checkout --track",
+        command,
         GitFailureId::CommandFailed,
         Some(128),
         Vec::new(),
@@ -726,21 +726,11 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
         validate_ref_like_arg(local_branch, "branch name")?;
 
-        let repo = self.reopen_repo()?;
         let upstream = Upstream {
             remote: remote.to_string(),
             branch: branch.to_string(),
         };
-        let tracking_refs = tracking_refs_for_remote_branch(&repo, &upstream)?;
-        let mut live_tracking_refs = Vec::new();
-        for tracking_ref in tracking_refs {
-            if Self::ref_exists_in_repo(&repo, tracking_ref.as_str())? {
-                live_tracking_refs.push(tracking_ref);
-            }
-        }
-        let [tracking_ref] = live_tracking_refs.as_slice() else {
-            return Err(checkout_remote_branch_missing_error(remote, branch));
-        };
+        let tracking_ref = self.live_tracking_ref(&upstream, "git checkout --track")?;
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("checkout")
@@ -752,6 +742,25 @@ impl GixRepo {
             .arg(local_branch)
             .arg(tracking_ref);
         run_git_simple(cmd, "git checkout --track")
+    }
+
+    /// The one remote-tracking ref of `upstream` that exists; `command` labels the failure.
+    pub(super) fn live_tracking_ref(&self, upstream: &Upstream, command: &str) -> Result<String> {
+        let repo = self.reopen_repo()?;
+        let mut live_tracking_refs = Vec::new();
+        for tracking_ref in tracking_refs_for_remote_branch(&repo, upstream)? {
+            if Self::ref_exists_in_repo(&repo, tracking_ref.as_str())? {
+                live_tracking_refs.push(tracking_ref);
+            }
+        }
+        let [tracking_ref] = live_tracking_refs.as_slice() else {
+            return Err(remote_branch_missing_error(
+                command,
+                &upstream.remote,
+                &upstream.branch,
+            ));
+        };
+        Ok(tracking_ref.clone())
     }
 
     pub(super) fn checkout_commit_impl(&self, id: &CommitId) -> Result<()> {

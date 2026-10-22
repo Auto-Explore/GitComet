@@ -15,7 +15,7 @@ use gitcomet_core::services::{
     ConflictFileStages, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry,
     MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext,
     SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1550,9 +1550,9 @@ impl GitRepository for GixRepo {
     fn add_worktree_with_output(
         &self,
         path: &Path,
-        reference: Option<&str>,
+        checkout: &WorktreeCheckout,
     ) -> Result<CommandOutput> {
-        self.add_worktree_with_output_impl(path, reference)
+        self.add_worktree_with_output_impl(path, checkout)
     }
 
     fn remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {

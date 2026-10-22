@@ -1451,12 +1451,13 @@ fn reduce_inner(
         Msg::AddWorktree {
             repo_id,
             path,
-            reference,
+            checkout,
+            open_after,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
             }
-            actions_emit_effects::add_worktree(repo_id, path, reference)
+            actions_emit_effects::add_worktree(repo_id, path, checkout, open_after)
         }
         Msg::RemoveWorktree { repo_id, path } => {
             let normalized_path = if let Some(repo_state) =
@@ -2514,6 +2515,6 @@ fn reduce_inner(
             repo_id,
             command,
             result,
-        }) => auth::repo_command_finished(inputs, repos, state, repo_id, command, result),
+        }) => auth::repo_command_finished(inputs, repos, id_alloc, state, repo_id, command, result),
     }
 }

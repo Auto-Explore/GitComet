@@ -2521,6 +2521,7 @@ dependencies = [
  "gitcomet-core",
  "gitcomet-filesystem-native",
  "gix-quote",
+ "gix-validate",
  "jiff",
  "md-5 0.11.0",
  "memchr",

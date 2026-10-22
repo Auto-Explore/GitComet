@@ -633,6 +633,17 @@ pub(crate) enum WorktreePopoverKind {
     },
 }
 
+/// What the Add-worktree dialog opens with when another surface starts it. The
+/// folder always starts as the current worktree's path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorktreeAddPrefill {
+    pub(crate) source: String,
+    pub(crate) create_branch: bool,
+    pub(crate) new_branch: String,
+    /// Open the worktree in a tab once git has created it.
+    pub(crate) open_after: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SubmodulePopoverKind {
     SectionMenu,

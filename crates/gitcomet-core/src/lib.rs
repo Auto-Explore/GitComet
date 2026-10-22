@@ -5,6 +5,7 @@ pub use gitcomet_base::{
 
 pub mod annex;
 pub mod auth;
+pub mod branch_name;
 pub mod conflict_labels;
 pub mod conflict_output;
 pub mod conflict_session;
