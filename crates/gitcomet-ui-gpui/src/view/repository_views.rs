@@ -24,6 +24,14 @@ use std::rc::Rc;
 /// The details pane's own tab.
 const DETAILS_TAB_ICON: &str = "icons/side_panel_right.svg";
 
+/// The details tabs listed for the active repository: the contributions in
+/// its view, the selected one, and whether the details pane's own tab leads.
+pub(in crate::view) struct DetailsListing {
+    tabs: Vec<(usize, SharedString, Option<SharedString>)>,
+    selected: Option<usize>,
+    own: bool,
+}
+
 /// A contribution built per repository: its title, tab icon and builder.
 pub(in crate::view) trait RoutedContribution {
     fn title(&self) -> SharedString;
@@ -818,22 +826,29 @@ impl GitCometView {
         cx.notify();
     }
 
-    /// The details area's header: the details pane's own tab first, then
-    /// each contribution listed in the active repository's view, with the
-    /// router index each tab selects. `None` without such contributions, when
-    /// the details pane mounts without a header.
-    pub(in crate::view) fn details_header(
-        &self,
-        cx: &mut App,
-    ) -> Option<(components::PanelHeader, Vec<Option<usize>>)> {
+    /// What the details header lists for the active repository; `None`
+    /// when its view lists no contributed details tab, and the details pane
+    /// mounts without a header.
+    pub(in crate::view) fn details_listing(&self) -> Option<DetailsListing> {
         let router = self.details_tabs.as_ref()?;
         let repo = self.active_repo()?;
         let tabs = router.listed_tabs(&self.active_view_target(repo));
         if tabs.is_empty() {
             return None;
         }
-        let selected = router.selected(repo);
-        let own = self.panel_has_host_tabs(repo, PanelArea::Details);
+        Some(DetailsListing {
+            selected: router.selected(repo),
+            own: self.panel_has_host_tabs(repo, PanelArea::Details),
+            tabs,
+        })
+    }
+
+    /// The details area's header: the details pane's own tab first when it
+    /// leads, then each contribution, with the router index each tab selects.
+    pub(in crate::view) fn details_header(
+        listing: &DetailsListing,
+        cx: &mut App,
+    ) -> (components::PanelHeader, Vec<Option<usize>>) {
         let builtin = (
             "details_tab_details".to_string(),
             SharedString::from("Details"),
@@ -841,18 +856,25 @@ impl GitCometView {
             None,
         );
         let mut header = components::PanelHeader::new("details_tab_control", cx);
-        let mut targets = Vec::with_capacity(tabs.len() + 1);
+        let mut targets = Vec::with_capacity(listing.tabs.len() + 1);
         for (id, title, icon, index) in
-            own.then_some(builtin)
+            listing
+                .own
+                .then_some(builtin)
                 .into_iter()
-                .chain(tabs.into_iter().map(|(index, title, icon)| {
-                    (format!("details_tab_{index}"), title, icon, Some(index))
+                .chain(listing.tabs.iter().map(|(index, title, icon)| {
+                    (
+                        format!("details_tab_{index}"),
+                        title.clone(),
+                        icon.clone(),
+                        Some(*index),
+                    )
                 }))
         {
-            header = header.tab(id, title.clone(), icon, selected == index, title);
+            header = header.tab(id, title.clone(), icon, listing.selected == index, title);
             targets.push(index);
         }
-        Some((header, targets))
+        (header, targets)
     }
 
     /// The main area for the active repository: History, the extension view
@@ -897,22 +919,20 @@ impl GitCometView {
         let Some(repo) = self.active_repo() else {
             return Some(details());
         };
-        let tabs = router.listed_tabs(&self.active_view_target(repo));
-        if tabs.is_empty() {
-            return None;
-        }
+        let listing = self.details_listing()?;
         // A view whose tabs replace Details shows one of them; the tab that
         // opens with it is selected when it opens.
-        let own = self.panel_has_host_tabs(repo, PanelArea::Details);
         let active = router.active_view(repo).or_else(|| {
-            (!own)
+            (!listing.own)
                 .then(|| {
-                    tabs.iter()
+                    listing
+                        .tabs
+                        .iter()
                         .find_map(|(index, ..)| router.built(repo, *index))
                 })
                 .flatten()
         });
-        let (header, targets) = self.details_header(cx)?;
+        let (header, targets) = Self::details_header(&listing, cx);
         let theme = self.theme;
         let strip = header
             .render(
