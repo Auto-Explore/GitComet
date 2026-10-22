@@ -29,6 +29,7 @@ mod log;
 mod maintenance;
 mod operation_identity;
 mod patch;
+mod pathspec_api_guard;
 mod refs;
 mod refs_api_guard;
 mod refs_review_regressions;
