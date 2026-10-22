@@ -125,9 +125,11 @@ impl FakeWindowHost {
 
     /// Makes an open repository the active one, as selecting its tab does.
     pub fn select_repository(&self, repository: &RepositoryHandle) {
-        if self.open.borrow().contains(repository) {
-            *self.active.borrow_mut() = Some(repository.clone());
-        }
+        assert!(
+            self.open.borrow().contains(repository),
+            "select_repository: {repository:?} is not open in this fake window"
+        );
+        *self.active.borrow_mut() = Some(repository.clone());
     }
 
     /// Closes a repository: its handle stops being current, and no repository
@@ -487,6 +489,10 @@ mod tests {
             );
             assert_eq!(host.check(&second, cx), Ok(()));
         });
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fake.select_repository(&first)
+        }));
+        assert!(refused.is_err(), "a closed repository cannot be selected");
         assert_eq!(
             fake.requests(),
             [HostRequest::SetCommitMessage {
