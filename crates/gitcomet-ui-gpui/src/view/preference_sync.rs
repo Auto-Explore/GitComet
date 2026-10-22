@@ -102,6 +102,16 @@ impl GitCometView {
         self.scaled_px(PANE_COLLAPSED_PX)
     }
 
+    /// The room a side pane takes: its collapsed strip, or `width` and its
+    /// resize handle.
+    pub(super) fn pane_footprint(&self, collapsed: bool, width: Pixels) -> Pixels {
+        if collapsed {
+            self.pane_collapsed_width()
+        } else {
+            width + self.pane_resize_handle_width()
+        }
+    }
+
     pub(super) fn main_min_width(&self) -> Pixels {
         self.scaled_px(MAIN_MIN_PX)
     }
@@ -138,23 +148,14 @@ impl GitCometView {
             self.pane_window_size_request = None;
             return;
         }
-        let pane = |collapsed: bool, minimum: Pixels| {
-            if collapsed {
-                (self.pane_collapsed_width(), 0.0)
-            } else {
-                (minimum, 1.0)
-            }
-        };
-        let (sidebar, sidebar_handles) = pane(self.sidebar_collapsed, self.sidebar_min_width());
-        let (details, details_handles) = pane(self.details_collapsed, self.details_min_width());
         let base_minimum = crate::app::main_window_min_size_for_percent(self.ui_scale_percent);
         let current = window.viewport_size();
-        let divider_allowance =
-            self.pane_resize_handle_width() * (sidebar_handles + details_handles);
         let required = gpui::size(
-            base_minimum
-                .width
-                .max(sidebar + self.main_min_width() + details + divider_allowance),
+            base_minimum.width.max(
+                self.pane_footprint(self.sidebar_collapsed, self.sidebar_min_width())
+                    + self.main_min_width()
+                    + self.pane_footprint(self.details_collapsed, self.details_min_width()),
+            ),
             current.height,
         );
         if current.width >= required.width {
