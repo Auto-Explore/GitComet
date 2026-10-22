@@ -122,3 +122,26 @@ fn the_details_pane_is_never_narrower_than_its_header(cx: &mut gpui::TestAppCont
         "the selected title shows"
     );
 }
+
+/// With the sidebar collapsed, a wide details header still sets how narrow
+/// the window may get, so the main area keeps its own minimum.
+#[gpui::test]
+fn a_wide_details_header_widens_the_window_with_the_sidebar_collapsed(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = open_window(cx);
+    click_debug_selector(cx, "details_tab_7");
+    cx.run_until_parked();
+    cx.update(|_, app| view.update(app, |view, cx| view.set_sidebar_collapsed(true, cx)));
+    cx.run_until_parked();
+    cx.simulate_resize(gpui::size(px(500.0), px(450.0)));
+    for _ in 0..3 {
+        test_support::redraw(cx);
+    }
+    cx.update(|window, app| {
+        let view = view.read(app);
+        let needed = view.pane_collapsed_width() + view.main_min_width() + view.details_min_width();
+        let width = window.bounds().size.width;
+        assert!(width >= needed, "{width:?} narrower than {needed:?}");
+    });
+}
