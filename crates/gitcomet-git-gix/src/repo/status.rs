@@ -424,31 +424,63 @@ pub(super) fn tree_id_for_commit(
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit tree id: {e}"))))
 }
 
+/// Every path in the repository. With no pathspec, or one whose empty patterns
+/// match the prefix, gix limits a walk to the process's working directory
+/// whenever the app was started inside the worktree.
+fn whole_repository_pathspec(repo: &gix::Repository) -> Result<gix::Pathspec<'_>> {
+    gix::Pathspec::new(
+        repo,
+        false,
+        std::iter::empty::<gix::bstr::BString>(),
+        false,
+        || -> gix::Result<gix::worktree::Stack> {
+            unreachable!("empty patterns never require pathspec attributes")
+        },
+    )
+    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix pathspec: {e}"))))
+}
+
+/// Pass each change between `tree_id` and the index to `on_change`, over the
+/// whole repository. A failed walk is reported as `walk`.
+pub(super) fn tree_index_changes(
+    repo: &gix::Repository,
+    tree_id: &gix::ObjectId,
+    walk: &str,
+    mut on_change: impl FnMut(
+        gix::diff::index::ChangeRef<'_, '_>,
+    ) -> gix::Result<gix::diff::index::Action>,
+) -> Result<()> {
+    let index = repo
+        .index_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    // Without an on-disk index there can be no staged rename. Avoid gix's
+    // diff-cache fallback to its files-only HEAD reader.
+    let renames = if repo.try_index().map_err(crate::refs::failure)?.is_none() {
+        gix::status::tree_index::TrackRenames::Disabled
+    } else {
+        gix::status::tree_index::TrackRenames::AsConfigured
+    };
+    let mut pathspec = whole_repository_pathspec(repo)?;
+    repo.tree_index_status(
+        tree_id,
+        &index,
+        Some(&mut pathspec),
+        renames,
+        |change, _, _| on_change(change),
+    )
+    .map_err(|e| Error::new(ErrorKind::Backend(format!("{walk}: {e}"))))?;
+    Ok(())
+}
+
 fn collect_staged_status_from_tree_index(
     repo: &gix::Repository,
     head_oid: &gix::ObjectId,
 ) -> Result<Vec<FileStatus>> {
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let mut staged = Vec::new();
-    repo.tree_index_status(
-        head_oid,
-        &index,
-        None,
-        // Without an on-disk index there can be no staged rename. Avoid
-        // gix's diff-cache fallback to its files-only HEAD reader.
-        if repo.try_index().map_err(crate::refs::failure)?.is_none() {
-            gix::status::tree_index::TrackRenames::Disabled
-        } else {
-            gix::status::tree_index::TrackRenames::AsConfigured
-        },
-        |change, _, _| {
-            collect_tree_index_change(change, &mut staged).or_error()?;
-            Ok(std::ops::ControlFlow::Continue(()))
-        },
-    )
-    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree/index status: {e}"))))?;
+    tree_index_changes(repo, head_oid, "gix tree/index status", |change| {
+        collect_tree_index_change(change, &mut staged).or_error()?;
+        Ok(std::ops::ControlFlow::Continue(()))
+    })?;
     Ok(staged)
 }
 
@@ -456,27 +488,11 @@ fn collect_staged_index_paths_from_tree_index(
     repo: &gix::Repository,
     head_tree_id: &gix::ObjectId,
 ) -> Result<Vec<PathBuf>> {
-    let index = repo
-        .index_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let mut paths = Vec::new();
-    repo.tree_index_status(
-        head_tree_id,
-        &index,
-        None,
-        // Without an on-disk index there can be no staged rename. Avoid
-        // gix's diff-cache fallback to its files-only HEAD reader.
-        if repo.try_index().map_err(crate::refs::failure)?.is_none() {
-            gix::status::tree_index::TrackRenames::Disabled
-        } else {
-            gix::status::tree_index::TrackRenames::AsConfigured
-        },
-        |change, _, _| {
-            collect_tree_index_change_paths(change, &mut paths).or_error()?;
-            Ok(std::ops::ControlFlow::Continue(()))
-        },
-    )
-    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree/index status: {e}"))))?;
+    tree_index_changes(repo, head_tree_id, "gix tree/index status", |change| {
+        collect_tree_index_change_paths(change, &mut paths).or_error()?;
+        Ok(std::ops::ControlFlow::Continue(()))
+    })?;
     Ok(paths)
 }
 
@@ -911,17 +927,7 @@ where
     drop(timing);
     #[cfg(feature = "benchmarks")]
     let timing = crate::status_trace::StageTimer::new("pathspec-realpath-fs-options");
-    let (pathspec, _pathspec_attr_stack) = gix::Pathspec::new(
-        repo,
-        false,
-        std::iter::empty::<gix::bstr::BString>(),
-        true,
-        || -> gix::Result<gix::worktree::Stack> {
-            unreachable!("empty direct-status patterns never require pathspec attributes")
-        },
-    )
-    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status pathspec: {e}"))))?
-    .into_parts();
+    let (pathspec, _pathspec_attr_stack) = whole_repository_pathspec(repo)?.into_parts();
     let git_dir_realpath = gix::path::realpath_opts(
         repo.git_dir(),
         repo.current_dir(),
