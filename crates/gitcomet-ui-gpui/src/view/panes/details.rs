@@ -856,10 +856,7 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_message_input
-            .update(cx, |input, cx| input.set_text(message, cx));
-        self.commit_message_scroll
-            .set_offset(point(px(0.0), px(0.0)));
+        self.set_commit_message_programmatically(message, cx);
         let focus = self
             .commit_message_input
             .read_with(cx, |input, _| input.focus_handle());
@@ -2594,10 +2591,7 @@ impl DetailsPaneView {
             && apply_merge_message
             && let Some(message) = next_merge_message
         {
-            self.commit_message_input
-                .update(cx, |input, cx| input.set_text(message, cx));
-            self.commit_message_scroll
-                .set_offset(point(px(0.0), px(0.0)));
+            self.set_commit_message_programmatically(message, cx);
         }
 
         self.apply_pending_amend_prefill(cx);
