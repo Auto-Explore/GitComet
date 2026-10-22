@@ -306,6 +306,14 @@ pub trait WindowHostImpl {
     ) -> Result<(), HostError> {
         Err(HostError::Unsupported)
     }
+    fn set_commit_message(
+        &self,
+        _repository: &RepositoryHandle,
+        _message: String,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
     fn external_editors(&self, _cx: &App) -> Vec<ExternalEditor> {
         Vec::new()
     }
@@ -581,6 +589,18 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<(), HostError> {
         self.0.set_branch_search(query, options, cx)
+    }
+    /// Replaces `repository`'s commit message, draft included, as choosing a
+    /// previous commit message does, without moving focus. A repository that
+    /// is not on screen gets it as the draft it shows when selected.
+    pub fn set_commit_message(
+        &self,
+        repository: &RepositoryHandle,
+        message: String,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.set_commit_message(repository, message, cx)
     }
     pub fn external_editors(&self, cx: &App) -> Vec<ExternalEditor> {
         self.0.external_editors(cx)

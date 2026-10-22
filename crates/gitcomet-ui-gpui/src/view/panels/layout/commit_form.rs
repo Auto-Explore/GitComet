@@ -248,6 +248,7 @@ impl DetailsPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .children(self.extension_commit_items.iter().cloned())
                     .child(previous_messages_menu)
                     .child(commit),
             ),

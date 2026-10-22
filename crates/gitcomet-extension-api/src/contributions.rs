@@ -523,3 +523,20 @@ impl ChromeDescriptor {
         }
     }
 }
+
+/// A control in History's commit box, drawn before "Previous commit
+/// messages" in registration order. Built once per repository window; it
+/// follows the active repository through its host.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct CommitBoxItemDescriptor {
+    pub build: ViewBuilder<WindowHost>,
+}
+
+impl CommitBoxItemDescriptor {
+    pub fn new(build: impl Fn(WindowHost, &mut Window, &mut App) -> AnyView + 'static) -> Self {
+        Self {
+            build: Rc::new(build),
+        }
+    }
+}

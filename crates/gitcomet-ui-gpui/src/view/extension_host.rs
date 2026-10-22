@@ -785,6 +785,28 @@ impl WindowHostImpl for HostWindow {
         });
         Ok(())
     }
+    fn set_commit_message(
+        &self,
+        repository: &RepositoryHandle,
+        message: String,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        let view = self.view.clone();
+        let repository = repository.clone();
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |root, cx| {
+                root.details_pane.update(cx, |pane, cx| {
+                    pane.set_extension_commit_message(
+                        repository.repo_id(),
+                        repository.lifetime(),
+                        message,
+                        cx,
+                    )
+                });
+            });
+        });
+        Ok(())
+    }
     fn external_editors(&self, _cx: &App) -> Vec<gitcomet_extension_api::host::ExternalEditor> {
         crate::external_editor::detect_external_editors()
             .into_iter()
@@ -1333,9 +1355,9 @@ pub(in crate::view) fn next_dialog_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Builds the window's status items and chrome and tells every extension
-/// the window opened. Deferred so both run after the window's own
-/// construction. Only main windows have a status bar to fill.
+/// Builds the window's status items, commit box items and chrome and tells
+/// every extension the window opened. Deferred so both run after the window's
+/// own construction. Only main windows have the bars and commit box to fill.
 pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
     let Some(registry) = registry(cx) else {
         return;
@@ -1343,7 +1365,7 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
     let Some(host) = view.read(cx).extension_window.as_ref().map(|w| w.host()) else {
         return;
     };
-    let has_status_bar = renders_full_chrome(view.read(cx).view_mode);
+    let full_chrome = renders_full_chrome(view.read(cx).view_mode);
     let window_handle = view.read(cx).window_handle;
     let view = view.downgrade();
     cx.defer(move |cx| {
@@ -1364,7 +1386,7 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
                 });
             }
         });
-        if has_status_bar && !registry.status_items().is_empty() {
+        if full_chrome && !registry.status_items().is_empty() {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let (action_items, status_items): (Vec<_>, Vec<_>) = registry
                     .status_items()
@@ -1388,11 +1410,29 @@ pub(crate) fn window_opened(view: &Entity<GitCometView>, cx: &mut App) {
                 }
             });
         }
+        if full_chrome && !registry.commit_box_items().is_empty() {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let items: Vec<_> = registry
+                    .commit_box_items()
+                    .iter()
+                    .map(|(_, item)| {
+                        super::perf::extension_dispatch();
+                        (item.build)(host.clone(), window, cx)
+                    })
+                    .collect();
+                if let Some(view) = view.upgrade() {
+                    view.update(cx, |root, cx| {
+                        root.details_pane
+                            .update(cx, |pane, cx| pane.set_extension_commit_items(items, cx));
+                    });
+                }
+            });
+        }
         if registry.edition_strip().is_some() || registry.title_bar_brand().is_some() {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let edition = registry
                     .edition_strip()
-                    .filter(|_| has_status_bar)
+                    .filter(|_| full_chrome)
                     .map(|item| {
                         super::perf::extension_dispatch();
                         (item.build)(host.clone(), window, cx)

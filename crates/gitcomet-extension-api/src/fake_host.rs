@@ -34,6 +34,10 @@ pub enum HostRequest {
         target: ViewTarget,
     },
     OpenSettings(SettingsTarget),
+    SetCommitMessage {
+        repository: RepositoryHandle,
+        message: String,
+    },
     OpenBottomPanel {
         repository: RepositoryHandle,
         panel: ContributionId,
@@ -191,6 +195,19 @@ impl WindowHostImpl for FakeWindowHost {
 
     fn open_settings_at(&self, target: SettingsTarget, _cx: &mut App) -> Result<(), HostError> {
         self.record(HostRequest::OpenSettings(target));
+        Ok(())
+    }
+
+    fn set_commit_message(
+        &self,
+        repository: &RepositoryHandle,
+        message: String,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.record(HostRequest::SetCommitMessage {
+            repository: repository.clone(),
+            message,
+        });
         Ok(())
     }
 

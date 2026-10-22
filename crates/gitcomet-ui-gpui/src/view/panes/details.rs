@@ -110,6 +110,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
+    pub(in super::super) extension_commit_items: Vec<AnyView>,
 
     pub(in super::super) status_multi_selection: FxHashMap<RepoId, StatusMultiSelection>,
     pub(in super::super) status_multi_selection_last_status: FxHashMap<RepoId, (u64, u64)>,
@@ -530,6 +531,7 @@ impl DetailsPaneView {
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
+            extension_commit_items: Vec::new(),
             status_multi_selection: FxHashMap::default(),
             status_multi_selection_last_status: FxHashMap::default(),
             file_list_selection: FxHashMap::default(),
@@ -789,6 +791,46 @@ impl DetailsPaneView {
             .update(cx, |input, cx| input.set_text(message, cx));
         self.commit_message_scroll
             .set_offset(point(px(0.0), px(0.0)));
+    }
+
+    /// An extension's message for the repository `repo_id` held at `lifetime`:
+    /// in the box while that repository is on screen, otherwise as the draft
+    /// it shows when selected. Focus stays where it is. A repository that has
+    /// closed since the request gets nothing.
+    pub(in super::super) fn set_extension_commit_message(
+        &mut self,
+        repo_id: RepoId,
+        lifetime: u64,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self
+            .state
+            .repos
+            .iter()
+            .any(|repo| repo.id == repo_id && repo.lifetime() == lifetime)
+        {
+            return;
+        }
+        if self.active_repo_id() == Some(repo_id) {
+            self.set_commit_message_programmatically(message, cx);
+            cx.notify();
+            return;
+        }
+        if message.is_empty() {
+            self.commit_message_drafts.remove(&repo_id);
+        } else {
+            self.commit_message_drafts.insert(repo_id, message.into());
+        }
+    }
+
+    pub(in super::super) fn set_extension_commit_items(
+        &mut self,
+        items: Vec<AnyView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.extension_commit_items = items;
+        cx.notify();
     }
 
     fn prefill_commit_message_for_amend(&mut self, cx: &mut gpui::Context<Self>) {
