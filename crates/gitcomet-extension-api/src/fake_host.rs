@@ -76,6 +76,7 @@ pub struct FakeWindowHost {
     theme: AppTheme,
     state: RefCell<Arc<AppState>>,
     active: RefCell<Option<RepositoryHandle>>,
+    open: RefCell<Vec<RepositoryHandle>>,
     workspace: RefCell<BTreeMap<ExtensionId, serde_json::Value>>,
     open_panels: RefCell<HashSet<(RepositoryHandle, ContributionId)>>,
     requests: RefCell<Vec<HostRequest>>,
@@ -95,6 +96,7 @@ impl FakeWindowHost {
             theme: AppTheme::gitcomet_dark(),
             state: RefCell::default(),
             active: RefCell::default(),
+            open: RefCell::default(),
             workspace: RefCell::default(),
             open_panels: RefCell::default(),
             requests: RefCell::default(),
@@ -110,13 +112,32 @@ impl FakeWindowHost {
         WindowHost::new(self.clone())
     }
 
-    /// A repository handle in this window, made the active repository.
+    /// A repository handle in this window, made the active repository. Those
+    /// opened before stay open, as tabs do.
     pub fn open_repository(&self, workdir: impl Into<PathBuf>) -> RepositoryHandle {
         let repo_id = gitcomet_state::model::RepoId(self.next_repo.get());
         self.next_repo.set(repo_id.0 + 1);
         let handle = RepositoryHandle::new(self.window, repo_id, 1, workdir.into());
+        self.open.borrow_mut().push(handle.clone());
         *self.active.borrow_mut() = Some(handle.clone());
         handle
+    }
+
+    /// Makes an open repository the active one, as selecting its tab does.
+    pub fn select_repository(&self, repository: &RepositoryHandle) {
+        if self.open.borrow().contains(repository) {
+            *self.active.borrow_mut() = Some(repository.clone());
+        }
+    }
+
+    /// Closes a repository: its handle stops being current, and no repository
+    /// is active if it was.
+    pub fn close_repository(&self, repository: &RepositoryHandle) {
+        self.open.borrow_mut().retain(|open| open != repository);
+        let mut active = self.active.borrow_mut();
+        if active.as_ref() == Some(repository) {
+            *active = None;
+        }
     }
 
     /// Replaces the state snapshot and runs the registered observers, as the
@@ -343,7 +364,7 @@ impl WindowHostImpl for FakeWindowHost {
     }
 
     fn is_current(&self, repository: &RepositoryHandle, _cx: &App) -> bool {
-        self.active.borrow().as_ref() == Some(repository)
+        self.open.borrow().contains(repository)
     }
 
     fn dispatch(&self, msg: Msg, _cx: &mut App) -> Result<(), HostError> {
@@ -435,5 +456,43 @@ impl WindowHostImpl for FakeWindowHost {
     ) -> Result<Result<(), StorageError>, HostError> {
         self.workspace.borrow_mut().insert(extension.clone(), value);
         Ok(Ok(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn repositories_stay_current_until_closed(cx: &mut gpui::TestAppContext) {
+        let fake = FakeWindowHost::new(WindowId::from(3));
+        let host = fake.host();
+        let first = fake.open_repository("/tmp/first");
+        let second = fake.open_repository("/tmp/second");
+        cx.update(|cx| {
+            assert_eq!(host.active_repository(cx), Ok(Some(second.clone())));
+            assert_eq!(
+                host.set_commit_message(&first, "Off screen".into(), cx),
+                Ok(())
+            );
+
+            fake.select_repository(&first);
+            assert_eq!(host.active_repository(cx), Ok(Some(first.clone())));
+
+            fake.close_repository(&first);
+            assert_eq!(host.active_repository(cx), Ok(None));
+            assert_eq!(
+                host.set_commit_message(&first, "Too late".into(), cx),
+                Err(HostError::RepositoryClosed)
+            );
+            assert_eq!(host.check(&second, cx), Ok(()));
+        });
+        assert_eq!(
+            fake.requests(),
+            [HostRequest::SetCommitMessage {
+                repository: first,
+                message: "Off screen".into(),
+            }]
+        );
     }
 }
