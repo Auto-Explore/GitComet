@@ -824,44 +824,6 @@ fn details_tabs_and_sidebar_sections_sit_beside_the_built_ins(cx: &mut gpui::Tes
     });
 }
 
-/// The details strip switches panels with the sidebar header's control, in
-/// a header of the same height, so both sides of the window read alike.
-#[gpui::test]
-fn the_details_strip_uses_the_sidebar_headers_control(cx: &mut gpui::TestAppContext) {
-    cx.update(install_example);
-    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            test_support::push_test_state(
-                this,
-                state_with_repo(RepoId(1), Path::new("/tmp/extension-details-control")),
-                cx,
-            )
-        });
-    });
-    test_support::redraw(cx);
-
-    let bounds = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
-        cx.debug_bounds(selector)
-            .unwrap_or_else(|| panic!("{selector} is drawn"))
-    };
-    let details_track = bounds(cx, "details_tab_control");
-    let sidebar_track = bounds(cx, "sidebar_view_toggle");
-    assert_eq!(details_track.size.height, sidebar_track.size.height);
-    assert_eq!(
-        bounds(cx, "details_tab_strip").size.height,
-        bounds(cx, "sidebar_header").size.height
-    );
-    for segment in ["details_tab_details", "details_tab_0"] {
-        assert!(
-            details_track.contains(&bounds(cx, segment).center()),
-            "{segment} sits on the control's track"
-        );
-    }
-}
-
 #[gpui::test]
 fn hosted_dialogs_open_in_the_popover_host_and_close(cx: &mut gpui::TestAppContext) {
     cx.update(install_example);

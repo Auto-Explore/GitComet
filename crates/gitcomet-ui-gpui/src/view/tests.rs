@@ -359,6 +359,7 @@ mod hosted_file_lists;
 mod hosted_panes;
 mod invalidation;
 mod notifications;
+mod panel_headers;
 mod previews;
 mod routing_palette;
 mod selection;
