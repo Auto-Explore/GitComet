@@ -125,36 +125,42 @@ impl GitCometView {
             self.sidebar_header_minimum = minimum;
             self.pane_resize = None;
         }
-        let details_minimum = self.details_header(cx).map_or(px(0.0), |(header, _)| {
-            header.minimum_width(theme, scale, window)
+        let details_minimum = self.details_listing().map_or(px(0.0), |listing| {
+            Self::details_header(&listing, cx)
+                .0
+                .minimum_width(theme, scale, window)
         });
         if self.details_header_minimum != details_minimum {
             self.details_header_minimum = details_minimum;
             self.pane_resize = None;
         }
-        if self.sidebar_collapsed || !renders_full_chrome(self.view_mode) {
-            self.sidebar_window_size_request = None;
+        if !renders_full_chrome(self.view_mode) {
+            self.pane_window_size_request = None;
             return;
         }
-        let details = if self.details_collapsed {
-            self.pane_collapsed_width()
-        } else {
-            self.details_min_width()
+        let pane = |collapsed: bool, minimum: Pixels| {
+            if collapsed {
+                (self.pane_collapsed_width(), 0.0)
+            } else {
+                (minimum, 1.0)
+            }
         };
+        let (sidebar, sidebar_handles) = pane(self.sidebar_collapsed, self.sidebar_min_width());
+        let (details, details_handles) = pane(self.details_collapsed, self.details_min_width());
         let base_minimum = crate::app::main_window_min_size_for_percent(self.ui_scale_percent);
         let current = window.viewport_size();
         let divider_allowance =
-            self.pane_resize_handle_width() * if self.details_collapsed { 1.0 } else { 2.0 };
+            self.pane_resize_handle_width() * (sidebar_handles + details_handles);
         let required = gpui::size(
-            base_minimum.width.max(
-                self.sidebar_min_width() + self.main_min_width() + details + divider_allowance,
-            ),
+            base_minimum
+                .width
+                .max(sidebar + self.main_min_width() + details + divider_allowance),
             current.height,
         );
         if current.width >= required.width {
-            self.sidebar_window_size_request = None;
-        } else if self.sidebar_window_size_request != Some((required, current)) {
-            self.sidebar_window_size_request = Some((required, current));
+            self.pane_window_size_request = None;
+        } else if self.pane_window_size_request != Some((required, current)) {
+            self.pane_window_size_request = Some((required, current));
             crate::app::ensure_window_respects_min_size(window, required);
         }
     }

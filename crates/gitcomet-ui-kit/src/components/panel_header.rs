@@ -76,6 +76,11 @@ impl PanelHeader {
         cx: &mut gpui::Context<V>,
         on_select: impl Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Div {
+        debug_assert_eq!(
+            tools.len(),
+            self.tools,
+            "the tools drawn are the ones `minimum_width` made room for"
+        );
         let has_tools = !tools.is_empty();
         div()
             .flex()

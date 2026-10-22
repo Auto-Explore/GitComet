@@ -8,12 +8,25 @@ enum SidebarTabTarget {
     Extension(usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SidebarTool {
+    Search,
+    ExplorerSettings,
+    LocateBranch,
+    LocateFile,
+}
+
 impl SidebarTabTarget {
-    fn tool_count(self) -> usize {
+    /// The tools after the tabs while this tab is selected, in order.
+    fn tools(self) -> &'static [SidebarTool] {
         match self {
-            Self::Branches => 2,
-            Self::Files => 3,
-            Self::History | Self::Extension(_) => 0,
+            Self::Branches => &[SidebarTool::Search, SidebarTool::LocateBranch],
+            Self::Files => &[
+                SidebarTool::Search,
+                SidebarTool::ExplorerSettings,
+                SidebarTool::LocateFile,
+            ],
+            Self::History | Self::Extension(_) => &[],
         }
     }
 }
@@ -99,7 +112,7 @@ impl SidebarPaneView {
             header = header.tab(id, title, icon, active == target, tooltip);
             targets.push(target);
         }
-        (header.tools(active.tool_count()), targets, active)
+        (header.tools(active.tools().len()), targets, active)
     }
 
     pub(in crate::view) fn header_minimum_width(
@@ -126,7 +139,6 @@ impl SidebarPaneView {
             SidebarTabTarget::Files => SidebarMode::Files,
             _ => SidebarMode::Branches,
         };
-        let tools = active.tool_count() > 0;
         let bg = crate::theme::content_header_bg(theme);
         let bg = if active == SidebarTabTarget::Files
             && self
@@ -156,85 +168,81 @@ impl SidebarPaneView {
             .is_some_and(|(invoker, _)| self.active_context_menu_invoker.as_ref() == Some(invoker));
 
         let mut tools_row: Vec<AnyElement> = Vec::new();
-        if tools {
-            tools_row.push(
-                self.render_search_toggle(mode == SidebarMode::Files, "sidebar_search_toggle", cx)
+        for tool in active.tools() {
+            tools_row.push(match tool {
+                SidebarTool::Search => self
+                    .render_search_toggle(mode == SidebarMode::Files, "sidebar_search_toggle", cx)
                     .into_any_element(),
-            );
-        }
-        if mode == SidebarMode::Files && tools {
-            tools_row.push(
-                components::Button::new("sidebar_explorer_settings", "")
-                    .borderless()
-                    .style(components::ButtonStyle::Subtle)
-                    .open(explorer_settings_open)
-                    .disabled(explorer_settings.is_none())
-                    .selected_bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.34 } else { 0.24 },
-                    ))
-                    .start_slot(crate::view::icons::svg_icon(
-                        "icons/cog.svg",
-                        if explorer_settings_open {
-                            theme.colors.accent.foreground
-                        } else if explorer_settings.is_some() {
-                            theme.colors.foreground.secondary
-                        } else {
-                            with_alpha(theme.colors.foreground.secondary, 0.45)
+                SidebarTool::ExplorerSettings => {
+                    let explorer_settings = explorer_settings.clone();
+                    components::Button::new("sidebar_explorer_settings", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .open(explorer_settings_open)
+                        .disabled(explorer_settings.is_none())
+                        .selected_bg(with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.34 } else { 0.24 },
+                        ))
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/cog.svg",
+                            if explorer_settings_open {
+                                theme.colors.accent.foreground
+                            } else if explorer_settings.is_some() {
+                                theme.colors.foreground.secondary
+                            } else {
+                                with_alpha(theme.colors.foreground.secondary, 0.45)
+                            },
+                            scaled_px(13.0),
+                        ))
+                        .on_click(theme, cx, move |this, e, window, cx| {
+                            if let Some((invoker, kind)) = explorer_settings.clone() {
+                                this.open_popover_at(
+                                    kind.invoked_by(invoker),
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })
+                        .w(components::control_height(ui_scale))
+                        .h(components::control_height(ui_scale))
+                        .gitcomet_tooltip(theme, "Files settings".into())
+                        .debug_selector(|| "sidebar_explorer_settings".to_string())
+                        .into_any_element()
+                }
+                SidebarTool::LocateBranch => {
+                    let tooltip = active_local_branch_name.clone().map_or_else(
+                        || SharedString::from("No active local branch to show"),
+                        |name| {
+                            SharedString::from(format!(
+                                "Show and select the active local branch: {name}"
+                            ))
                         },
-                        scaled_px(13.0),
-                    ))
-                    .on_click(theme, cx, move |this, e, window, cx| {
-                        if let Some((invoker, kind)) = explorer_settings.clone() {
-                            this.open_popover_at(
-                                kind.invoked_by(invoker),
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                        }
-                    })
-                    .w(components::control_height(ui_scale))
-                    .h(components::control_height(ui_scale))
-                    .gitcomet_tooltip(theme, "Files settings".into())
-                    .debug_selector(|| "sidebar_explorer_settings".to_string())
-                    .into_any_element(),
-            );
-        }
-        if mode == SidebarMode::Branches && tools {
-            let tooltip = active_local_branch_name.map_or_else(
-                || SharedString::from("No active local branch to show"),
-                |name| {
-                    SharedString::from(format!("Show and select the active local branch: {name}"))
-                },
-            );
-            tools_row.push(
-                components::Button::new("sidebar_locate_active_branch", "")
-                    .borderless()
-                    .style(components::ButtonStyle::Subtle)
-                    .disabled(!can_locate_active_branch)
-                    .start_slot(crate::view::icons::svg_icon(
-                        "icons/locate.svg",
-                        if can_locate_active_branch {
-                            theme.colors.foreground.secondary
-                        } else {
-                            with_alpha(theme.colors.foreground.secondary, 0.45)
-                        },
-                        scaled_px(13.0),
-                    ))
-                    .on_click(theme, cx, |this, _e, _window, cx| {
-                        this.locate_active_local_branch(cx);
-                    })
-                    .w(components::control_height(ui_scale))
-                    .h(components::control_height(ui_scale))
-                    .gitcomet_tooltip(theme, tooltip)
-                    .debug_selector(|| "sidebar_locate_active_branch".to_string())
-                    .into_any_element(),
-            );
-        }
-        if mode == SidebarMode::Files && tools {
-            tools_row.push(
-                components::Button::new("sidebar_locate_open_file", "")
+                    );
+                    components::Button::new("sidebar_locate_active_branch", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .disabled(!can_locate_active_branch)
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/locate.svg",
+                            if can_locate_active_branch {
+                                theme.colors.foreground.secondary
+                            } else {
+                                with_alpha(theme.colors.foreground.secondary, 0.45)
+                            },
+                            scaled_px(13.0),
+                        ))
+                        .on_click(theme, cx, |this, _e, _window, cx| {
+                            this.locate_active_local_branch(cx);
+                        })
+                        .w(components::control_height(ui_scale))
+                        .h(components::control_height(ui_scale))
+                        .gitcomet_tooltip(theme, tooltip)
+                        .debug_selector(|| "sidebar_locate_active_branch".to_string())
+                        .into_any_element()
+                }
+                SidebarTool::LocateFile => components::Button::new("sidebar_locate_open_file", "")
                     .borderless()
                     .style(components::ButtonStyle::Subtle)
                     .disabled(!can_locate_open_file)
@@ -266,7 +274,7 @@ impl SidebarPaneView {
                     )
                     .debug_selector(|| "sidebar_locate_open_file".to_string())
                     .into_any_element(),
-            );
+            });
         }
         header
             .render(
