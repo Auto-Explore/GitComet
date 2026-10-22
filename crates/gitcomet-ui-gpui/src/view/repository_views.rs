@@ -21,6 +21,9 @@ use gitcomet_extension_api::{
 };
 use std::rc::Rc;
 
+/// The details pane's own tab, and any contributed tab without an icon.
+const DETAILS_TAB_ICON: &str = "icons/side_panel_right.svg";
+
 /// A contribution built per repository: its title, tab icon and builder.
 pub(in crate::view) trait RoutedContribution {
     fn title(&self) -> SharedString;
@@ -816,7 +819,8 @@ impl GitCometView {
     }
 
     /// The details area's strip of tabs: the details pane's own first, then
-    /// each contribution with its icon.
+    /// each contribution with its icon. The sidebar's header control, so both
+    /// sides of the window switch panels the same way.
     fn details_strip(
         &self,
         tabs: Vec<(usize, SharedString, Option<SharedString>)>,
@@ -826,32 +830,36 @@ impl GitCometView {
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
-        let mut strip = components::navigation_tab_strip(theme.colors.surface.canvas, ui_scale)
-            .id("details_tab_strip")
-            .debug_selector(|| "details_tab_strip".to_string())
-            .border_b_1()
-            .border_color(theme.colors.stroke.subtle);
-        let builtin = ("Details".into(), Some("icons/side_panel_right.svg".into()));
+        let builtin = ("Details".into(), Some(DETAILS_TAB_ICON.into()));
         let entries = own
             .then(|| ("details_tab_details".to_string(), builtin, None))
             .into_iter()
             .chain(tabs.into_iter().map(|(index, title, icon)| {
                 (format!("details_tab_{index}"), (title, icon), Some(index))
             }));
+        let mut control = components::SegmentedControl::new("details_tab_control")
+            .adaptive()
+            .font(crate::font_preferences::current_ui_font(cx));
+        let mut targets = Vec::new();
         for (id, (title, icon), index) in entries {
-            let mut tab = components::NavTab::new(id, title).selected(selected == index);
-            if let Some(icon) = icon {
-                tab = tab.icon(icon);
-            }
-            strip = strip.child(tab.render(theme, ui_scale).on_activate(
-                false,
-                controls::ControlActivation::ManagedFocus,
-                cx.listener(move |this, _, window, cx| {
-                    this.select_routed_view(RoutedArea::Details, index, window, cx);
-                }),
-            ));
+            control = control.segment(
+                components::Segment::new(id, title.clone())
+                    .icon(icon.unwrap_or_else(|| DETAILS_TAB_ICON.into()))
+                    .selected(selected == index)
+                    .tooltip(title, Vec::new()),
+            );
+            targets.push(index);
         }
-        strip
+        let control = control.render(theme, ui_scale, cx, move |this, segment, window, cx| {
+            this.select_routed_view(RoutedArea::Details, targets[segment], window, cx);
+        });
+        components::navigation_tab_strip(crate::theme::content_header_bg(theme), ui_scale)
+            .id("details_tab_strip")
+            .debug_selector(|| "details_tab_strip".to_string())
+            .min_w(px(0.0))
+            .border_b_1()
+            .border_color(theme.colors.stroke.default)
+            .child(control)
     }
 
     /// The main area for the active repository: History, the extension view
