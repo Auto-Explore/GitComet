@@ -304,29 +304,16 @@ impl GitCometView {
             return;
         }
 
-        let sidebar_handle_w = if self.sidebar_collapsed {
-            px(0.0)
-        } else {
-            self.pane_resize_handle_width()
-        };
-        let details_handle_w = if self.details_collapsed {
-            px(0.0)
-        } else {
-            self.pane_resize_handle_width()
-        };
-        let handles_w = sidebar_handle_w + details_handle_w;
+        let handle_w = self.pane_resize_handle_width();
         let main_min = self.main_min_width();
         let sidebar_min = self.sidebar_min_width();
         let details_min = self.details_min_width();
         let collapsed_w = self.pane_collapsed_width();
 
         if !self.sidebar_collapsed {
-            let details_w = if self.details_collapsed {
-                collapsed_w
-            } else {
-                self.details_width.max(details_min)
-            };
-            let max_sidebar = (total_w - details_w - main_min - handles_w).max(sidebar_min);
+            let details_w =
+                self.pane_footprint(self.details_collapsed, self.details_width.max(details_min));
+            let max_sidebar = (total_w - details_w - main_min - handle_w).max(sidebar_min);
             self.set_sidebar_width_from_pixels(
                 self.sidebar_width.max(sidebar_min).min(max_sidebar),
             );
@@ -335,12 +322,9 @@ impl GitCometView {
         }
 
         if !self.details_collapsed {
-            let sidebar_w = if self.sidebar_collapsed {
-                collapsed_w
-            } else {
-                self.sidebar_width.max(sidebar_min)
-            };
-            let max_details = (total_w - sidebar_w - main_min - handles_w).max(details_min);
+            let sidebar_w =
+                self.pane_footprint(self.sidebar_collapsed, self.sidebar_width.max(sidebar_min));
+            let max_details = (total_w - sidebar_w - main_min - handle_w).max(details_min);
             self.set_details_width_from_pixels(
                 self.details_width.max(details_min).min(max_details),
             );
