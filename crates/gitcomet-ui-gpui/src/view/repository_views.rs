@@ -21,7 +21,7 @@ use gitcomet_extension_api::{
 };
 use std::rc::Rc;
 
-/// The details pane's own tab, and any contributed tab without an icon.
+/// The details pane's own tab.
 const DETAILS_TAB_ICON: &str = "icons/side_panel_right.svg";
 
 /// A contribution built per repository: its title, tab icon and builder.
@@ -818,48 +818,41 @@ impl GitCometView {
         cx.notify();
     }
 
-    /// The details area's strip of tabs: the details pane's own first, then
-    /// each contribution with its icon. The sidebar's header control, so both
-    /// sides of the window switch panels the same way.
-    fn details_strip(
+    /// The details area's header: the details pane's own tab first, then
+    /// each contribution listed in the active repository's view, with the
+    /// router index each tab selects. `None` without such contributions, when
+    /// the details pane mounts without a header.
+    pub(in crate::view) fn details_header(
         &self,
-        tabs: Vec<(usize, SharedString, Option<SharedString>)>,
-        selected: Option<usize>,
-        own: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        let ui_scale = ui_scale::UiScale::current(cx);
-        let builtin = ("Details".into(), Some(DETAILS_TAB_ICON.into()));
-        let entries = own
-            .then(|| ("details_tab_details".to_string(), builtin, None))
-            .into_iter()
-            .chain(tabs.into_iter().map(|(index, title, icon)| {
-                (format!("details_tab_{index}"), (title, icon), Some(index))
-            }));
-        let mut control = components::SegmentedControl::new("details_tab_control")
-            .adaptive()
-            .font(crate::font_preferences::current_ui_font(cx));
-        let mut targets = Vec::new();
-        for (id, (title, icon), index) in entries {
-            control = control.segment(
-                components::Segment::new(id, title.clone())
-                    .icon(icon.unwrap_or_else(|| DETAILS_TAB_ICON.into()))
-                    .selected(selected == index)
-                    .tooltip(title, Vec::new()),
-            );
+        cx: &mut App,
+    ) -> Option<(components::PanelHeader, Vec<Option<usize>>)> {
+        let router = self.details_tabs.as_ref()?;
+        let repo = self.active_repo()?;
+        let tabs = router.listed_tabs(&self.active_view_target(repo));
+        if tabs.is_empty() {
+            return None;
+        }
+        let selected = router.selected(repo);
+        let own = self.panel_has_host_tabs(repo, PanelArea::Details);
+        let builtin = (
+            "details_tab_details".to_string(),
+            SharedString::from("Details"),
+            Some(SharedString::from(DETAILS_TAB_ICON)),
+            None,
+        );
+        let mut header = components::PanelHeader::new("details_tab_control", cx);
+        let mut targets = Vec::with_capacity(tabs.len() + 1);
+        for (id, title, icon, index) in
+            own.then_some(builtin)
+                .into_iter()
+                .chain(tabs.into_iter().map(|(index, title, icon)| {
+                    (format!("details_tab_{index}"), title, icon, Some(index))
+                }))
+        {
+            header = header.tab(id, title.clone(), icon, selected == index, title);
             targets.push(index);
         }
-        let control = control.render(theme, ui_scale, cx, move |this, segment, window, cx| {
-            this.select_routed_view(RoutedArea::Details, targets[segment], window, cx);
-        });
-        components::navigation_tab_strip(crate::theme::content_header_bg(theme), ui_scale)
-            .id("details_tab_strip")
-            .debug_selector(|| "details_tab_strip".to_string())
-            .min_w(px(0.0))
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
-            .child(control)
+        Some((header, targets))
     }
 
     /// The main area for the active repository: History, the extension view
@@ -908,7 +901,6 @@ impl GitCometView {
         if tabs.is_empty() {
             return None;
         }
-        let selected = router.selected(repo);
         // A view whose tabs replace Details shows one of them; the tab that
         // opens with it is selected when it opens.
         let own = self.panel_has_host_tabs(repo, PanelArea::Details);
@@ -920,7 +912,21 @@ impl GitCometView {
                 })
                 .flatten()
         });
-        let strip = self.details_strip(tabs, selected, own, cx);
+        let (header, targets) = self.details_header(cx)?;
+        let theme = self.theme;
+        let strip = header
+            .render(
+                theme,
+                ui_scale::UiScale::current(cx),
+                crate::theme::content_header_bg(theme),
+                Vec::new(),
+                cx,
+                move |this, segment, window, cx| {
+                    this.select_routed_view(RoutedArea::Details, targets[segment], window, cx);
+                },
+            )
+            .id("details_tab_strip")
+            .debug_selector(|| "details_tab_strip".to_string());
         let body = match active {
             Some(view) => div().flex_1().min_h(px(0.0)).child(view).into_any_element(),
             None => details(),
