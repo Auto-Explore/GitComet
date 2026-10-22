@@ -2550,8 +2550,6 @@ impl DetailsPaneView {
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             self.staged_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-            self.commit_message_scroll
-                .set_offset(point(px(0.0), px(0.0)));
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -2559,8 +2557,7 @@ impl DetailsPaneView {
                 .and_then(|repo_id| self.commit_message_drafts.get(&repo_id).cloned())
                 .unwrap_or_default();
             restored_commit_message = Some(restore.clone());
-            self.commit_message_input
-                .update(cx, |input, cx| input.set_text(restore.to_string(), cx));
+            self.set_commit_message_programmatically(restore.to_string(), cx);
         } else if switched_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
