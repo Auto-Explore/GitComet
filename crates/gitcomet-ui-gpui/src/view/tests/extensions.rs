@@ -848,6 +848,56 @@ fn hosted_dialogs_open_in_the_popover_host_and_close(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
+fn hosted_menu_entries_show_their_tooltips_on_hover(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    cx.update(|_window, app| {
+        host.open_menu(
+            gpui::point(px(100.0), px(100.0)),
+            vec![
+                HostedMenuItem::Header("CI".into()),
+                HostedMenuItem::action(HostedAction::new("Re-run failed jobs", |_| {}))
+                    .with_tooltip("Runs the failed jobs again"),
+                HostedMenuItem::action(HostedAction::new("Open run", |_| {})),
+                HostedMenuItem::action(HostedAction::new("Cancel run", |_| {}))
+                    .disabled(true)
+                    .with_tooltip("The run has finished"),
+            ],
+            app,
+        )
+        .expect("the window is open");
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+
+    for (selector, expected) in [
+        (
+            "context_menu_re_run_failed_jobs",
+            Some("Runs the failed jobs again"),
+        ),
+        ("context_menu_open_run", None),
+        ("context_menu_cancel_run", Some("The run has finished")),
+    ] {
+        let center = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected {selector} to be rendered"))
+            .center();
+        cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+        test_support::wait_for_native_tooltip(cx);
+        assert_eq!(
+            test_support::tooltip_text(cx, &view).as_deref(),
+            expected,
+            "{selector}"
+        );
+    }
+}
+
+#[gpui::test]
 fn entry_gates_refuse_marked_repositories_with_a_notice(cx: &mut gpui::TestAppContext) {
     cx.update(install_example);
     let marked = tempfile::tempdir().unwrap();
