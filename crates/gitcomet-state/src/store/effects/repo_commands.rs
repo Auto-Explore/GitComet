@@ -157,6 +157,12 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             let subject = message_subject(message).unwrap_or_else(|| "No commit message".into());
             format!("{count} commits · {subject}")
         }
+        RepoCommandKind::RewordCommit {
+            commit_id, message, ..
+        } => {
+            let subject = message_subject(message).unwrap_or_else(|| "No commit message".into());
+            format!("{} · {subject}", short_commit_id(commit_id.as_ref()))
+        }
         RepoCommandKind::Rebase { onto } => format!("Current branch onto {onto}"),
         RepoCommandKind::RebaseContinue => "Current rebase".to_string(),
         RepoCommandKind::RebaseAbort => "Current rebase".to_string(),
@@ -277,7 +283,7 @@ fn schedule_repo_command_with_context<F>(
         repo_id,
         command,
         context_override,
-        move |repo| {
+        move |repo, _command| {
             let gate = gated.then(|| super::super::mutation_gate::for_repo(repo.as_ref()));
             let _mutation = gate
                 .as_ref()
@@ -287,6 +293,8 @@ fn schedule_repo_command_with_context<F>(
     );
 }
 
+/// `run` may record what the command did in its [`RepoCommandKind`] before
+/// the completion reports it.
 fn schedule_repo_command_task<F>(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -296,7 +304,9 @@ fn schedule_repo_command_task<F>(
     context_override: Option<String>,
     run: F,
 ) where
-    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+    F: FnOnce(Arc<dyn GitRepository>, &mut RepoCommandKind) -> Result<CommandOutput, Error>
+        + Send
+        + 'static,
 {
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
@@ -319,7 +329,7 @@ fn schedule_repo_command_task<F>(
             );
             let result = {
                 let _scope = operation.attach();
-                run(Arc::clone(&repo))
+                run(Arc::clone(&repo), &mut command)
             };
             if fetches_objects {
                 // The refresh this command triggers should read the new packs
@@ -1619,6 +1629,62 @@ fn schedule_squash_commits(
     });
 }
 
+fn schedule_reword_commit(
+    executor: &TaskExecutor,
+    repos: &RepositoryRuntimes,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    message: String,
+    auth: Option<StagedGitAuth>,
+) {
+    let command = RepoCommandKind::RewordCommit {
+        commit_id: commit_id.clone(),
+        message: message.clone(),
+        rebase_paused: false,
+        rewritten_id: None,
+    };
+    schedule_repo_command_task(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        command,
+        None,
+        move |repo, command| {
+            let gate = super::super::mutation_gate::for_repo(repo.as_ref());
+            let _mutation = gate.read().unwrap_or_else(|error| error.into_inner());
+            let result = run_with_git_auth(auth, || {
+                repo.reword_commit_with_output(&commit_id, &message)
+            });
+            if let RepoCommandKind::RewordCommit {
+                rewritten_id,
+                rebase_paused,
+                ..
+            } = command
+            {
+                match &result {
+                    Ok(outcome) => *rewritten_id = outcome.rewritten_id.clone(),
+                    // Only a git failure can come from the reword's own
+                    // rebase: refusing to start over another operation is a
+                    // backend error, and the backend aborts every stop but
+                    // one the auth prompt's retry continues. A rebase still
+                    // in progress after a git failure is that one.
+                    Err(error) => {
+                        *rebase_paused = matches!(error.kind(), ErrorKind::Git(_))
+                            && repo
+                                .rebase_in_progress(
+                                    &gitcomet_core::services::CancellationToken::new(),
+                                )
+                                .unwrap_or(false);
+                    }
+                }
+            }
+            result.map(|outcome| outcome.output)
+        },
+    );
+}
+
 fn schedule_rebase(
     executor: &TaskExecutor,
     repos: &RepositoryRuntimes,
@@ -2634,7 +2700,7 @@ pub(super) fn schedule(
                 repo_id,
                 command,
                 None,
-                move |repo| {
+                move |repo, _command| {
                     let gate = super::super::mutation_gate::for_repo(repo.as_ref());
                     let _mutation = match gate.try_write() {
                         Ok(guard) => guard,
@@ -2848,6 +2914,12 @@ pub(super) fn schedule(
             message,
             count,
         ),
+        RepoCommandEffect::RewordCommit {
+            repo_id,
+            commit_id,
+            message,
+            auth,
+        } => schedule_reword_commit(executor, repos, msg_tx, repo_id, commit_id, message, auth),
         RepoCommandEffect::Rebase { repo_id, onto } => {
             schedule_rebase(executor, repos, msg_tx, repo_id, onto)
         }

@@ -1315,3 +1315,300 @@ fn interactive_rebase_preserves_later_reword_message_across_conflict() {
         "Later message preserved"
     );
 }
+
+#[test]
+fn reword_head_keeps_staged_changes_out_of_the_commit() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (_root, _a, _b, c, _d) = linear_repo(&repo);
+    let tree_before = rev_parse(&repo, "HEAD^{tree}");
+
+    fs::write(repo.join("staged.txt"), "staged\n").expect("write staged file");
+    run_git(&repo, &["add", "staged.txt"]);
+    fs::write(repo.join("file.txt"), "dirty\n").expect("dirty the worktree");
+
+    let backend = open_backend(&repo);
+    let head = rev_parse(&repo, "HEAD");
+    let outcome = backend
+        .reword_commit_with_output(&commit_id(&head), "New D message\n\nWith a body")
+        .expect("reword HEAD");
+
+    let new_head = rev_parse(&repo, "HEAD");
+    assert_ne!(new_head, head, "HEAD must move to the reworded commit");
+    assert_eq!(outcome.rewritten_id, Some(commit_id(&new_head)));
+    assert_eq!(rev_parse(&repo, "HEAD^"), c);
+    assert_eq!(rev_parse(&repo, "HEAD^{tree}"), tree_before);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "New D message\n\nWith a body"
+    );
+    let status = git_stdout(&repo, &["status", "--porcelain"]);
+    assert!(
+        status.contains("A  staged.txt"),
+        "staged file must stay staged: {status}"
+    );
+    assert!(status.contains("M file.txt"), "dirty file kept: {status}");
+}
+
+#[test]
+fn reword_head_allows_an_empty_root_commit() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Empty root",
+        ],
+    );
+    let root = rev_parse(&repo, "HEAD");
+
+    let backend = open_backend(&repo);
+    backend
+        .reword_commit_with_output(&commit_id(&root), "Reworded root")
+        .expect("reword an empty root HEAD");
+
+    assert_ne!(rev_parse(&repo, "HEAD"), root);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Reworded root"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-list", "--count", "HEAD"]), "1");
+}
+
+#[test]
+fn reword_older_commit_replays_its_descendants_unchanged() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (_root, a, b, _c, _d) = linear_repo(&repo);
+    let trees_before: Vec<String> = ["HEAD", "HEAD~1", "HEAD~2"]
+        .iter()
+        .map(|spec| rev_parse(&repo, &format!("{spec}^{{tree}}")))
+        .collect();
+
+    let backend = open_backend(&repo);
+    let outcome = backend
+        .reword_commit_with_output(&commit_id(&b), "Reworded B\n\n# not a comment")
+        .expect("reword an older commit");
+
+    let trees_after: Vec<String> = ["HEAD", "HEAD~1", "HEAD~2"]
+        .iter()
+        .map(|spec| rev_parse(&repo, &format!("{spec}^{{tree}}")))
+        .collect();
+    assert_eq!(trees_after, trees_before, "rewording must not change trees");
+    assert_eq!(rev_parse(&repo, "HEAD~3"), a, "the parent is untouched");
+    let reworded = rev_parse(&repo, "HEAD~2");
+    assert_ne!(reworded, b);
+    assert_eq!(outcome.rewritten_id, Some(commit_id(&reworded)));
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", "HEAD~2"]),
+        "Reworded B\n\n# not a comment"
+    );
+    assert_eq!(
+        git_stdout(
+            &repo,
+            &["log", "-1", "--format=%an|%ad", "--date=raw", "HEAD~2"]
+        ),
+        "Oldest Author|1600000000 +0230",
+        "the author is kept"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "--format=%s", "-2"]),
+        "Commit D\nCommit C"
+    );
+    assert!(
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state")
+    );
+}
+
+#[test]
+fn reword_refuses_older_commits_it_cannot_replay_linearly() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "Base");
+    let base = rev_parse(&repo, "HEAD");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    commit_file(&repo, "feature.txt", "feature\n", "Feature");
+    let feature = rev_parse(&repo, "HEAD");
+    run_git(&repo, &["checkout", "-"]);
+    commit_file(&repo, "main.txt", "main\n", "Main work");
+    let main_work = rev_parse(&repo, "HEAD");
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "merge",
+            "--no-ff",
+            "-m",
+            "Merge feature",
+            "feature",
+        ],
+    );
+    commit_file(&repo, "after.txt", "after\n", "After merge");
+    let head = rev_parse(&repo, "HEAD");
+
+    let backend = open_backend(&repo);
+    for (target, expected) in [
+        (&main_work, "merge commit lies between"),
+        (&feature, "merge commit lies between"),
+        (&base, "merge commit lies between"),
+    ] {
+        let err = backend
+            .reword_commit_with_output(&commit_id(target), "Nope")
+            .expect_err("a merge in the replayed range must fail");
+        assert!(
+            err.to_string().contains(expected),
+            "unexpected error: {err}"
+        );
+    }
+    let merge = rev_parse(&repo, "HEAD^");
+    let err = backend
+        .reword_commit_with_output(&commit_id(&merge), "Nope")
+        .expect_err("rewording a merge must fail");
+    assert!(
+        err.to_string().contains("is a merge commit"),
+        "unexpected error: {err}"
+    );
+    let err = backend
+        .reword_commit_with_output(&commit_id(&head), "   \n")
+        .expect_err("an empty message must fail");
+    assert!(err.to_string().contains("empty"), "unexpected error: {err}");
+    assert_eq!(rev_parse(&repo, "HEAD"), head);
+
+    // A root commit below HEAD, and a commit off the branch.
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    run_git(&repo, &["checkout", "-b", "side"]);
+    commit_file(&repo, "side.txt", "side\n", "Side");
+    let side = rev_parse(&repo, "HEAD");
+    run_git(&repo, &["checkout", "-"]);
+    commit_file(&repo, "file.txt", "next\n", "Next");
+    let next = rev_parse(&repo, "HEAD");
+
+    let backend = open_backend(&repo);
+    let err = backend
+        .reword_commit_with_output(&commit_id(&root), "Nope")
+        .expect_err("an older root commit must fail");
+    assert!(
+        err.to_string().contains("root commit"),
+        "unexpected error: {err}"
+    );
+    let err = backend
+        .reword_commit_with_output(&commit_id(&side), "Nope")
+        .expect_err("a commit off the branch must fail");
+    assert!(
+        err.to_string().contains("not part of the current branch"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(rev_parse(&repo, "HEAD"), next);
+}
+
+#[test]
+fn reword_head_keeps_comment_lines_like_the_rebase_path() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (_root, _a, b, _c, d) = linear_repo(&repo);
+    append_config(&repo, &[("commit.cleanup", "strip")]);
+
+    let backend = open_backend(&repo);
+    let message = "Reworded\n\n# kept line";
+    backend
+        .reword_commit_with_output(&commit_id(&d), message)
+        .expect("reword HEAD");
+    backend
+        .reword_commit_with_output(&commit_id(&b), message)
+        .expect("reword an older commit");
+
+    assert_eq!(git_stdout(&repo, &["log", "-1", "--format=%B"]), message);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", "HEAD~2"]),
+        message
+    );
+}
+
+#[test]
+fn reword_head_keeps_a_merge_commits_parents() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "Base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    commit_file(&repo, "feature.txt", "feature\n", "Feature");
+    run_git(&repo, &["checkout", "-"]);
+    commit_file(&repo, "main.txt", "main\n", "Main work");
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "merge",
+            "--no-ff",
+            "-m",
+            "Merge feature",
+            "feature",
+        ],
+    );
+    let merge = rev_parse(&repo, "HEAD");
+    let parents = git_stdout(&repo, &["log", "-1", "--format=%P"]);
+
+    let backend = open_backend(&repo);
+    backend
+        .reword_commit_with_output(&commit_id(&merge), "Merge the feature branch")
+        .expect("reword a merge HEAD");
+
+    assert_ne!(rev_parse(&repo, "HEAD"), merge);
+    assert_eq!(git_stdout(&repo, &["log", "-1", "--format=%P"]), parents);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Merge the feature branch"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reword_rolls_back_when_a_hook_rejects_an_older_commits_message() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (_root, _a, b, _c, d) = linear_repo(&repo);
+    let hook = git_path(&repo, "hooks/commit-msg");
+    fs::create_dir_all(hook.parent().unwrap()).expect("create hooks dir");
+    fs::write(
+        &hook,
+        "#!/bin/sh\nif grep -q Rejected \"$1\"; then echo 'hook says no' >&2; exit 1; fi\n",
+    )
+    .expect("write hook");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("make hook executable");
+
+    let backend = open_backend(&repo);
+    let err = backend
+        .reword_commit_with_output(&commit_id(&b), "Rejected message")
+        .expect_err("the hook rejects the message");
+    assert!(
+        err.to_string().contains("hook says no"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !backend
+            .rebase_in_progress(&gitcomet_core::services::CancellationToken::new())
+            .expect("read rebase state"),
+        "the rejected reword must not leave a rebase behind"
+    );
+    assert_eq!(rev_parse(&repo, "HEAD"), d);
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", "HEAD~2"]),
+        "Commit B\n\nBody of B"
+    );
+}

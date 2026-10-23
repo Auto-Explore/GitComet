@@ -771,6 +771,70 @@ mod tests {
     }
 
     #[test]
+    fn indexed_first_parent_position_matches_decoded_topology() {
+        use crate::squash::{FirstParentPosition, first_parent_position_indexed};
+        // e -> m(c, x); c -> b; x -> b; b -> a; a is the root.
+        let topology: [(u8, &[u8]); 6] = [
+            (6, &[5]),
+            (5, &[4, 3]),
+            (4, &[2]),
+            (3, &[2]),
+            (2, &[1]),
+            (1, &[]),
+        ];
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("merge".into()),
+            HistoryMode::FullReachable,
+            20,
+        )
+        .unwrap();
+        for (id, parents) in topology {
+            let parents: Vec<Vec<u8>> = parents.iter().map(|parent| vec![*parent; 20]).collect();
+            builder
+                .push(&[id; 20], parents.iter().map(Vec::as_slice), false)
+                .unwrap();
+        }
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        let commits: Vec<_> = (0..index.len())
+            .map(|row| Commit {
+                id: index.commit_id(row).unwrap(),
+                parent_ids: (0..index.parents(row).len())
+                    .filter_map(|parent| index.parent_commit_id(row, parent))
+                    .collect(),
+                author: "a".into(),
+                summary: "s".into(),
+                time: std::time::UNIX_EPOCH,
+            })
+            .collect();
+        let head = &commits[0].id;
+        for target in &commits {
+            assert_eq!(
+                first_parent_position_indexed(&index, head, &target.id),
+                crate::squash::first_parent_position(&commits, head, &target.id),
+                "target {}",
+                target.id.as_ref()
+            );
+        }
+        let id = |row: usize| commits[row].id.clone();
+        assert_eq!(
+            first_parent_position_indexed(&index, head, &id(1)),
+            FirstParentPosition::Linear { distance: 1 }
+        );
+        assert_eq!(
+            first_parent_position_indexed(&index, head, &id(2)),
+            FirstParentPosition::BelowMerge
+        );
+        assert_eq!(
+            first_parent_position_indexed(&index, head, &id(3)),
+            FirstParentPosition::NotFound
+        );
+        assert_eq!(
+            first_parent_position_indexed(&index, head, &CommitId("missing".into())),
+            FirstParentPosition::NotFound
+        );
+    }
+
+    #[test]
     fn cancellation_is_inherited_without_cancelling_siblings() {
         let parent = CancellationToken::new();
         let child = CancellationToken::new().with_parent(parent.clone());

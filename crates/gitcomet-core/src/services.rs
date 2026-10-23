@@ -492,6 +492,14 @@ pub struct CommitOperationOutcome {
     pub post_head: Option<CommitId>,
 }
 
+/// What [`GitRepository::reword_commit_with_output`] did.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RewordCommitOutcome {
+    pub output: CommandOutput,
+    /// The rewritten commit's new id, when the backend could tell it.
+    pub rewritten_id: Option<CommitId>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SafePushAfterCommitContext {
     pub amend: bool,
@@ -1373,6 +1381,19 @@ pub trait GitRepository: Send + Sync {
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git rebase -i is not implemented for this backend",
+        )))
+    }
+    /// Replaces the message of `commit_id`, which must be HEAD or a commit on
+    /// HEAD's linear first-parent history. Trees are unchanged: HEAD is
+    /// amended without its staged changes, and an older commit is reworded
+    /// by replaying its descendants on top of it.
+    fn reword_commit_with_output(
+        &self,
+        _commit_id: &CommitId,
+        _message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "rewording a commit is not implemented for this backend",
         )))
     }
     /// Picks `entries` in order. Without `commit` every pick only merges into

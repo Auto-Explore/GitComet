@@ -444,9 +444,9 @@ use panels::{
 };
 pub(crate) use panes::DiffRenderer;
 use panes::{
-    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, DiffRendererInit,
-    HistoryPrimarySelection, HistoryView, MainPaneView, ReflogPaneInit, ReflogPaneView,
-    SidebarPaneView, history_primary_selection,
+    CollapsedSidebarSection, CommitRewordDraft, CommitRewordSubmission, DetailsPaneInit,
+    DetailsPaneView, DiffRendererInit, HistoryPrimarySelection, HistoryView, MainPaneView,
+    ReflogPaneInit, ReflogPaneView, SidebarPaneView, history_primary_selection,
 };
 pub(crate) use settings_window::{
     SettingsWindowView, open_settings_window, open_settings_window_to_workspace,

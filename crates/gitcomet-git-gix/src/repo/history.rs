@@ -10,7 +10,7 @@ use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{
     CommandOutput, InteractiveRebaseAction, InteractiveRebaseEntry,
     REVERT_ABORT_KEPT_HEAD_SENTINEL, REVERT_NOTHING_TO_REVERT_SENTINEL, REVERT_SKIP_COMMAND,
-    ResetMode, Result, SequencerState,
+    ResetMode, Result, RewordCommitOutcome, SequencerState,
 };
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -83,6 +83,74 @@ fn first_parent_chain_to(
             ))));
         }
         current = parent;
+    }
+}
+
+fn reword_error(message: &str) -> Error {
+    Error::new(ErrorKind::Backend(format!("reword: {message}")))
+}
+
+/// Whether a failed reword rebase stopped for credentials the auth prompt
+/// will supply before continuing it: the failures the state layer raises a
+/// prompt for, judged by the askpass outcome every git command reports.
+fn reword_stop_resumes_after_auth(error: &Error) -> bool {
+    use gitcomet_core::auth::AuthOutcome;
+    let ErrorKind::Git(failure) = error.kind() else {
+        return false;
+    };
+    !matches!(
+        failure.id(),
+        GitFailureId::WorktreeWouldBeOverwritten
+            | GitFailureId::StoppedAtConflicts
+            | GitFailureId::Timeout
+    ) && matches!(
+        failure.auth_outcome(),
+        Some(AuthOutcome::NeedsInput(_) | AuthOutcome::Rejected(_))
+    )
+}
+
+/// The number of first-parent steps from `head` down to `target`, and
+/// `target`'s parent. Rewording replays that range with a flattening
+/// `git rebase -i`, so every commit on it must have exactly one parent,
+/// `target` included.
+fn reword_first_parent_distance(
+    repo: &gix::Repository,
+    head: gix::ObjectId,
+    target: gix::ObjectId,
+    short: &str,
+) -> Result<(usize, gix::ObjectId)> {
+    let mut current = head;
+    let mut distance = 0;
+    loop {
+        let commit = peel_commit(repo, &current.to_string())?;
+        let mut parents = commit.parent_ids().map(|id| id.detach());
+        let (first, second) = (parents.next(), parents.next());
+        if current == target {
+            return match (first, second) {
+                (Some(parent), None) => Ok((distance, parent)),
+                (None, _) => Err(reword_error(&format!(
+                    "{short} is the root commit; only HEAD can be reworded there"
+                ))),
+                (Some(_), Some(_)) => Err(reword_error(&format!(
+                    "{short} is a merge commit; rewording it would flatten the merge"
+                ))),
+            };
+        }
+        match (first, second) {
+            (Some(parent), None) => current = parent,
+            (None, _) => {
+                return Err(reword_error(&format!(
+                    "{short} is not on the current branch's first-parent history"
+                )));
+            }
+            (Some(_), Some(_)) => {
+                return Err(reword_error(&format!(
+                    "a merge commit lies between {short} and HEAD; rewording it would \
+                     flatten the merge"
+                )));
+            }
+        }
+        distance += 1;
     }
 }
 
@@ -1481,6 +1549,152 @@ impl GixRepo {
         self.run_planned_rebase(entries, base, &label)
     }
 
+    pub(super) fn reword_commit_with_output_impl(
+        &self,
+        commit_id: &CommitId,
+        message: &str,
+    ) -> Result<RewordCommitOutcome> {
+        validate_hex_commit_id(commit_id)?;
+        if message.trim().is_empty() {
+            return Err(reword_error("the commit message must not be empty"));
+        }
+
+        // The target was chosen from a possibly stale log snapshot; check it
+        // against the live repository.
+        let repo = self.reopen_repo()?;
+        let head = gix_head_id_or_none(&repo)?.ok_or_else(|| reword_error("HEAD is unborn"))?;
+        let target = peel_commit(&repo, commit_id.as_ref())?.id;
+        if let Some(operation) = self.operation_in_progress_label()? {
+            return Err(reword_error(&format!(
+                "{operation} is in progress; finish or abort it first"
+            )));
+        }
+        if target == head {
+            return self.reword_head_commit(message);
+        }
+
+        let short = short_commit_id(commit_id.as_ref());
+        let target_hex = target.to_string();
+        let label = "git merge-base --is-ancestor";
+        let mut cmd = self.git_workdir_cmd();
+        cmd.args([
+            "merge-base",
+            "--is-ancestor",
+            &target_hex,
+            &head.to_string(),
+        ]);
+        let output = run_git_raw_output(cmd, label)?;
+        match output.status.code() {
+            Some(0) => {}
+            Some(1) => {
+                return Err(reword_error(&format!(
+                    "{short} is not part of the current branch"
+                )));
+            }
+            _ => return Err(git_command_failed_error(label, output)),
+        }
+        let (distance, parent) = reword_first_parent_distance(&repo, head, target, short)?;
+
+        // The rebase replays the whole listed range, so the plan must cover
+        // it exactly: a pick for every descendant, a reword for the target.
+        let base = parent.to_string();
+        let mut entries = self.list_commits_for_interactive_rebase_impl(&base)?;
+        if entries.len() != distance + 1 {
+            return Err(reword_error(&format!(
+                "the commits after {short} do not form a linear history"
+            )));
+        }
+        for entry in &mut entries {
+            if entry.commit_id.eq_ignore_ascii_case(&target_hex) {
+                entry.action = InteractiveRebaseAction::Reword;
+                entry.new_message = Some(message.to_string());
+            } else {
+                entry.action = InteractiveRebaseAction::Pick;
+            }
+        }
+        if !entries
+            .iter()
+            .any(|entry| entry.action == InteractiveRebaseAction::Reword)
+        {
+            return Err(reword_error(&format!(
+                "{short} is not in the commits after its parent"
+            )));
+        }
+
+        let label = format!("git rebase -i {} (reword {short})", short_commit_id(&base));
+        let output = match self.run_planned_rebase(&entries, &base, &label) {
+            Ok(output) => output,
+            Err(error) => {
+                // A signing prompt is retried by continuing the paused rebase,
+                // which kept the new message. Any other stop, such as a
+                // `commit-msg` hook rejecting it, is rolled back so the
+                // repository is as it was before the reword.
+                if !reword_stop_resumes_after_auth(&error) && self.rebase_in_progress_impl()? {
+                    self.abort_reword_rebase()?;
+                }
+                return Err(error);
+            }
+        };
+        if self.rebase_in_progress_impl()? {
+            // Trees are unchanged, so a stop that still reported success is
+            // not one a continue could finish meaningfully either.
+            self.abort_reword_rebase()?;
+            return Err(reword_error(&format!(
+                "the replay stopped before finishing; the rebase was aborted\n{}",
+                output.stderr.trim()
+            )));
+        }
+        // A HEAD that moved meanwhile no longer has the reworded commit at
+        // `distance`.
+        let rewritten_id = {
+            let repo = self.reopen_repo()?;
+            let reworded = peel_commit(&repo, &format!("HEAD~{distance}"))?;
+            let same_parent = reworded
+                .parent_ids()
+                .next()
+                .is_some_and(|id| id.detach() == parent);
+            same_parent.then(|| CommitId(reworded.id.to_string().into()))
+        };
+        Ok(RewordCommitOutcome {
+            output,
+            rewritten_id,
+        })
+    }
+
+    fn abort_reword_rebase(&self) -> Result<()> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("rebase").arg("--abort");
+        run_git_with_output(cmd, "git rebase --abort").map(|_| ())
+    }
+
+    /// Amends HEAD's message only. `--only` with no paths leaves whatever is
+    /// staged out of the amended commit, so it works on a dirty worktree, and
+    /// `--allow-empty` keeps a commit whose tree matches its parent's
+    /// rewordable. A merge HEAD keeps its parents. Lines starting with the
+    /// comment character survive a `commit.cleanup=strip` here as they do on
+    /// the rebase path.
+    fn reword_head_commit(&self, message: &str) -> Result<RewordCommitOutcome> {
+        self.refuse_amending_annex_adjustment()?;
+        let label = "git commit --amend --only";
+        let comment_char = comment_char_override(
+            &configured_comment_prefixes(&self.repo()),
+            &[message.as_bytes().to_vec()],
+        )?;
+        let mut cmd = self.git_workdir_cmd();
+        if let Some(comment_char) = comment_char {
+            cmd.arg("-c").arg(comment_char_config(comment_char));
+        }
+        cmd.args(["commit", "--amend", "--only", "--allow-empty", "-m"])
+            .arg(message);
+        let output = run_git_with_output(cmd, label)?;
+        let repo = self.reopen_repo()?;
+        let rewritten_id = gix_head_id_or_none(&repo)?.map(|id| CommitId(id.to_string().into()));
+        Ok(RewordCommitOutcome {
+            output,
+            rewritten_id,
+        })
+    }
+
     /// Runs `git rebase -i <upstream>` with the planned todo installed via
     /// the sequence editor (and the message editor when the plan rewords or
     /// squashes), keeping reword data alongside git's state if the rebase
@@ -1919,6 +2133,14 @@ fn read_planned_messages(msgs_dir: &Path) -> Result<Vec<Vec<u8>>> {
 
 /// [`comment_char_override`] for the planned messages in `msgs_dir`.
 fn planned_messages_comment_char(repo: &gix::Repository, msgs_dir: &Path) -> Result<Option<u8>> {
+    comment_char_override(
+        &configured_comment_prefixes(repo),
+        &read_planned_messages(msgs_dir)?,
+    )
+}
+
+/// The comment prefixes git's message cleanup would strip lines by.
+fn configured_comment_prefixes(repo: &gix::Repository) -> Vec<Vec<u8>> {
     let config = repo.config_snapshot();
     let mut configured: Vec<Vec<u8>> = ["core.commentChar", "core.commentString"]
         .into_iter()
@@ -1927,7 +2149,7 @@ fn planned_messages_comment_char(repo: &gix::Repository, msgs_dir: &Path) -> Res
     if configured.is_empty() {
         configured.push(b"#".to_vec());
     }
-    comment_char_override(&configured, &read_planned_messages(msgs_dir)?)
+    configured
 }
 
 fn comment_char_config(comment_char: u8) -> String {
