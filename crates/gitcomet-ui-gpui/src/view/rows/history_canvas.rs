@@ -1,6 +1,7 @@
 use super::*;
 use crate::kit::interaction_paint::InteractionPaint;
 use crate::view::panes::HistoryRowHoverArea;
+use gitcomet_extension_api::MarkEdge;
 use gitcomet_state::msg::CommitSelectMode;
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use gpui::{
@@ -1418,6 +1419,10 @@ pub(super) fn history_commit_row_canvas(
     // The same resolver paints the row and its graph-node cutouts.
     row_paint: InteractionPaint,
     annotation: gitcomet_extension_api::HistoryRowAnnotation,
+    // For each mark (leading, trailing), the annotator whose menu it opens.
+    mark_menus: [Option<usize>; 2],
+    // The commit, on a row with a mark that opens a menu.
+    mark_commit: Option<gitcomet_core::domain::Commit>,
 ) -> AnyElement {
     let interaction = row_paint.clone();
     let prepaint_interaction = row_paint.clone();
@@ -1579,7 +1584,9 @@ pub(super) fn history_commit_row_canvas(
 
             // Marks share the existing summary canvas, reserving their width so
             // neither the commit subject nor adjacent columns are obscured. A
-            // text glyph shapes with the label; an icon glyph leads it.
+            // text glyph shapes with the label; an icon glyph leads it. Where
+            // a mark with a menu lands is kept for a right-click on it.
+            let mut mark_bounds: [Option<(MarkEdge, usize, Bounds<Pixels>)>; 2] = [None, None];
             for (leading, mark) in [
                 (true, annotation.leading.as_ref()),
                 (false, annotation.trailing.as_ref()),
@@ -1632,6 +1639,18 @@ pub(super) fn history_commit_row_canvas(
                 } else {
                     summary_bounds.right() - width
                 };
+                let (slot, edge) = if leading {
+                    (0, MarkEdge::Leading)
+                } else {
+                    (1, MarkEdge::Trailing)
+                };
+                mark_bounds[slot] = mark_menus[slot].map(|owner| {
+                    (
+                        edge,
+                        owner,
+                        Bounds::new(point(x, bounds.top()), size(width, bounds.size.height)),
+                    )
+                });
                 if let Some(path) = icon {
                     super::diff_canvas::paint_centered_svg_icon(
                         path.clone(),
@@ -2273,6 +2292,31 @@ pub(super) fn history_commit_row_canvas(
                 MouseButton::Right,
                 true,
                 move |event, window, cx| {
+                    // A press on a mark with a menu opens that menu, asked of
+                    // the annotator that drew the mark while History is only
+                    // read, not updated.
+                    let pressed = match event {
+                        gpui::ClickEvent::Mouse(click) => click.down.position,
+                        _ => event.position(),
+                    };
+                    let mark_menu = mark_bounds
+                        .iter()
+                        .flatten()
+                        .find(|(_, _, bounds)| bounds.contains(&pressed))
+                        .zip(mark_commit.as_ref())
+                        .map(|((edge, owner, _), commit)| {
+                            view.read(cx)
+                                .history_mark_menu(repo_id, commit, *edge, *owner, cx)
+                        })
+                        .unwrap_or_default();
+                    // Only a menu with something to choose replaces the
+                    // commit's.
+                    let mark_menu = mark_menu
+                        .iter()
+                        .any(|item| {
+                            matches!(item, gitcomet_extension_api::HostedMenuItem::Action { .. })
+                        })
+                        .then_some(mark_menu);
                     view.update(cx, |this, cx| {
                         // Right-clicking inside an active multi-selection must
                         // not collapse it — the menu acts on the whole set — but
@@ -2286,20 +2330,31 @@ pub(super) fn history_commit_row_canvas(
                             CommitSelectMode::PreserveIfSelected,
                             None,
                         );
-                        let context_menu_invoker =
+                        let context_menu_invoker: SharedString =
                             format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();
 
-                        let kind = PopoverKind::CommitMenu {
-                            repo_id,
-                            commit_id: commit_id.clone(),
-                        };
-                        this.open_popover_at(
-                            kind.invoked_by(context_menu_invoker),
-                            event.position(),
-                            window,
-                            cx,
-                        );
+                        // The row shows its menu open either way.
+                        if let Some(mark_menu) = mark_menu {
+                            this.open_hosted_menu_at(
+                                mark_menu,
+                                context_menu_invoker,
+                                event.position(),
+                                window,
+                                cx,
+                            );
+                        } else {
+                            let kind = PopoverKind::CommitMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                            };
+                            this.open_popover_at(
+                                kind.invoked_by(context_menu_invoker),
+                                event.position(),
+                                window,
+                                cx,
+                            );
+                        }
                         cx.notify();
                     });
                 },
