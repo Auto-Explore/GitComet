@@ -1,5 +1,5 @@
 //! Descriptor annotations are painted inside existing rows, without child views.
-use crate::{RepositoryViewContext, SlotSignal, ViewBuilder};
+use crate::{HostedMenuItem, RepositoryViewContext, SlotSignal, ViewBuilder};
 use gitcomet_core::domain::Commit;
 use gitcomet_ui_kit::gpui::{AnyView, App, Hsla, SharedString, Window};
 use std::rc::Rc;
@@ -109,12 +109,25 @@ impl HistoryRowAnnotation {
 pub type AnnotateHistory =
     Rc<dyn Fn(&RepositoryViewContext, &Commit, &App) -> HistoryRowAnnotation>;
 
+/// Which of a History row's marks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MarkEdge {
+    Leading,
+    Trailing,
+}
+
+/// The menu a right-click on a History row's mark opens; empty opens the
+/// commit's own menu instead.
+pub type HistoryMarkMenu =
+    Rc<dyn Fn(&RepositoryViewContext, &Commit, MarkEdge, &App) -> Vec<HostedMenuItem>>;
+
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct HistoryAnnotator {
     pub signal: SlotSignal,
     pub annotate: AnnotateHistory,
     pub scope_header: Option<ViewBuilder<RepositoryViewContext>>,
+    pub mark_menu: Option<HistoryMarkMenu>,
 }
 
 impl HistoryAnnotator {
@@ -126,6 +139,7 @@ impl HistoryAnnotator {
             signal,
             annotate: Rc::new(annotate),
             scope_header: None,
+            mark_menu: None,
         }
     }
 
@@ -135,6 +149,19 @@ impl HistoryAnnotator {
         build: impl Fn(RepositoryViewContext, &mut Window, &mut App) -> AnyView + 'static,
     ) -> Self {
         self.scope_header = Some(Rc::new(build));
+        self
+    }
+
+    /// A menu for a right-click on a mark this annotator drew, asked for
+    /// when the click lands, not when the row is drawn. A mark another
+    /// annotator drew over this one's opens that annotator's menu, if it has
+    /// one; the rest of the row, a mark without a menu, or a menu with no
+    /// action opens the commit's menu as before.
+    pub fn with_mark_menu(
+        mut self,
+        menu: impl Fn(&RepositoryViewContext, &Commit, MarkEdge, &App) -> Vec<HostedMenuItem> + 'static,
+    ) -> Self {
+        self.mark_menu = Some(Rc::new(menu));
         self
     }
 }

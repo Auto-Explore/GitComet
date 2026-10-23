@@ -302,7 +302,7 @@ impl HistoryView {
                         find_dimmed,
                         find_highlights,
                         this.active_context_menu_invoker.as_ref(),
-                        this.history_row_annotation(repo, commit, cx),
+                        this.history_row(repo, commit, cx),
                         cx,
                     ))
                 })()
@@ -534,9 +534,13 @@ fn history_table_row(
     find_dimmed: bool,
     find_highlights: Option<crate::view::panes::history::find::HistoryFindHighlights>,
     active_context_menu_invoker: Option<&SharedString>,
-    annotation: gitcomet_extension_api::HistoryRowAnnotation,
+    row: crate::view::panes::history::annotations::RowAnnotation,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
+    let crate::view::panes::history::annotations::RowAnnotation {
+        annotation,
+        mark_menus,
+    } = row;
     // Compared without formatting: this ran once per visible commit per frame
     // just to find the one row whose menu is open.
     let context_menu_active = active_context_menu_invoker.is_some_and(|active| {
@@ -595,6 +599,11 @@ fn history_table_row(
         active_context_menu_invoker.cloned(),
         row_paint.clone(),
         annotation.clone(),
+        mark_menus,
+        mark_menus
+            .iter()
+            .any(Option::is_some)
+            .then(|| commit.clone()),
     );
 
     let commit_id = commit.id.clone();
