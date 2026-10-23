@@ -846,7 +846,62 @@ impl GixRepo {
     }
 
     pub(super) fn stage_impl(&self, paths: &[&Path]) -> Result<()> {
-        run_git_simple_with_paths(&self.spec.workdir, "git add", &["add", "-A"], paths)
+        if paths.is_empty() {
+            return run_git_simple_with_paths(&self.spec.workdir, "git add", &["add", "-A"], paths);
+        }
+        // As a pathspec, a file's path also names everything under a directory
+        // that replaced it, so `git add` would add that directory's files too.
+        // Staging the file stages its deletion and nothing else.
+        let replaced = self.files_replaced_by_directories(paths)?;
+        let (deletions, others): (Vec<&Path>, Vec<&Path>) =
+            paths.iter().partition(|path| replaced.contains(*path));
+        if !deletions.is_empty() {
+            run_git_simple_with_paths(
+                &self.spec.workdir,
+                "git rm --cached",
+                &["rm", "--cached", "--quiet"],
+                &deletions,
+            )?;
+        }
+        if !others.is_empty() {
+            run_git_simple_with_paths(&self.spec.workdir, "git add", &["add", "-A"], &others)?;
+        }
+        Ok(())
+    }
+
+    /// The `paths` the index holds as a file (stage 0, not a submodule) while
+    /// the working tree has a directory there.
+    fn files_replaced_by_directories<'a>(&self, paths: &[&'a Path]) -> Result<Vec<&'a Path>> {
+        let directories: Vec<&Path> = paths
+            .iter()
+            .copied()
+            .filter(|path| {
+                fs::symlink_metadata(self.spec.workdir.join(path))
+                    .is_ok_and(|metadata| metadata.is_dir())
+            })
+            .collect();
+        if directories.is_empty() {
+            return Ok(directories);
+        }
+        let index = self.repo().index_or_empty().map_err(|error| {
+            Error::new(ErrorKind::Backend(format!("reading the index: {error}")))
+        })?;
+        let mut replaced = Vec::new();
+        for path in directories {
+            let key = gix::path::into_bstr(path).map_err(|error| {
+                Error::new(ErrorKind::Backend(format!(
+                    "encoding path {}: {error}",
+                    path.display()
+                )))
+            })?;
+            let key = gix::path::to_unix_separators_on_windows(key);
+            if index.entry_by_path(key.as_ref()).is_some_and(|entry| {
+                entry.stage_raw() == 0 && entry.mode != gix::index::entry::Mode::COMMIT
+            }) {
+                replaced.push(path);
+            }
+        }
+        Ok(replaced)
     }
 
     fn merge_untracked_restore_conflicts_from_stash(

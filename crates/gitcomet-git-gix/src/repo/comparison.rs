@@ -8,8 +8,10 @@
 
 use super::GixRepo;
 use super::log::diff_range_files;
+use super::patch::write_pathspec_file;
 use crate::util::{
-    git_workdir_cmd_for, path_buf_from_git_bytes, run_git_capture_bytes_cancellable,
+    git_workdir_cmd_for, path_buf_from_git_bytes, push_literal_pathspec_file,
+    run_git_capture_bytes_cancellable, run_git_simple,
 };
 use gitcomet_core::domain::{CommitFileChange, CommitId, FileMode, FileStatusKind, ObjectHash};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -68,14 +70,19 @@ where
 /// `git diff <from> [<to>]` in one of git's machine formats. Omitting `to`
 /// compares `from` against the working tree, where git would write refreshed
 /// stats back to the index even without optional locks; the watcher would
-/// report that as an index change and reload every worktree view.
+/// report that as an index change and reload every worktree view. `index`
+/// replaces the repository's index for that comparison.
 fn range_diff_command(
     workdir: &Path,
     format: &[&str],
     from: &CommitId,
     to: Option<&CommitId>,
+    index: Option<&Path>,
 ) -> std::process::Command {
     let mut command = git_workdir_cmd_for(workdir);
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
     command
         .arg("--no-optional-locks")
         .arg("-c")
@@ -99,9 +106,10 @@ pub(super) fn git_range_status_changes(
     workdir: &Path,
     from: &CommitId,
     to: Option<&CommitId>,
+    index: Option<&Path>,
     cancellation: &CancellationToken,
 ) -> Result<Vec<RangeStatusChange>> {
-    let command = range_diff_command(workdir, &["--raw", "--no-abbrev"], from, to);
+    let command = range_diff_command(workdir, &["--raw", "--no-abbrev"], from, to, index);
     let label = "git diff --raw -z --find-renames";
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
     parse_raw_changes(&output, cancellation)
@@ -177,11 +185,18 @@ pub(super) fn git_range_numstat_counts(
     workdir: &Path,
     from: &CommitId,
     to: Option<&CommitId>,
+    index: Option<&Path>,
     cancellation: &CancellationToken,
 ) -> Result<NumstatCounts> {
     // Gitlink counts are dropped per row, so skip the `git status` git would
     // otherwise run in every populated submodule against the working tree.
-    let command = range_diff_command(workdir, &["--numstat", "--ignore-submodules=all"], from, to);
+    let command = range_diff_command(
+        workdir,
+        &["--numstat", "--ignore-submodules=all"],
+        from,
+        to,
+        index,
+    );
     let label = "git diff --numstat --ignore-submodules=all -z --find-renames";
     let output = run_git_capture_bytes_cancellable(command, label, cancellation)?;
 
@@ -232,18 +247,69 @@ fn untracked_paths(workdir: &Path, cancellation: &CancellationToken) -> Result<V
         .collect()
 }
 
+/// A copy of `index` with `paths` added as intent-to-add entries, so that a
+/// `git diff` reading it sees those untracked files. The copy lives outside
+/// the repository, where neither git's own index nor the watcher sees it.
+/// `None` when there is nothing to add or the copy fails; the caller then
+/// diffs with the repository's index, which leaves the files out.
+pub(super) fn intent_to_add_index(
+    workdir: &Path,
+    index: &Path,
+    paths: &[PathBuf],
+) -> Option<tempfile::TempPath> {
+    if paths.is_empty() {
+        return None;
+    }
+    let path_bytes = paths
+        .iter()
+        .map(|path| {
+            let bytes = gix::path::into_bstr(path.as_path()).ok()?;
+            Some(gix::path::to_unix_separators_on_windows(bytes).to_vec())
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let pathspec = write_pathspec_file(path_bytes.iter().map(Vec::as_slice)).ok()?;
+    let copy = tempfile::NamedTempFile::new().ok()?.into_temp_path();
+    std::fs::copy(index, &copy).ok()?;
+    let mut command = git_workdir_cmd_for(workdir);
+    command
+        .env("GIT_INDEX_FILE", &copy)
+        .args(["add", "--intent-to-add"]);
+    push_literal_pathspec_file(&mut command, pathspec.path());
+    run_git_simple(command, "git add --intent-to-add").ok()?;
+    Some(copy)
+}
+
 /// What `git diff <from>` lists against the live working tree, with
 /// numstat's counts. Untracked files, listed only when asked for, have none.
+///
+/// `git diff` does not see untracked files, so a file moved without `git mv`
+/// would list as deleted, its new copy as a separate untracked file. With the
+/// untracked files as intent-to-add entries git pairs the two into a rename.
 fn git_worktree_changes(
     workdir: &Path,
+    index: &Path,
     from: &CommitId,
     include_untracked: bool,
     cancellation: &CancellationToken,
 ) -> Result<Vec<CommitFileChange>> {
-    let status_changes = git_range_status_changes(workdir, from, None, cancellation)?;
-    let counts = git_range_numstat_counts(workdir, from, None, cancellation)?;
+    let untracked = if include_untracked {
+        untracked_paths(workdir, cancellation)?
+    } else {
+        Vec::new()
+    };
+    let intent_to_add = intent_to_add_index(workdir, index, &untracked);
+    let index = intent_to_add.as_deref();
+    let status_changes = git_range_status_changes(workdir, from, None, index, cancellation)?;
+    let counts = git_range_numstat_counts(workdir, from, None, index, cancellation)?;
+    let untracked_set: rustc_hash::FxHashSet<&Path> =
+        untracked.iter().map(PathBuf::as_path).collect();
     let mut files: Vec<CommitFileChange> = status_changes
         .into_iter()
+        // An untracked file git did not pair lists as added; it is listed
+        // below as untracked, as without the intent-to-add index.
+        .filter(|change| {
+            change.kind != FileStatusKind::Added || !untracked_set.contains(change.path.as_path())
+        })
         // Without the index refresh `--raw` also lists a file whose stat
         // moved but not its content; numstat reads the content and leaves
         // it out, while every real change (mode-only, binary) is in it.
@@ -262,13 +328,17 @@ fn git_worktree_changes(
                 .with_modes(change.old_mode, change.new_mode)
         })
         .collect();
-    if include_untracked {
-        files.extend(
-            untracked_paths(workdir, cancellation)?
-                .into_iter()
-                .map(|path| CommitFileChange::new(path, FileStatusKind::Untracked)),
-        );
-    }
+    let renamed: rustc_hash::FxHashSet<PathBuf> = files
+        .iter()
+        .filter(|file| file.kind == FileStatusKind::Renamed)
+        .map(|file| file.path.clone())
+        .collect();
+    files.extend(
+        untracked
+            .into_iter()
+            .filter(|path| !renamed.contains(path))
+            .map(|path| CommitFileChange::new(path, FileStatusKind::Untracked)),
+    );
     Ok(files)
 }
 
@@ -282,8 +352,13 @@ impl GixRepo {
         include_untracked: bool,
         cancellation: &CancellationToken,
     ) -> Result<Vec<CommitFileChange>> {
-        let mut files =
-            git_worktree_changes(&self.spec.workdir, from, include_untracked, cancellation)?;
+        let mut files = git_worktree_changes(
+            &self.spec.workdir,
+            &self.repo().index_path(),
+            from,
+            include_untracked,
+            cancellation,
+        )?;
         self.add_worktree_line_stats(&mut files, cancellation)?;
         Ok(files)
     }

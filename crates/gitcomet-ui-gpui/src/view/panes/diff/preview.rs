@@ -744,7 +744,9 @@ impl DiffRenderer {
     /// Images always are; an SVG only while its toggle says Rendered, because
     /// Code is exactly the request to read (and edit) its source.
     pub(in crate::view) fn content_preview_is_picture(&self, path: &std::path::Path) -> bool {
-        if !crate::view::should_bypass_text_file_preview_for_path(path) {
+        if !crate::view::should_bypass_text_file_preview_for_path(path)
+            && !self.selected_content_is_image()
+        {
             return false;
         }
         match crate::view::preview_path_rendered_kind(path) {
@@ -754,6 +756,13 @@ impl DiffRenderer {
             }
             _ => true,
         }
+    }
+
+    /// Whether the selected file's bytes showed an image that its name does
+    /// not announce.
+    pub(in crate::view) fn selected_content_is_image(&self) -> bool {
+        self.active_repo()
+            .is_some_and(|repo| self.bound_diff_state(repo).selected_content_is_image())
     }
 
     /// Whether the rendered markdown preview — of the file, or of its diff —

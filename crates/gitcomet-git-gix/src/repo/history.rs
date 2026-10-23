@@ -1434,9 +1434,12 @@ impl GixRepo {
         // merge is linearized away, like plain git rebase), and
         // `--topo-order` so a parent can never sort after its child (date
         // order allows that under clock skew, which would make the installed
-        // todo unreplayable).
+        // todo unreplayable). `--no-show-signature` because
+        // `log.showSignature=true` would print the signature check into the
+        // first field of each record.
         cmd.args([
             "log",
+            "--no-show-signature",
             "-z",
             "--format=%H%x00%s%x00%B",
             "--reverse",

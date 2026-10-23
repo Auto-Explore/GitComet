@@ -453,6 +453,13 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, "Close commit details".into()),
             );
 
+        // A multi-selection without a comparison has no merged diff: only
+        // consecutive commits have one diff holding exactly their changes.
+        let no_diff_hint = div()
+            .debug_selector(|| "multi_commit_no_merged_diff".to_string())
+            .text_size(theme.ui_text(14.0))
+            .text_color(theme.colors.foreground.secondary)
+            .child("Select consecutive commits to see their combined changes.");
         let body = self.commit_cards_list(repo_id, count, cx);
 
         div()
@@ -470,10 +477,12 @@ impl DetailsPaneView {
                     .relative()
                     .flex()
                     .flex_col()
+                    .gap_2()
                     .flex_1()
                     .h_full()
                     .min_h(px(0.0))
                     .p_2()
+                    .child(no_diff_hint)
                     .child(body),
             )
             .into_any_element()

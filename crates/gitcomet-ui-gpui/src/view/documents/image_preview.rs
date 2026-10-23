@@ -8,17 +8,7 @@ pub(super) fn decode_image(path: &Path, bytes: &[u8]) -> Result<Input, String> {
 fn decode_image_with_limit(path: &Path, bytes: &[u8], detail_limit: u64) -> Result<Input, String> {
     let guessed = image::guess_format(bytes).ok();
     let format = match guessed {
-        Some(format) => match format {
-            image::ImageFormat::Png => Some(gpui::ImageFormat::Png),
-            image::ImageFormat::Jpeg => Some(gpui::ImageFormat::Jpeg),
-            image::ImageFormat::Gif => Some(gpui::ImageFormat::Gif),
-            image::ImageFormat::WebP => Some(gpui::ImageFormat::Webp),
-            image::ImageFormat::Bmp => Some(gpui::ImageFormat::Bmp),
-            image::ImageFormat::Tiff => Some(gpui::ImageFormat::Tiff),
-            image::ImageFormat::Ico => Some(gpui::ImageFormat::Ico),
-            image::ImageFormat::Pnm => Some(gpui::ImageFormat::Pnm),
-            _ => None,
-        },
+        Some(_) => crate::view::diff_utils::image_format_for_bytes(bytes),
         None => image_format_for_path(path),
     };
     let Some((format, source)) = format

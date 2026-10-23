@@ -167,6 +167,22 @@ pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::Imag
     }
 }
 
+/// The raster format `bytes` are in, read from their signature: for a file
+/// whose name does not say.
+pub(super) fn image_format_for_bytes(bytes: &[u8]) -> Option<gpui::ImageFormat> {
+    match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Png => Some(gpui::ImageFormat::Png),
+        image::ImageFormat::Jpeg => Some(gpui::ImageFormat::Jpeg),
+        image::ImageFormat::Gif => Some(gpui::ImageFormat::Gif),
+        image::ImageFormat::WebP => Some(gpui::ImageFormat::Webp),
+        image::ImageFormat::Bmp => Some(gpui::ImageFormat::Bmp),
+        image::ImageFormat::Tiff => Some(gpui::ImageFormat::Tiff),
+        image::ImageFormat::Ico => Some(gpui::ImageFormat::Ico),
+        image::ImageFormat::Pnm => Some(gpui::ImageFormat::Pnm),
+        _ => None,
+    }
+}
+
 const SVG_PREVIEW_MIN_RASTER_WIDTH_PX: f32 = 1024.0;
 const SVG_PREVIEW_MAX_RASTER_EDGE_PX: f32 = 4096.0;
 

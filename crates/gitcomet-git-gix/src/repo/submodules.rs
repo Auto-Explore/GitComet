@@ -1094,8 +1094,9 @@ fn submodule_range_changes_from_commits(
     to: &CommitId,
     cancellation: &CancellationToken,
 ) -> Result<Vec<SubmoduleInnerChange>> {
-    let status_changes = git_range_status_changes(nested_workdir, from, Some(to), cancellation)?;
-    let counts = git_range_numstat_counts(nested_workdir, from, Some(to), cancellation)?;
+    let status_changes =
+        git_range_status_changes(nested_workdir, from, Some(to), None, cancellation)?;
+    let counts = git_range_numstat_counts(nested_workdir, from, Some(to), None, cancellation)?;
     status_changes
         .into_iter()
         .map(|change| {

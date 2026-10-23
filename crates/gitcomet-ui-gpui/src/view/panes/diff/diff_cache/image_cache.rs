@@ -716,7 +716,13 @@ fn build_file_image_diff_cache_rebuild(
     file: &gitcomet_core::domain::FileDiffImage,
     workdir: &std::path::Path,
 ) -> ImageDiffCacheRebuild {
-    let format = image_format_for_path(&file.path);
+    // A name without a known extension leaves the format to the bytes.
+    let format = image_format_for_path(&file.path).or_else(|| {
+        [file.new.as_deref(), file.old.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(crate::view::diff_utils::image_format_for_bytes)
+    });
     let file_path = Some(if file.path.is_absolute() {
         file.path.to_path_buf()
     } else {

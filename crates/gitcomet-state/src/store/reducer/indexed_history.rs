@@ -782,6 +782,46 @@ mod tests {
         assert!(state.repos[0].history_state.multi_selection.is_multi());
     }
     #[test]
+    fn a_selection_with_a_gap_opens_no_comparison_until_the_gap_closes() {
+        let (mut state, index) = fixture();
+        reduce(
+            &mut state,
+            Event::Publish {
+                repo_id: RepoId(1),
+                index: index.clone(),
+            },
+        );
+        request(&mut state, &index, vec![9984]);
+        let projection = HistoryProjection::new(index.clone(), vec![]);
+        let select = |state: &mut AppState, row: usize, mode| {
+            reduce(
+                state,
+                Event::Select {
+                    request_id: None,
+                    repo_id: RepoId(1),
+                    projection: projection.clone(),
+                    commit_id: index.commit_id(row).unwrap(),
+                    mode,
+                },
+            );
+        };
+
+        select(&mut state, 10_000, CommitSelectMode::Single);
+        select(&mut state, 10_002, CommitSelectMode::Toggle);
+        assert!(state.repos[0].history_state.multi_selection.is_multi());
+        assert_eq!(state.repos[0].history_state.range_selection, None);
+
+        select(&mut state, 10_001, CommitSelectMode::Toggle);
+        let range = state.repos[0]
+            .history_state
+            .range_selection
+            .as_ref()
+            .expect("consecutive commits open a comparison");
+        assert_eq!(range.to, index.commit_id(10_000));
+        assert_eq!(range.from, index.commit_id(10_003).unwrap());
+    }
+
+    #[test]
     fn query_change_invalidates_generations_even_when_switching_back() {
         let (mut state, _) = fixture();
         state.repos[0].history_state.indexed.index = None;
