@@ -27,6 +27,20 @@ fn clipboard_events_from_the_emulator_are_inert() {
     ));
     assert!(matches!(load, TerminalBackendEvent::Wakeup));
 }
+
+/// Only what the program printed counts as output; a repaint the emulator
+/// asks for on its own does not.
+#[test]
+fn output_is_only_what_the_program_printed() {
+    assert!(matches!(
+        TerminalBackendEvent::from(AlacEvent::Wakeup),
+        TerminalBackendEvent::Output
+    ));
+    assert!(matches!(
+        TerminalBackendEvent::from(AlacEvent::MouseCursorDirty),
+        TerminalBackendEvent::Wakeup
+    ));
+}
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
 use alacritty_terminal::term::cell::Cell as AlacCell;
 use gpui::{FontStyle, FontWeight, WhiteSpace};
