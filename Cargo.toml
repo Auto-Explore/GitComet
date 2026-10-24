@@ -166,12 +166,12 @@ gix-quote = "0.10.1"
 # Git's ref-name rules for branch names the UI is about to hand to git. Already
 # in the graph through gix, so this adds no new compilation.
 gix-validate = "0.13.1"
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0", features = ["font-kit"] }
-gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
-gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0", default-features = false }
-gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
-gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "1b6f3cedafcd97fa15e6bc5fdbb8f34cc805afc0" }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", features = ["font-kit"] }
+gpui_wgpu = { package = "gpui_ce_wgpu", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_parley = { package = "gpui_ce_parley", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866", default-features = false }
+gpui_shared_string = { package = "gpui_ce_shared_string", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
+gpui_sum_tree = { package = "gpui_ce_sum_tree", git = "https://github.com/Havunen/gpui-ce.git", rev = "81b1e374d98a356f6dcdd38d4466739edde6b866" }
 image = "0.25.10"
 fast_image_resize = { version = "6.1.0", features = ["image"] }
 # Already in the dependency graph; merges sorted reference streams lazily.
