@@ -160,7 +160,7 @@ fnv = "1.0.7"
 fontdb = "0.24.0"
 fs2 = "0.4.3"
 futures = "0.3.34"
-gix = { version = "0.90.0", default-features = false, features = ["max-performance", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
+gix = { version = "0.90.0", default-features = false, features = ["max-performance", "zlib-sirocco", "comfort", "basic", "status", "blame", "sha1", "sha256"] }
 # Already in the tree via gix; Git-compatible quoting for attribute patterns.
 gix-quote = "0.10.1"
 # Git's ref-name rules for branch names the UI is about to hand to git. Already

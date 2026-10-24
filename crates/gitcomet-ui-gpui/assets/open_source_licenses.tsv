@@ -23,6 +23,7 @@ accesskit_unix	0.24.0	MIT OR Apache-2.0
 accesskit_windows	0.35.1	MIT OR Apache-2.0
 addr2line	0.25.1	Apache-2.0 OR MIT
 adler2	2.0.1	0BSD OR MIT OR Apache-2.0
+adler32furious	0.1.1	MIT OR Apache-2.0
 aes	0.8.4	MIT OR Apache-2.0
 ahash	0.8.12	MIT OR Apache-2.0
 aho-corasick	1.1.5	Unlicense OR MIT
@@ -647,6 +648,7 @@ simd_helpers	0.1.0	MIT
 simdutf8	0.1.5	MIT OR Apache-2.0
 simplecss	0.2.2	Apache-2.0 OR MIT
 siphasher	1.0.4	MIT OR Apache-2.0
+sirocco	0.2.0	MIT OR Apache-2.0
 skrifa	0.44.0	MIT OR Apache-2.0
 skrifa	0.48.0	MIT OR Apache-2.0
 slab	0.4.12	MIT
