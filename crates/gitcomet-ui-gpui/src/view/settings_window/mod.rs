@@ -81,12 +81,15 @@ fn external_editor_preference_settings(
     }
 }
 
-fn custom_external_editor_path_prompt_options() -> gpui::PathPromptOptions {
+fn custom_external_editor_path_prompt_options(
+    directory: Option<std::path::PathBuf>,
+) -> gpui::PathPromptOptions {
     gpui::PathPromptOptions {
         files: true,
         directories: true,
         multiple: false,
         prompt: Some("Select external code editor".into()),
+        directory,
     }
 }
 

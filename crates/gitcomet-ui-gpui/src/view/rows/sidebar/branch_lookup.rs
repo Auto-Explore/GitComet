@@ -28,6 +28,35 @@ pub(in crate::view) fn listed_worktree_paths_by_branch(
     worktree_paths
 }
 
+/// The first listed worktree other than this one that has `branch` checked out,
+/// as `listed_worktree_paths_by_branch` would map it.
+pub(in crate::view) fn branch_held_elsewhere(
+    repo: &RepoState,
+    branch: &str,
+) -> Option<std::path::PathBuf> {
+    let Loadable::Ready(worktrees) = &repo.worktrees else {
+        return None;
+    };
+    worktrees
+        .iter()
+        .find(|worktree| {
+            worktree.path != repo.spec.workdir && worktree.branch.as_deref() == Some(branch)
+        })
+        .map(|worktree| worktree.path.clone())
+}
+
+/// Where `branch` is checked out: this repository's own HEAD, or a listed worktree.
+pub(in crate::view) fn branch_checked_out_at(
+    repo: &RepoState,
+    branch: &str,
+) -> Option<std::path::PathBuf> {
+    // A detached HEAD reads "HEAD", which is no branch to hold.
+    if matches!(&repo.head_branch, Loadable::Ready(head) if head == branch && head != "HEAD") {
+        return Some(repo.spec.workdir.clone());
+    }
+    branch_held_elsewhere(repo, branch)
+}
+
 pub(super) fn branch_worktree_badge_path(
     listed_worktree_path: Option<&std::path::Path>,
     active_worktree_path: Option<&std::path::Path>,

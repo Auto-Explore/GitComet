@@ -429,7 +429,7 @@ fn browsed_external_editor_path_updates_custom_setting_and_notifies(cx: &mut gpu
 
 #[test]
 fn custom_external_editor_browse_prompt_allows_app_bundle_directories() {
-    let options = custom_external_editor_path_prompt_options();
+    let options = custom_external_editor_path_prompt_options(None);
 
     assert!(
         options.files,
@@ -783,4 +783,60 @@ fn signing_tools_fixture() -> gitcomet_core::signing_tools::SigningToolsState {
             },
         },
     }
+}
+
+#[gpui::test]
+fn git_executable_browse_opens_beside_the_typed_executable(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    settings_cx.run_until_parked();
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let executable = dir.path().join("git");
+    std::fs::write(&executable, "").expect("executable");
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::GitExecutable, cx);
+        settings.git_executable_mode = GitExecutableMode::Custom;
+        settings.git_executable_input.update(cx, |input, cx| {
+            input.set_text(executable.display().to_string(), cx)
+        });
+        cx.notify();
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let center = settings_cx
+        .debug_bounds("settings_window_git_executable_browse")
+        .expect("Browse is drawn")
+        .center();
+    settings_cx.simulate_mouse_down(center, MouseButton::Left, gpui::Modifiers::default());
+    settings_cx.simulate_mouse_up(center, MouseButton::Left, gpui::Modifiers::default());
+    settings_cx.run_until_parked();
+
+    assert!(
+        settings_cx.did_prompt_for_paths(),
+        "Browse opens a file dialog"
+    );
+    let mut directory = None;
+    settings_cx.simulate_path_prompt_response(|options| {
+        directory = options.directory.clone();
+        None
+    });
+    assert_eq!(directory, Some(dir.path().to_path_buf()));
 }

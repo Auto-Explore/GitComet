@@ -119,6 +119,7 @@ fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
@@ -142,6 +143,7 @@ fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
@@ -164,10 +166,12 @@ fn push_request_offers_standard_remote_for_untracked_branch() {
             Remote {
                 name: "backup".to_string(),
                 url: None,
+                default_branch: None,
             },
             Remote {
                 name: "origin".to_string(),
                 url: None,
+                default_branch: None,
             },
         ])),
     );
@@ -188,6 +192,7 @@ fn push_request_uses_first_remote_when_origin_is_absent() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "upstream".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
 
@@ -208,6 +213,7 @@ fn push_request_on_an_annex_adjusted_branch_never_offers_set_upstream() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
     let head = "adjusted/main(unlocked)".to_string();
@@ -301,6 +307,7 @@ fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
         Loadable::Ready(Arc::new(vec![Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         }])),
     );
 

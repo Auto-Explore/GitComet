@@ -554,6 +554,7 @@ impl GitCometView {
             directories: true,
             multiple: false,
             prompt: Some("Open Git Repository".into()),
+            directory: None,
         });
 
         window
@@ -588,6 +589,7 @@ impl GitCometView {
             directories: true,
             multiple: false,
             prompt: Some("Initialize Git Repository".into()),
+            directory: None,
         });
 
         window

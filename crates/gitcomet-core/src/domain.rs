@@ -431,6 +431,8 @@ pub struct UpstreamDivergence {
 pub struct Remote {
     pub name: String,
     pub url: Option<String>,
+    /// The branch `refs/remotes/<name>/HEAD` points at, when the remote has one.
+    pub default_branch: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -61,6 +61,7 @@ mod stash;
 mod status;
 mod submodule;
 mod upstream;
+mod worktree;
 mod worktree_badge;
 
 mod appearance_and_refs;

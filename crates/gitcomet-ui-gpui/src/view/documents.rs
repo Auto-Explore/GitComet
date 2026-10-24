@@ -1571,6 +1571,7 @@ impl GitCometView {
             directories: false,
             multiple: true,
             prompt: Some("Open File".into()),
+            directory: None,
         });
         cx.spawn(async move |view, cx| {
             if let Ok(Ok(Some(paths))) = answer.await {

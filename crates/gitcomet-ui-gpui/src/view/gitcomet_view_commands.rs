@@ -466,6 +466,7 @@ impl GitCometView {
                         directories: false,
                         multiple: false,
                         prompt: Some("Select patch file".into()),
+                        directory: None,
                     });
                     cx.spawn(async move |cx| {
                         let result = rx.await;

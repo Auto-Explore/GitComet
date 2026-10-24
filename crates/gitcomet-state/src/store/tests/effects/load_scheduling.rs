@@ -2528,7 +2528,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::RepoCommand(RepoCommandEffect::AddWorktree {
                 repo_id,
                 path: PathBuf::from("wt"),
-                reference: Some("main".to_string()),
+                checkout: gitcomet_core::services::WorktreeCheckout::Existing {
+                    reference: "main".to_string(),
+                },
+                open_after: false,
             }),
             1,
         ),

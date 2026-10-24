@@ -238,6 +238,11 @@ pub(in crate::view) enum ContextMenuAction {
     OpenRepo {
         path: std::path::PathBuf,
     },
+    /// Opens the Add-worktree dialog with these fields filled in.
+    OpenWorktreeAddPrompt {
+        repo_id: RepoId,
+        prefill: WorktreeAddPrefill,
+    },
     ActivateRepo {
         repo_id: RepoId,
     },

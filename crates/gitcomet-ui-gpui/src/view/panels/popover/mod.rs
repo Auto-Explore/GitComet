@@ -316,10 +316,9 @@ pub(in super::super) struct PopoverHost {
     upstream_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
     worktree_badge_picker_selected_index: Option<usize>,
-    /// Path/reference the workspace badge's create row hands to the Add-worktree
-    /// dialog. Consumed (and cleared) when that dialog opens, so a later
-    /// open from elsewhere still starts blank.
-    pending_worktree_add_prefill: Option<(String, String)>,
+    /// What another surface hands the Add-worktree dialog. Consumed when that
+    /// dialog opens, so a later open from elsewhere starts from the defaults.
+    pending_worktree_add_prefill: Option<WorktreeAddPrefill>,
     submodule_picker_selected_index: Option<usize>,
     history_author_filter_selected_index: Option<usize>,
     /// Collected author names survive frames and active author filters.
@@ -398,6 +397,9 @@ pub(in super::super) struct PopoverHost {
     /// "Apply to all remaining" in the open file-collision dialog.
     filesystem_conflict_apply_to_all: bool,
     filesystem_conflict_apply_to_all_focus_handle: FocusHandle,
+    /// "Also delete local branch" in the open Remove-worktree dialog; off on every open.
+    worktree_remove_delete_branch: bool,
+    worktree_remove_delete_branch_focus_handle: FocusHandle,
     checkout_remote_branch_focus: DialogFocus,
     stash_message_input: Entity<components::TextInput>,
     stash_focus: DialogFocus,
@@ -435,6 +437,10 @@ pub(in super::super) struct PopoverHost {
     push_upstream_branch_input: Entity<components::TextInput>,
     worktree_path_input: Entity<components::TextInput>,
     worktree_ref_input: Entity<components::TextInput>,
+    worktree_new_branch_input: Entity<components::TextInput>,
+    worktree_add_create_branch: bool,
+    worktree_add_create_branch_focus_handle: FocusHandle,
+    worktree_add_open_after: bool,
     submodule_url_input: Entity<components::TextInput>,
     submodule_path_input: Entity<components::TextInput>,
     submodule_ref_input: Entity<components::TextInput>,
@@ -636,7 +642,9 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::StashMenu { .. }
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(
-                    WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    WorktreePopoverKind::SectionMenu
+                        | WorktreePopoverKind::Menu { .. }
+                        | WorktreePopoverKind::CommitMenu { .. },
                 ),
                 ..
             }
@@ -1197,7 +1205,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Worktree(
-                    WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    WorktreePopoverKind::SectionMenu
+                    | WorktreePopoverKind::Menu { .. }
+                    | WorktreePopoverKind::CommitMenu { .. },
                 ),
             ..
         }

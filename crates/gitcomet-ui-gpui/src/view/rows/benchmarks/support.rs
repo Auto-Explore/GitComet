@@ -154,6 +154,7 @@ pub(crate) fn build_synthetic_repo_state_with_tags(
                 format!("remote{r}")
             },
             url: None,
+            default_branch: None,
         });
     }
     repo.remotes = Loadable::Ready(Arc::new(remotes_vec.clone()));

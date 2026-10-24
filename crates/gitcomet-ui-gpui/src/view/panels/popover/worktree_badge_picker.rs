@@ -35,22 +35,6 @@ fn create_base_ref(repo: &RepoState) -> String {
     }
 }
 
-/// Suggested folder for a new worktree named `query`: a sibling of the current
-/// workdir, which is where linked worktrees conventionally live. An empty query
-/// leaves the dialog's path blank.
-pub(super) fn suggested_worktree_path(repo: &RepoState, query: &str) -> String {
-    let query = query.trim();
-    if query.is_empty() {
-        return String::new();
-    }
-    // Branch-shaped queries ("feat/x") would nest directories; flatten them.
-    let folder = query.replace(['/', '\\'], "-");
-    match repo.spec.workdir.parent() {
-        Some(parent) => parent.join(folder).display().to_string(),
-        None => folder,
-    }
-}
-
 /// Takes the repository rather than the host so the result is a pure function of
 /// its inputs, which is what lets [`rows_cache`](super::rows_cache) memoise it
 /// across frames.
@@ -249,19 +233,16 @@ pub(super) fn activate(
             this.close_popover(cx);
         }
         WorktreeBadgeRow::CreateNew => {
-            let path = this
-                .state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|repo| suggested_worktree_path(repo, query))
-                .unwrap_or_default();
-            // Deliberately no reference: `git worktree add <path>` branches off
-            // HEAD into a new branch named after the folder, which is what the
-            // "based on <head>" label promises. Passing the head branch itself
-            // would fail — git refuses to check out a branch that is already
-            // checked out in another worktree.
-            this.pending_worktree_add_prefill = Some((path, String::new()));
+            let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
+                return;
+            };
+            // A new branch off the base the row's "based on <head>" label names.
+            this.pending_worktree_add_prefill = Some(WorktreeAddPrefill {
+                source: create_base_ref(repo),
+                create_branch: true,
+                new_branch: query.trim().to_string(),
+                open_after: false,
+            });
             this.open_popover_centered(
                 PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
                 window,
