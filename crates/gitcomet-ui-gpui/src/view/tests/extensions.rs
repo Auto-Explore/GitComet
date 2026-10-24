@@ -897,6 +897,81 @@ fn hosted_menu_entries_show_their_tooltips_on_hover(cx: &mut gpui::TestAppContex
     }
 }
 
+/// An extension is told once its menu has closed, however it closed, on a
+/// later turn: dismissed, chosen from, or replaced by another popover.
+#[gpui::test]
+fn a_hosted_menu_tells_its_extension_once_it_closes(cx: &mut gpui::TestAppContext) {
+    use gitcomet_extension_api::{HostedAction, HostedMenuItem};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    cx.update(install_example);
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+    let host = cx.update(|_window, app| view.read(app).extension_window.as_ref().unwrap().host());
+    let closed = Rc::new(Cell::new(0));
+    let chosen = Rc::new(Cell::new(0));
+    let open = |cx: &mut gpui::VisualTestContext| {
+        let (closed, chosen) = (closed.clone(), chosen.clone());
+        cx.update(|_window, app| {
+            host.open_menu_with_on_closed(
+                gpui::point(px(100.0), px(100.0)),
+                vec![HostedMenuItem::action(HostedAction::new(
+                    "Do it",
+                    move |_| chosen.set(chosen.get() + 1),
+                ))],
+                move |_| closed.set(closed.get() + 1),
+                app,
+            )
+            .expect("the window is open");
+        });
+        cx.run_until_parked();
+        test_support::redraw(cx);
+    };
+    let is_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| test_support::popover_is_open(view.read(app), app))
+    };
+
+    // Dismissed.
+    open(cx);
+    assert!(is_open(cx));
+    assert_eq!(closed.get(), 0, "told nothing while open");
+    cx.update(|_window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| host.close_popover(cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(closed.get(), 1);
+
+    // Chosen from.
+    open(cx);
+    click_debug_selector(cx, "context_menu_do_it");
+    cx.run_until_parked();
+    assert_eq!((chosen.get(), closed.get()), (1, 2));
+
+    // Replaced by another menu: only the first is told.
+    open(cx);
+    open(cx);
+    assert!(is_open(cx));
+    assert_eq!(closed.get(), 3);
+
+    // Replaced by one of the host's own popovers.
+    cx.update(|window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| {
+            host.open_popover_at(
+                PopoverKind::CloneRepo,
+                gpui::point(px(100.0), px(100.0)),
+                window,
+                cx,
+            )
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(closed.get(), 4);
+}
+
 #[gpui::test]
 fn entry_gates_refuse_marked_repositories_with_a_notice(cx: &mut gpui::TestAppContext) {
     cx.update(install_example);

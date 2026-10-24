@@ -93,6 +93,8 @@ pub struct FakeWindowHost {
     observers: RefCell<Vec<(u64, StateObserver)>>,
     next_observer: Cell<u64>,
     next_repo: Cell<u64>,
+    /// What each menu still open runs once closed.
+    menus_open: RefCell<Vec<crate::OnMenuClosed>>,
 }
 
 impl FakeWindowHost {
@@ -113,6 +115,7 @@ impl FakeWindowHost {
             observers: RefCell::default(),
             next_observer: Cell::new(1),
             next_repo: Cell::new(1),
+            menus_open: RefCell::default(),
         })
     }
 
@@ -168,6 +171,14 @@ impl FakeWindowHost {
     }
 
     /// Everything requested so far, oldest first.
+    /// Closes every menu opened with a close callback, running each.
+    pub fn close_menus(&self, cx: &mut App) {
+        let menus = std::mem::take(&mut *self.menus_open.borrow_mut());
+        for on_closed in menus {
+            on_closed(cx);
+        }
+    }
+
     pub fn requests(&self) -> Vec<HostRequest> {
         self.requests.borrow().clone()
     }
@@ -424,6 +435,18 @@ impl WindowHostImpl for FakeWindowHost {
         _cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
         self.record(HostRequest::Menu { items: items.len() });
+        Ok(DialogHandle::new(|_| {}))
+    }
+
+    fn open_menu_with_on_closed(
+        &self,
+        _anchor: Point<Pixels>,
+        items: Vec<HostedMenuItem>,
+        on_closed: crate::OnMenuClosed,
+        _cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.record(HostRequest::Menu { items: items.len() });
+        self.menus_open.borrow_mut().push(on_closed);
         Ok(DialogHandle::new(|_| {}))
     }
 

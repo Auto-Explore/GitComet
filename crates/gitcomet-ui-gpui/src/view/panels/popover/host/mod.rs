@@ -1734,6 +1734,13 @@ impl PopoverHost {
         // collision cannot emit a fresh prompt later.
         if self.popover.as_ref() != Some(&kind) {
             self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
+            // An extension's dialog this popover does not show is gone, and
+            // its extension is told.
+            if self.extension_dialog.as_ref().is_some_and(
+                |dialog| !matches!(kind, PopoverKind::Hosted { id, .. } if id == dialog.id),
+            ) {
+                self.extension_dialog = None;
+            }
             // A displaced file-operation dialog comes back once this one closes.
             if let Some(prompt_id) = self.open_filesystem_prompt_id() {
                 let root_view = self.root_view.clone();
