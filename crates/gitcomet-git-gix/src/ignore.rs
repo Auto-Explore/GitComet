@@ -168,20 +168,11 @@ pub(crate) fn repository_watch_info(
         {
             info.ignore_inputs.push(path);
         }
-        if let Some(path) = config
-            .trusted_path("core.attributesFile")
-            .map_err(|error| Error::new(ErrorKind::Backend(format!("watch attributes: {error}"))))?
-        {
-            info.ignore_inputs.push(if path.is_absolute() {
-                path
-            } else {
-                workdir.join(path)
-            });
-        } else if let Some(path) =
-            gix::path::env::xdg_config("attributes", &mut |key| std::env::var_os(key))
-        {
-            info.ignore_inputs.push(path);
-        }
+        // The installation, system and user files gix's attribute stack reads.
+        info.ignore_inputs
+            .extend(repo.attribute_global_paths().map_err(|error| {
+                Error::new(ErrorKind::Backend(format!("watch attributes: {error}")))
+            })?);
         if let Some(submodules) = crate::refs::submodules(&repo).map_err(|error| {
             Error::new(ErrorKind::Backend(format!("watch submodules: {error}"))).with_source(error)
         })? {
@@ -350,5 +341,34 @@ impl WorktreeIgnoreMatcher for GixWorktreeIgnoreMatcher {
                 )))
             })?;
         Ok(platform.is_excluded())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{git_success, init_test_repo};
+
+    #[test]
+    fn watch_info_includes_every_global_attributes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = gitcomet_core::path_utils::canonicalize_or_original(dir.path().to_path_buf());
+        init_test_repo(&workdir);
+        let configured = workdir.join("global-attributes");
+        git_success(
+            &workdir,
+            &[
+                "config",
+                "core.attributesFile",
+                configured.to_str().unwrap(),
+            ],
+        );
+        let info = super::repository_watch_info(&workdir).unwrap();
+        assert!(info.ignore_inputs.contains(&configured));
+        // Status also reads the system file, so editing it must refresh.
+        if let Some(system) =
+            gix::attrs::Source::System.storage_location(&mut |name| std::env::var_os(name))
+        {
+            assert!(info.ignore_inputs.contains(&system), "{system:?}");
+        }
     }
 }
