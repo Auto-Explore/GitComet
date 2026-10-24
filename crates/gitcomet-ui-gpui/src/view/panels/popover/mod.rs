@@ -28,6 +28,7 @@ mod discard_changes_confirm;
 mod discard_folder_changes_confirm;
 mod error_details;
 mod extension_dialog;
+pub(in crate::view) use extension_dialog::OnClosed;
 mod file_history_file_picker;
 mod filesystem_conflict_prompt;
 mod filesystem_unsaved_edits_confirm;
