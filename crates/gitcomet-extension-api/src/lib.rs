@@ -56,7 +56,8 @@ pub use contributions::{
 pub use gitcomet_state::diff_session::ChangeSource;
 pub use host::{
     DialogContent, DialogHandle, HostError, OnWindowClosed, PopOutWindow, RepositoryHandle,
-    RepositoryWatch, StateObserver, StateSubscription, WindowContent, WindowHost,
+    RepositoryWatch, StateObserver, StateSubscription, TerminalId, TerminalTab, WindowContent,
+    WindowHost,
 };
 pub use id::{ContributionId, ExtensionId, IdError};
 pub use lifecycle::{HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension};

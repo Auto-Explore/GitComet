@@ -6,7 +6,7 @@ use gitcomet_core::test_support::git_fixture::{
     FixtureTimer, LinearCommit, append_config, import_linear_history,
 };
 use gitcomet_git_gix::GixBackend;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 mod authors;
 mod ref_filter;
@@ -1973,6 +1973,46 @@ fn log_file_page_follows_renames() {
             "rename history file",
             "add history file"
         ]
+    );
+}
+
+/// A staged rename is in no commit yet, so `git log --follow` finds nothing
+/// under the new name: the history is the old name's, and so is the file's
+/// name in each of those commits.
+#[test]
+fn file_history_of_a_staged_rename_reads_the_old_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    append_config(
+        repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
+    std::fs::write(repo.join("old.txt"), "line 1\n").unwrap();
+    run_git(repo, &["add", "old.txt"]);
+    run_git(repo, &["commit", "-m", "add file"]);
+    std::fs::write(repo.join("old.txt"), "line 1\nline 2\n").unwrap();
+    run_git(repo, &["commit", "-am", "edit file"]);
+    run_git(repo, &["mv", "old.txt", "new.txt"]);
+
+    let opened = GixBackend.open(repo).unwrap();
+    let page = opened
+        .log_file_page(Path::new("new.txt"), 10, None)
+        .unwrap();
+    let summaries: Vec<&str> = page.commits.iter().map(|c| &*c.summary).collect();
+    assert_eq!(summaries, vec!["edit file", "add file"]);
+
+    let first = page.commits[1].id.clone();
+    assert_eq!(
+        opened
+            .resolve_file_path_at_commit(Path::new("new.txt"), &first)
+            .unwrap(),
+        Some(PathBuf::from("old.txt"))
     );
 }
 

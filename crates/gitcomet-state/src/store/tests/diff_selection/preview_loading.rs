@@ -94,6 +94,140 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
     ));
 }
 
+/// A name without an extension does not say whether the file is an image, so
+/// selecting it also loads its bytes to look. Until they show an image, it
+/// loads and shows as text.
+#[test]
+fn select_diff_for_a_file_without_an_extension_probes_its_bytes() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        PathBuf::from("assets/logo"),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(repo_state.diff_state.diff_file.is_loading());
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::LoadSelectedDiff {
+                repo_id: RepoId(1),
+                load_patch_diff: true,
+                load_file_text: true,
+                load_file_image: false,
+                load_submodule_summary: false,
+                preview_text_side: None,
+            },
+            Effect::LoadDiffFileImage {
+                repo_id: RepoId(1),
+                target: probed,
+            },
+        ] if *probed == target
+    ));
+}
+
+/// The probe's bytes decide: text leaves the file a text diff, an image's
+/// signature makes it an image diff, which a reselection then loads as one.
+#[test]
+fn an_image_probe_shows_an_image_only_when_the_bytes_are_one() {
+    let mut repos: RepositoryRuntimes = Default::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::test_default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    let path = PathBuf::from("assets/logo");
+    let target = gitcomet_core::domain::DiffTarget::working_tree(
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    let select = |repos: &mut RepositoryRuntimes, state: &mut AppState| {
+        reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::SelectDiff {
+                repo_id: RepoId(1),
+                target: target.clone(),
+            },
+        )
+    };
+    let probed = |bytes: &[u8]| {
+        Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
+            repo_id: RepoId(1),
+            target: target.clone(),
+            result: Ok(Some(gitcomet_core::domain::FileDiffImage {
+                path: path.clone(),
+                old: Some(bytes.to_vec()),
+                new: Some(bytes.to_vec()),
+                ..Default::default()
+            })),
+        })
+    };
+
+    select(&mut repos, &mut state);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        probed(b"BM is text here\n"),
+    );
+    let diff_state = &state.repos[0].diff_state;
+    assert!(matches!(diff_state.diff_file_image, Loadable::NotLoaded));
+    assert!(!diff_state.selected_content_is_image());
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        probed(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"),
+    );
+    let diff_state = &state.repos[0].diff_state;
+    assert!(matches!(
+        diff_state.diff_file_image,
+        Loadable::Ready(Some(_))
+    ));
+    assert!(diff_state.selected_content_is_image());
+
+    let effects = select(&mut repos, &mut state);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            load_file_text: false,
+            load_file_image: true,
+            ..
+        }]
+    ));
+}
+
 #[test]
 fn select_diff_for_ico_sets_loading_and_emits_effect() {
     let mut repos: RepositoryRuntimes = Default::default();

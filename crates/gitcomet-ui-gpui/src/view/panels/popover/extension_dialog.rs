@@ -110,31 +110,39 @@ impl PopoverHost {
         items: Vec<gitcomet_extension_api::HostedMenuItem>,
     ) {
         use gitcomet_extension_api::HostedMenuItem;
-        let items = items
-            .into_iter()
-            .filter_map(|item| match item {
+        let mut entries = Vec::with_capacity(items.len());
+        let mut tooltips = FxHashMap::default();
+        for item in items {
+            let entry = match item {
                 HostedMenuItem::Action {
                     action,
                     icon,
                     disabled,
+                    tooltip,
                     ..
-                } => Some(ContextMenuItem::Entry {
-                    label: action.label().clone(),
-                    icon,
-                    shortcut: None,
-                    disabled,
-                    action: Box::new(ContextMenuAction::Hosted(action)),
-                }),
-                HostedMenuItem::Header(label) => Some(ContextMenuItem::Header(label.into())),
-                HostedMenuItem::Separator => Some(ContextMenuItem::Separator),
-                _ => None,
-            })
-            .collect();
+                } => {
+                    if let Some(tooltip) = tooltip {
+                        tooltips.insert(entries.len(), tooltip);
+                    }
+                    ContextMenuItem::Entry {
+                        label: action.label().clone(),
+                        icon,
+                        shortcut: None,
+                        disabled,
+                        action: Box::new(ContextMenuAction::Hosted(action)),
+                    }
+                }
+                HostedMenuItem::Header(label) => ContextMenuItem::Header(label.into()),
+                HostedMenuItem::Separator => ContextMenuItem::Separator,
+                _ => continue,
+            };
+            entries.push(entry);
+        }
         self.extension_dialog = Some(ExtensionDialog {
             id,
             title: "".into(),
             content: None,
-            menu: Some(ContextMenuModel::new(items)),
+            menu: Some(ContextMenuModel::new(entries).with_entry_tooltips(tooltips)),
         });
     }
 

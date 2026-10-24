@@ -228,6 +228,32 @@ fn path_preview_flags(path: &Path) -> DiffTargetPreviewFlags {
     }
 }
 
+/// Whether `target` is a file whose name does not say if it is an image: one
+/// without an extension. Its bytes are loaded to look.
+pub(super) fn probes_image_content(target: &DiffTarget) -> bool {
+    target
+        .file_path()
+        .is_some_and(|path| path.extension().is_none())
+}
+
+/// Whether `bytes` start with the signature of an image the image view
+/// decodes. Only signatures no text file starts with count, which leaves out
+/// BMP's and ICO's two bytes.
+pub(super) fn has_image_signature(bytes: &[u8]) -> bool {
+    const SIGNATURES: [&[u8]; 6] = [
+        b"\x89PNG\r\n\x1a\n",
+        b"\xff\xd8\xff",
+        b"GIF87a",
+        b"GIF89a",
+        b"II*\0",
+        b"MM\0*",
+    ];
+    SIGNATURES
+        .iter()
+        .any(|signature| bytes.starts_with(signature))
+        || (bytes.get(..4) == Some(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+}
+
 pub(super) fn diff_target_preview_flags(target: &DiffTarget) -> DiffTargetPreviewFlags {
     match target {
         DiffTarget::WorkingTree { path, .. } => path_preview_flags(path),
@@ -351,7 +377,14 @@ pub(super) fn selected_diff_load_plan(
             | DiffTarget::Commit { .. }
             | DiffTarget::CommitRange { path: Some(_), .. }
     );
-    let preview = diff_target_preview_flags(target);
+    let preview = if repo_state.diff_state.content_image_target.as_ref() == Some(target) {
+        DiffTargetPreviewFlags {
+            wants_image: true,
+            is_svg: false,
+        }
+    } else {
+        diff_target_preview_flags(target)
+    };
     let content_preview = repo_state.diff_state.content_preview;
     let preview_only = content_preview || target_preview_text_side.is_some();
     let preview_text_side = if supports_file && (!preview.wants_image || preview.is_svg) {

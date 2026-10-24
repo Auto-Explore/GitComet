@@ -188,6 +188,16 @@ impl GitCometView {
         let Some(repo_id) = self.repo_id_for_path(path) else {
             return false;
         };
+        self.activate_repo(repo_id, cx)
+    }
+
+    /// Shows the repository canvas with `repo_id` active. Whether anything
+    /// changed: the document viewer left, or another repository was chosen.
+    pub(in crate::view) fn activate_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
         let was_document = self.documents_active;
         self.show_repository_canvas(cx);
         if self.state.active_repo == Some(repo_id) {
@@ -346,18 +356,7 @@ impl GitCometView {
         else {
             return false;
         };
-
-        let was_document = self.documents_active;
-        self.show_repository_canvas(cx);
-        if self.state.active_repo == Some(next_repo_id) {
-            return was_document;
-        }
-
-        self.store.dispatch(Msg::SetActiveRepo {
-            repo_id: next_repo_id,
-        });
-        cx.notify();
-        true
+        self.activate_repo(next_repo_id, cx)
     }
 
     pub(crate) fn open_repo_path(

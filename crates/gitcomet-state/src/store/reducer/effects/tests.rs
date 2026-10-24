@@ -1717,9 +1717,17 @@ fn multi_selection_compares_merged_diff_from_oldest_parent_to_newest() {
         next_cursor: None,
     })));
 
-    // Select c4 (newest) and c2 (oldest of the pair). The merged diff spans
-    // c2's parent (c1) → c4, so every selected commit's own changes show.
+    // Select c4 (newest) through c2 (oldest). The merged diff spans c2's
+    // parent (c1) → c4, so every selected commit's own changes show.
     select_commit(&mut state, repo_id, CommitId("c4".into()));
+    select_commit_multi(
+        &mut state,
+        repo_id,
+        CommitId("c3".into()),
+        CommitSelectMode::Toggle,
+        Some(1),
+        None,
+    );
     let effects = select_commit_multi(
         &mut state,
         repo_id,

@@ -408,11 +408,11 @@ pub(super) fn select_commit_multi(
 
     repo_state.set_commit_multi_selection(sel);
 
-    // Two or more selected commits enter "compare" mode: the details pane shows
-    // the merged diff of the whole selection — every selected commit's own
-    // changes, combined — instead of a plain list. A single commit (or a
-    // selection that can't be resolved in the loaded log) falls back to the
-    // single/multi-list behavior below.
+    // Two or more consecutive commits enter "compare" mode: the details pane
+    // shows the merged diff of the whole selection — every selected commit's
+    // own changes, combined — instead of a plain list. A single commit, or a
+    // selection with no such diff (see `merged_selection_range`), falls back to
+    // the single/multi-list behavior below.
     let range_pair = {
         let selected = &repo_state.history_state.multi_selection.commits;
         (selected.len() >= 2)
@@ -499,6 +499,11 @@ fn reconcile_selected_commit_details(repo_state: &mut RepoState, repo_id: RepoId
 /// would silently drop them. Returns `None` unless the log is loaded and every
 /// selected commit resolves within it, so the caller leaves comparison mode
 /// rather than guess.
+///
+/// Also `None` unless the selection is one first-parent chain, each selected
+/// commit the first parent of the next newer one. Anything else — a gap, or
+/// commits on different branches — has no diff holding exactly the selected
+/// commits' changes: `from..to` would add every commit in between.
 fn merged_selection_range(
     repo_state: &RepoState,
     selected: &[CommitId],
@@ -513,9 +518,20 @@ fn merged_selection_range(
             .iter()
             .map(|id| index.position(id.as_ref()))
             .collect();
-        if let Some(positions) = positions {
-            let newest = *positions.iter().min()?;
-            let oldest = *positions.iter().max()?;
+        if let Some(mut positions) = positions {
+            // Newest first, as the log lists them.
+            positions.sort_unstable();
+            positions.dedup();
+            let consecutive = positions.windows(2).all(|pair| {
+                index
+                    .parent_id_bytes(pair[0], 0)
+                    .is_some_and(|parent| Some(parent) == index.id_bytes(pair[1]))
+            });
+            if !consecutive {
+                return None;
+            }
+            let newest = *positions.first()?;
+            let oldest = *positions.last()?;
             return Some((
                 index
                     .parent_commit_id(oldest, 0)
@@ -531,25 +547,27 @@ fn merged_selection_range(
     // scan per selected id: a shift-click over a large selection was
     // quadratic.
     let wanted: FxHashSet<&str> = selected.iter().map(|id| id.as_ref()).collect();
-    let mut newest_ix: Option<usize> = None;
-    let mut oldest_ix: Option<usize> = None;
-    let mut found = 0usize;
-    for (ix, commit) in page.commits.iter().enumerate() {
+    let mut found = Vec::with_capacity(wanted.len());
+    for commit in &page.commits {
         if !wanted.contains(commit.id.as_ref()) {
             continue;
         }
-        newest_ix.get_or_insert(ix);
-        oldest_ix = Some(ix);
-        found += 1;
-        if found == wanted.len() {
+        found.push(commit);
+        if found.len() == wanted.len() {
             break;
         }
     }
-    if found != wanted.len() {
+    if found.len() != wanted.len() {
         return None;
     }
-    let newest = &page.commits[newest_ix?];
-    let oldest = &page.commits[oldest_ix?];
+    let consecutive = found
+        .windows(2)
+        .all(|pair| pair[0].parent_ids.first() == Some(&pair[1].id));
+    if !consecutive {
+        return None;
+    }
+    let newest = found.first()?;
+    let oldest = found.last()?;
     let from = oldest
         .parent_ids
         .first()

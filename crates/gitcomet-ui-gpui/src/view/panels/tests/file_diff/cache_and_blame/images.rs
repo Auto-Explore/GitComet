@@ -73,6 +73,87 @@ fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payloa
     }
 }
 
+/// A name without an extension leaves the format to the bytes: a PNG named
+/// `gitcomet` decodes and shows like `gitcomet.png`.
+#[gpui::test]
+fn file_image_diff_decodes_an_image_named_without_an_extension(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(148);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_image_diff_without_extension",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("assets/gitcomet");
+    let image_bytes =
+        include_bytes!("../../../../../../../../assets/linux/hicolor/32x32/apps/gitcomet.png");
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        1,
+        Some(image_bytes),
+        Some(image_bytes),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "both sides decoded", |pane| {
+        pane.file_image_diff_cache_old.is_some() && pane.file_image_diff_cache_new.is_some()
+    });
+}
+
+/// An untracked file previews as text, unless it is an image: once its bytes
+/// have shown that a file without an extension is one, it shows as an image.
+#[gpui::test]
+fn an_untracked_image_named_without_an_extension_shows_as_an_image(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(149);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_untracked_image_without_extension",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("logo");
+    let image_bytes =
+        include_bytes!("../../../../../../../../assets/linux/hicolor/32x32/apps/gitcomet.png");
+    std::fs::create_dir_all(&workdir).unwrap();
+    std::fs::write(workdir.join(&path), image_bytes).unwrap();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.content_image_target = repo.diff_state.diff_target.clone();
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file_image = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::FileDiffImage {
+                    path: path.clone(),
+                    new: Some(image_bytes.to_vec()),
+                    ..Default::default()
+                }),
+            ));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    wait_for_file_image_diff_cache(cx, &view, "the untracked image", |pane| {
+        pane.file_image_diff_cache_new.is_some() && !pane.diff_surface().file_preview
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 #[gpui::test]
 fn replacing_file_image_diff_cache_releases_old_sprite_atlas_tiles(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));

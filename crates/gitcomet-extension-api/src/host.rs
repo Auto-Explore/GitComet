@@ -28,6 +28,8 @@ pub enum HostError {
     /// The request itself was refused, such as a URL scheme that may not be
     /// opened.
     InvalidRequest(SharedString),
+    /// The terminal tab has closed.
+    TerminalClosed,
 }
 
 impl fmt::Display for HostError {
@@ -35,6 +37,7 @@ impl fmt::Display for HostError {
         f.write_str(match self {
             Self::WindowClosed => "the window has closed",
             Self::RepositoryClosed => "the repository has closed",
+            Self::TerminalClosed => "the terminal has closed",
             Self::Unsupported => "this window does not support the request",
             Self::InvalidRequest(reason) => reason,
         })
@@ -48,6 +51,34 @@ impl std::error::Error for HostError {}
 pub struct ExternalEditor {
     pub id: String,
     pub label: String,
+}
+
+/// A tab of the embedded terminal, unique in its window while it is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TerminalId(u64);
+
+impl TerminalId {
+    /// For hosts; extensions receive ids from [`WindowHost::terminals`].
+    #[doc(hidden)]
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// For hosts, to find the tab again.
+    #[doc(hidden)]
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// One open tab of the embedded terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalTab {
+    pub repository: RepositoryHandle,
+    pub id: TerminalId,
+    /// The process the tab started, the user's shell; `None` when the
+    /// platform did not report it.
+    pub shell_pid: Option<u32>,
 }
 
 /// A repository in one window. `RepoId`s are per window and may be reused,
@@ -313,6 +344,12 @@ pub trait WindowHostImpl {
         Err(HostError::Unsupported)
     }
     fn open_workspace(&self, _paths: Vec<PathBuf>, _cx: &mut App) -> Result<WindowHost, HostError> {
+        Err(HostError::Unsupported)
+    }
+    fn terminals(&self, _cx: &App) -> Vec<TerminalTab> {
+        Vec::new()
+    }
+    fn focus_terminal(&self, _terminal: &TerminalTab, _cx: &mut App) -> Result<(), HostError> {
         Err(HostError::Unsupported)
     }
 
@@ -588,6 +625,21 @@ impl WindowHost {
     /// Override the editor for this window; `None` restores the global preference.
     pub fn set_external_editor(&self, id: Option<String>, cx: &mut App) -> Result<(), HostError> {
         self.0.set_external_editor(id, cx)
+    }
+
+    /// The embedded terminal's open tabs in this window, for every
+    /// repository, as of the window's last update.
+    pub fn terminals(&self, cx: &App) -> Vec<TerminalTab> {
+        self.0.terminals(cx)
+    }
+
+    /// Shows `terminal` once this update ends: makes its repository the
+    /// active one, brings the terminal to the front of the bottom panel,
+    /// selects and focuses the tab and activates the window.
+    /// [`HostError::TerminalClosed`] when the tab is no longer open.
+    pub fn focus_terminal(&self, terminal: &TerminalTab, cx: &mut App) -> Result<(), HostError> {
+        self.check(&terminal.repository, cx)?;
+        self.0.focus_terminal(terminal, cx)
     }
 
     pub fn set_commit_identity_resolver(

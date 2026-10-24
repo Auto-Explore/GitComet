@@ -5,7 +5,7 @@
 
 #[cfg(unix)]
 use gitcomet_core::domain::SignatureFormats;
-use gitcomet_core::domain::{CommitId, SignatureFormat, SignatureStatus};
+use gitcomet_core::domain::{CommitId, DiffTarget, SignatureFormat, SignatureStatus};
 use gitcomet_core::services::{GitBackend, GitRepository};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -469,6 +469,85 @@ fn log_show_signature_does_not_corrupt_the_batch_parse() {
         "log.showSignature must not swallow the record, got {results:?}"
     );
     assert!(results[0].1.status.is_verified());
+}
+
+/// A signed commit, titled `message`, that sets `name` to `contents`.
+fn commit_contents(repo: &Path, name: &str, contents: &str, message: &str) -> CommitId {
+    fs::write(repo.join(name), contents).expect("write file");
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-m", message]);
+    CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into())
+}
+
+#[test]
+fn log_show_signature_does_not_leak_into_a_commit_diff() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+    run_git(&fixture.repo, &["config", "log.showSignature", "true"]);
+
+    commit_contents(&fixture.repo, "a.txt", "one\n", "add");
+    // A modification, so the diff comes from `git show` and not from blobs.
+    let modified = commit_contents(&fixture.repo, "a.txt", "one\ntwo\n", "modify");
+
+    let diff = open(&fixture.repo)
+        .diff_unified(&DiffTarget::commit(modified, "a.txt".into()))
+        .expect("commit diff");
+
+    assert!(
+        diff.starts_with("diff --git "),
+        "the signature check must not precede the patch, got {diff:?}"
+    );
+}
+
+#[test]
+fn log_show_signature_does_not_corrupt_file_history() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+    run_git(&fixture.repo, &["config", "log.showSignature", "true"]);
+
+    let first = commit_contents(&fixture.repo, "a.txt", "one\n", "add");
+    let second = commit_contents(&fixture.repo, "a.txt", "one\ntwo\n", "modify");
+
+    let page = open(&fixture.repo)
+        .log_file_page(Path::new("a.txt"), 10, None)
+        .expect("file history");
+
+    let ids: Vec<_> = page.commits.iter().map(|commit| &commit.id).collect();
+    assert_eq!(ids, [&second, &first]);
+    assert_eq!(page.commits[0].summary.as_ref(), "modify");
+}
+
+#[test]
+fn log_show_signature_does_not_corrupt_the_interactive_rebase_list() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+    run_git(&fixture.repo, &["config", "log.showSignature", "true"]);
+
+    let base = commit_contents(&fixture.repo, "a.txt", "one\n", "add");
+    let modified = commit_contents(&fixture.repo, "a.txt", "one\ntwo\n", "modify");
+
+    let entries = open(&fixture.repo)
+        .list_commits_for_interactive_rebase(base.as_ref())
+        .expect("interactive rebase list");
+
+    assert_eq!(entries.len(), 1, "got {entries:?}");
+    assert_eq!(entries[0].commit_id, modified.as_ref());
+    assert_eq!(entries[0].summary, "modify");
 }
 
 #[test]
