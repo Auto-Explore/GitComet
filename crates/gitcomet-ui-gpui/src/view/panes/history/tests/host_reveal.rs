@@ -79,17 +79,30 @@ fn reveal(view: &Entity<GitCometView>, commit: &str, cx: &mut gpui::VisualTestCo
     }
 }
 
-/// An extension shows a commit as the sidebar shows a branch's tip: selected
-/// and scrolled to, far down the log.
+/// An extension shows a commit as the sidebar shows a branch's tip: History
+/// in place of the view it was on, the commit selected and scrolled to, far
+/// down the log, and History's mode as it was.
 #[gpui::test]
 fn an_extension_reveals_a_commit_selected_and_in_view(cx: &mut gpui::TestAppContext) {
-    let (view, store, cx) = history_of(cx, 200, LogScope::AllBranches);
+    let (view, store, cx) = history_of(cx, 200, LogScope::FullReachable);
     assert!(
         cx.debug_bounds("history_row_150").is_none(),
         "not drawn yet"
     );
+    let tab = cx
+        .debug_bounds("repository_view_0")
+        .expect("the example's view tab")
+        .center();
+    cx.simulate_click(tab, gpui::Modifiers::default());
+    cx.run_until_parked();
+    redraw(cx);
+    assert!(cx.debug_bounds("example_review_view").is_some());
 
     reveal(&view, "c150", cx);
+    assert!(
+        cx.debug_bounds("example_review_view").is_none(),
+        "History is shown again"
+    );
     drain_store_worker(&view, cx);
     let selected = store.snapshot().repos[0]
         .history_state
@@ -102,7 +115,7 @@ fn an_extension_reveals_a_commit_selected_and_in_view(cx: &mut gpui::TestAppCont
     );
     assert_eq!(
         store.snapshot().repos[0].history_state.history_scope,
-        LogScope::AllBranches,
+        LogScope::FullReachable,
         "a commit History shows leaves its mode alone"
     );
 }
