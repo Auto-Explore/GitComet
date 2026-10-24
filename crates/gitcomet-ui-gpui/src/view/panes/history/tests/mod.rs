@@ -322,6 +322,7 @@ mod branch_names;
 mod columns;
 mod find;
 mod graph_gradient;
+mod host_reveal;
 mod interaction;
 mod lane_attribution;
 mod mark_menu;
