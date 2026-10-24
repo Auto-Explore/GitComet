@@ -391,6 +391,16 @@ pub trait WindowHostImpl {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
 
+    fn open_menu_with_on_closed(
+        &self,
+        _anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        _items: Vec<crate::HostedMenuItem>,
+        _on_closed: OnMenuClosed,
+        _cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        Err(HostError::Unsupported)
+    }
+
     fn toast(
         &self,
         kind: crate::NotificationKind,
@@ -436,6 +446,9 @@ pub type WindowContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
 
 /// Runs once when a pop-out window closes, however it closes.
 pub type OnWindowClosed = Box<dyn FnOnce(&mut App)>;
+
+/// Runs once when a menu closes, however it closes.
+pub type OnMenuClosed = Box<dyn FnOnce(&mut App)>;
 
 /// What the host implements behind a [`PopOutWindow`].
 #[doc(hidden)]
@@ -845,6 +858,23 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
         self.0.open_menu(anchor, items, cx)
+    }
+
+    /// Opens a menu as [`Self::open_menu`] does, and runs `on_closed` once
+    /// it has closed, however it closed: an item chosen, Escape, a click
+    /// away, another popover opening in its place, or its window closing.
+    /// It runs on a later turn of the app, never inside the update that
+    /// closed the menu. So an extension can show what the menu was opened
+    /// from as open until then.
+    pub fn open_menu_with_on_closed(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        items: Vec<crate::HostedMenuItem>,
+        on_closed: impl FnOnce(&mut App) + 'static,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.0
+            .open_menu_with_on_closed(anchor, items, Box::new(on_closed), cx)
     }
 
     pub fn toast(

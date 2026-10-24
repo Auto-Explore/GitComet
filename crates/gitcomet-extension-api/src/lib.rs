@@ -55,9 +55,9 @@ pub use contributions::{
 /// Revision-pinned state types hosted panes take.
 pub use gitcomet_state::diff_session::ChangeSource;
 pub use host::{
-    DialogContent, DialogHandle, HostError, OnWindowClosed, PopOutWindow, RepositoryHandle,
-    RepositoryWatch, StateObserver, StateSubscription, TerminalId, TerminalTab, WindowContent,
-    WindowHost,
+    DialogContent, DialogHandle, HostError, OnMenuClosed, OnWindowClosed, PopOutWindow,
+    RepositoryHandle, RepositoryWatch, StateObserver, StateSubscription, TerminalId, TerminalTab,
+    WindowContent, WindowHost,
 };
 pub use id::{ContributionId, ExtensionId, IdError};
 pub use lifecycle::{HostNotifier, ShellEvent, Slot, SlotSignal, WindowExtension};
