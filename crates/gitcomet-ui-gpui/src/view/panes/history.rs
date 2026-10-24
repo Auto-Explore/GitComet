@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-mod annotations;
+pub(in crate::view) mod annotations;
 mod cache_build;
 mod columns;
 pub(in crate::view) mod find;
@@ -1590,6 +1590,35 @@ impl HistoryView {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = root_view.update(cx, |root, cx| {
                     root.open_popover_at(kind, anchor, window, cx);
+                });
+            });
+        });
+    }
+
+    /// Opens an extension's `items` as a menu at `anchor`, the control
+    /// `invoker` names showing its menu open, as the host's own menus do.
+    pub(in crate::view) fn open_hosted_menu_at(
+        &mut self,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+        invoker: SharedString,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let id = super::super::extension_host::next_dialog_id();
+        let root_view = self.root_view.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.popover_host
+                        .update(cx, |host, _| host.set_hosted_menu(id, items));
+                    root.open_popover_at(
+                        PopoverKind::Hosted { id, menu: true }.invoked_by(invoker),
+                        anchor,
+                        window,
+                        cx,
+                    );
                 });
             });
         });
