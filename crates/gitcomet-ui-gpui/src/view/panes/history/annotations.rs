@@ -1,10 +1,11 @@
 use super::*;
 use gitcomet_extension_api::{
-    HistoryAnnotator, HistoryRowAnnotation, HostedMenuItem, MarkEdge, RepositoryViewContext,
+    HistoryAnnotator, HistoryRowAnnotation, HostedMenuItem, MarkTarget, RepositoryViewContext,
 };
 
-/// A row's merged annotation, and for each of its marks (leading,
-/// trailing) the annotator that drew it, when that annotator offers a menu.
+/// A row's merged annotation, and for each edge's marks (leading,
+/// trailing) the annotator that drew them, when that annotator offers a
+/// menu.
 #[derive(Clone, Default)]
 pub(in crate::view) struct RowAnnotation {
     pub(in crate::view) annotation: HistoryRowAnnotation,
@@ -55,13 +56,14 @@ impl HistoryView {
             .flatten()
     }
 
-    /// The menu for `commit`'s `edge` mark, from annotator `owner`, the one
-    /// [`Self::history_row`] found drew it. Asked only on the right-click.
+    /// The menu for `commit`'s marks `target`, from annotator `owner`, the
+    /// one [`Self::history_row`] found drew them. Asked only on the
+    /// right-click.
     pub(in crate::view) fn history_mark_menu(
         &self,
         repo_id: RepoId,
         commit: &gitcomet_core::domain::Commit,
-        edge: MarkEdge,
+        target: &MarkTarget,
         owner: usize,
         cx: &App,
     ) -> Vec<HostedMenuItem> {
@@ -83,11 +85,12 @@ impl HistoryView {
             return Vec::new();
         };
         crate::view::perf::extension_dispatch();
-        menu(&context, commit, edge, cx)
+        menu(&context, commit, target, cx)
     }
 
     /// The row's annotation, merged from every annotator, with who drew each
-    /// mark: a later annotator's mark is drawn over an earlier one's.
+    /// edge's marks: a later annotator's marks on an edge are drawn instead
+    /// of an earlier one's.
     pub(in crate::view) fn history_row(
         &self,
         repo: &RepoState,
@@ -106,10 +109,10 @@ impl HistoryView {
                     crate::view::perf::extension_dispatch();
                     let next = (provider.annotate)(&context, commit, cx);
                     let menu = provider.mark_menu.is_some().then_some(ix);
-                    if next.leading.is_some() {
+                    if !next.leading.is_empty() {
                         row.mark_menus[0] = menu;
                     }
-                    if next.trailing.is_some() {
+                    if !next.trailing.is_empty() {
                         row.mark_menus[1] = menu;
                     }
                     let result = &mut row.annotation;
@@ -118,8 +121,12 @@ impl HistoryView {
                     } else {
                         1.0
                     };
-                    result.leading = next.leading.or(result.leading.take());
-                    result.trailing = next.trailing.or(result.trailing.take());
+                    if !next.leading.is_empty() {
+                        result.leading = next.leading;
+                    }
+                    if !next.trailing.is_empty() {
+                        result.trailing = next.trailing;
+                    }
                     result.range = next.range.or(result.range);
                 }
             }

@@ -541,15 +541,8 @@ fn history_table_row(
         annotation,
         mark_menus,
     } = row;
-    // Compared without formatting: this ran once per visible commit per frame
-    // just to find the one row whose menu is open.
     let context_menu_active = active_context_menu_invoker.is_some_and(|active| {
-        active
-            .strip_prefix("history_commit_menu_")
-            .and_then(|rest| rest.split_once('_'))
-            .is_some_and(|(repo, commit_id)| {
-                repo.parse::<u64>() == Ok(repo_id.0) && commit_id == commit.id.as_ref()
-            })
+        history_canvas::history_row_menu_is_open(active, repo_id, commit.id.as_ref())
     });
     let row_state = controls::InteractionState::default()
         .selected(selected, theme.colors.accent.subtle_background)
