@@ -1,7 +1,7 @@
 use super::*;
 use gitcomet_extension_api::{
     Extension, ExtensionId, HistoryAnnotator, HistoryRowAnnotation, HostedAction, HostedMenuItem,
-    MarkEdge, Registrar, Registry, RowMark, SlotSignal,
+    MarkEdge, MarkTarget, Registrar, Registry, RowMark, SlotSignal,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -12,13 +12,14 @@ use crate::view::test_support::redraw;
 /// how many annotations.
 #[derive(Default)]
 struct Asked {
-    menus: RefCell<Vec<(String, MarkEdge)>>,
+    menus: RefCell<Vec<(String, MarkTarget)>>,
     annotations: Cell<usize>,
 }
 
 /// Two annotators. "agents" marks every commit's end and `c01`'s start and
 /// offers a menu, empty on `c02`; "other", registered after it, marks
-/// `c03`'s end over it and offers none.
+/// `c03`'s end over it and offers none. `c06` ends with three short marks,
+/// all of which fit, and `c07` with six long ones, of which one fits.
 struct Marks(Rc<Asked>);
 
 impl Extension for Marks {
@@ -34,18 +35,27 @@ impl Extension for Marks {
             HistoryAnnotator::new(SlotSignal::default(), move |_, commit, _| {
                 asked.annotations.set(asked.annotations.get() + 1);
                 let mark = RowMark::new(gpui::green()).with_label("Running");
-                let annotation = HistoryRowAnnotation::default().with_trailing(mark.clone());
-                if commit.id.as_ref() == "c01" {
-                    annotation.with_leading(mark)
-                } else {
-                    annotation
+                match commit.id.as_ref() {
+                    "c01" => HistoryRowAnnotation::default()
+                        .with_trailing(mark.clone())
+                        .with_leading(mark),
+                    "c06" => ["A", "B", "C"].into_iter().fold(
+                        HistoryRowAnnotation::default(),
+                        |annotation, label| {
+                            annotation.with_trailing(RowMark::new(gpui::green()).with_label(label))
+                        },
+                    ),
+                    "c07" => (0..6).fold(HistoryRowAnnotation::default(), |annotation, _| {
+                        annotation.with_trailing(mark.clone())
+                    }),
+                    _ => HistoryRowAnnotation::default().with_trailing(mark),
                 }
             })
-            .with_mark_menu(move |_, commit, edge, _| {
+            .with_mark_menu(move |_, commit, target, _| {
                 menus
                     .menus
                     .borrow_mut()
-                    .push((commit.id.as_ref().to_owned(), edge));
+                    .push((commit.id.as_ref().to_owned(), target.clone()));
                 if commit.id.as_ref() == "c02" {
                     return Vec::new();
                 }
@@ -83,7 +93,7 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(1);
-    let commits = (0..6)
+    let commits = (0..8)
         .map(|ix| commit(&format!("c{ix:02}"), &[], &format!("commit {ix:02}")))
         .collect::<Vec<_>>();
     let page = Arc::new(log_page(commits, None));
@@ -123,7 +133,7 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     cx.run_until_parked();
     ensure_history_cache_for_tests(cx, &view, state);
     wait_until(cx, "history rows", |cx| {
-        cx.debug_bounds("history_row_3").is_some()
+        cx.debug_bounds("history_row_7").is_some()
     });
 
     let message = cx
@@ -212,8 +222,15 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
         matches!(kind, Some(PopoverKind::Hosted { menu: true, .. })),
         "{kind:?}"
     );
-    assert_eq!(invoker.as_deref(), Some("history_commit_menu_1_c00"));
-    assert_eq!(*asked.menus.borrow(), [("c00".into(), MarkEdge::Trailing)]);
+    assert_eq!(
+        invoker.as_deref(),
+        Some("history_mark_menu_1_c00_trailing_0_1")
+    );
+    let only = |edge| MarkTarget::new(edge, 0..1);
+    assert_eq!(
+        *asked.menus.borrow(),
+        [("c00".into(), only(MarkEdge::Trailing))]
+    );
     assert_eq!(
         asked.annotations.get(),
         annotations,
@@ -235,7 +252,7 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     ));
     assert_eq!(
         asked.menus.borrow().last(),
-        Some(&("c05".into(), MarkEdge::Trailing))
+        Some(&("c05".into(), only(MarkEdge::Trailing)))
     );
     close(cx);
 
@@ -248,7 +265,7 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     ));
     assert_eq!(
         asked.menus.borrow().last(),
-        Some(&("c01".into(), MarkEdge::Leading))
+        Some(&("c01".into(), only(MarkEdge::Leading)))
     );
     close(cx);
 
@@ -264,7 +281,7 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     assert_eq!(opened(cx).0, commit_menu("c02"));
     assert_eq!(
         asked.menus.borrow().last(),
-        Some(&("c02".into(), MarkEdge::Trailing)),
+        Some(&("c02".into(), only(MarkEdge::Trailing))),
         "its menu was asked for"
     );
     close(cx);
@@ -287,4 +304,72 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     });
     assert_eq!(opened(cx).0, None);
     assert_eq!(asked.menus.borrow().len(), asked_before);
+
+    // Several marks: each chip asks for its own, right to left; those that
+    // did not fit are asked for together, from their "+5".
+    let along = |cx: &mut gpui::VisualTestContext, row: &'static str| {
+        let mut found: Vec<MarkTarget> = Vec::new();
+        let mut x = message.right() - px(2.0);
+        while x > message.right() - px(110.0) {
+            let before = asked.menus.borrow().len();
+            let position = at(cx, row, x);
+            right_click(cx, position);
+            if asked.menus.borrow().len() > before {
+                let (_, target) = asked.menus.borrow().last().cloned().unwrap();
+                let (_, invoker) = opened(cx);
+                let commit = CommitId(row.replace("history_row_", "c0").into());
+                assert_eq!(
+                    invoker.as_deref(),
+                    Some(
+                        crate::view::rows::history_mark_menu_invoker(repo_id, &commit, &target)
+                            .as_ref()
+                    )
+                );
+                if found.last() != Some(&target) {
+                    found.push(target);
+                }
+            }
+            close(cx);
+            x -= px(2.0);
+        }
+        found
+    };
+    let trailing = |marks| MarkTarget::new(MarkEdge::Trailing, marks);
+    assert_eq!(
+        along(cx, "history_row_6"),
+        [trailing(2..3), trailing(1..2), trailing(0..1)]
+    );
+    assert_eq!(along(cx, "history_row_7"), [trailing(1..6), trailing(0..1)]);
+}
+
+/// The row whose marks opened a menu shows its menu open, as for its own;
+/// a chip knows its menu from the invoker.
+#[test]
+fn a_mark_menus_invoker_names_its_row_edge_and_marks() {
+    use crate::view::rows::{
+        history_mark_menu_invoker, history_mark_menu_target, history_row_menu_is_open,
+    };
+    let repo = RepoId(3);
+    let commit = CommitId("abc".into());
+    let target = MarkTarget::new(MarkEdge::Leading, 1..6);
+    let invoker = history_mark_menu_invoker(repo, &commit, &target);
+    assert_eq!(invoker.as_ref(), "history_mark_menu_3_abc_leading_1_6");
+    assert_eq!(
+        history_mark_menu_target(&invoker, repo, "abc"),
+        Some(target)
+    );
+    assert_eq!(history_mark_menu_target(&invoker, repo, "ab"), None);
+    assert_eq!(history_mark_menu_target(&invoker, RepoId(4), "abc"), None);
+    assert!(history_row_menu_is_open(&invoker, repo, "abc"));
+    assert!(history_row_menu_is_open(
+        "history_commit_menu_3_abc",
+        repo,
+        "abc"
+    ));
+    assert!(!history_row_menu_is_open(
+        "history_commit_menu_3_abcd",
+        repo,
+        "abc"
+    ));
+    assert!(!history_row_menu_is_open(&invoker, repo, "abcd"));
 }

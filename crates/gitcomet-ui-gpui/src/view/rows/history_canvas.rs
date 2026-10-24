@@ -1,7 +1,7 @@
 use super::*;
 use crate::kit::interaction_paint::InteractionPaint;
 use crate::view::panes::HistoryRowHoverArea;
-use gitcomet_extension_api::MarkEdge;
+use gitcomet_extension_api::{MarkEdge, MarkTarget, RowGlyph, RowMark};
 use gitcomet_state::msg::CommitSelectMode;
 use gitcomet_ui_kit::text_layout::TextLayoutExt as _;
 use gpui::{
@@ -844,6 +844,98 @@ fn history_branch_chip_icon_width(
         + icon_gap * icons.len().saturating_sub(1) as f32
 }
 
+/// A mark shaped for its row: its glyph's icon and the text drawn after it.
+struct LaidMark {
+    icon: Option<SharedString>,
+    icon_width: Pixels,
+    text: Option<gpui::ShapedLine>,
+    color: gpui::Rgba,
+}
+
+impl LaidMark {
+    fn content(&self) -> Pixels {
+        self.icon_width + self.text.as_ref().map_or(px(0.0), |text| text.width)
+    }
+}
+
+/// A mark's icon, and its text: a text glyph shapes with the label.
+fn mark_content(mark: &RowMark) -> (Option<SharedString>, Option<SharedString>) {
+    match &mark.glyph {
+        Some(RowGlyph::Icon(path)) => (Some(path.clone()), mark.label.clone()),
+        Some(RowGlyph::Text(glyph)) => (
+            None,
+            Some(match &mark.label {
+                Some(label) => format!("{glyph} {label}").into(),
+                None => glyph.clone(),
+            }),
+        ),
+        _ => (None, mark.label.clone()),
+    }
+}
+
+/// The invoker of the menu a History row's marks opened: the row, the edge
+/// and which of its marks, so that chip shows its menu open.
+pub(in crate::view) fn history_mark_menu_invoker(
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    target: &MarkTarget,
+) -> SharedString {
+    let edge = match target.edge {
+        MarkEdge::Leading => "leading",
+        MarkEdge::Trailing => "trailing",
+    };
+    format!(
+        "history_mark_menu_{}_{}_{edge}_{}_{}",
+        repo_id.0,
+        commit_id.as_ref(),
+        target.marks.start,
+        target.marks.end
+    )
+    .into()
+}
+
+/// Whether the menu `invoker` opened is `repo_id`'s `commit_id` row's: the
+/// commit's own, or one its marks opened.
+pub(in crate::view) fn history_row_menu_is_open(
+    invoker: &str,
+    repo_id: RepoId,
+    commit_id: &str,
+) -> bool {
+    // Compared without formatting: this runs once per visible commit per
+    // frame just to find the one row whose menu is open.
+    invoker
+        .strip_prefix("history_commit_menu_")
+        .and_then(|rest| rest.split_once('_'))
+        .is_some_and(|(repo, commit)| repo.parse::<u64>() == Ok(repo_id.0) && commit == commit_id)
+        || history_mark_menu_target(invoker, repo_id, commit_id).is_some()
+}
+
+/// The marks on `repo_id`'s `commit_id` row whose menu `invoker` opened.
+pub(in crate::view) fn history_mark_menu_target(
+    invoker: &str,
+    repo_id: RepoId,
+    commit_id: &str,
+) -> Option<MarkTarget> {
+    let (repo, rest) = invoker
+        .strip_prefix("history_mark_menu_")?
+        .split_once('_')?;
+    if repo.parse::<u64>() != Ok(repo_id.0) {
+        return None;
+    }
+    let mut parts = rest.strip_prefix(commit_id)?.strip_prefix('_')?.split('_');
+    let edge = match parts.next()? {
+        "leading" => MarkEdge::Leading,
+        "trailing" => MarkEdge::Trailing,
+        _ => return None,
+    };
+    let start = parts.next()?.parse().ok()?;
+    let end = parts.next()?.parse().ok()?;
+    parts
+        .next()
+        .is_none()
+        .then(|| MarkTarget::new(edge, start..end))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_history_chip(
     window: &mut Window,
@@ -1584,96 +1676,199 @@ pub(super) fn history_commit_row_canvas(
 
             // Marks share the existing summary canvas, reserving their width so
             // neither the commit subject nor adjacent columns are obscured. A
-            // text glyph shapes with the label; an icon glyph leads it. Where
-            // a mark with a menu lands is kept for a right-click on it.
-            let mut mark_bounds: [Option<(MarkEdge, usize, Bounds<Pixels>)>; 2] = [None, None];
-            for (leading, mark) in [
-                (true, annotation.leading.as_ref()),
-                (false, annotation.trailing.as_ref()),
+            // text glyph shapes with the label; an icon glyph leads it. An
+            // edge's marks sit side by side, and those that do not fit give
+            // way to a "+2" counting them. An edge whose annotator offers a
+            // menu draws its marks as chips, the one whose menu is open as
+            // open, and keeps where each landed for a right-click on it.
+            let open_marks = active_context_menu_invoker
+                .as_deref()
+                .and_then(|invoker| history_mark_menu_target(invoker, repo_id, commit_id.as_ref()));
+            let mut mark_chips: SmallVec<[(MarkTarget, usize, Bounds<Pixels>); 4]> =
+                SmallVec::new();
+            let icon_size = xxs_line_height.min(bounds.size.height);
+            let mark_pad = scaled_px(4.0);
+            let mark_gap = scaled_px(3.0);
+            let chip_height = scaled_px(theme.metrics.row_height(
+                HISTORY_TAG_CHIP_HEIGHT_PX,
+                HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX,
+            ))
+            .min(bounds.size.height);
+            let chip_radius = px(theme.radii.pill).min(chip_height * 0.5);
+            for (edge, marks, owner) in [
+                (MarkEdge::Leading, &annotation.leading, mark_menus[0]),
+                (MarkEdge::Trailing, &annotation.trailing, mark_menus[1]),
             ] {
-                let Some(mark) = mark else {
+                if marks.is_empty() {
                     continue;
-                };
-                let color: gpui::Rgba = mark.color.into_color();
-                let (icon, text) = match &mark.glyph {
-                    Some(gitcomet_extension_api::RowGlyph::Icon(path)) => {
-                        (Some(path), mark.label.clone())
-                    }
-                    Some(gitcomet_extension_api::RowGlyph::Text(glyph)) => (
-                        None,
-                        Some(match &mark.label {
-                            Some(label) => format!("{glyph} {label}").into(),
-                            None => glyph.clone(),
-                        }),
-                    ),
-                    _ => (None, mark.label.clone()),
-                };
-                let icon_size = xxs_line_height.min(bounds.size.height);
-                let icon_width = if icon.is_some() {
-                    icon_size + scaled_px(2.0)
-                } else {
-                    px(0.0)
-                };
+                }
                 let available = (summary_bounds.size.width * 0.3).min(scaled_px(96.0));
-                let text = text.map(|text| {
+                let shape = |window: &mut Window, text: &SharedString, max: Pixels, color| {
                     let mut hasher = FxHasher::default();
                     text.hash(&mut hasher);
                     shape_truncated_line_cached(
                         window,
                         &base_style,
                         xxs_font,
-                        &text,
+                        text,
                         hasher.finish(),
-                        (available - icon_width).max(px(0.0)),
+                        max.max(px(0.0)),
                         color,
                         None,
                     )
-                });
-                let content = icon_width + text.as_ref().map_or(px(0.0), |text| text.width);
-                if content <= px(0.0) {
+                };
+                // Each mark alone at most as wide as the edge allows.
+                let mut laid: Vec<LaidMark> = Vec::with_capacity(marks.len());
+                for mark in marks {
+                    let color: gpui::Rgba = mark.color.into_color();
+                    let (icon, text) = mark_content(mark);
+                    let icon_width = if icon.is_some() {
+                        icon_size + scaled_px(2.0)
+                    } else {
+                        px(0.0)
+                    };
+                    let text = text.map(|text| {
+                        shape(
+                            window,
+                            &text,
+                            available - icon_width - mark_pad * 2.0,
+                            color,
+                        )
+                    });
+                    laid.push(LaidMark {
+                        icon,
+                        icon_width,
+                        text,
+                        color,
+                    });
+                }
+                let secondary = theme.colors.foreground.secondary;
+                // The "+2" for each count of marks left out, the first none.
+                let more: Vec<Option<gpui::ShapedLine>> = (0..laid.len())
+                    .map(|hidden| {
+                        (hidden > 0).then(|| {
+                            shape(window, &format!("+{hidden}").into(), available, secondary)
+                        })
+                    })
+                    .collect();
+                let more_width = |hidden: usize| {
+                    more[hidden]
+                        .as_ref()
+                        .map_or(px(0.0), |text| mark_gap + text.width + mark_pad * 2.0)
+                };
+                let group = |laid: &[LaidMark], shown: usize| {
+                    let marks: Pixels = laid[..shown]
+                        .iter()
+                        .map(|mark| mark.content() + mark_pad * 2.0)
+                        .sum();
+                    marks
+                        + mark_gap * (shown.saturating_sub(1) as f32)
+                        + more_width(laid.len() - shown)
+                };
+                let mut shown = laid.len();
+                while shown > 1 && group(&laid, shown) > available {
+                    shown -= 1;
+                }
+                // The first always shows: its label gives way to the "+2".
+                if shown < laid.len()
+                    && group(&laid, shown) > available
+                    && let Some(text) = mark_content(&marks[0]).1
+                {
+                    let first = &laid[0];
+                    let room =
+                        available - more_width(laid.len() - 1) - first.icon_width - mark_pad * 2.0;
+                    let color = first.color;
+                    laid[0].text = Some(shape(window, &text, room, color));
+                }
+                let hidden = laid.len() - shown;
+                let total = group(&laid, shown);
+                if total <= mark_pad * 2.0 {
                     continue;
                 }
-                let width = (content + scaled_px(8.0)).min(summary_bounds.size.width);
-                let x = if leading {
-                    summary_bounds.left() + scaled_px(4.0)
-                } else {
-                    summary_bounds.right() - width
+                let mut x = match edge {
+                    MarkEdge::Leading => summary_bounds.left() + scaled_px(4.0),
+                    MarkEdge::Trailing => summary_bounds.right() - total,
                 };
-                let (slot, edge) = if leading {
-                    (0, MarkEdge::Leading)
-                } else {
-                    (1, MarkEdge::Trailing)
-                };
-                mark_bounds[slot] = mark_menus[slot].map(|owner| {
-                    (
-                        edge,
-                        owner,
-                        Bounds::new(point(x, bounds.top()), size(width, bounds.size.height)),
-                    )
-                });
-                if let Some(path) = icon {
-                    super::diff_canvas::paint_centered_svg_icon(
-                        path.clone(),
-                        Bounds::new(point(x, center_y(icon_size)), size(icon_size, icon_size)),
-                        icon_size,
-                        color,
-                        window,
-                        cx,
+                let chip_y = bounds.top() + (bounds.size.height - chip_height) * 0.5;
+                let more_text = more[hidden].clone();
+                let pieces = laid[..shown]
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, mark)| (ix..ix + 1, Some(mark), None))
+                    .chain(more_text.map(|text| (shown..laid.len(), None, Some(text))));
+                for (marks_here, mark, more_text) in pieces {
+                    let content = mark.map_or_else(
+                        || more_text.as_ref().map_or(px(0.0), |text| text.width),
+                        LaidMark::content,
                     );
+                    let chip_width = content + mark_pad * 2.0;
+                    let target = MarkTarget::new(edge, marks_here);
+                    let content_x = if let Some(owner) = owner {
+                        let open = open_marks.as_ref() == Some(&target);
+                        let color = mark.map_or(secondary, |mark| mark.color);
+                        super::history_shapes::paint_rounded_rect(
+                            Bounds::new(point(x, chip_y), size(chip_width, chip_height)),
+                            chip_radius,
+                            if open {
+                                crate::kit::components::control_open_background(theme)
+                            } else {
+                                gpui::rgba(0x00000000)
+                            },
+                            scaled_px(1.0),
+                            if open { color } else { with_alpha(color, 0.45) },
+                            window,
+                        );
+                        mark_chips.push((
+                            target,
+                            owner,
+                            Bounds::new(
+                                point(x, bounds.top()),
+                                size(chip_width, bounds.size.height),
+                            ),
+                        ));
+                        x + mark_pad
+                    } else {
+                        x
+                    };
+                    if let Some(mark) = mark {
+                        if let Some(path) = &mark.icon {
+                            super::diff_canvas::paint_centered_svg_icon(
+                                path.clone(),
+                                Bounds::new(
+                                    point(content_x, center_y(icon_size)),
+                                    size(icon_size, icon_size),
+                                ),
+                                icon_size,
+                                mark.color,
+                                window,
+                                cx,
+                            );
+                        }
+                        if let Some(text) = &mark.text {
+                            let _ = text.paint(
+                                point(content_x + mark.icon_width, center_y(xxs_line_height)),
+                                xxs_line_height,
+                                gpui::TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        }
+                    } else if let Some(text) = &more_text {
+                        let _ = text.paint(
+                            point(content_x, center_y(xxs_line_height)),
+                            xxs_line_height,
+                            gpui::TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                    x += chip_width + mark_gap;
                 }
-                if let Some(text) = text {
-                    let _ = text.paint(
-                        point(x + icon_width, center_y(xxs_line_height)),
-                        xxs_line_height,
-                        gpui::TextAlign::Left,
-                        None,
-                        window,
-                        cx,
-                    );
-                }
-                summary_bounds.size.width -= width;
-                if leading {
-                    summary_bounds.origin.x += width;
+                summary_bounds.size.width -= total;
+                if edge == MarkEdge::Leading {
+                    summary_bounds.origin.x += total;
                 }
             }
 
@@ -2299,24 +2494,27 @@ pub(super) fn history_commit_row_canvas(
                         gpui::ClickEvent::Mouse(click) => click.down.position,
                         _ => event.position(),
                     };
-                    let mark_menu = mark_bounds
+                    let chip = mark_chips
                         .iter()
-                        .flatten()
                         .find(|(_, _, bounds)| bounds.contains(&pressed))
-                        .zip(mark_commit.as_ref())
-                        .map(|((edge, owner, _), commit)| {
-                            view.read(cx)
-                                .history_mark_menu(repo_id, commit, *edge, *owner, cx)
+                        .zip(mark_commit.as_ref());
+                    let mark_menu = chip
+                        .map(|((target, owner, _), commit)| {
+                            let items = view
+                                .read(cx)
+                                .history_mark_menu(repo_id, commit, target, *owner, cx);
+                            (target.clone(), items)
                         })
-                        .unwrap_or_default();
-                    // Only a menu with something to choose replaces the
-                    // commit's.
-                    let mark_menu = mark_menu
-                        .iter()
-                        .any(|item| {
-                            matches!(item, gitcomet_extension_api::HostedMenuItem::Action { .. })
-                        })
-                        .then_some(mark_menu);
+                        // Only a menu with something to choose replaces the
+                        // commit's.
+                        .filter(|(_, items)| {
+                            items.iter().any(|item| {
+                                matches!(
+                                    item,
+                                    gitcomet_extension_api::HostedMenuItem::Action { .. }
+                                )
+                            })
+                        });
                     view.update(cx, |this, cx| {
                         // Right-clicking inside an active multi-selection must
                         // not collapse it — the menu acts on the whole set — but
@@ -2334,11 +2532,12 @@ pub(super) fn history_commit_row_canvas(
                             format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();
 
-                        // The row shows its menu open either way.
-                        if let Some(mark_menu) = mark_menu {
+                        // The row shows its menu open either way, and a
+                        // chip its own.
+                        if let Some((target, mark_menu)) = mark_menu {
                             this.open_hosted_menu_at(
                                 mark_menu,
-                                context_menu_invoker,
+                                history_mark_menu_invoker(repo_id, &commit_id, &target),
                                 event.position(),
                                 window,
                                 cx,
