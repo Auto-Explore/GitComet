@@ -14,6 +14,10 @@ pub struct RowMark {
     pub label: Option<SharedString>,
     pub color: Hsla,
     pub glyph: Option<RowGlyph>,
+    /// What the mark stands for, to its annotator: a History mark's menu is
+    /// told the keys of the marks it covers, and a chip shows its menu open
+    /// by them while the marks move.
+    pub key: Option<SharedString>,
 }
 
 impl RowMark {
@@ -22,7 +26,13 @@ impl RowMark {
             label: None,
             color,
             glyph: None,
+            key: None,
         }
+    }
+
+    pub fn with_key(mut self, key: impl Into<SharedString>) -> Self {
+        self.key = Some(key.into());
+        self
     }
 
     pub fn with_label(mut self, label: impl Into<SharedString>) -> Self {
@@ -117,7 +127,7 @@ impl HistoryRowAnnotation {
 pub type AnnotateHistory =
     Rc<dyn Fn(&RepositoryViewContext, &Commit, &App) -> HistoryRowAnnotation>;
 
-/// Which of a History row's marks.
+/// Which end of a History row's message marks sit at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MarkEdge {
     Leading,
@@ -125,17 +135,28 @@ pub enum MarkEdge {
 }
 
 /// The marks a right-click landed on: one mark, or the marks a "+2" stands
-/// for, by their places in the edge's list.
+/// for, by their places in the edge's list as drawn and by the keys of
+/// those that have one. The keys still name them once the list has moved.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct MarkTarget {
     pub edge: MarkEdge,
     pub marks: Range<usize>,
+    pub keys: Vec<SharedString>,
 }
 
 impl MarkTarget {
     pub fn new(edge: MarkEdge, marks: Range<usize>) -> Self {
-        Self { edge, marks }
+        Self {
+            edge,
+            marks,
+            keys: Vec::new(),
+        }
+    }
+
+    pub fn with_keys(mut self, keys: impl IntoIterator<Item = SharedString>) -> Self {
+        self.keys = keys.into_iter().collect();
+        self
     }
 }
 

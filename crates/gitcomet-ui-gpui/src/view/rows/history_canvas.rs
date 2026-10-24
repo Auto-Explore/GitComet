@@ -873,23 +873,32 @@ fn mark_content(mark: &RowMark) -> (Option<SharedString>, Option<SharedString>) 
     }
 }
 
-/// The invoker of the menu a History row's marks opened: the row, the edge
-/// and which of its marks, so that chip shows its menu open.
+/// Which chip a mark target is drawn as: by its edge and its marks' keys
+/// when they all have one, so a chip keeps showing its menu open while the
+/// marks move; else by its edge and the marks' places.
+pub(in crate::view) fn history_mark_chip(target: &MarkTarget) -> u64 {
+    let mut hasher = FxHasher::default();
+    target.edge.hash(&mut hasher);
+    if !target.keys.is_empty() && target.keys.len() == target.marks.len() {
+        target.keys.hash(&mut hasher);
+    } else {
+        target.marks.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// The invoker of the menu a History row's marks opened: the row, and which
+/// of its chips, so that chip shows its menu open.
 pub(in crate::view) fn history_mark_menu_invoker(
     repo_id: RepoId,
     commit_id: &CommitId,
     target: &MarkTarget,
 ) -> SharedString {
-    let edge = match target.edge {
-        MarkEdge::Leading => "leading",
-        MarkEdge::Trailing => "trailing",
-    };
     format!(
-        "history_mark_menu_{}_{}_{edge}_{}_{}",
+        "history_mark_menu_{}_{}_{:016x}",
         repo_id.0,
         commit_id.as_ref(),
-        target.marks.start,
-        target.marks.end
+        history_mark_chip(target)
     )
     .into()
 }
@@ -907,33 +916,23 @@ pub(in crate::view) fn history_row_menu_is_open(
         .strip_prefix("history_commit_menu_")
         .and_then(|rest| rest.split_once('_'))
         .is_some_and(|(repo, commit)| repo.parse::<u64>() == Ok(repo_id.0) && commit == commit_id)
-        || history_mark_menu_target(invoker, repo_id, commit_id).is_some()
+        || history_mark_menu_chip(invoker, repo_id, commit_id).is_some()
 }
 
-/// The marks on `repo_id`'s `commit_id` row whose menu `invoker` opened.
-pub(in crate::view) fn history_mark_menu_target(
+/// The chip on `repo_id`'s `commit_id` row whose menu `invoker` opened.
+pub(in crate::view) fn history_mark_menu_chip(
     invoker: &str,
     repo_id: RepoId,
     commit_id: &str,
-) -> Option<MarkTarget> {
+) -> Option<u64> {
     let (repo, rest) = invoker
         .strip_prefix("history_mark_menu_")?
         .split_once('_')?;
     if repo.parse::<u64>() != Ok(repo_id.0) {
         return None;
     }
-    let mut parts = rest.strip_prefix(commit_id)?.strip_prefix('_')?.split('_');
-    let edge = match parts.next()? {
-        "leading" => MarkEdge::Leading,
-        "trailing" => MarkEdge::Trailing,
-        _ => return None,
-    };
-    let start = parts.next()?.parse().ok()?;
-    let end = parts.next()?.parse().ok()?;
-    parts
-        .next()
-        .is_none()
-        .then(|| MarkTarget::new(edge, start..end))
+    let chip = rest.strip_prefix(commit_id)?.strip_prefix('_')?;
+    u64::from_str_radix(chip, 16).ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1681,9 +1680,9 @@ pub(super) fn history_commit_row_canvas(
             // way to a "+2" counting them. An edge whose annotator offers a
             // menu draws its marks as chips, the one whose menu is open as
             // open, and keeps where each landed for a right-click on it.
-            let open_marks = active_context_menu_invoker
+            let open_chip = active_context_menu_invoker
                 .as_deref()
-                .and_then(|invoker| history_mark_menu_target(invoker, repo_id, commit_id.as_ref()));
+                .and_then(|invoker| history_mark_menu_chip(invoker, repo_id, commit_id.as_ref()));
             let mut mark_chips: SmallVec<[(MarkTarget, usize, Bounds<Pixels>); 4]> =
                 SmallVec::new();
             let icon_size = xxs_line_height.min(bounds.size.height);
@@ -1743,27 +1742,35 @@ pub(super) fn history_commit_row_canvas(
                     });
                 }
                 let secondary = theme.colors.foreground.secondary;
-                // The "+2" for each count of marks left out, the first none.
-                let more: Vec<Option<gpui::ShapedLine>> = (0..laid.len())
-                    .map(|hidden| {
-                        (hidden > 0).then(|| {
-                            shape(window, &format!("+{hidden}").into(), available, secondary)
-                        })
-                    })
-                    .collect();
-                let more_width = |hidden: usize| {
-                    more[hidden]
-                        .as_ref()
-                        .map_or(px(0.0), |text| mark_gap + text.width + mark_pad * 2.0)
-                };
-                let group = |laid: &[LaidMark], shown: usize| {
+                let marks_width = |laid: &[LaidMark], shown: usize| -> Pixels {
                     let marks: Pixels = laid[..shown]
                         .iter()
                         .map(|mark| mark.content() + mark_pad * 2.0)
                         .sum();
-                    marks
-                        + mark_gap * (shown.saturating_sub(1) as f32)
-                        + more_width(laid.len() - shown)
+                    marks + mark_gap * (shown.saturating_sub(1) as f32)
+                };
+                // The "+2" for each count of marks left out, the first none;
+                // shaped only when some are.
+                let more: Vec<Option<gpui::ShapedLine>> = if marks_width(&laid, laid.len())
+                    <= available
+                {
+                    Vec::new()
+                } else {
+                    (0..laid.len())
+                        .map(|hidden| {
+                            (hidden > 0).then(|| {
+                                shape(window, &format!("+{hidden}").into(), available, secondary)
+                            })
+                        })
+                        .collect()
+                };
+                let more_width = |hidden: usize| {
+                    more.get(hidden)
+                        .and_then(Option::as_ref)
+                        .map_or(px(0.0), |text| mark_gap + text.width + mark_pad * 2.0)
+                };
+                let group = |laid: &[LaidMark], shown: usize| {
+                    marks_width(laid, shown) + more_width(laid.len() - shown)
                 };
                 let mut shown = laid.len();
                 while shown > 1 && group(&laid, shown) > available {
@@ -1782,15 +1789,18 @@ pub(super) fn history_commit_row_canvas(
                 }
                 let hidden = laid.len() - shown;
                 let total = group(&laid, shown);
-                if total <= mark_pad * 2.0 {
+                // Marks that would not fit the message cell are not drawn
+                // over its neighbours.
+                let inset = scaled_px(4.0);
+                if total <= mark_pad * 2.0 || total + inset > summary_bounds.size.width {
                     continue;
                 }
                 let mut x = match edge {
-                    MarkEdge::Leading => summary_bounds.left() + scaled_px(4.0),
-                    MarkEdge::Trailing => summary_bounds.right() - total,
+                    MarkEdge::Leading => summary_bounds.left() + inset,
+                    MarkEdge::Trailing => summary_bounds.right() - inset - total,
                 };
                 let chip_y = bounds.top() + (bounds.size.height - chip_height) * 0.5;
-                let more_text = more[hidden].clone();
+                let more_text = more.get(hidden).cloned().flatten();
                 let pieces = laid[..shown]
                     .iter()
                     .enumerate()
@@ -1802,9 +1812,12 @@ pub(super) fn history_commit_row_canvas(
                         LaidMark::content,
                     );
                     let chip_width = content + mark_pad * 2.0;
-                    let target = MarkTarget::new(edge, marks_here);
-                    let content_x = if let Some(owner) = owner {
-                        let open = open_marks.as_ref() == Some(&target);
+                    let keys = marks[marks_here.clone()]
+                        .iter()
+                        .filter_map(|mark| mark.key.clone());
+                    let target = MarkTarget::new(edge, marks_here).with_keys(keys);
+                    if let Some(owner) = owner {
+                        let open = open_chip == Some(history_mark_chip(&target));
                         let color = mark.map_or(secondary, |mark| mark.color);
                         super::history_shapes::paint_rounded_rect(
                             Bounds::new(point(x, chip_y), size(chip_width, chip_height)),
@@ -1826,10 +1839,8 @@ pub(super) fn history_commit_row_canvas(
                                 size(chip_width, bounds.size.height),
                             ),
                         ));
-                        x + mark_pad
-                    } else {
-                        x
-                    };
+                    }
+                    let content_x = x + mark_pad;
                     if let Some(mark) = mark {
                         if let Some(path) = &mark.icon {
                             super::diff_canvas::paint_centered_svg_icon(
@@ -1866,9 +1877,9 @@ pub(super) fn history_commit_row_canvas(
                     }
                     x += chip_width + mark_gap;
                 }
-                summary_bounds.size.width -= total;
+                summary_bounds.size.width -= total + inset;
                 if edge == MarkEdge::Leading {
-                    summary_bounds.origin.x += total;
+                    summary_bounds.origin.x += total + inset;
                 }
             }
 

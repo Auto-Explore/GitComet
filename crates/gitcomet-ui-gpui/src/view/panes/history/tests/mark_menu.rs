@@ -19,7 +19,8 @@ struct Asked {
 /// Two annotators. "agents" marks every commit's end and `c01`'s start and
 /// offers a menu, empty on `c02`; "other", registered after it, marks
 /// `c03`'s end over it and offers none. `c06` ends with three short marks,
-/// all of which fit, and `c07` with six long ones, of which one fits.
+/// all of which fit, each with a key; `c07` with six long ones, of which one
+/// fits, its label cut to leave room for the "+5".
 struct Marks(Rc<Asked>);
 
 impl Extension for Marks {
@@ -42,11 +43,17 @@ impl Extension for Marks {
                     "c06" => ["A", "B", "C"].into_iter().fold(
                         HistoryRowAnnotation::default(),
                         |annotation, label| {
-                            annotation.with_trailing(RowMark::new(gpui::green()).with_label(label))
+                            annotation.with_trailing(
+                                RowMark::new(gpui::green())
+                                    .with_label(label)
+                                    .with_key(label.to_lowercase()),
+                            )
                         },
                     ),
                     "c07" => (0..6).fold(HistoryRowAnnotation::default(), |annotation, _| {
-                        annotation.with_trailing(mark.clone())
+                        annotation.with_trailing(
+                            RowMark::new(gpui::green()).with_label("Running for a long while"),
+                        )
                     }),
                     _ => HistoryRowAnnotation::default().with_trailing(mark),
                 }
@@ -142,9 +149,9 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
     let at = |cx: &mut gpui::VisualTestContext, row: &'static str, x: Pixels| {
         point(x, cx.debug_bounds(row).expect(row).center().y)
     };
-    // The trailing mark ends at the message column's right edge; the leading
-    // one starts just inside its left.
-    let trailing = |cx: &mut gpui::VisualTestContext, row| at(cx, row, message.right() - px(3.0));
+    // The trailing mark ends just inside the message column's right edge; the
+    // leading one starts just inside its left.
+    let trailing = |cx: &mut gpui::VisualTestContext, row| at(cx, row, message.right() - px(8.0));
     let leading = |cx: &mut gpui::VisualTestContext, row| at(cx, row, message.left() + px(8.0));
     let subject = |cx: &mut gpui::VisualTestContext, row| at(cx, row, message.center().x);
     // Pressed at `press`, released at `release` on the same row.
@@ -222,11 +229,18 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
         matches!(kind, Some(PopoverKind::Hosted { menu: true, .. })),
         "{kind:?}"
     );
+    let only = |edge| MarkTarget::new(edge, 0..1);
     assert_eq!(
         invoker.as_deref(),
-        Some("history_mark_menu_1_c00_trailing_0_1")
+        Some(
+            crate::view::rows::history_mark_menu_invoker(
+                repo_id,
+                &CommitId("c00".into()),
+                &only(MarkEdge::Trailing)
+            )
+            .as_ref()
+        )
     );
-    let only = |edge| MarkTarget::new(edge, 0..1);
     assert_eq!(
         *asked.menus.borrow(),
         [("c00".into(), only(MarkEdge::Trailing))]
@@ -335,31 +349,34 @@ fn a_right_click_on_a_mark_opens_its_annotators_menu(cx: &mut gpui::TestAppConte
         found
     };
     let trailing = |marks| MarkTarget::new(MarkEdge::Trailing, marks);
+    let keyed = |marks, key: &str| trailing(marks).with_keys([SharedString::from(key.to_owned())]);
     assert_eq!(
         along(cx, "history_row_6"),
-        [trailing(2..3), trailing(1..2), trailing(0..1)]
+        [keyed(2..3, "c"), keyed(1..2, "b"), keyed(0..1, "a")]
     );
     assert_eq!(along(cx, "history_row_7"), [trailing(1..6), trailing(0..1)]);
 }
 
 /// The row whose marks opened a menu shows its menu open, as for its own;
-/// a chip knows its menu from the invoker.
+/// a chip knows its menu from the invoker, by its marks' keys where they
+/// have them, so it stays open while they move.
 #[test]
-fn a_mark_menus_invoker_names_its_row_edge_and_marks() {
+fn a_mark_menus_invoker_names_its_row_and_chip() {
     use crate::view::rows::{
-        history_mark_menu_invoker, history_mark_menu_target, history_row_menu_is_open,
+        history_mark_chip, history_mark_menu_chip, history_mark_menu_invoker,
+        history_row_menu_is_open,
     };
     let repo = RepoId(3);
     let commit = CommitId("abc".into());
     let target = MarkTarget::new(MarkEdge::Leading, 1..6);
     let invoker = history_mark_menu_invoker(repo, &commit, &target);
-    assert_eq!(invoker.as_ref(), "history_mark_menu_3_abc_leading_1_6");
+    assert!(invoker.starts_with("history_mark_menu_3_abc_"));
     assert_eq!(
-        history_mark_menu_target(&invoker, repo, "abc"),
-        Some(target)
+        history_mark_menu_chip(&invoker, repo, "abc"),
+        Some(history_mark_chip(&target))
     );
-    assert_eq!(history_mark_menu_target(&invoker, repo, "ab"), None);
-    assert_eq!(history_mark_menu_target(&invoker, RepoId(4), "abc"), None);
+    assert_eq!(history_mark_menu_chip(&invoker, repo, "ab"), None);
+    assert_eq!(history_mark_menu_chip(&invoker, RepoId(4), "abc"), None);
     assert!(history_row_menu_is_open(&invoker, repo, "abc"));
     assert!(history_row_menu_is_open(
         "history_commit_menu_3_abc",
@@ -372,4 +389,20 @@ fn a_mark_menus_invoker_names_its_row_edge_and_marks() {
         "abc"
     ));
     assert!(!history_row_menu_is_open(&invoker, repo, "abcd"));
+
+    // Keyed marks are the same chip wherever they moved; unkeyed ones are
+    // their places.
+    let at = |marks, keys: &[&str]| {
+        history_mark_chip(
+            &MarkTarget::new(MarkEdge::Trailing, marks)
+                .with_keys(keys.iter().map(|key| SharedString::from(key.to_string()))),
+        )
+    };
+    assert_eq!(at(0..1, &["b"]), at(1..2, &["b"]));
+    assert_ne!(at(0..1, &["a"]), at(0..1, &["b"]));
+    assert_ne!(at(0..1, &[]), at(1..2, &[]));
+    assert_ne!(
+        history_mark_chip(&MarkTarget::new(MarkEdge::Leading, 0..1)),
+        history_mark_chip(&MarkTarget::new(MarkEdge::Trailing, 0..1))
+    );
 }
