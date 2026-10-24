@@ -642,7 +642,9 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::StashMenu { .. }
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(
-                    WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    WorktreePopoverKind::SectionMenu
+                        | WorktreePopoverKind::Menu { .. }
+                        | WorktreePopoverKind::CommitMenu { .. },
                 ),
                 ..
             }
@@ -1203,7 +1205,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Worktree(
-                    WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    WorktreePopoverKind::SectionMenu
+                    | WorktreePopoverKind::Menu { .. }
+                    | WorktreePopoverKind::CommitMenu { .. },
                 ),
             ..
         }

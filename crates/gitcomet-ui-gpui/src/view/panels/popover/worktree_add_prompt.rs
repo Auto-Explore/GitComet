@@ -5,11 +5,13 @@ use gitcomet_core::services::WorktreeCheckout;
 use gitcomet_state::model::RepoState;
 use std::path::{Path, PathBuf};
 
-/// Why Add is off: a field still needs input, or git would refuse the request.
+/// Why Add is off: a field still needs input, git would refuse the request, or
+/// the branch is checked out at the path already, which the dialog offers to open.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum WorktreeAddBlocked {
     Incomplete,
     Refused(String),
+    CheckedOut(PathBuf),
 }
 
 pub(super) struct WorktreeAddFields<'a> {
@@ -157,10 +159,7 @@ fn existing_checkout(
         return Err(WorktreeAddBlocked::Incomplete);
     }
     if let Some(at) = crate::view::rows::branch_checked_out_at(repo, source) {
-        return Err(WorktreeAddBlocked::Refused(format!(
-            "'{source}' is already checked out in {}",
-            at.display()
-        )));
+        return Err(WorktreeAddBlocked::CheckedOut(at));
     }
     Ok(WorktreeCheckout::Existing {
         reference: source.to_string(),
@@ -232,9 +231,25 @@ pub(super) fn panel(
     let theme = this.theme;
     let blocked = this.worktree_add_request(repo_id, cx).err();
     let can_submit = blocked.is_none();
-    let refused = match blocked {
-        Some(WorktreeAddBlocked::Refused(reason)) => Some(reason),
-        _ => None,
+    let (refused, checked_out_at) = match blocked {
+        Some(WorktreeAddBlocked::Refused(reason)) => (Some(reason), None),
+        Some(WorktreeAddBlocked::CheckedOut(at)) => (None, Some(at)),
+        _ => (None, None),
+    };
+    let checked_out = checked_out_at.map(|at| {
+        format!(
+            "'{}' is already checked out in {}.",
+            this.worktree_ref_source_target.trim(),
+            at.display()
+        )
+    });
+    // Unticked, a branch that is checked out already opens where it is.
+    let submit = match checked_out {
+        Some(_) => components::Button::new("worktree_add_open", "Open worktree")
+            .separated_end_slot(super::hotkey_hint(theme, "worktree_add_open_hint", "Enter")),
+        None => components::Button::new("worktree_add_go", "Add")
+            .disabled(!can_submit)
+            .separated_end_slot(super::hotkey_hint(theme, "worktree_add_go_hint", "Enter")),
     };
     let create_branch = this.worktree_add_create_branch;
     let detached = this
@@ -328,14 +343,26 @@ pub(super) fn panel(
                     components::Button::new("worktree_browse", "Browse")
                         .focus_handle(this.worktree_browse_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |_this, _e, window, cx| {
+                        .on_click(theme, cx, move |this, _e, window, cx| {
                             cx.stop_propagation();
                             let view = cx.weak_entity();
+                            // A relative folder counts from the worktree, as git reads it.
+                            let workdir = this
+                                .state
+                                .repos
+                                .iter()
+                                .find(|repo| repo.id == repo_id)
+                                .map(|repo| repo.spec.workdir.clone());
+                            let directory = crate::view::path_prompt::existing_folder(
+                                this.worktree_path_input.read(cx).text(),
+                                workdir.as_deref(),
+                            );
                             let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
                                 files: false,
                                 directories: true,
                                 multiple: false,
                                 prompt: Some("Select worktree folder".into()),
+                                directory,
                             });
 
                             window
@@ -412,6 +439,17 @@ pub(super) fn panel(
                     .child(this.worktree_new_branch_input.clone()),
             )
         })
+        .when_some(checked_out, |panel, notice| {
+            panel.child(
+                div()
+                    .debug_selector(|| "worktree_add_checked_out".to_string())
+                    .px_2()
+                    .pb_1()
+                    .text_size(theme.ui_text(12.0))
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(notice),
+            )
+        })
         .when_some(refused, |panel, reason| {
             panel.child(
                 div()
@@ -434,14 +472,8 @@ pub(super) fn panel(
                         }),
                 )
                 .child(
-                    components::Button::new("worktree_add_go", "Add")
+                    submit
                         .focus_handle(this.worktree_focus.submit.clone())
-                        .disabled(!can_submit)
-                        .separated_end_slot(super::hotkey_hint(
-                            theme,
-                            "worktree_add_go_hint",
-                            "Enter",
-                        ))
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.submit_worktree_add(cx);
@@ -592,13 +624,26 @@ mod tests {
     }
 
     #[test]
-    fn checkout_branch_refuses_a_branch_checked_out_elsewhere() {
+    fn checkout_branch_offers_the_worktree_that_has_the_branch() {
         assert_eq!(
             request("/tmp/ws/again", "main", false, ""),
-            Err(WorktreeAddBlocked::Refused(format!(
-                "'main' is already checked out in {}",
-                Path::new("/tmp/ws/main").display()
+            Err(WorktreeAddBlocked::CheckedOut(PathBuf::from(
+                "/tmp/ws/main"
             )))
+        );
+    }
+
+    #[test]
+    fn a_checked_out_branch_can_start_a_new_branch() {
+        assert_eq!(
+            request("/tmp/ws/next", "main", true, ""),
+            Ok((
+                PathBuf::from("/tmp/ws/next"),
+                WorktreeCheckout::NewBranch {
+                    name: "next".to_string(),
+                    start: Some("main".to_string()),
+                }
+            ))
         );
     }
 
@@ -665,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn checkout_branch_refuses_a_branch_held_by_another_worktree() {
+    fn checkout_branch_offers_another_worktree_that_has_the_branch() {
         let mut repo = request_repo();
         repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
             path: PathBuf::from("/tmp/ws/held"),
@@ -683,9 +728,8 @@ mod tests {
                     new_branch: "",
                 },
             ),
-            Err(WorktreeAddBlocked::Refused(format!(
-                "'free' is already checked out in {}",
-                Path::new("/tmp/ws/held").display()
+            Err(WorktreeAddBlocked::CheckedOut(PathBuf::from(
+                "/tmp/ws/held"
             )))
         );
     }
@@ -762,9 +806,16 @@ mod tests {
     #[test]
     fn a_refusal_shows_before_the_folder_is_filled_in() {
         assert!(matches!(
-            request("", "main", false, ""),
+            request("", "main", true, "a..b"),
             Err(WorktreeAddBlocked::Refused(_))
         ));
+        assert_eq!(
+            request("", "main", false, ""),
+            Err(WorktreeAddBlocked::CheckedOut(PathBuf::from(
+                "/tmp/ws/main"
+            ))),
+            "opening the worktree that has the branch needs no folder"
+        );
     }
 
     #[test]

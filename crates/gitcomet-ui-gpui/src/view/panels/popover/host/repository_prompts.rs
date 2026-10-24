@@ -432,7 +432,10 @@ impl PopoverHost {
         else {
             return false;
         };
-        self.worktree_add_request(repo_id, cx).is_ok()
+        matches!(
+            self.worktree_add_request(repo_id, cx),
+            Ok(_) | Err(worktree_add_prompt::WorktreeAddBlocked::CheckedOut(_))
+        )
     }
 
     pub(in crate::view::panels::popover) fn submit_worktree_add(
@@ -449,15 +452,30 @@ impl PopoverHost {
         else {
             return;
         };
-        let Ok((path, checkout)) = self.worktree_add_request(repo_id, cx) else {
-            return;
-        };
-        self.store.dispatch(Msg::AddWorktree {
-            repo_id,
-            path,
-            checkout,
-            open_after: self.worktree_add_open_after,
-        });
+        match self.worktree_add_request(repo_id, cx) {
+            Ok((path, checkout)) => {
+                self.store.dispatch(Msg::AddWorktree {
+                    repo_id,
+                    path,
+                    checkout,
+                    open_after: self.worktree_add_open_after,
+                });
+            }
+            Err(worktree_add_prompt::WorktreeAddBlocked::CheckedOut(path)) => {
+                let is_current = self
+                    .state
+                    .repos
+                    .iter()
+                    .any(|repo| repo.id == repo_id && repo.spec.workdir == path);
+                // The worktree the dialog started in is open already.
+                if !is_current {
+                    let _ = self
+                        .root_view
+                        .request(RootRequest::OpenRepoPath(path), None, cx);
+                }
+            }
+            Err(_) => return,
+        }
         self.close_popover(cx);
     }
 

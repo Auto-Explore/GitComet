@@ -631,6 +631,10 @@ pub(crate) enum WorktreePopoverKind {
         path: std::path::PathBuf,
         branch: Option<String>,
     },
+    /// Every worktree a history row's chips stand for, from its "+N" chip.
+    CommitMenu {
+        commit_id: CommitId,
+    },
 }
 
 /// What the Add-worktree dialog opens with when another surface starts it. The

@@ -876,6 +876,7 @@ pub(super) fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>)
         directories: true,
         multiple: false,
         prompt: Some("Open Git Repository".into()),
+        directory: None,
     });
 
     cx.spawn(async move |cx: &mut gpui::AsyncApp| {
@@ -936,6 +937,7 @@ pub(super) fn prompt_apply_patch(cx: &mut App) {
         directories: false,
         multiple: false,
         prompt: Some("Select patch file".into()),
+        directory: None,
     });
 
     cx.spawn(async move |cx: &mut gpui::AsyncApp| {

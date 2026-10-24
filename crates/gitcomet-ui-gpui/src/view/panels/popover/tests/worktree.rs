@@ -280,23 +280,36 @@ fn add_worktree_creates_a_branch_from_the_default_branch_by_default(cx: &mut gpu
         cx.debug_bounds("worktree_add_new_branch").is_none(),
         "checking out a branch needs no new name"
     );
+    assert!(cx.debug_bounds("worktree_add_refused").is_none());
     assert!(
-        cx.debug_bounds("worktree_add_refused").is_some(),
+        cx.debug_bounds("worktree_add_checked_out").is_some(),
         "main is checked out in this worktree already"
+    );
+    assert!(cx.debug_bounds("worktree_add_go").is_none());
+
+    click(cx, "worktree_add_open");
+
+    assert_eq!(
+        popover_kind(&view, cx),
+        None,
+        "opening the worktree the dialog started in only closes it"
     );
 }
 
-#[gpui::test]
-fn branch_menu_opens_the_add_dialog_ready_to_check_the_branch_out(cx: &mut gpui::TestAppContext) {
-    let repo_id = RepoId(1);
-    let (view, cx) = open_view(cx, repo_with_default_branch(repo_id), repo_id);
+/// Opens the local branch's menu and picks "Open in new worktree".
+fn open_branch_in_new_worktree(
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    repo_id: RepoId,
+    branch: &str,
+) {
     let menu = PopoverKind::BranchMenu {
         repo_id,
         target: BranchMenuTarget::Local {
-            name: "feat/free".to_string(),
+            name: branch.to_string(),
         },
     };
-    open_popover(&view, cx, menu.clone());
+    open_popover(view, cx, menu.clone());
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -320,6 +333,13 @@ fn branch_menu_opens_the_add_dialog_ready_to_check_the_branch_out(cx: &mut gpui:
         });
     });
     redraw(cx);
+}
+
+#[gpui::test]
+fn branch_menu_opens_the_add_dialog_ready_to_check_the_branch_out(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let (view, cx) = open_view(cx, repo_with_default_branch(repo_id), repo_id);
+    open_branch_in_new_worktree(&view, cx, repo_id, "feat/free");
 
     assert_eq!(
         popover_kind(&view, cx),
@@ -345,6 +365,43 @@ fn branch_menu_opens_the_add_dialog_ready_to_check_the_branch_out(cx: &mut gpui:
     assert_eq!(source, "feat/free");
     assert!(!create, "an existing local branch is checked out as-is");
     assert!(open_after, "the new worktree opens once git creates it");
+    assert!(cx.debug_bounds("worktree_add_refused").is_none());
+}
+
+#[gpui::test]
+fn a_branch_checked_out_elsewhere_gets_a_new_branch_or_opens_its_worktree(
+    cx: &mut gpui::TestAppContext,
+) {
+    let repo_id = RepoId(1);
+    let (view, cx) = open_view(cx, repo_with_default_branch(repo_id), repo_id);
+    open_branch_in_new_worktree(&view, cx, repo_id, "feat/x");
+
+    assert_eq!(
+        popover_kind(&view, cx),
+        Some(PopoverKind::worktree(
+            repo_id,
+            WorktreePopoverKind::AddPrompt
+        ))
+    );
+    let (source, create) = host_read(&view, cx, |host, _| {
+        (
+            host.worktree_ref_source_target.clone(),
+            host.worktree_add_create_branch,
+        )
+    });
+    assert_eq!(source, "feat/x");
+    assert!(create, "git refuses to check feat/x out a second time");
+    assert!(cx.debug_bounds("worktree_add_checked_out").is_none());
+    assert!(cx.debug_bounds("worktree_add_go").is_some());
+
+    click(cx, "worktree_add_create_branch");
+
+    assert!(
+        cx.debug_bounds("worktree_add_checked_out").is_some(),
+        "unticked, the dialog says where feat/x is checked out"
+    );
+    assert!(cx.debug_bounds("worktree_add_open").is_some());
+    assert!(cx.debug_bounds("worktree_add_go").is_none());
     assert!(cx.debug_bounds("worktree_add_refused").is_none());
 }
 
@@ -379,5 +436,53 @@ fn checking_out_a_remote_ref_says_the_worktree_starts_detached(cx: &mut gpui::Te
     assert!(
         cx.debug_bounds("worktree_add_detached").is_some(),
         "git checks a remote ref out detached"
+    );
+}
+
+/// Clicks `selector` and returns the folder the dialog it opens starts in.
+fn browse_start(cx: &mut gpui::VisualTestContext, selector: &'static str) -> Option<PathBuf> {
+    click(cx, selector);
+    assert!(cx.did_prompt_for_paths(), "{selector} opens a dialog");
+    let mut directory = None;
+    cx.simulate_path_prompt_response(|options| {
+        directory = options.directory.clone();
+        None
+    });
+    redraw(cx);
+    directory
+}
+
+#[gpui::test]
+fn browse_opens_at_the_typed_worktree_folder_when_it_exists(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workdir = dir.path().to_path_buf();
+    let (view, cx) = open_view(cx, opening_repo_state(repo_id, &workdir), repo_id);
+    open_popover(
+        &view,
+        cx,
+        PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
+    );
+
+    assert_eq!(
+        browse_start(cx, "worktree_browse"),
+        Some(workdir.clone()),
+        "the prefilled folder exists"
+    );
+
+    let missing = workdir.join("missing");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.worktree_path_input.update(cx, |input, cx| {
+                    input.set_text(missing.display().to_string(), cx);
+                });
+            });
+        });
+    });
+    assert_eq!(
+        browse_start(cx, "worktree_browse"),
+        None,
+        "a missing folder keeps the platform default"
     );
 }

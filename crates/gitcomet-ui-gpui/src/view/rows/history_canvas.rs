@@ -1418,6 +1418,8 @@ pub(super) fn history_commit_row_canvas(
     // The same resolver paints the row and its graph-node cutouts.
     row_paint: InteractionPaint,
     annotation: gitcomet_extension_api::HistoryRowAnnotation,
+    // Left edge of the worktree chips laid over the end of the message cell.
+    worktree_chips_left: Option<std::rc::Rc<std::cell::Cell<Option<Pixels>>>>,
 ) -> AnyElement {
     let interaction = row_paint.clone();
     let prepaint_interaction = row_paint.clone();
@@ -1576,6 +1578,12 @@ pub(super) fn history_commit_row_canvas(
                     size(diameter, diameter),
                 )
             });
+
+            if let Some(chips_left) = worktree_chips_left.as_ref().and_then(|left| left.get()) {
+                summary_bounds.size.width = (chips_left - summary_bounds.left())
+                    .max(px(0.0))
+                    .min(summary_bounds.size.width);
+            }
 
             // Marks share the existing summary canvas, reserving their width so
             // neither the commit subject nor adjacent columns are obscured. A

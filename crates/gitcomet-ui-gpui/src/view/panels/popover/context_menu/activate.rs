@@ -494,6 +494,7 @@ impl PopoverHost {
                     directories: true,
                     multiple: false,
                     prompt: Some("Export patch to folder".into()),
+                    directory: None,
                 });
                 window
                     .spawn(cx, async move |cx| {

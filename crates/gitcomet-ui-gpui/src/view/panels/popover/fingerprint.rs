@@ -370,6 +370,8 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.head_branch_rev.hash(hasher);
             // The Add dialog refuses a new branch name that already exists.
             repo.branches_rev.hash(hasher);
+            // A history row's worktree menu leaves out dirty worktrees.
+            repo.worktree_dirty_rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -1252,6 +1254,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 path.hash(hasher);
                 branch.hash(hasher);
             }
+            WorktreePopoverKind::CommitMenu { commit_id } => {
+                37u8.hash(hasher);
+                repo_id.hash(hasher);
+                commit_id.hash(hasher);
+            }
         },
         RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
             SubmodulePopoverKind::SectionMenu => {
@@ -1450,8 +1457,8 @@ mod tests {
         assert_eq!(resolved.id, repo_id);
     }
 
-    /// The branch menus switch "Open in new worktree" to "Open worktree" once the
-    /// worktree list names the branch; the Add dialog refuses an existing name.
+    /// The branch menus add "Open worktree" once the worktree list names the
+    /// branch; the Add dialog refuses an existing name.
     #[test]
     fn worktree_aware_popovers_repaint_when_their_lists_change() {
         let repo_id = RepoId(9);
