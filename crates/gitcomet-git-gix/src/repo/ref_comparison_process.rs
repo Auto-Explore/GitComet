@@ -1,5 +1,6 @@
 use crate::util::{
-    configure_git_process_tree, git_workdir_cmd_for, terminate_process_tree_and_wait,
+    configure_git_process_tree, git_workdir_cmd_for, kill_process_tree_and_wait,
+    terminate_process_tree_and_wait,
 };
 use gitcomet_core::process::configure_background_command;
 use gitcomet_core::ref_comparison::RefComparisonReason;
@@ -10,6 +11,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+pub(super) mod memory;
+
 pub(super) type AnalysisResult<T> = Result<T, RefComparisonReason>;
 
 pub(super) struct Analysis<'a> {
@@ -18,6 +21,7 @@ pub(super) struct Analysis<'a> {
     pub cancellation: &'a CancellationToken,
     pub memory: usize,
     pub empty_graph: Option<&'a Path>,
+    pub native: Option<&'a memory::NativeMemory>,
 }
 
 impl Analysis<'_> {
@@ -150,6 +154,7 @@ impl Analysis<'_> {
             .take()
             .ok_or(RefComparisonReason::IncompleteHistory)?;
         let stopped = AtomicBool::new(false);
+        let mut memory = self.native.map(|budget| budget.monitor(child.child.id()));
         std::thread::scope(|scope| {
             let stop = &stopped;
             let writer = scope.spawn(move || stdin.write_all(input));
@@ -172,6 +177,21 @@ impl Analysis<'_> {
                 if stopped.load(Ordering::Acquire) {
                     let _ = terminate_process_tree_and_wait(&mut child.child);
                     break false;
+                }
+                if let Some(memory) = &mut memory {
+                    match memory.exceeded() {
+                        Some(true) => {
+                            failure = Some(RefComparisonReason::Budget);
+                            let _ = kill_process_tree_and_wait(&mut child.child);
+                            break false;
+                        }
+                        None if child.child.try_wait().ok().flatten().is_none() => {
+                            failure = Some(RefComparisonReason::Unsupported);
+                            let _ = kill_process_tree_and_wait(&mut child.child);
+                            break false;
+                        }
+                        Some(false) | None => {}
+                    }
                 }
                 match child.child.try_wait() {
                     Ok(Some(status))

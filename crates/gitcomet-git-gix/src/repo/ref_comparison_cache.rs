@@ -48,6 +48,15 @@ impl ComparisonCache {
         depth: RefComparisonDepth,
         memory: &Arc<ComparisonMemory>,
     ) {
+        if matches!(
+            result.counts,
+            gitcomet_core::ref_comparison::RefComparisonCounts::Unavailable(
+                gitcomet_core::ref_comparison::RefComparisonReason::Budget
+                    | gitcomet_core::ref_comparison::RefComparisonReason::Deadline
+            )
+        ) {
+            return;
+        }
         let mut result = result.clone();
         let depth = if matches!(
             result.integration,
@@ -93,7 +102,7 @@ impl ComparisonCache {
         self.results.insert(key, (depth, result.clone()));
     }
 
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.results = FxHashMap::default();
         self.reservation = None;
         self.bytes = 0;

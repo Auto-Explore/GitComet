@@ -311,6 +311,7 @@ mod tests {
             cancellation: &cancellation,
             memory: 64,
             empty_graph: None,
+            native: None,
         };
         assert_eq!(
             index.advance(&analysis, 1_000, Duration::from_secs(5)),
@@ -323,6 +324,7 @@ mod tests {
             cancellation: &cancellation,
             memory: 8 * 1024 * 1024,
             empty_graph: None,
+            native: None,
         };
         assert_eq!(
             index.advance(&blocked, 1_000, Duration::from_secs(5)),
@@ -334,6 +336,7 @@ mod tests {
             cancellation: &cancellation,
             memory: 8 * 1024 * 1024,
             empty_graph: None,
+            native: None,
         };
         index
             .advance(&deeper, 10_000, Duration::from_secs(30))

@@ -63,7 +63,7 @@ impl ComparisonProjections {
                 Default::default(),
             ),
             active,
-            _reservation: Some(reservation.clone()),
+            _reservation: Some(reservation),
         };
         for branch in branches {
             projections
@@ -106,13 +106,51 @@ impl ComparisonProjections {
         }
         available.clear();
         available.extend(projections.subjects.iter().cloned());
-        reservation.resize(
-            bytes.saturating_add(scratch).saturating_sub(
-                tips.saturating_sub(projections.subjects.len())
-                    .saturating_mul(gitcomet_core::ref_comparison_memory::COMPARISON_OID_BYTES),
-            ),
-        );
         projections.members = Arc::new(available);
         Some(Arc::new(projections))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_tips_still_charge_each_retained_ref_object_allocation() {
+        let capture = |shared: bool| {
+            let memory = Arc::new(ComparisonMemory::default());
+            let branches: Vec<_> = (1..=32)
+                .map(|ix| Branch {
+                    name: format!("branch-{ix:05}"),
+                    target: CommitId(
+                        if shared {
+                            "f".repeat(64)
+                        } else {
+                            format!("{ix:064x}")
+                        }
+                        .into(),
+                    ),
+                    upstream: None,
+                    divergence: None,
+                })
+                .collect();
+            let projections =
+                ComparisonProjections::capture(&memory, &branches, &[], &[], None, 0).unwrap();
+            drop(branches);
+            (memory, projections)
+        };
+        let (shared_memory, shared) = capture(true);
+        let (distinct_memory, distinct) = capture(false);
+        assert_eq!(shared.subjects.len(), 1);
+        assert_eq!(distinct.subjects.len(), 32);
+        assert_eq!(
+            shared_memory.used_bytes(),
+            distinct_memory.used_bytes(),
+            "row maps retain separate ref object allocations even when tip values match"
+        );
+        drop(shared);
+        drop(distinct);
+        assert_eq!(shared_memory.used_bytes(), 0);
+        assert_eq!(distinct_memory.used_bytes(), 0);
     }
 }

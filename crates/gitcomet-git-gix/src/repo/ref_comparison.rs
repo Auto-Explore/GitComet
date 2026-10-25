@@ -1,4 +1,5 @@
 use super::GixRepo;
+use super::ref_comparison_process::memory::JobMemory;
 use super::ref_comparison_process::{Analysis, AnalysisResult};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
@@ -15,17 +16,16 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RefComparisonTarget> {
         cancellation.check_cancelled()?;
-        let memory_bytes = COMPARISON_REPOSITORY_BYTES / 16;
         let store = self.shared_store();
-        let _reservation = store
-            .common
-            .comparison_memory
-            .reserve(memory_bytes)
-            .ok_or_else(|| {
-                Error::new(ErrorKind::Backend(
-                    "Comparison target resolution reached its shared memory limit.".into(),
-                ))
-            })?;
+        let job_memory = JobMemory::reserve(
+            &store.common.comparison_memory,
+            RefComparisonBudget::automatic().memory_bytes,
+        )
+        .ok_or_else(|| {
+            Error::new(ErrorKind::Backend(
+                "Comparison target resolution reached its shared memory limit.".into(),
+            ))
+        })?;
         if self.identity != super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo()) {
             return Err(Error::new(ErrorKind::Backend(
                 "The repository was replaced. Refresh before comparing refs.".into(),
@@ -35,7 +35,8 @@ impl GixRepo {
             workdir: &self.spec.workdir,
             deadline: Instant::now() + RefComparisonBudget::automatic().elapsed,
             cancellation,
-            memory: memory_bytes,
+            memory: job_memory.buffer_bytes,
+            native: Some(&job_memory.native),
             empty_graph: None,
         };
         graph_available(&analysis).map_err(|reason| {
@@ -108,17 +109,22 @@ impl GixRepo {
             .filter(|oid| seen.insert((*oid).clone()))
             .cloned()
             .collect();
-        if subjects.len() > MAX_COMPARISON_SUBJECTS {
-            return Err(Error::new(ErrorKind::Backend(
-                "A comparison batch is limited to 128 distinct subjects.".into(),
-            )));
-        }
         let store = self.shared_store();
         let memory_bytes = request
             .budget
             .memory_bytes
-            .min(COMPARISON_REPOSITORY_BYTES / 4);
-        let Some(_active_memory) = store.common.comparison_memory.reserve(memory_bytes) else {
+            .min(COMPARISON_REPOSITORY_BYTES / 2);
+        if store.common.comparison_memory.available_bytes()
+            < memory_bytes.saturating_add(1024 * 1024)
+        {
+            store
+                .comparisons
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clear();
+        }
+        let Some(job_memory) = JobMemory::reserve(&store.common.comparison_memory, memory_bytes)
+        else {
             return Ok(RefComparisonBatch {
                 target: request.target.clone(),
                 results: subjects
@@ -142,7 +148,8 @@ impl GixRepo {
                     .elapsed
                     .min(RefComparisonBudget::deep().elapsed),
             cancellation,
-            memory: memory_bytes,
+            memory: job_memory.buffer_bytes,
+            native: Some(&job_memory.native),
             empty_graph: Some(empty_graph.path()),
         };
         let graph = if self.identity

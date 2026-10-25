@@ -3,6 +3,8 @@ use crate::test_support::{git_success, init_test_repo, open_repo, write_file};
 use gitcomet_core::error::ErrorKind;
 use gitcomet_core::ref_comparison::*;
 
+static COMPARISON_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn oid(dir: &Path, reference: &str) -> CommitId {
     let output = crate::util::git_workdir_cmd_for(dir)
         .args(["rev-parse", reference])
@@ -14,6 +16,9 @@ fn oid(dir: &Path, reference: &str) -> CommitId {
 
 #[test]
 fn shared_counts_equal_independent_immutable_oid_walks() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -87,6 +92,9 @@ fn shared_counts_equal_independent_immutable_oid_walks() {
 
 #[test]
 fn shared_walk_handles_skewed_dates_merges_disconnected_roots_and_all_128_memberships() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -167,6 +175,9 @@ fn shared_walk_handles_skewed_dates_merges_disconnected_roots_and_all_128_member
 
 #[test]
 fn default_resolution_overrides_and_graph_context_changes_never_reuse_false_confirmation() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -213,6 +224,9 @@ fn default_resolution_overrides_and_graph_context_changes_never_reuse_false_conf
 
 #[test]
 fn explicit_deeper_counts_retry_deferred_automatic_counts() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -256,6 +270,9 @@ fn explicit_deeper_counts_retry_deferred_automatic_counts() {
 
 #[test]
 fn strict_content_evidence_keeps_unique_commit_counts_separate() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -302,6 +319,9 @@ fn commit_all(dir: &Path, message: &str) -> CommitId {
 
 #[test]
 fn squash_patch_evidence_is_historical_and_reuses_completed_counts() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -362,6 +382,9 @@ fn evidence_at_head(repo: &GixRepo, subjects: Vec<CommitId>) -> RefComparisonBat
 
 #[test]
 fn individual_patch_evidence_requires_every_unique_commit_and_preserves_later_edits() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -398,6 +421,9 @@ fn individual_patch_evidence_requires_every_unique_commit_and_preserves_later_ed
 
 #[test]
 fn whitespace_sensitive_patches_and_reverted_target_patches_are_not_confirmed() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -427,6 +453,9 @@ fn whitespace_sensitive_patches_and_reverted_target_patches_are_not_confirmed() 
 
 #[test]
 fn no_net_changes_handles_empty_commits_and_branch_reverts() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -453,6 +482,9 @@ fn no_net_changes_handles_empty_commits_and_branch_reverts() {
 #[cfg(unix)]
 #[test]
 fn content_evidence_compares_binary_rename_modes_symlink_gitlink_and_deletion_objects() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     use std::os::unix::fs::{PermissionsExt, symlink};
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -505,6 +537,9 @@ fn content_evidence_compares_binary_rename_modes_symlink_gitlink_and_deletion_ob
 
 #[test]
 fn historical_limits_defer_once_and_deeper_checks_expand_shared_coverage() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     use std::io::Write as _;
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -591,6 +626,9 @@ fn tree_commit(dir: &Path, tree: &CommitId, parents: &[CommitId], message: &str)
 
 #[test]
 fn criss_cross_bases_do_not_prove_content_or_skip_unique_merge_commits() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -637,6 +675,9 @@ fn criss_cross_bases_do_not_prove_content_or_skip_unique_merge_commits() {
 
 #[test]
 fn repeated_branch_patches_cannot_reuse_one_historical_target_commit() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);
@@ -666,6 +707,9 @@ fn repeated_branch_patches_cannot_reuse_one_historical_target_commit() {
 #[cfg(unix)]
 #[test]
 fn historical_matching_disables_external_diff_text_conversion_and_index_writes() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -715,6 +759,9 @@ fn historical_matching_disables_external_diff_text_conversion_and_index_writes()
 #[cfg(unix)]
 #[test]
 fn missing_promisor_objects_do_not_trigger_lazy_fetch() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -779,6 +826,9 @@ fn missing_promisor_objects_do_not_trigger_lazy_fetch() {
 #[cfg(unix)]
 #[test]
 fn repository_replacement_cannot_reuse_cached_confirmation_at_the_same_path() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("repository");
     std::fs::create_dir(&dir).unwrap();
@@ -808,6 +858,9 @@ fn repository_replacement_cannot_reuse_cached_confirmation_at_the_same_path() {
 
 #[test]
 fn a_deleted_file_replaced_by_a_target_directory_does_not_establish_content_evidence() {
+    let _guard = COMPARISON_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     init_test_repo(dir);

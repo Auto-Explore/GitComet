@@ -556,6 +556,19 @@ pub(crate) fn terminate_process_tree_and_wait(
     }
 }
 
+pub(crate) fn kill_process_tree_and_wait(
+    child: &mut std::process::Child,
+) -> io::Result<std::process::ExitStatus> {
+    #[cfg(unix)]
+    if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+    #[cfg(windows)]
+    let _ = gitcomet_win32_window_utils::terminate_process_tree(child.id());
+    let _ = child.kill();
+    child.wait()
+}
+
 pub(super) fn run_command_with_timeout(
     cmd: Command,
     label: &str,

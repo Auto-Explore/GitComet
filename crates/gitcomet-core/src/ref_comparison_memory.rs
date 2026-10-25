@@ -28,6 +28,7 @@ pub fn vector_bytes<T>(entries: usize) -> usize {
 pub struct ComparisonMemory {
     bytes: AtomicUsize,
     peak: AtomicUsize,
+    native_peak: AtomicUsize,
 }
 
 impl ComparisonMemory {
@@ -66,6 +67,17 @@ impl ComparisonMemory {
     }
     pub fn peak_bytes(&self) -> usize {
         self.peak.load(Ordering::Acquire)
+    }
+    pub fn available_bytes(&self) -> usize {
+        COMPARISON_REPOSITORY_BYTES
+            .saturating_sub(self.used_bytes())
+            .min(COMPARISON_GLOBAL_BYTES.saturating_sub(Self::global_used_bytes()))
+    }
+    pub fn observe_native_bytes(&self, bytes: usize) {
+        self.native_peak.fetch_max(bytes, Ordering::Relaxed);
+    }
+    pub fn native_peak_bytes(&self) -> usize {
+        self.native_peak.load(Ordering::Acquire)
     }
     pub fn global_used_bytes() -> usize {
         GLOBAL_BYTES.load(Ordering::Acquire)

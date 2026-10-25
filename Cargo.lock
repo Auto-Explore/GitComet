@@ -2654,6 +2654,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "syn 3.0.9",
+ "sysinfo",
  "tempfile",
  "winapi-util",
 ]
