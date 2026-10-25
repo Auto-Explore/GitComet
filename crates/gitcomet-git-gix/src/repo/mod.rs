@@ -74,6 +74,8 @@ mod patch;
 mod patch_action;
 mod porcelain;
 mod ref_comparison;
+#[cfg(test)]
+mod ref_comparison_boundary_tests;
 mod ref_comparison_cache;
 mod ref_comparison_evidence;
 mod ref_comparison_patches;

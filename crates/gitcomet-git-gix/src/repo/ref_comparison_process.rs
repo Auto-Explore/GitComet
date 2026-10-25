@@ -13,6 +13,27 @@ use std::time::{Duration, Instant};
 
 pub(super) mod memory;
 
+const REPOSITORY_ENVIRONMENT: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
+
 pub(super) type AnalysisResult<T> = Result<T, RefComparisonReason>;
 
 pub(super) struct Analysis<'a> {
@@ -37,6 +58,9 @@ impl Analysis<'_> {
 
     pub fn command(&self, args: &[&str]) -> Command {
         let mut cmd = git_workdir_cmd_for(self.workdir);
+        for name in REPOSITORY_ENVIRONMENT {
+            cmd.env_remove(name);
+        }
         cmd.env("GIT_NO_LAZY_FETCH", "1")
             .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("GIT_OPTIONAL_LOCKS", "0")
