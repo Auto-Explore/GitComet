@@ -63,6 +63,11 @@ repository lifetimes, and document ownership.
 Product names, identifiers, and links come from `gitcomet_core::identity`, never
 from string literals: `scripts/ci/identity_literals.py` fails on new ones.
 
+Declare dependencies for workspace members in the root `[workspace.dependencies]`
+table and inherit them with `workspace = true`, including build, development and
+target-specific dependencies. Keep optional flags and features needed by a
+particular member in that member's manifest.
+
 ### Getting started
 
 Linux prerequisites:

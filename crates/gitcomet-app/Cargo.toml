@@ -46,7 +46,7 @@ wayland-client = { workspace = true }
 signal-hook = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-gitcomet-win32-window-utils = { path = "../win32-window-utils", optional = true }
+gitcomet-win32-window-utils = { workspace = true, optional = true }
 
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }

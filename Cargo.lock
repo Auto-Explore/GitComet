@@ -5292,7 +5292,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "ttf-parser",
- "usvg 0.48.1",
+ "usvg 0.49.0",
 ]
 
 [[package]]

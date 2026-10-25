@@ -10,10 +10,11 @@ The checked-in source is the published crate, with these focused changes:
   the leaf options it implements for unsupported-setting diagnostics.
 * Measure text using gitcomet-fonts. Remove system font discovery and the disk
   font cache. Cache up to 2048 exact text widths with bounded key lengths. Fall back to the same bundled sans family used by SVG decoding.
-* Build as a workspace member and inherit every dependency the workspace
-  declares, so the renderer cannot drift onto second copies (it had fontdb
-  0.23 and lru 0.18 beside the workspace's 0.24 and 0.19). Upstream's unit
-  tests, doc examples and benches are not built: they read fixtures the
+* Build as a workspace member and inherit every dependency from the root
+  workspace manifest, so the renderer cannot drift onto second copies (it had
+  fontdb 0.23 and lru 0.18 beside the workspace's 0.24 and 0.19). Match usvg to
+  resvg's version so their SVG tree types agree in the PNG output path.
+  Upstream's unit tests, doc examples and benches are not built: they read fixtures the
   published crate omits. Two upstream clippy style lints are allowed.
 
 GitComet uses strict parsing, then configuration, layout and SVG exactly once.
