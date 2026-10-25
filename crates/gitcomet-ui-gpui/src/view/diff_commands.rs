@@ -20,7 +20,7 @@ pub(super) fn for_window(root: WeakEntity<GitCometView>) -> DiffCommands {
                 let _ = window.update(cx, |_, window, cx| {
                     let _ = root.update(cx, |root, cx| {
                         root.popover_host.update(cx, |host, cx| {
-                            host.open_hosted_menu(id, items, anchor, window, cx)
+                            host.open_hosted_menu(id, items, anchor, None, window, cx)
                         });
                     });
                 });

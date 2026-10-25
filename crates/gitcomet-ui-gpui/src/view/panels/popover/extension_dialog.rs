@@ -9,6 +9,38 @@ pub(in crate::view) struct ExtensionDialog {
     pub(super) title: SharedString,
     pub(super) content: Option<gpui::AnyView>,
     pub(super) menu: Option<ContextMenuModel>,
+    /// Told when the dialog goes, with it.
+    pub(super) on_closed: Option<OnClosed>,
+}
+
+/// What an extension runs once its menu closes, however it closes: chosen
+/// from, dismissed, replaced by another popover, or gone with its window.
+/// It runs on the app's next turn after the dialog holding it is dropped,
+/// never inside the update that dropped it.
+pub(in crate::view) struct OnClosed {
+    run: Option<gitcomet_extension_api::OnMenuClosed>,
+    cx: gpui::AsyncApp,
+}
+
+impl OnClosed {
+    pub(in crate::view) fn new(run: gitcomet_extension_api::OnMenuClosed, cx: &App) -> Self {
+        Self {
+            run: Some(run),
+            cx: cx.to_async(),
+        }
+    }
+}
+
+impl Drop for OnClosed {
+    fn drop(&mut self) {
+        if let Some(run) = self.run.take() {
+            let cx = self.cx.clone();
+            self.cx
+                .foreground_executor()
+                .spawn(async move { cx.update(run) })
+                .detach();
+        }
+    }
 }
 
 pub(super) fn panel(
@@ -79,6 +111,7 @@ impl PopoverHost {
             title,
             content: Some(content),
             menu: None,
+            on_closed: None,
         });
         self.open_popover_centered(
             PopoverKind::Hosted {
@@ -95,10 +128,14 @@ impl PopoverHost {
         id: u64,
         items: Vec<gitcomet_extension_api::HostedMenuItem>,
         anchor: Point<Pixels>,
+        on_closed: Option<OnClosed>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         self.set_hosted_menu(id, items);
+        if let Some(dialog) = &mut self.extension_dialog {
+            dialog.on_closed = on_closed;
+        }
         self.open_popover_at(PopoverKind::Hosted { id, menu: true }, anchor, window, cx);
     }
 
@@ -143,6 +180,7 @@ impl PopoverHost {
             title: "".into(),
             content: None,
             menu: Some(ContextMenuModel::new(entries).with_entry_tooltips(tooltips)),
+            on_closed: None,
         });
     }
 
