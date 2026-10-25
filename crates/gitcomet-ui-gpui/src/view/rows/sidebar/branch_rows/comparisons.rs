@@ -157,7 +157,11 @@ impl SidebarPaneView {
         Some(
             div()
                 .id(SharedString::from(format!("ref_comparison_{subject}")))
-                .flex_none()
+                .debug_selector({
+                    let subject = subject.clone();
+                    move || format!("ref_comparison_{subject}")
+                })
+                .flex_1()
                 .max_w_1_2()
                 .min_w(px(0.0))
                 .overflow_hidden()

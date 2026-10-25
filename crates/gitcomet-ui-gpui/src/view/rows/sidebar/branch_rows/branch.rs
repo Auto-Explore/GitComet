@@ -144,6 +144,17 @@ impl SidebarPaneView {
             )
             .open(context_menu_active);
 
+        let comparison = if section == BranchSection::Local {
+            this.active_repo().and_then(|repo| {
+                this.comparison_badge(
+                    ctx,
+                    repo.ref_comparisons.projections.branches.get(name.as_ref()),
+                )
+            })
+        } else {
+            None
+        };
+        let has_comparison = comparison.is_some();
         let mut row = div()
             .id(("branch_item", ix))
             .debug_selector(move || row_debug_selector.clone())
@@ -197,18 +208,16 @@ impl SidebarPaneView {
                     row_style.resolved_hover_background(row_state),
                 )
                 .render(ctx.ui_scale_percent)
-                .flex_1(),
+                .debug_selector(move || format!("branch_comparison_label_{ix}"))
+                .flex_1()
+                .when(has_comparison, |label| {
+                    label.min_w(gpui::rems(
+                        theme.ui_text(14.0).0 * COMPARISON_IDENTITY_MIN_EM,
+                    ))
+                }),
             );
 
-        if section == BranchSection::Local
-            && let Some(repo) = this.active_repo()
-            && let Some(badge) = this.comparison_badge(
-                ctx,
-                repo.ref_comparisons.projections.branches.get(name.as_ref()),
-            )
-        {
-            row = row.child(badge);
-        }
+        row = row.children(comparison);
 
         let show_branch_badges = divergence_behind.is_some()
             || divergence_ahead.is_some()
@@ -217,27 +226,31 @@ impl SidebarPaneView {
         let mut end_accessories = div()
             .ml_auto()
             .flex_none()
+            .when(has_comparison, |accessories| {
+                accessories
+                    .flex_initial()
+                    .max_w(gpui::relative(COMPARISON_ACCESSORY_FRACTION))
+                    .min_w(px(0.0))
+            })
             .flex()
             .items_center()
             .gap(badge_gap_px);
 
         if divergence_behind.is_some() || divergence_ahead.is_some() {
             if let Some(behind) = divergence_behind {
-                let color = theme.colors.status.warning.foreground;
                 end_accessories = end_accessories.child(ctx.divergence_badge(
-                    "icons/arrow_down.svg",
-                    color,
+                    UpstreamDirection::Behind,
                     behind,
                     Some(format!("branch_pull_badge_{ix}")),
+                    has_comparison,
                 ));
             }
             if let Some(ahead) = divergence_ahead {
-                let color = theme.colors.status.success.foreground;
                 end_accessories = end_accessories.child(ctx.divergence_badge(
-                    "icons/arrow_up.svg",
-                    color,
+                    UpstreamDirection::Ahead,
                     ahead,
                     Some(format!("branch_push_badge_{ix}")),
+                    has_comparison,
                 ));
             }
         }
@@ -260,7 +273,8 @@ impl SidebarPaneView {
                 has_active_worktree,
                 worktree_menu_active,
                 cx,
-            );
+            )
+            .when(has_comparison, |badge| badge.flex_1().min_w(px(0.0)));
             end_accessories = end_accessories.child(worktree_badge);
         }
 
@@ -416,6 +430,7 @@ impl SidebarPaneView {
             // containing block is the accessory run, which is
             // itself sized by this pill.
             .max_w(ctx.px(BRANCH_WORKTREE_BADGE_MAX_W_PX))
+            .min_w(px(0.0))
             .overflow_hidden()
             .child(ctx.svg_icon(WORKTREE_ICON_PATH, badge_colors.icon, 9.0))
             .child(

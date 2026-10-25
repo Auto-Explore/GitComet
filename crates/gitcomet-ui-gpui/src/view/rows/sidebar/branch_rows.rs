@@ -22,6 +22,9 @@ const BRANCH_BADGE_GAP_PX: f32 = 3.0;
 /// narrow enough that the pill always fits the pane — which is what
 /// keeps every row's badge on one right edge.
 const BRANCH_WORKTREE_BADGE_MAX_W_PX: f32 = 140.0;
+const COMPARISON_ACCESSORY_FRACTION: f32 = 1.0 / 3.0;
+const COMPARISON_WORKTREE_IDENTITY_WEIGHT: f32 = 2.0;
+const COMPARISON_IDENTITY_MIN_EM: f32 = 3.0;
 /// Gap between a row's trailing badge and the row's right edge, shared
 /// by every row (headers included) so the badges land on one edge.
 /// The expanded sidebar adds its content inset here so full-width
@@ -60,6 +63,11 @@ struct SidebarRowSlot {
     stuck: bool,
     row_style: components::InteractiveRowStyle,
     row_surface: gpui::Rgba,
+}
+
+enum UpstreamDirection {
+    Ahead,
+    Behind,
 }
 
 impl SidebarRowContext {
@@ -203,21 +211,52 @@ impl SidebarRowContext {
 
     fn divergence_badge(
         &self,
-        icon_path: &'static str,
-        color: gpui::Rgba,
+        direction: UpstreamDirection,
         count: NonZeroU32,
         debug_selector: Option<String>,
-    ) -> gpui::Div {
+        constrained: bool,
+    ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
+        let (icon_path, color, relation) = match direction {
+            UpstreamDirection::Ahead => (
+                "icons/arrow_up.svg",
+                theme.colors.status.success.foreground,
+                "ahead of",
+            ),
+            UpstreamDirection::Behind => (
+                "icons/arrow_down.svg",
+                theme.colors.status.warning.foreground,
+                "behind",
+            ),
+        };
         let mut badge = div()
+            .id(icon_path)
             .flex()
+            .when(constrained, |badge| badge.flex_1().min_w(px(0.0)))
             .items_center()
             .gap_1()
             .text_size(theme.ui_text(12.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(color)
             .child(self.svg_icon(icon_path, color, 11.0))
-            .child(crate::view::branch_sidebar::branch_sidebar_divergence_label(count));
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .when(constrained, |text| {
+                        text.overflow_hidden().whitespace_nowrap().text_ellipsis()
+                    })
+                    .child(crate::view::branch_sidebar::branch_sidebar_divergence_label(count)),
+            )
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "{} commit{} {} the configured upstream.",
+                    count,
+                    if count.get() == 1 { "" } else { "s" },
+                    relation
+                )
+                .into(),
+            );
         if let Some(debug_selector) = debug_selector {
             badge = badge.debug_selector(move || debug_selector.clone());
         }

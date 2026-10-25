@@ -1,0 +1,87 @@
+{
+  "cases": [
+    {
+      "apply_layout_paint_submit_ms": [
+        16.549934
+      ],
+      "decoration_publication_elapsed_ms": [
+        0.00648
+      ],
+      "decoration_reserved_peak_bytes": 3392,
+      "local_branches": 20000,
+      "shared_tips": true,
+      "structural_rows": 25012,
+      "visible_rows_cache_reused": true,
+      "worktrees": 5000,
+      "frame_mean_ms": 16.549934,
+      "frame_max_ms": 16.549934
+    },
+    {
+      "apply_layout_paint_submit_ms": [
+        18.217751,
+        15.652366,
+        16.516154,
+        16.051625,
+        15.729415999999999,
+        15.626076,
+        16.499104,
+        16.535924,
+        17.211533000000003,
+        17.000024,
+        16.634354000000002,
+        17.519742,
+        16.932413,
+        16.762044,
+        17.627831999999998,
+        16.802503,
+        16.732253999999998,
+        16.632864,
+        16.756104,
+        16.860073
+      ],
+      "decoration_publication_elapsed_ms": [
+        0.055819,
+        0.055529999999999996,
+        0.049920000000000006,
+        0.06961,
+        0.061560000000000004,
+        0.06857,
+        0.06293,
+        0.06378,
+        0.06985000000000001,
+        0.093179,
+        0.08045000000000001,
+        0.07734,
+        0.0971,
+        0.09469,
+        0.07917,
+        0.11304,
+        0.08912,
+        0.10101,
+        0.097899,
+        0.11213999999999999
+      ],
+      "decoration_reserved_peak_bytes": 633664,
+      "local_branches": 20000,
+      "shared_tips": false,
+      "structural_rows": 25012,
+      "visible_rows_cache_reused": true,
+      "worktrees": 5000,
+      "frame_mean_ms": 16.7150078,
+      "frame_max_ms": 18.217751
+    }
+  ],
+  "date": "2026-10-25",
+  "profile": "test; UI opt-level0; default dependency overrides; debug symbols",
+  "release_frame_gate": "not established by this test-profile capture",
+  "scope": "Elapsed snapshot apply/layout/paint/submission including harness pumping; excludes backend, full reducer/IPC, and screenshot readback",
+  "cargo_command": "cargo test -p gitcomet-ui-gpui --lib --features benchmarks --offline --config 'profile.test.package.gitcomet-ui-gpui.opt-level=0' comparison_rows_native_capture_and_publication_frames -- --ignored --nocapture",
+  "binary_sha256": "80fcb3aaaef0e32a752f7bba1d51f6d1bff5bd6f59346585f3761e0ab6d750c1",
+  "background_builds_or_tests": false,
+  "viewport_logical_pixels": [
+    1600,
+    1000
+  ],
+  "publication_scope": "ComparisonDecorations.publish plus revision increment; elapsed time, not thread CPU time",
+  "fixtures": "Synthetic presentation snapshots; asserted 20,000 local branches, 5,000 worktree items and active branch 000-active before timing; fresh repository IDs per scenario"
+}

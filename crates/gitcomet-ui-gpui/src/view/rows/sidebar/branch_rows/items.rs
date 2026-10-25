@@ -133,6 +133,7 @@ impl SidebarPaneView {
         let comparison = this.active_repo().and_then(|repo| {
             this.comparison_badge(ctx, repo.ref_comparisons.projections.worktrees.get(&path))
         });
+        let has_comparison = comparison.is_some();
         let cleanliness = this.worktree_cleanliness_badge(ctx, &path, head.as_ref(), is_active);
         let context_menu_invoker_for_right_click = context_menu_invoker.clone();
         let row_group: SharedString = format!("worktree_row_{}_{}", repo_id.0, ix).into();
@@ -162,6 +163,9 @@ impl SidebarPaneView {
             .child(
                 div()
                     .flex_1()
+                    .when(has_comparison, |identity| {
+                        identity.flex_grow(COMPARISON_WORKTREE_IDENTITY_WEIGHT)
+                    })
                     .min_w(px(0.0))
                     .text_size(theme.ui_text(14.0))
                     .flex()
@@ -173,6 +177,11 @@ impl SidebarPaneView {
                             .debug_selector(move || format!("worktree_path_label_{ix}"))
                             .flex_1()
                             .min_w(px(0.0))
+                            .when(has_comparison, |label| {
+                                label.min_w(gpui::rems(
+                                    theme.ui_text(14.0).0 * COMPARISON_IDENTITY_MIN_EM,
+                                ))
+                            })
                             .overflow_hidden()
                             .child(
                                 components::TruncatedText::path(
@@ -218,6 +227,9 @@ impl SidebarPaneView {
                                 .id(("worktree_branch_badge", ix))
                                 .debug_selector(move || format!("worktree_branch_badge_{ix}"))
                                 .max_w_1_2()
+                                .when(has_comparison, |badge| {
+                                    badge.max_w(gpui::relative(COMPARISON_ACCESSORY_FRACTION))
+                                })
                                 .min_w(px(0.0))
                                 .overflow_hidden()
                                 .child(ctx.svg_icon(
