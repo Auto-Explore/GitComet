@@ -1855,3 +1855,56 @@ fn indexed_history_rows_tile_without_gaps_at_a_fractional_row_height(
         }
     }
 }
+
+#[gpui::test]
+fn indexed_history_drops_the_labels_of_a_hidden_remote(cx: &mut gpui::TestAppContext) {
+    let (index, commits) = indexed_fixture(10);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));
+    state.repos[0].remote_branches = Loadable::Ready(Arc::new(
+        ["origin", "upstream"]
+            .map(|remote| RemoteBranch {
+                remote: remote.to_string(),
+                name: "main".to_string(),
+                target: commits[0].id.clone(),
+            })
+            .to_vec(),
+    ));
+    state.repos[0].remote_branches_rev += 1;
+    install_index(&mut state, index);
+    let labels = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history
+                .indexed
+                .window
+                .as_ref()
+                .and_then(|window| window.cache.decorations.row_vms.first())
+                .map(|row| row.branches_text.as_ref().to_owned())
+        })
+    };
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "both remotes label the tip", |cx| {
+        labels(cx)
+            .is_some_and(|text| text.contains("origin/main") && text.contains("upstream/main"))
+    });
+
+    state.repos[0].shared_preferences =
+        Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
+            key: gitcomet_state::model::RepositoryKey::Worktree(
+                state.repos[0].spec.workdir.clone(),
+            ),
+            revision: 1,
+            preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
+                history_mode: state.repos[0].history_state.history_scope,
+                history_hidden_remotes: std::collections::BTreeSet::from(["upstream".to_string()]),
+                ..Default::default()
+            }),
+        });
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "the hidden remote's label is gone", |cx| {
+        labels(cx)
+            .is_some_and(|text| text.contains("origin/main") && !text.contains("upstream/main"))
+    });
+}
