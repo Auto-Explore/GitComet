@@ -207,7 +207,12 @@ fn indexed_history_honors_replacement_refs_like_git_and_bypasses_the_commit_grap
             "page rows must match git log"
         );
         let index = opened
-            .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+            .build_history_index(
+                &HistoryMode::FullReachable.into(),
+                None,
+                &cancel,
+                &mut |_| {},
+            )
             .unwrap()
             .unwrap();
         let indexed = opened

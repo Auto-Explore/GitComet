@@ -864,6 +864,7 @@ fn a_remote_hidden_from_history_marks_its_header_and_changes_the_cache_source() 
             .map(|name| Remote {
                 name: name.into(),
                 url: None,
+                default_branch: None,
             })
             .to_vec(),
     ));

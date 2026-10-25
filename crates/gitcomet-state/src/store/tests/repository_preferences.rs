@@ -969,6 +969,7 @@ fn hidden_remotes_leave_the_hidden_set_only_when_removed() {
                 .map(|name| gitcomet_core::domain::Remote {
                     name: name.to_string(),
                     url: None,
+                    default_branch: None,
                 })
                 .collect()),
         })
