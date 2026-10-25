@@ -256,4 +256,30 @@ mod tests {
         token.cancel();
         assert!(production_limit(&repo, &repo.index_or_empty().unwrap(), &token).is_err());
     }
+
+    /// `GITCOMET_PROBE_REPO=<worktree> cargo test -p gitcomet-git-gix --lib
+    /// timing_worker_limit -- --ignored --nocapture`: the Windows status
+    /// policy's cost per refresh where `filter.lfs` is configured globally.
+    #[test]
+    #[ignore = "timing probe"]
+    fn timing_worker_limit_policy() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("GITCOMET_PROBE_REPO").expect("set GITCOMET_PROBE_REPO"),
+        );
+        let repo = open_gix(&root);
+        let index = repo.index_or_empty().unwrap();
+        let mut samples = Vec::new();
+        let mut limit = None;
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            limit = production_limit(&repo, &index, &CancellationToken::new()).unwrap();
+            samples.push(started.elapsed());
+        }
+        samples.sort();
+        println!(
+            "timing worker_limit entries {} limit {limit:?} p50 {:?}",
+            index.entries().len(),
+            samples[2]
+        );
+    }
 }
