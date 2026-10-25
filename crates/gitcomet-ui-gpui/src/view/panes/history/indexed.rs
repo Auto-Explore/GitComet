@@ -239,7 +239,7 @@ impl HistoryView {
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
             branches_rev: repo.branches_rev,
-            remote_branches_rev: repo.remote_branches_rev,
+            remote_branches: HistoryRemoteBranchesKey::of(repo),
             stashes_rev: repo.stashes_rev,
         }
     }
@@ -301,10 +301,7 @@ impl HistoryView {
             Loadable::Ready(rows) => rows.clone(),
             _ => Arc::new(Vec::new()),
         };
-        let remotes = match &repo.remote_branches {
-            Loadable::Ready(rows) => rows.clone(),
-            _ => Arc::new(Vec::new()),
-        };
+        let remotes = repo.history_remote_branches();
         let stashes = match &repo.stashes {
             Loadable::Ready(rows) => rows.clone(),
             _ => Arc::new(Vec::new()),
@@ -1119,7 +1116,7 @@ impl HistoryView {
                                 .as_ref()
                                 .map(|head| CommitId(head.clone().into())),
                             branches_rev: shown.key.branches_rev,
-                            remote_branches_rev: shown.key.remote_branches_rev,
+                            remote_branches: shown.key.remote_branches.clone(),
                             tags_rev: task_key.tags_rev,
                         },
                         row_vms: (start..end)
@@ -1618,7 +1615,10 @@ mod cache_regressions {
             detached_head_commit: None,
             head_branch_target: Some(head.clone()),
             branches_rev: 1,
-            remote_branches_rev: 1,
+            remote_branches: HistoryRemoteBranchesKey {
+                rev: 1,
+                hidden: Default::default(),
+            },
             stashes_rev: 1,
         };
         let presentation = Presentation {

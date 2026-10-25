@@ -54,8 +54,25 @@ pub(super) struct HistoryBaseCacheRequest {
     pub(super) detached_head_commit: Option<CommitId>,
     pub(super) head_branch_target: Option<CommitId>,
     pub(super) branches_rev: u64,
-    pub(super) remote_branches_rev: u64,
+    pub(super) remote_branches: HistoryRemoteBranchesKey,
     pub(super) stashes_rev: u64,
+}
+
+/// The remote branches the graph shows: the loaded list's revision and the
+/// remotes hidden from the history.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct HistoryRemoteBranchesKey {
+    pub(super) rev: u64,
+    pub(super) hidden: std::collections::BTreeSet<String>,
+}
+
+impl HistoryRemoteBranchesKey {
+    pub(super) fn of(repo: &RepoState) -> Self {
+        Self {
+            rev: repo.remote_branches_rev,
+            hidden: repo.history_hidden_remotes().clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,7 +81,7 @@ pub(super) struct HistoryDecorationCacheRequest {
     pub(super) head_branch_rev: u64,
     pub(super) detached_head_commit: Option<CommitId>,
     pub(super) branches_rev: u64,
-    pub(super) remote_branches_rev: u64,
+    pub(super) remote_branches: HistoryRemoteBranchesKey,
     pub(super) tags_rev: u64,
 }
 

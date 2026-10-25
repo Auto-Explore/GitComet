@@ -61,17 +61,12 @@ fn multi_cherry_pick_plan(
         Loadable::Ready(branches) => Some(branches),
         _ => None,
     };
-    let remote_branches = match &repo.remote_branches {
-        Loadable::Ready(branches) => Some(branches),
-        _ => None,
-    };
     let branch_heads = branches
         .into_iter()
         .flat_map(|branches| branches.iter().map(|branch| branch.target.as_ref()))
         .chain(
-            remote_branches
-                .into_iter()
-                .flat_map(|branches| branches.iter().map(|branch| branch.target.as_ref())),
+            repo.history_remote_branches_iter()
+                .map(|branch| branch.target.as_ref()),
         )
         .collect::<Vec<_>>();
     let head_target = repo.head_commit_id();
@@ -190,16 +185,10 @@ fn commit_branch_names_to_copy(
     if !local.is_empty() {
         return local;
     }
-    repo.remote_branches
-        .ready()
-        .map(|branches| {
-            branches
-                .iter()
-                .filter(|branch| branch.target == *commit_id)
-                .map(|branch| format!("{}/{}", branch.remote, branch.name))
-                .collect()
-        })
-        .unwrap_or_default()
+    repo.history_remote_branches_iter()
+        .filter(|branch| branch.target == *commit_id)
+        .map(|branch| format!("{}/{}", branch.remote, branch.name))
+        .collect()
 }
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {

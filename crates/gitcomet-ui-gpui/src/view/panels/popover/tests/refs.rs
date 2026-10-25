@@ -2469,3 +2469,79 @@ fn remote_menu_checks_show_in_history_graph_for_shown_remotes(cx: &mut gpui::Tes
         })
     });
 }
+
+#[gpui::test]
+fn commit_menu_leaves_out_branches_of_remotes_hidden_from_history(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(24);
+    let commit_id = CommitId("0123456789abcdef".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_hidden_remote_refs"),
+                },
+            );
+            repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+            repo.remote_branches = Loadable::Ready(Arc::new(
+                ["origin", "upstream"]
+                    .map(|remote| gitcomet_core::domain::RemoteBranch {
+                        remote: remote.to_string(),
+                        name: "main".to_string(),
+                        target: commit_id.clone(),
+                    })
+                    .to_vec(),
+            ));
+            repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
+                key: gitcomet_state::model::RepositoryKey::Worktree(repo.spec.workdir.clone()),
+                revision: 1,
+                preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
+                    history_hidden_remotes: std::collections::BTreeSet::from([
+                        "upstream".to_string()
+                    ]),
+                    ..Default::default()
+                }),
+            });
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..AppState::test_default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    let labels = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(
+                    &PopoverKind::CommitMenu {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                    cx,
+                )
+            })
+        })
+        .expect("expected a commit menu")
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry { label, .. } => Some(label.as_ref().to_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+    });
+    assert!(
+        labels.contains(&"Remote branch origin/main".to_string()),
+        "{labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|label| label.contains("upstream/main")),
+        "{labels:?}"
+    );
+}

@@ -539,6 +539,28 @@ impl RepoState {
         })
     }
 
+    /// The remote branches the history graph shows: the loaded ones, without
+    /// the hidden remotes'.
+    pub fn history_remote_branches_iter(&self) -> impl Iterator<Item = &RemoteBranch> {
+        let hidden = self.history_hidden_remotes();
+        self.remote_branches
+            .ready()
+            .into_iter()
+            .flat_map(|branches| branches.iter())
+            .filter(move |branch| !hidden.contains(&branch.remote))
+    }
+
+    /// [`Self::history_remote_branches_iter`] as an owned list, shared with the
+    /// loaded one while nothing is hidden.
+    pub fn history_remote_branches(&self) -> Shared<Vec<RemoteBranch>> {
+        match &self.remote_branches {
+            Loadable::Ready(branches) if self.history_hidden_remotes().is_empty() => {
+                Shared::clone(branches)
+            }
+            _ => Shared::new(self.history_remote_branches_iter().cloned().collect()),
+        }
+    }
+
     /// What the history pane walks: its mode, without the hidden remotes.
     pub fn history_walk(&self) -> HistoryWalk {
         HistoryWalk::new(

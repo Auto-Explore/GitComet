@@ -492,10 +492,14 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 message.len().hash(&mut h);
             }
             BranchSidebarRow::RemoteHeader {
-                name, collapsed, ..
+                name,
+                collapsed,
+                hidden_in_history,
+                ..
             } => {
                 name.len().hash(&mut h);
                 collapsed.hash(&mut h);
+                hidden_in_history.hash(&mut h);
             }
             BranchSidebarRow::GroupHeader {
                 label,

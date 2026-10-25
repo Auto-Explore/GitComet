@@ -472,6 +472,7 @@ impl SidebarPaneView {
                     name,
                     collapsed,
                     collapse_key,
+                    hidden_in_history,
                 } => Self::sidebar_remote_header_row(
                     this,
                     &ctx,
@@ -479,6 +480,7 @@ impl SidebarPaneView {
                     name,
                     collapsed,
                     collapse_key,
+                    hidden_in_history,
                     cx,
                 ),
                 BranchSidebarRow::GroupHeader {

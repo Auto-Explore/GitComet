@@ -3,6 +3,9 @@
 
 use super::*;
 
+const REMOTE_HIDDEN_IN_HISTORY_TOOLTIP: &str =
+    "Hidden from the history graph (right-click to show it again)";
+
 impl SidebarPaneView {
     /// Local / Remote Branches header.
     pub(super) fn sidebar_section_header_row(
@@ -388,6 +391,7 @@ impl SidebarPaneView {
     }
 
     /// One remote's folder row in the Remote Branches section.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn sidebar_remote_header_row(
         this: &Self,
         ctx: &SidebarRowContext,
@@ -395,6 +399,7 @@ impl SidebarPaneView {
         name: SharedString,
         collapsed: bool,
         collapse_key: SharedString,
+        hidden_in_history: bool,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let SidebarRowSlot {
@@ -471,6 +476,17 @@ impl SidebarPaneView {
                 .render(ctx.ui_scale_percent)
                 .flex_1(),
             )
+            .when(hidden_in_history, |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .debug_selector(move || format!("sidebar_remote_hidden_in_history_{ix}"))
+                        .child(ctx.svg_icon("icons/eye_off.svg", ctx.icon_primary, 14.0)),
+                )
+                .gitcomet_tooltip(theme, REMOTE_HIDDEN_IN_HISTORY_TOOLTIP.into())
+            })
             .on_activate(
                 false,
                 ctx.header_activation,

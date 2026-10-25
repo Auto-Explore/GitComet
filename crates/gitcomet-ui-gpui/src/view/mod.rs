@@ -388,8 +388,8 @@ use caches::{
     HistoryAuthorVm, HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm,
     HistoryBranchChipKind, HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest,
     HistoryDecorationCache, HistoryDecorationCacheRequest, HistoryDecorationRowVm,
-    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryStashIdsCache,
-    HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind, HistoryRemoteBranchesKey,
+    HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
