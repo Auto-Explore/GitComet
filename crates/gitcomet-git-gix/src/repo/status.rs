@@ -398,19 +398,43 @@ fn finalize_status(
 }
 
 fn apply_unmerged_conflicts(repo: &gix::Repository, unstaged: &mut Vec<FileStatus>) -> Result<()> {
-    for (path, conflict_kind) in gix_unmerged_conflicts(repo)? {
-        if let Some(entry) = unstaged.iter_mut().find(|entry| entry.path == path) {
-            entry.kind = FileStatusKind::Conflicted;
-            entry.conflict = Some(conflict_kind);
-        } else {
-            unstaged.push(FileStatus {
+    merge_unmerged_conflicts(unstaged, gix_unmerged_conflicts(repo)?);
+    Ok(())
+}
+
+/// Marks each conflicted path's first unstaged entry, or adds one.
+fn merge_unmerged_conflicts(
+    unstaged: &mut Vec<FileStatus>,
+    conflicts: Vec<(PathBuf, FileConflictKind)>,
+) {
+    if conflicts.is_empty() {
+        return;
+    }
+    // Conflict paths are distinct, so indexing the entries up front finds the
+    // same entry a scan per conflict did.
+    let targets: Vec<Option<usize>> = {
+        let mut first = FxHashMap::with_capacity_and_hasher(unstaged.len(), Default::default());
+        for (ix, entry) in unstaged.iter().enumerate() {
+            first.entry(entry.path.as_path()).or_insert(ix);
+        }
+        conflicts
+            .iter()
+            .map(|(path, _)| first.get(path.as_path()).copied())
+            .collect()
+    };
+    for ((path, conflict_kind), target) in conflicts.into_iter().zip(targets) {
+        match target {
+            Some(ix) => {
+                unstaged[ix].kind = FileStatusKind::Conflicted;
+                unstaged[ix].conflict = Some(conflict_kind);
+            }
+            None => unstaged.push(FileStatus {
                 path,
                 kind: FileStatusKind::Conflicted,
                 conflict: Some(conflict_kind),
-            });
+            }),
         }
     }
-    Ok(())
 }
 
 pub(super) fn tree_id_for_commit(
