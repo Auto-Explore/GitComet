@@ -277,6 +277,7 @@ struct HostWindow {
     external_editor:
         Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
     terminals: SharedTerminals,
+    terminal_target: Rc<std::cell::Cell<super::TerminalButtonTarget>>,
 }
 
 /// One open terminal tab, as only the view knows it; the host adds its
@@ -915,6 +916,40 @@ impl WindowHostImpl for HostWindow {
         });
         Ok(())
     }
+    fn open_terminal(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &std::path::Path,
+        command: Option<&str>,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        if let Some(command) = command {
+            if self.terminal_target.get() == super::TerminalButtonTarget::External {
+                return Err(HostError::Unsupported);
+            }
+            // One line, and nothing a terminal would read as a key of its own.
+            if command.chars().any(char::is_control) {
+                return Err(HostError::InvalidRequest(
+                    "A terminal command is one line without control characters".into(),
+                ));
+            }
+        }
+        let cwd = if cwd.is_absolute() {
+            cwd.to_owned()
+        } else {
+            repository.workdir().join(cwd)
+        };
+        let view = self.view.clone();
+        let repository = repository.clone();
+        let command = command.map(str::to_owned);
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |root, cx| {
+                root.open_terminal_at(&repository, cwd, command, cx)
+            });
+        });
+        Ok(())
+    }
     fn reveal_commit(
         &self,
         repository: &RepositoryHandle,
@@ -1206,6 +1241,7 @@ pub(in crate::view) struct ExtensionWindow {
     external_editor:
         Rc<std::cell::RefCell<Option<gitcomet_state::session::ExternalCodeEditorSetting>>>,
     terminals: SharedTerminals,
+    terminal_target: Rc<std::cell::Cell<super::TerminalButtonTarget>>,
 }
 
 impl ExtensionWindow {
@@ -1226,6 +1262,7 @@ impl ExtensionWindow {
         })?;
         let external_editor = Rc::default();
         let terminals: SharedTerminals = Rc::default();
+        let terminal_target = Rc::new(std::cell::Cell::new(super::TerminalButtonTarget::default()));
         let diff_panes: SharedDiffPanes = Rc::default();
         let bottom_panels = Rc::new(std::cell::RefCell::new(
             super::extension_panels::BottomPanels::new(registry.bottom_panels()),
@@ -1275,6 +1312,7 @@ impl ExtensionWindow {
             diff_environment,
             external_editor: Rc::clone(&external_editor),
             terminals: Rc::clone(&terminals),
+            terminal_target: Rc::clone(&terminal_target),
         });
         *observers.host.borrow_mut() = Some(Rc::downgrade(&host_window));
         let closing_host = Rc::downgrade(&host_window);
@@ -1314,6 +1352,7 @@ impl ExtensionWindow {
             diff_panes,
             external_editor,
             terminals,
+            terminal_target,
         })
     }
 
@@ -1404,6 +1443,11 @@ impl ExtensionWindow {
     /// Publishes each repository's open terminal tabs to extension handles.
     pub(in crate::view) fn set_terminals(&self, tabs: FxHashMap<RepoId, Vec<OpenTerminal>>) {
         *self.terminals.borrow_mut() = tabs;
+    }
+
+    /// Publishes where the user's terminal button opens a terminal.
+    pub(in crate::view) fn set_terminal_target(&self, target: super::TerminalButtonTarget) {
+        self.terminal_target.set(target);
     }
 
     pub(in crate::view) fn set_theme(&self, theme: AppTheme, cx: &mut App) {

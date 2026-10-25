@@ -454,6 +454,7 @@ pub(super) fn shortcut_fixture_repo(
     repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
         name: "origin".into(),
         url: Some("https://example.com/origin.git".into()),
+        default_branch: None,
     }]));
     repo.tags = Loadable::Ready(Arc::new(vec![]));
     repo.remote_tags = Loadable::Ready(Arc::new(vec![]));

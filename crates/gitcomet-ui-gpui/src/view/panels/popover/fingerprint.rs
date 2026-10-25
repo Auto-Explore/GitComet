@@ -316,6 +316,8 @@ fn hash_repo_for_popover<H: Hasher>(
             // summary on their detail line, so metadata landing while the picker
             // is open has to repaint it — the rows change height, not just text.
             repo.ref_metadata_rev.hash(hasher);
+            // A branch's menu offers its worktree once the worktree list knows it.
+            repo.worktrees_rev.hash(hasher);
         }
 
         // Its toggle label reads `expanded_dirs` and its disabled state reads
@@ -366,6 +368,10 @@ fn hash_repo_for_popover<H: Hasher>(
             // while the picker is open has to repaint it — otherwise the row keeps
             // promising a base the Add dialog will no longer use.
             repo.head_branch_rev.hash(hasher);
+            // The Add dialog refuses a new branch name that already exists.
+            repo.branches_rev.hash(hasher);
+            // A history row's worktree menu leaves out dirty worktrees.
+            repo.worktree_dirty_rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -484,6 +490,7 @@ fn hash_repo_for_popover<H: Hasher>(
             repo.history_state.selected_commit_rev.hash(hasher);
             repo.history_state.log_rev.hash(hasher);
             repo.ops_rev.hash(hasher);
+            repo.worktrees_rev.hash(hasher);
         }
         PopoverKind::FileHistoryCommitMenu { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -1247,6 +1254,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 path.hash(hasher);
                 branch.hash(hasher);
             }
+            WorktreePopoverKind::CommitMenu { commit_id } => {
+                37u8.hash(hasher);
+                repo_id.hash(hasher);
+                commit_id.hash(hasher);
+            }
         },
         RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
             SubmodulePopoverKind::SectionMenu => {
@@ -1443,6 +1455,54 @@ mod tests {
             repo_for_popover(&state, &popover, None).expect("expected repo lookup to work");
 
         assert_eq!(resolved.id, repo_id);
+    }
+
+    /// The branch menus add "Open worktree" once the worktree list names the
+    /// branch; the Add dialog refuses an existing name.
+    #[test]
+    fn worktree_aware_popovers_repaint_when_their_lists_change() {
+        let repo_id = RepoId(9);
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::test_default()
+        };
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_worktree_menu_fingerprint"),
+            },
+        ));
+        let changes = |popover: PopoverKind, bump: fn(&mut RepoState)| {
+            let mut state = state.clone();
+            let before = notify_fingerprint(&state, &popover, None);
+            bump(&mut state.repos[0]);
+            before != notify_fingerprint(&state, &popover, None)
+        };
+        let bump_worktrees: fn(&mut RepoState) =
+            |repo| repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
+        let bump_branches: fn(&mut RepoState) =
+            |repo| repo.branches_rev = repo.branches_rev.wrapping_add(1);
+
+        assert!(changes(
+            PopoverKind::BranchMenu {
+                repo_id,
+                target: crate::view::BranchMenuTarget::Local {
+                    name: "main".to_string(),
+                },
+            },
+            bump_worktrees,
+        ));
+        assert!(changes(
+            PopoverKind::CommitMenu {
+                repo_id,
+                commit_id: CommitId("deadbeef".into()),
+            },
+            bump_worktrees,
+        ));
+        assert!(changes(
+            PopoverKind::worktree(repo_id, WorktreePopoverKind::AddPrompt),
+            bump_branches,
+        ));
     }
 
     #[test]

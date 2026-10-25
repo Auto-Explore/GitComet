@@ -339,6 +339,7 @@ mod pane_store;
 mod panels;
 mod panes;
 mod patch_split;
+mod path_prompt;
 mod pending_commit;
 mod perf;
 mod permalink;

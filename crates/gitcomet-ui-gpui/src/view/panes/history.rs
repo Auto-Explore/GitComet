@@ -1,11 +1,12 @@
 use super::super::*;
 use crate::view::caches::{
     HistoryListPlan, HistoryListPlanCache, HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm,
-    HistoryWorktreeRowAnchor, analyze_history_stashes, build_history_branch_chips_by_target,
+    HistoryWorktreeChipsByHead, HistoryWorktreeChipsCache, HistoryWorktreeRowAnchor,
+    analyze_history_stashes, build_history_branch_chips_by_target,
     build_history_branch_containment_bits, build_history_branch_ref_items_by_target,
     build_history_branch_text_by_target, build_history_tag_names_by_target,
     build_history_visible_indices, history_ref_items_from_displayed_refs,
-    next_history_stash_tip_for_commit_ix, related_commit_contains,
+    history_worktree_chips_by_head, next_history_stash_tip_for_commit_ix, related_commit_contains,
 };
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
@@ -578,6 +579,7 @@ pub(in super::super) struct HistoryView {
     pub(in crate::view) loading: loading::HistoryLoading,
     history_selected_lane_color_cache: Option<HistorySelectedLaneColorCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
+    history_worktree_chips_cache: Option<HistoryWorktreeChipsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
     pub(in crate::view) history_annotations: Option<annotations::HistoryAnnotations>,
@@ -774,6 +776,8 @@ impl HistoryView {
             // The linked-worktree rows live in this table: their badge counts come
             // from the dirty scan and the selected row from the worktree selection,
             // so both revs have to move the fingerprint or the rows never repaint.
+            // Clean worktrees' chips come from the worktree list.
+            repo.worktrees_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.worktree_status_cache_rev().hash(&mut hasher);
@@ -966,6 +970,7 @@ impl HistoryView {
             loading: Default::default(),
             history_selected_lane_color_cache: None,
             history_stash_ids_cache: None,
+            history_worktree_chips_cache: None,
             history_scroll: UniformListScrollHandle::default(),
             history_panel_focus_handle,
             relative_time_tick: None,
@@ -2174,6 +2179,37 @@ impl HistoryView {
                 Some(ids)
             }
         }
+    }
+
+    /// Other worktrees by the commit they have checked out, for the chips on
+    /// those commits' rows.
+    pub(in super::super) fn ensure_history_worktree_chips_cache(
+        &mut self,
+    ) -> Option<Arc<HistoryWorktreeChipsByHead>> {
+        let Some(repo) = self.active_repo() else {
+            self.history_worktree_chips_cache = None;
+            return None;
+        };
+        let Loadable::Ready(worktrees) = &repo.worktrees else {
+            self.history_worktree_chips_cache = None;
+            return None;
+        };
+        if let Some(cache) = &self.history_worktree_chips_cache
+            && cache.repo_id == repo.id
+            && cache.worktrees_rev == repo.worktrees_rev
+        {
+            return Some(Arc::clone(&cache.chips));
+        }
+        let chips = Arc::new(history_worktree_chips_by_head(
+            worktrees,
+            &repo.spec.workdir,
+        ));
+        self.history_worktree_chips_cache = Some(HistoryWorktreeChipsCache {
+            repo_id: repo.id,
+            worktrees_rev: repo.worktrees_rev,
+            chips: Arc::clone(&chips),
+        });
+        Some(chips)
     }
 
     pub(in super::super) fn ensure_history_cache(&mut self, cx: &mut gpui::Context<Self>) {

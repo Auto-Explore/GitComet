@@ -16,7 +16,7 @@ use gitcomet_core::services::{
     CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease,
     InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
     SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    SubmoduleTrustTarget, WorktreeCheckout,
 };
 use gitcomet_core::signing_tools::SigningToolsState;
 use std::path::PathBuf;
@@ -850,7 +850,9 @@ pub enum Msg {
     AddWorktree {
         repo_id: RepoId,
         path: PathBuf,
-        reference: Option<String>,
+        checkout: WorktreeCheckout,
+        /// Open the new worktree in a tab once git has created it.
+        open_after: bool,
     },
     RemoveWorktree {
         repo_id: RepoId,

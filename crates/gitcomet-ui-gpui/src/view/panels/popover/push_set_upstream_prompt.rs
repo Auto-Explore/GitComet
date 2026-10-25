@@ -330,6 +330,7 @@ mod tests {
                 .map(|name| Remote {
                     name: (*name).to_string(),
                     url: None,
+                    default_branch: None,
                 })
                 .collect(),
         ));

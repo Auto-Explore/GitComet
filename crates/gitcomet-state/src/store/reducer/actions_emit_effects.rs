@@ -19,7 +19,7 @@ use gitcomet_core::domain::{DiffTarget, FileConflictKind, Upstream};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
     CheckoutRemoteBranchMode, CommandOutput, InteractiveRebaseEntry, PullMode, RemoteUrlKind,
-    ResetMode, SafePushAfterCommitTarget,
+    ResetMode, SafePushAfterCommitTarget, WorktreeCheckout,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -174,12 +174,14 @@ pub(super) fn apply_patch(repo_id: RepoId, patch: PathBuf) -> Vec<Effect> {
 pub(super) fn add_worktree(
     repo_id: RepoId,
     path: PathBuf,
-    reference: Option<String>,
+    checkout: WorktreeCheckout,
+    open_after: bool,
 ) -> Vec<Effect> {
     vec![Effect::RepoCommand(RepoCommandEffect::AddWorktree {
         repo_id,
         path,
-        reference,
+        checkout,
+        open_after,
     })]
 }
 

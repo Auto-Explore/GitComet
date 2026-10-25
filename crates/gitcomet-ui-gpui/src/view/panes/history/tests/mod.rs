@@ -40,10 +40,17 @@ fn the_history_fingerprint_tracks_the_worktree_revs() {
     );
 
     state.repos[0].history_state.worktree_selection_rev += 1;
+    let after_selection = fingerprint(&state);
     assert_ne!(
-        after_scan,
-        fingerprint(&state),
+        after_scan, after_selection,
         "selecting a worktree row must repaint the row that shows it"
+    );
+
+    state.repos[0].worktrees_rev += 1;
+    assert_ne!(
+        after_selection,
+        fingerprint(&state),
+        "a new worktree list must repaint the clean worktrees' chips"
     );
 }
 
@@ -332,3 +339,4 @@ mod reveal;
 mod row_tooltips;
 mod selection;
 mod worktree_anchors;
+mod worktree_chips;
