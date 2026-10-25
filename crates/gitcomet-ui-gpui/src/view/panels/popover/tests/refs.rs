@@ -2392,7 +2392,7 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
 }
 
 #[gpui::test]
-fn remote_menu_checks_show_in_history_graph_for_shown_remotes(cx: &mut gpui::TestAppContext) {
+fn remote_menu_offers_to_hide_shown_remotes_and_show_hidden_ones(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -2423,7 +2423,15 @@ fn remote_menu_checks_show_in_history_graph_for_shown_remotes(cx: &mut gpui::Tes
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
-                for (name, checked) in [("origin", true), ("upstream", false)] {
+                for (name, shown, label, eye) in [
+                    (
+                        "origin",
+                        true,
+                        "Hide from history graph",
+                        "icons/eye_off.svg",
+                    ),
+                    ("upstream", false, "Show in history graph", "icons/eye.svg"),
+                ] {
                     let model = host
                         .context_menu_model(
                             &PopoverKind::remote(
@@ -2435,15 +2443,11 @@ fn remote_menu_checks_show_in_history_graph_for_shown_remotes(cx: &mut gpui::Tes
                             cx,
                         )
                         .expect("expected a remote menu");
-                    let ix = entry_ix(&model, "Show in history graph");
+                    let ix = entry_ix(&model, label);
                     let ContextMenuItem::Entry { icon, action, .. } = &model.items[ix] else {
                         unreachable!();
                     };
-                    assert_eq!(
-                        icon.as_ref().map(|icon| icon.as_ref()),
-                        checked.then_some("icons/check.svg"),
-                        "{name}"
-                    );
+                    assert_eq!(icon.as_ref().map(|icon| icon.as_ref()), Some(eye), "{name}");
                     assert!(
                         matches!(
                             action.as_ref(),
@@ -2451,7 +2455,7 @@ fn remote_menu_checks_show_in_history_graph_for_shown_remotes(cx: &mut gpui::Tes
                                 repo_id: rid,
                                 remote,
                                 hidden,
-                            } if *rid == repo_id && remote == name && *hidden == checked
+                            } if *rid == repo_id && remote == name && *hidden == shown
                         ),
                         "{name}: choosing it flips the remote's visibility"
                     );

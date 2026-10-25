@@ -30,9 +30,14 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
         });
     }
     items.push(ContextMenuItem::Separator);
+    let (history_label, history_icon) = if shown_in_history {
+        ("Hide from history graph", "icons/eye_off.svg")
+    } else {
+        ("Show in history graph", "icons/eye.svg")
+    };
     items.push(ContextMenuItem::Entry {
-        label: "Show in history graph".into(),
-        icon: shown_in_history.then_some("icons/check.svg".into()),
+        label: history_label.into(),
+        icon: Some(history_icon.into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::SetRemoteHistoryVisibility {

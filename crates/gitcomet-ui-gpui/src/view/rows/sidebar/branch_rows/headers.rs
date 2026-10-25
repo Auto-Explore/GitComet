@@ -466,7 +466,9 @@ impl SidebarPaneView {
             ))
             .child(
                 components::FadingText::new(
-                    div().child(name),
+                    div()
+                        .when(hidden_in_history, |text| text.line_through())
+                        .child(name),
                     row_style.resolved_background(row_state),
                 )
                 .hover_bg(
