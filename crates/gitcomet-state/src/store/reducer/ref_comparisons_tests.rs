@@ -13,6 +13,9 @@ fn fixture() -> AppState {
             workdir: "/tmp/comparisons".into(),
         },
     );
+    repo.ref_comparisons.memory = Some(Arc::new(
+        gitcomet_core::ref_comparison_memory::ComparisonMemory::default(),
+    ));
     repo.set_branches(Loadable::Ready(vec![Branch {
         name: "topic".into(),
         target: CommitId("a".repeat(40).into()),
@@ -27,8 +30,10 @@ fn fixture() -> AppState {
     }
 }
 
-fn start(state: &mut AppState) -> crate::ref_comparisons::RefComparisonsEffect {
-    let Effect::RefComparisons(work) = ensure(&mut state.repos[0], false).remove(0) else {
+fn start(state: &mut AppState) -> crate::ref_comparisons::RefComparisonSubscription {
+    let Effect::RefComparisons(crate::ref_comparisons::RefComparisonsEffect::Compare(work)) =
+        ensure(&mut state.repos[0], false).remove(0)
+    else {
         panic!("comparison effect")
     };
     work
@@ -42,10 +47,11 @@ fn target() -> RefComparisonTarget {
     }
 }
 
-fn resolve(state: &mut AppState, work: &crate::ref_comparisons::RefComparisonsEffect) {
+fn resolve(state: &mut AppState, work: &crate::ref_comparisons::RefComparisonSubscription) {
     reduce(
         state,
         RefComparisonsMsg::Target {
+            reservation: None,
             repo_id: work.repo_id,
             lifetime: work.lifetime,
             generation: work.generation,
@@ -54,17 +60,18 @@ fn resolve(state: &mut AppState, work: &crate::ref_comparisons::RefComparisonsEf
     );
 }
 
-fn publish(state: &mut AppState, work: &crate::ref_comparisons::RefComparisonsEffect) {
+fn publish(state: &mut AppState, work: &crate::ref_comparisons::RefComparisonSubscription) {
     reduce(
         state,
         RefComparisonsMsg::Publish {
             repo_id: work.repo_id,
             lifetime: work.lifetime,
             generation: work.generation,
+            reservation: work.memory.reserve(32 * 1024).unwrap(),
             batch: RefComparisonBatch {
                 target: target(),
                 results: vec![RefComparison {
-                    subject: work.subjects[0].clone(),
+                    subject: work.projections.subjects[0].clone(),
                     counts: RefComparisonCounts::Exact {
                         ahead: 0,
                         behind: 3,
@@ -79,6 +86,97 @@ fn publish(state: &mut AppState, work: &crate::ref_comparisons::RefComparisonsEf
 }
 
 #[test]
+fn comparison_projections_are_bounded_and_remain_owned_by_retained_snapshots() {
+    let _guard = crate::ref_comparisons::MEMORY_TESTS.lock().unwrap();
+    let mut state = fixture();
+    let memory = state.repos[0]
+        .ref_comparisons
+        .memory
+        .as_ref()
+        .unwrap()
+        .clone();
+    let held = memory.reserve(COMPARISON_REPOSITORY_BYTES).unwrap();
+    assert!(matches!(
+        ensure(&mut state.repos[0], false).as_slice(),
+        [Effect::RefComparisons(
+            crate::ref_comparisons::RefComparisonsEffect::Release { .. }
+        )]
+    ));
+    assert!(matches!(
+        state.repos[0].ref_comparisons.target,
+        Loadable::Error(_)
+    ));
+    drop(held);
+    assert!(
+        ensure(&mut state.repos[0], false).is_empty(),
+        "exhaustion is deferred until an explicit retry"
+    );
+    let Effect::RefComparisons(crate::ref_comparisons::RefComparisonsEffect::Compare(work)) =
+        ensure(&mut state.repos[0], true).remove(0)
+    else {
+        panic!("explicit retry")
+    };
+    assert!(memory.used_bytes() > 0);
+    let retained = state.clone();
+    drop(state);
+    drop(work);
+    assert!(memory.used_bytes() > 0);
+    drop(retained);
+    assert_eq!(memory.used_bytes(), 0);
+}
+
+#[test]
+fn unchanged_refresh_waits_for_the_worktree_snapshot_without_starting_comparisons() {
+    let mut state = fixture();
+    state.repos[0].set_worktrees(Loadable::Ready(vec![gitcomet_core::domain::Worktree {
+        path: "/linked".into(),
+        head: Some(CommitId("c".repeat(40).into())),
+        branch: None,
+        detached: true,
+    }]));
+    let work = start(&mut state);
+    resolve(&mut state, &work);
+    let previous = state.repos[0].worktrees.ready().unwrap().as_ref().clone();
+    state.repos[0].set_worktrees(Loadable::Loading);
+    assert!(ensure(&mut state.repos[0], false).is_empty());
+    state.repos[0].set_worktrees(Loadable::Ready(previous));
+    assert!(ensure(&mut state.repos[0], false).is_empty());
+}
+
+#[test]
+fn empty_accepted_subjects_release_ownership_and_reject_the_previous_completion() {
+    let mut state = fixture();
+    let work = start(&mut state);
+    resolve(&mut state, &work);
+    publish(&mut state, &work);
+    state.repos[0].set_branches(Loadable::Ready(Vec::new()));
+    let effects = ensure(&mut state.repos[0], false);
+    assert!(
+        matches!(effects.as_slice(), [Effect::RefComparisons(crate::ref_comparisons::RefComparisonsEffect::Release { lifetime })] if *lifetime == work.lifetime)
+    );
+    assert!(
+        state.repos[0]
+            .ref_comparisons
+            .projections
+            .subjects
+            .is_empty()
+    );
+    assert!(
+        state.repos[0]
+            .ref_comparisons
+            .decorations
+            .get(&work.projections.subjects[0])
+            .is_none()
+    );
+    resolve(&mut state, &work);
+    assert!(matches!(
+        state.repos[0].ref_comparisons.target,
+        Loadable::NotLoaded
+    ));
+    assert!(ensure(&mut state.repos[0], false).is_empty());
+}
+
+#[test]
 fn comparison_only_publications_do_not_change_sidebar_structure_and_reject_stale_generations() {
     let mut state = fixture();
     let work = start(&mut state);
@@ -90,7 +188,7 @@ fn comparison_only_publications_do_not_change_sidebar_structure_and_reject_stale
         state.repos[0]
             .ref_comparisons
             .decorations
-            .get(&work.subjects[0])
+            .get(&work.projections.subjects[0])
             .is_some()
     );
     let old_snapshot = state.repos[0].ref_comparisons.decorations.clone();
@@ -109,11 +207,11 @@ fn comparison_only_publications_do_not_change_sidebar_structure_and_reject_stale
         state.repos[0]
             .ref_comparisons
             .decorations
-            .get(&next.subjects[0])
+            .get(&next.projections.subjects[0])
             .is_none()
     );
     publish(&mut state, &next);
-    assert!(old_snapshot.get(&next.subjects[0]).is_none());
+    assert!(old_snapshot.get(&next.projections.subjects[0]).is_none());
 }
 
 #[test]
@@ -141,7 +239,7 @@ fn unchanged_refresh_reuses_results_without_scheduling_comparison_work() {
         state.repos[0]
             .ref_comparisons
             .decorations
-            .get(&work.subjects[0])
+            .get(&work.projections.subjects[0])
             .is_some()
     );
 }
@@ -182,7 +280,7 @@ fn unchanged_refresh_during_counting_preserves_the_immutable_input_subscription(
         state.repos[0]
             .ref_comparisons
             .decorations
-            .get(&work.subjects[0])
+            .get(&work.projections.subjects[0])
             .is_some()
     );
 }
@@ -246,7 +344,7 @@ fn a_verification_context_only_event_restarts_comparisons_without_waiting_for_re
         state.repos[0]
             .ref_comparisons
             .decorations
-            .get(&work.subjects[0])
+            .get(&work.projections.subjects[0])
             .is_none()
     );
 }

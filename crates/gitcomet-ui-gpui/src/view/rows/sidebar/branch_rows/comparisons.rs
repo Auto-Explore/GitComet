@@ -203,7 +203,13 @@ impl SidebarPaneView {
             return None;
         };
         let (label, detail) = match repo.ref_comparisons.decorations.get(subject) {
-            None => ("Comparing…".to_string(), "Comparison pending.".to_string()),
+            None => match repo.ref_comparisons.deferred {
+                Some(reason) => (
+                    "Not confirmed".to_string(),
+                    reason.description().to_string(),
+                ),
+                None => ("Comparing…".to_string(), "Comparison pending.".to_string()),
+            },
             Some(result) => {
                 let (counts, count_detail) = match result.counts {
                     RefComparisonCounts::Exact { ahead, behind } => (
@@ -219,7 +225,10 @@ impl SidebarPaneView {
                     ),
                 };
                 let (status, evidence) = match result.integration {
-                    RefIntegration::Pending => ("Checking…", "Integration evidence pending."),
+                    RefIntegration::Pending => match repo.ref_comparisons.deferred {
+                        Some(reason) => ("Not confirmed", reason.description()),
+                        None => ("Checking…", "Integration evidence pending."),
+                    },
                     RefIntegration::Confirmed(evidence) => {
                         (evidence.label(), evidence.description())
                     }

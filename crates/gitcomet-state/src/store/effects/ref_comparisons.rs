@@ -4,10 +4,13 @@ use super::super::worker_channel::StoreWorkerSender;
 use super::util::send_or_log;
 use crate::model::RepoLifetime;
 use crate::msg::Msg;
-use crate::ref_comparisons::{RefComparisonsEffect, RefComparisonsMsg};
+use crate::ref_comparisons::{
+    MAX_COMPARISON_PROJECTIONS, RefComparisonSubscription, RefComparisonsEffect, RefComparisonsMsg,
+};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::ref_comparison::*;
+use gitcomet_core::ref_comparison_memory::{ComparisonReservation, hash_table_bytes};
 use gitcomet_core::services::{CancellationToken, GitRepository};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -17,7 +20,7 @@ const MAX_SUBSCRIBERS: usize = 256;
 const PUBLICATION_INTERVAL: Duration = Duration::from_millis(100);
 
 struct Subscriber {
-    request: RefComparisonsEffect,
+    request: RefComparisonSubscription,
     repo: Arc<dyn GitRepository>,
     tx: StoreWorkerSender,
     target: Option<RefComparisonTarget>,
@@ -25,12 +28,52 @@ struct Subscriber {
     visible: FxHashSet<CommitId>,
     pending: FxHashSet<CommitId>,
     last_publication: Option<Instant>,
+    deferred: bool,
+    _reservation: Arc<ComparisonReservation>,
+}
+
+fn subject_priority(subscriber: &Subscriber, id: &CommitId) -> u8 {
+    if subscriber.visible.contains(id) || subscriber.request.projections.active.as_ref() == Some(id)
+    {
+        return 0;
+    }
+    if subscriber.request.projections.worktree_heads.contains(id) {
+        return 1;
+    }
+    2
+}
+
+impl Subscriber {
+    fn new(
+        request: RefComparisonSubscription,
+        repo: Arc<dyn GitRepository>,
+        tx: StoreWorkerSender,
+        previous: Option<Self>,
+        reservation: Arc<ComparisonReservation>,
+    ) -> Self {
+        let subjects = request.projections.members.clone();
+        let visible = request.visible.iter().cloned().collect();
+        Self {
+            request,
+            repo,
+            tx,
+            target: None,
+            subjects,
+            visible,
+            pending: FxHashSet::default(),
+            deferred: false,
+            last_publication: previous.and_then(|subscriber| subscriber.last_publication),
+            _reservation: reservation,
+        }
+    }
 }
 
 struct Cohort {
     target: RefComparisonTarget,
     results: FxHashMap<CommitId, RefComparison>,
     subscribers: FxHashMap<RepoLifetime, Subscriber>,
+    reservation: Option<Arc<ComparisonReservation>>,
+    bytes: usize,
 }
 
 #[derive(Default)]
@@ -72,10 +115,16 @@ struct Pool {
     executor: TaskExecutor,
 }
 static POOL: OnceLock<Pool> = OnceLock::new();
+static ANALYSIS_THREAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}-ref-analysis",
+        gitcomet_core::identity::current().executable_name()
+    )
+});
 fn pool() -> &'static Pool {
     POOL.get_or_init(|| Pool {
         queue: Mutex::default(),
-        executor: TaskExecutor::named("gitcomet-ref-analysis", 2),
+        executor: TaskExecutor::named(ANALYSIS_THREAD.as_str(), 2),
     })
 }
 
@@ -107,72 +156,106 @@ enum Completion {
 }
 
 impl Cohort {
-    fn next(&self, index: usize) -> Option<(u8, Step)> {
-        let mut counts = FxHashSet::default();
-        let mut evidence = FxHashSet::default();
-        let mut visible = FxHashSet::default();
-        let mut deeper = FxHashSet::default();
-        for subscriber in self.subscribers.values() {
-            if subscriber.request.deep {
-                deeper.extend(subscriber.subjects.iter().cloned());
+    fn reserve_subjects(&mut self, subscriber: &Subscriber) -> bool {
+        let additional = subscriber
+            .subjects
+            .iter()
+            .filter(|id| !self.results.contains_key(*id))
+            .count();
+        let total = self.results.len().saturating_add(additional);
+        if total > MAX_COMPARISON_PROJECTIONS {
+            return false;
+        }
+        if self.results.capacity() < total {
+            let bytes = hash_table_bytes::<CommitId, RefComparison>(total);
+            let Some(reservation) = self
+                .reservation
+                .clone()
+                .or_else(|| subscriber.request.memory.reserve(0))
+            else {
+                return false;
+            };
+            if !reservation.resize(self.bytes.saturating_add(bytes)) {
+                return false;
             }
-            visible.extend(subscriber.visible.iter().cloned());
-            for id in subscriber.subjects.iter() {
-                match self.results.get(id) {
-                    None => {
-                        counts.insert(id.clone());
+            self.results.reserve(total - self.results.len());
+            reservation.resize(bytes);
+            self.reservation = Some(reservation);
+            self.bytes = bytes;
+        }
+        for id in subscriber.subjects.iter() {
+            self.results
+                .entry(id.clone())
+                .or_insert_with(|| RefComparison {
+                    subject: id.clone(),
+                    counts: RefComparisonCounts::Pending,
+                    integration: RefIntegration::Pending,
+                });
+        }
+        true
+    }
+
+    fn next(&self, index: usize) -> Option<(u8, Step)> {
+        for (stage, initial_depth, limit) in [
+            (1, RefComparisonDepth::Counts, MAX_COMPARISON_SUBJECTS),
+            (4, RefComparisonDepth::Evidence, 1),
+        ] {
+            let mut best = None;
+            let mut subjects = Vec::with_capacity(limit);
+            let mut seen = FxHashSet::with_capacity_and_hasher(limit, Default::default());
+            for subscriber in self.subscribers.values() {
+                if subscriber.deferred {
+                    continue;
+                }
+                for id in &subscriber.request.projections.subjects {
+                    let result = self.results.get(id);
+                    let needs_counts =
+                        result.is_none_or(|result| result.counts == RefComparisonCounts::Pending);
+                    let needs_evidence = result.is_some_and(|result| {
+                        result.integration == RefIntegration::Pending
+                            && matches!(result.counts, RefComparisonCounts::Exact { .. })
+                    });
+                    if (initial_depth == RefComparisonDepth::Counts && !needs_counts)
+                        || (initial_depth == RefComparisonDepth::Evidence && !needs_evidence)
+                    {
+                        continue;
                     }
-                    Some(result) if result.integration == RefIntegration::Pending => {
-                        evidence.insert(id.clone());
+                    let priority = subject_priority(subscriber, id);
+                    let deep = self.subscribers.values().any(|owner| {
+                        !owner.deferred && owner.request.deep && owner.subjects.contains(id)
+                    });
+                    let key = (priority, deep);
+                    if best.is_none_or(|best| key < best) {
+                        best = Some(key);
+                        subjects.clear();
+                        seen.clear();
                     }
-                    _ => {}
+                    if best == Some(key) && subjects.len() < limit && seen.insert(id.clone()) {
+                        subjects.push(id.clone());
+                    }
                 }
             }
-        }
-        for (set, stage, depth, limit) in [
-            (
-                &counts,
-                1,
-                RefComparisonDepth::Counts,
-                MAX_COMPARISON_SUBJECTS,
-            ),
-            (&evidence, 3, RefComparisonDepth::Evidence, 1),
-        ] {
-            if set.is_empty() {
-                continue;
+            if let Some((priority, deep)) = best {
+                let depth = if deep && initial_depth == RefComparisonDepth::Evidence {
+                    RefComparisonDepth::Deep
+                } else {
+                    initial_depth
+                };
+                return Some((
+                    stage + priority,
+                    Step::Analyze {
+                        cohort: index,
+                        target: self.target.clone(),
+                        subjects,
+                        depth,
+                        budget: if deep {
+                            RefComparisonBudget::deep()
+                        } else {
+                            RefComparisonBudget::automatic()
+                        },
+                    },
+                ));
             }
-            let has_visible = set.iter().any(|id| visible.contains(id));
-            let deep = set
-                .iter()
-                .filter(|id| !has_visible || visible.contains(*id))
-                .all(|id| deeper.contains(id));
-            let budget = if deep {
-                RefComparisonBudget::deep()
-            } else {
-                RefComparisonBudget::automatic()
-            };
-            let depth = if deep && depth == RefComparisonDepth::Evidence {
-                RefComparisonDepth::Deep
-            } else {
-                depth
-            };
-            let subjects = set
-                .iter()
-                .filter(|id| !has_visible || visible.contains(*id))
-                .filter(|id| deeper.contains(*id) == deep)
-                .take(limit)
-                .cloned()
-                .collect();
-            return Some((
-                stage + u8::from(!has_visible),
-                Step::Analyze {
-                    cohort: index,
-                    target: self.target.clone(),
-                    subjects,
-                    depth,
-                    budget,
-                },
-            ));
         }
         None
     }
@@ -250,6 +333,7 @@ fn target_reply(
     send_or_log(
         &subscriber.tx,
         Msg::RefComparisons(RefComparisonsMsg::Target {
+            reservation: Some(subscriber._reservation.clone()),
             repo_id: subscriber.request.repo_id,
             lifetime: subscriber.request.lifetime,
             generation: subscriber.request.generation,
@@ -259,6 +343,43 @@ fn target_reply(
 }
 
 fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
+    let completion = match (&task.step, completion) {
+        (
+            Step::Analyze {
+                target,
+                subjects,
+                depth,
+                ..
+            },
+            Completion::Batch(Ok(batch)),
+        ) => {
+            let valid = batch.target.oid == target.oid
+                && batch.target.context == target.context
+                && batch.results.len() == subjects.len()
+                && batch.results.iter().all(|result| {
+                    result.counts != RefComparisonCounts::Pending
+                        && ((*depth == RefComparisonDepth::Counts
+                            && matches!(result.counts, RefComparisonCounts::Exact { .. }))
+                            || result.integration != RefIntegration::Pending)
+                })
+                && subjects.iter().all(|subject| {
+                    batch
+                        .results
+                        .iter()
+                        .filter(|result| &result.subject == subject)
+                        .count()
+                        == 1
+                });
+            if valid {
+                Completion::Batch(Ok(batch))
+            } else {
+                Completion::Batch(Err(Error::new(ErrorKind::Backend(
+                    "Comparison backend returned an incomplete or mismatched batch.".into(),
+                ))))
+            }
+        }
+        (_, completion) => completion,
+    };
     let Some(work) = queue.repositories.get_mut(&task.scope) else {
         return;
     };
@@ -278,11 +399,22 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
             let Some(mut subscriber) = work.targets.remove(owner) else {
                 return;
             };
-            target_reply(&subscriber, result.clone());
-            let Ok(target) = result else {
+            let target = match result {
+                Ok(target) => target,
+                Err(error) => {
+                    target_reply(&subscriber, Err(error));
+                    queue.owners.remove(owner);
+                    return;
+                }
+            };
+            if !subscriber
+                ._reservation
+                .grow(target.reference.len().saturating_mul(2))
+            {
+                target_reply(&subscriber, Err(Error::new(ErrorKind::Backend("Comparison target reached its shared memory limit. Run a deeper check to retry.".into()))));
                 queue.owners.remove(owner);
                 return;
-            };
+            }
             let index = work
                 .cohorts
                 .iter()
@@ -294,10 +426,25 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
                         target: target.clone(),
                         results: FxHashMap::default(),
                         subscribers: FxHashMap::default(),
+                        reservation: None,
+                        bytes: 0,
                     });
                     work.cohorts.len() - 1
                 });
             let cohort = &mut work.cohorts[index];
+            cohort.results.retain(|id, _| {
+                subscriber.subjects.contains(id)
+                    || cohort
+                        .subscribers
+                        .values()
+                        .any(|owner| owner.subjects.contains(id))
+            });
+            if !cohort.reserve_subjects(&subscriber) {
+                target_reply(&subscriber, Err(Error::new(ErrorKind::Backend("Comparison analysis reached its shared memory or subject limit. Run a deeper check to retry.".into()))));
+                queue.owners.remove(owner);
+                return;
+            }
+            target_reply(&subscriber, Ok(target.clone()));
             cohort.results.retain(|subject, result| {
                 if !subscriber.subjects.contains(subject) {
                     return true;
@@ -327,13 +474,18 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
             subscriber.pending = subscriber
                 .subjects
                 .iter()
-                .filter(|id| cohort.results.contains_key(*id))
+                .filter(|id| {
+                    cohort
+                        .results
+                        .get(*id)
+                        .is_some_and(|result| result.counts != RefComparisonCounts::Pending)
+                })
                 .cloned()
                 .collect();
             subscriber.target = Some(target);
             cohort.subscribers.insert(*owner, subscriber);
         }
-        (Step::Analyze { cohort, .. }, Completion::Batch(Ok(batch))) => {
+        (Step::Analyze { cohort, depth, .. }, Completion::Batch(Ok(batch))) => {
             let Some(cohort) = work.cohorts.get_mut(*cohort) else {
                 return;
             };
@@ -342,9 +494,21 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
             {
                 return;
             }
-            for result in batch.results {
+            for mut result in batch.results {
+                if *depth != RefComparisonDepth::Counts
+                    && matches!(
+                        result.counts,
+                        RefComparisonCounts::Unavailable(
+                            RefComparisonReason::Budget | RefComparisonReason::Deadline
+                        )
+                    )
+                    && let Some(previous) = cohort.results.get(&result.subject)
+                    && matches!(previous.counts, RefComparisonCounts::Exact { .. })
+                {
+                    result.counts = previous.counts;
+                }
                 for subscriber in cohort.subscribers.values_mut() {
-                    if subscriber.subjects.contains(&result.subject) {
+                    if !subscriber.deferred && subscriber.subjects.contains(&result.subject) {
                         subscriber.pending.insert(result.subject.clone());
                     }
                 }
@@ -371,12 +535,21 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
                                 subject.clone(),
                                 RefComparison {
                                     subject: subject.clone(),
-                                    counts: cohort.results.get(subject).map_or(
-                                        RefComparisonCounts::Unavailable(
-                                            RefComparisonReason::IncompleteHistory,
+                                    counts: cohort
+                                        .results
+                                        .get(subject)
+                                        .filter(|result| {
+                                            matches!(
+                                                result.counts,
+                                                RefComparisonCounts::Exact { .. }
+                                            )
+                                        })
+                                        .map_or(
+                                            RefComparisonCounts::Unavailable(
+                                                RefComparisonReason::IncompleteHistory,
+                                            ),
+                                            |result| result.counts,
                                         ),
-                                        |result| result.counts,
-                                    ),
                                     integration: RefIntegration::NotConfirmed(
                                         RefComparisonReason::IncompleteHistory,
                                     ),
@@ -384,6 +557,9 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
                             );
                         }
                         for subscriber in cohort.subscribers.values_mut() {
+                            if subscriber.deferred {
+                                continue;
+                            }
                             subscriber.pending.extend(
                                 subjects
                                     .iter()
@@ -418,12 +594,33 @@ fn publish(queue: &mut Queue) -> Option<Duration> {
                         Some(delay.map_or(remaining, |current: Duration| current.min(remaining)));
                     continue;
                 }
-                let ids: Vec<_> = subscriber
-                    .pending
-                    .iter()
-                    .take(MAX_COMPARISON_SUBJECTS)
-                    .cloned()
-                    .collect();
+                let Some(reservation) = subscriber.request.memory.reserve(32 * 1024) else {
+                    subscriber.deferred = true;
+                    subscriber.pending.clear();
+                    subscriber.pending.shrink_to_fit();
+                    send_or_log(
+                        &subscriber.tx,
+                        Msg::RefComparisons(RefComparisonsMsg::Deferred {
+                            repo_id: subscriber.request.repo_id,
+                            lifetime: subscriber.request.lifetime,
+                            generation: subscriber.request.generation,
+                            reason: RefComparisonReason::Budget,
+                            reservation: subscriber._reservation.clone(),
+                        }),
+                    );
+                    continue;
+                };
+                let mut ids = Vec::with_capacity(MAX_COMPARISON_SUBJECTS);
+                for priority in 0..3 {
+                    for id in &subscriber.pending {
+                        if ids.len() == MAX_COMPARISON_SUBJECTS {
+                            break;
+                        }
+                        if subject_priority(subscriber, id) == priority {
+                            ids.push(id.clone());
+                        }
+                    }
+                }
                 let results = ids
                     .iter()
                     .filter_map(|id| cohort.results.get(id).cloned())
@@ -437,6 +634,7 @@ fn publish(queue: &mut Queue) -> Option<Duration> {
                         repo_id: subscriber.request.repo_id,
                         lifetime: subscriber.request.lifetime,
                         generation: subscriber.request.generation,
+                        reservation,
                         batch: RefComparisonBatch {
                             target: target.clone(),
                             results,
@@ -513,36 +711,58 @@ fn run(pool: &'static Pool) {
 pub(super) fn schedule(
     repos: &RepositoryRuntimes,
     tx: StoreWorkerSender,
-    request: RefComparisonsEffect,
+    effect: RefComparisonsEffect,
 ) {
     let pool = pool();
     let mut queue = pool.queue.lock().unwrap_or_else(|error| error.into_inner());
-    if request.priority_only {
-        if let Some(scope) = queue.owners.get(&request.lifetime).copied()
-            && let Some(work) = queue.repositories.get_mut(&scope)
-        {
-            let subscriber = work.targets.get_mut(&request.lifetime).or_else(|| {
-                work.cohorts
-                    .iter_mut()
-                    .find_map(|cohort| cohort.subscribers.get_mut(&request.lifetime))
-            });
-            if let Some(subscriber) = subscriber {
-                subscriber.visible = request.subjects.iter().cloned().collect();
-            }
+    let request = match effect {
+        RefComparisonsEffect::Release { lifetime } => {
+            drop(queue);
+            release(lifetime);
+            return;
         }
-        start_workers(pool, &mut queue);
-        return;
-    }
+        RefComparisonsEffect::Compare(request) => request,
+        RefComparisonsEffect::Prioritize { lifetime, subjects } => {
+            if let Some(scope) = queue.owners.get(&lifetime).copied()
+                && let Some(work) = queue.repositories.get_mut(&scope)
+            {
+                let subscriber = work.targets.get_mut(&lifetime).or_else(|| {
+                    work.cohorts
+                        .iter_mut()
+                        .find_map(|cohort| cohort.subscribers.get_mut(&lifetime))
+                });
+                if let Some(subscriber) = subscriber {
+                    subscriber.visible = subjects.iter().take(128).cloned().collect();
+                }
+            }
+            start_workers(pool, &mut queue);
+            return;
+        }
+    };
     let Some(repo) = repos.repository(&request.repo_id).cloned() else {
         return;
     };
     let scope = repo.ref_comparison_scope();
+    if admit(&mut queue, request, repo, tx, scope) {
+        start_workers(pool, &mut queue);
+    }
+}
+
+fn admit(
+    queue: &mut Queue,
+    request: RefComparisonSubscription,
+    repo: Arc<dyn GitRepository>,
+    tx: StoreWorkerSender,
+    scope: Option<u64>,
+) -> bool {
     if scope.is_none()
         || (queue.owners.len() >= MAX_SUBSCRIBERS && !queue.owners.contains_key(&request.lifetime))
     {
+        retire(queue, request.lifetime);
         send_or_log(
             &tx,
             Msg::RefComparisons(RefComparisonsMsg::Target {
+                reservation: None,
                 repo_id: request.repo_id,
                 lifetime: request.lifetime,
                 generation: request.generation,
@@ -551,10 +771,25 @@ pub(super) fn schedule(
                 ))),
             }),
         );
-        return;
+        return false;
     }
     let Some(scope) = scope else {
-        return;
+        return false;
+    };
+    let bytes = hash_table_bytes::<CommitId, ()>(request.projections.subjects.len())
+        .saturating_mul(2)
+        .saturating_add(64 * 1024)
+        .saturating_add(
+            request
+                .reference
+                .as_ref()
+                .map_or(0, |reference| reference.len().saturating_mul(6)),
+        );
+    let Some(reservation) = request.memory.reserve(bytes) else {
+        retire(queue, request.lifetime);
+        send_or_log(&tx, Msg::RefComparisons(RefComparisonsMsg::Target {
+                reservation: None, repo_id: request.repo_id, lifetime: request.lifetime, generation: request.generation, result: Err(Error::new(ErrorKind::Backend("Comparison queue reached its shared memory limit. Run a deeper check to retry.".into()))) }));
+        return false;
     };
     if let Some(old) = queue.owners.insert(request.lifetime, scope)
         && old != scope
@@ -567,32 +802,11 @@ pub(super) fn schedule(
     }
     let work = queue.repositories.entry(scope).or_default();
     let previous = work.remove(request.lifetime);
-    let subjects = Arc::new(request.subjects.iter().cloned().collect());
-    let visible = previous
-        .as_ref()
-        .map(|subscriber| subscriber.visible.clone())
-        .unwrap_or_else(|| {
-            request
-                .subjects
-                .iter()
-                .take(MAX_COMPARISON_SUBJECTS)
-                .cloned()
-                .collect()
-        });
     work.targets.insert(
         request.lifetime,
-        Subscriber {
-            request,
-            repo,
-            tx,
-            target: None,
-            subjects,
-            visible,
-            pending: FxHashSet::default(),
-            last_publication: previous.and_then(|subscriber| subscriber.last_publication),
-        },
+        Subscriber::new(request, repo, tx, previous, reservation),
     );
-    start_workers(pool, &mut queue);
+    true
 }
 
 pub(in crate::store) fn release(lifetime: RepoLifetime) {
@@ -600,6 +814,10 @@ pub(in crate::store) fn release(lifetime: RepoLifetime) {
         return;
     };
     let mut queue = pool.queue.lock().unwrap_or_else(|error| error.into_inner());
+    retire(&mut queue, lifetime);
+}
+
+fn retire(queue: &mut Queue, lifetime: RepoLifetime) {
     let Some(scope) = queue.owners.remove(&lifetime) else {
         return;
     };

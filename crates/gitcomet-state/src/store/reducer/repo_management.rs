@@ -1357,6 +1357,7 @@ pub(super) fn repo_opened_ok(
     };
 
     let common_dir = repo.common_dir().map(Arc::<std::path::Path>::from);
+    let comparison_memory = repo.ref_comparison_memory();
     repos.opened(repo_id, lifetime, repo);
     let git_log_settings = state.git_log_settings;
     let maintenance_settings = state.maintenance_settings;
@@ -1366,6 +1367,7 @@ pub(super) fn repo_opened_ok(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.common_dir = common_dir;
+        repo_state.ref_comparisons.memory = comparison_memory;
         if let Some(snapshot) = preferences {
             repo_state.history_state.history_scope = snapshot.preferences.history_mode;
             repo_state.file_browser.show_hidden = snapshot.preferences.show_hidden_files;

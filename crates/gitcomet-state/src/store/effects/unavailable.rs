@@ -42,14 +42,24 @@ pub(super) fn send_unavailable_git_effect_result(
     let send = |msg| util::send_or_log(msg_tx, msg);
 
     match effect {
-        Effect::RefComparisons(work) => send(Msg::RefComparisons(
-            crate::ref_comparisons::RefComparisonsMsg::Target {
-                repo_id: work.repo_id,
-                lifetime: work.lifetime,
-                generation: work.generation,
-                result: Err(git_unavailable_error(runtime)),
-            },
-        )),
+        Effect::RefComparisons(crate::ref_comparisons::RefComparisonsEffect::Release {
+            lifetime,
+        }) => super::ref_comparisons::release(lifetime),
+        Effect::RefComparisons(crate::ref_comparisons::RefComparisonsEffect::Prioritize {
+            ..
+        }) => {}
+        Effect::RefComparisons(crate::ref_comparisons::RefComparisonsEffect::Compare(work)) => {
+            super::ref_comparisons::release(work.lifetime);
+            send(Msg::RefComparisons(
+                crate::ref_comparisons::RefComparisonsMsg::Target {
+                    reservation: None,
+                    repo_id: work.repo_id,
+                    lifetime: work.lifetime,
+                    generation: work.generation,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
         Effect::Status(work) => send(Msg::Internal(work.failed(git_unavailable_error(runtime)))),
         Effect::References(work) => {
             send(Msg::Internal(work.failed(git_unavailable_error(runtime))))

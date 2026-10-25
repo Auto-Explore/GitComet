@@ -8,7 +8,7 @@ pub const COMPARISON_GLOBAL_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefComparisonTarget {
-    pub reference: String,
+    pub reference: std::sync::Arc<str>,
     pub oid: CommitId,
     pub context: u64,
 }

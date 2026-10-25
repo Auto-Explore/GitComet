@@ -15,6 +15,17 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RefComparisonTarget> {
         cancellation.check_cancelled()?;
+        let memory_bytes = COMPARISON_REPOSITORY_BYTES / 16;
+        let store = self.shared_store();
+        let _reservation = store
+            .common
+            .comparison_memory
+            .reserve(memory_bytes)
+            .ok_or_else(|| {
+                Error::new(ErrorKind::Backend(
+                    "Comparison target resolution reached its shared memory limit.".into(),
+                ))
+            })?;
         if self.identity != super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo()) {
             return Err(Error::new(ErrorKind::Backend(
                 "The repository was replaced. Refresh before comparing refs.".into(),
@@ -24,7 +35,7 @@ impl GixRepo {
             workdir: &self.spec.workdir,
             deadline: Instant::now() + RefComparisonBudget::automatic().elapsed,
             cancellation,
-            memory: RefComparisonBudget::automatic().memory_bytes,
+            memory: memory_bytes,
             empty_graph: None,
         };
         graph_available(&analysis).map_err(|reason| {
@@ -73,7 +84,7 @@ impl GixRepo {
                 .strip_prefix("refs/remotes/")
                 .or_else(|| reference.strip_prefix("refs/heads/"))
                 .unwrap_or(&reference)
-                .to_string(),
+                .into(),
             oid: CommitId(oid.to_string().into()),
             context: self.shared_store().id,
         })
@@ -85,6 +96,11 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RefComparisonBatch> {
         cancellation.check_cancelled()?;
+        if request.subjects.len() > MAX_COMPARISON_SUBJECTS {
+            return Err(Error::new(ErrorKind::Backend(
+                "A comparison batch is limited to 128 subjects.".into(),
+            )));
+        }
         let mut seen = FxHashSet::default();
         let subjects: Vec<_> = request
             .subjects

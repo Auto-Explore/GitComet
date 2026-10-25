@@ -130,9 +130,9 @@ impl SidebarPaneView {
             worktree_tab_open,
             context_menu_active,
         );
-        let comparison = this
-            .active_repo()
-            .and_then(|repo| this.comparison_badge(ctx, repo.ref_comparisons.worktrees.get(&path)));
+        let comparison = this.active_repo().and_then(|repo| {
+            this.comparison_badge(ctx, repo.ref_comparisons.projections.worktrees.get(&path))
+        });
         let cleanliness = this.worktree_cleanliness_badge(ctx, &path, head.as_ref(), is_active);
         let context_menu_invoker_for_right_click = context_menu_invoker.clone();
         let row_group: SharedString = format!("worktree_row_{}_{}", repo_id.0, ix).into();

@@ -1,17 +1,17 @@
 use crate::model::{AppState, Loadable, RepoState};
 use crate::msg::Effect;
-use crate::ref_comparisons::{
-    ComparisonDecorations, MAX_COMPARISON_PROJECTIONS, RefComparisonsEffect, RefComparisonsMsg,
-};
-use gitcomet_core::domain::CommitId;
-use rustc_hash::FxHashSet;
+use crate::ref_comparison_decorations::ComparisonDecorations;
+use crate::ref_comparisons::{RefComparisonSubscription, RefComparisonsEffect, RefComparisonsMsg};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
-fn source(
-    repo: &RepoState,
-    reference: Option<String>,
-) -> Option<(u64, u64, u64, u64, Option<String>)> {
+fn source(repo: &RepoState, reference: Option<&str>) -> Option<(u64, u64, u64, u64, Option<u64>)> {
+    if matches!(repo.worktrees, Loadable::Loading)
+        || repo
+            .loads_in_flight
+            .is_in_flight(crate::model::LoadKind::Worktrees)
+    {
+        return None;
+    }
     if [
         crate::model::LoadKind::Branches,
         crate::model::LoadKind::Remotes,
@@ -32,10 +32,7 @@ fn source(
         branch.name.hash(&mut local);
         branch.target.hash(&mut local);
     }
-    if reference
-        .as_deref()
-        .is_some_and(|reference| reference.contains("HEAD"))
-    {
+    if reference.is_some_and(|reference| reference.contains("HEAD")) {
         let Loadable::Ready(head) = &repo.head_branch else {
             return None;
         };
@@ -77,7 +74,11 @@ fn source(
         worktrees.finish(),
         remote.finish(),
         defaults.finish(),
-        reference,
+        reference.map(|reference| {
+            let mut hasher = rustc_hash::FxHasher::default();
+            reference.hash(&mut hasher);
+            hasher.finish()
+        }),
     ))
 }
 
@@ -86,7 +87,7 @@ pub(super) fn ensure(repo: &mut RepoState, deep: bool) -> Vec<Effect> {
     let reference = repo
         .shared_preferences
         .as_ref()
-        .and_then(|snapshot| snapshot.preferences.comparison_ref.clone());
+        .and_then(|snapshot| snapshot.preferences.comparison_ref.as_deref());
     if reference.is_some() && !matches!(repo.tags, Loadable::Ready(_) | Loadable::Error(_)) {
         repo.ref_comparisons.invalidate();
         if repo.loads_in_flight.request(crate::model::LoadKind::Tags) {
@@ -96,10 +97,13 @@ pub(super) fn ensure(repo: &mut RepoState, deep: bool) -> Vec<Effect> {
         }
         return Vec::new();
     }
-    let Some(source) = source(repo, reference.clone()) else {
+    let Some(source) = source(repo, reference) else {
         return Vec::new();
     };
-    if !deep && repo.ref_comparisons.resolved_source.as_ref() == Some(&source) {
+    if !deep
+        && repo.ref_comparisons.publication_generation.is_some()
+        && repo.ref_comparisons.resolved_source.as_ref() == Some(&source)
+    {
         if repo.ref_comparisons.source.as_ref() != Some(&source) {
             repo.ref_comparisons.generation = repo.ref_comparisons.generation.wrapping_add(1);
             repo.ref_comparisons.source = Some(source);
@@ -119,57 +123,75 @@ pub(super) fn ensure(repo: &mut RepoState, deep: bool) -> Vec<Effect> {
     {
         return Vec::new();
     }
-    let mut branches = rustc_hash::FxHashMap::default();
-    let mut worktrees = rustc_hash::FxHashMap::default();
-    let mut subjects = Vec::new();
-    let mut seen = FxHashSet::default();
-    let mut push = |id: &CommitId| {
-        if subjects.len() < MAX_COMPARISON_PROJECTIONS && seen.insert(id.clone()) {
-            subjects.push(id.clone());
-        }
+    let projections = repo.ref_comparisons.memory.as_ref().and_then(|memory| {
+        crate::ref_comparison_projections::ComparisonProjections::capture(
+            memory,
+            repo.branches.ready().map_or(&[], |list| list.as_slice()),
+            repo.worktrees.ready().map_or(&[], |list| list.as_slice()),
+            &repo.ref_comparisons.visible,
+            repo.head_commit_id(),
+            64 * 1024
+                + reference
+                    .as_ref()
+                    .map_or(0, |reference| reference.len().saturating_mul(6)),
+        )
+    });
+    let Some(projections) = projections else {
+        let comparisons = &mut repo.ref_comparisons;
+        comparisons.forget_subjects();
+        comparisons.source = Some(source);
+        comparisons.target = Loadable::Error(if comparisons.memory.is_some() {
+            "Comparison analysis reached its shared memory or subject limit. Close unused repositories or run a deeper check to retry.".into()
+        } else {
+            "Comparison analysis is not supported by this Git backend.".into()
+        });
+        comparisons.rev = comparisons.rev.wrapping_add(1);
+        return vec![Effect::RefComparisons(RefComparisonsEffect::Release {
+            lifetime,
+        })];
     };
-    for id in repo.ref_comparisons.visible.iter() {
-        push(id);
-    }
-    if let Loadable::Ready(list) = &repo.branches
-        && let Loadable::Ready(head) = &repo.head_branch
-        && let Some(branch) = list.iter().find(|branch| &branch.name == head)
-    {
-        push(&branch.target);
-    }
-    if let Loadable::Ready(list) = &repo.worktrees {
-        for worktree in list.iter().take(MAX_COMPARISON_PROJECTIONS) {
-            if let Some(head) = &worktree.head {
-                worktrees.insert(worktree.path.clone(), head.clone());
-                push(head);
-            }
-        }
-    }
-    if let Loadable::Ready(list) = &repo.branches {
-        for branch in list.iter().take(MAX_COMPARISON_PROJECTIONS) {
-            branches.insert(branch.name.clone(), branch.target.clone());
-            push(&branch.target);
-        }
-    }
-    if subjects.is_empty() {
-        return Vec::new();
+    if projections.subjects.is_empty() {
+        let comparisons = &mut repo.ref_comparisons;
+        comparisons.forget_subjects();
+        comparisons.source = Some(source);
+        comparisons.target = Loadable::NotLoaded;
+        comparisons.rev = comparisons.rev.wrapping_add(1);
+        return vec![Effect::RefComparisons(RefComparisonsEffect::Release {
+            lifetime,
+        })];
     }
     let state = &mut repo.ref_comparisons;
+    if let Some(memory) = &state.memory
+        && state
+            .decorations
+            .retain(memory, &projections.members)
+            .is_err()
+    {
+        state.decorations = ComparisonDecorations::default();
+    }
     state.source = Some(source);
-    state.branches = Arc::new(branches);
-    state.worktrees = Arc::new(worktrees);
+    state.projections = projections.clone();
     state.generation = state.generation.wrapping_add(1);
+    state.publication_generation = None;
     state.target = Loadable::Loading;
+    state.deferred = None;
     state.rev = state.rev.wrapping_add(1);
-    vec![Effect::RefComparisons(RefComparisonsEffect {
-        repo_id: repo.id,
-        lifetime,
-        generation: state.generation,
-        priority_only: false,
-        reference,
-        subjects: Arc::new(subjects),
-        deep,
-    })]
+    vec![Effect::RefComparisons(RefComparisonsEffect::Compare(
+        RefComparisonSubscription {
+            repo_id: repo.id,
+            lifetime,
+            generation: state.generation,
+            reference: reference.map(str::to_owned),
+            projections,
+            visible: state.visible.clone(),
+            memory: state
+                .memory
+                .as_ref()
+                .expect("captured projections have a memory owner")
+                .clone(),
+            deep,
+        },
+    ))]
 }
 
 pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Effect> {
@@ -177,6 +199,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
         RefComparisonsMsg::Ensure { repo_id }
         | RefComparisonsMsg::Prioritize { repo_id, .. }
         | RefComparisonsMsg::Deeper { repo_id }
+        | RefComparisonsMsg::Deferred { repo_id, .. }
         | RefComparisonsMsg::Target { repo_id, .. }
         | RefComparisonsMsg::Publish { repo_id, .. } => *repo_id,
     };
@@ -184,19 +207,35 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
         return Vec::new();
     };
     match message {
+        RefComparisonsMsg::Deferred {
+            lifetime,
+            generation,
+            reason,
+            reservation,
+            ..
+        } => {
+            let _reservation = reservation;
+            if lifetime == repo.lifetime_id()
+                && repo.ref_comparisons.publication_generation == Some(generation)
+            {
+                repo.ref_comparisons.deferred = Some(reason);
+                repo.ref_comparisons.rev = repo.ref_comparisons.rev.wrapping_add(1);
+            }
+            Vec::new()
+        }
         RefComparisonsMsg::Ensure { .. } => ensure(repo, false),
         RefComparisonsMsg::Deeper { .. } => ensure(repo, true),
         RefComparisonsMsg::Prioritize { subjects, .. } => {
             if subjects.as_slice() != repo.ref_comparisons.visible.as_slice() {
-                repo.ref_comparisons.visible = Arc::new(subjects.into_iter().take(128).collect());
-                return vec![Effect::RefComparisons(RefComparisonsEffect {
-                    repo_id,
+                let Some(visible) = repo.ref_comparisons.memory.as_ref().and_then(|memory| {
+                    crate::ref_comparisons::ComparisonPriorities::capture(memory, subjects)
+                }) else {
+                    return Vec::new();
+                };
+                repo.ref_comparisons.visible = visible;
+                return vec![Effect::RefComparisons(RefComparisonsEffect::Prioritize {
                     lifetime: repo.lifetime_id(),
-                    generation: repo.ref_comparisons.generation,
-                    reference: None,
                     subjects: repo.ref_comparisons.visible.clone(),
-                    deep: false,
-                    priority_only: true,
                 })];
             }
             Vec::new()
@@ -205,6 +244,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
             lifetime,
             generation,
             result,
+            reservation,
             ..
         } => {
             if lifetime != repo.lifetime_id() || generation != repo.ref_comparisons.generation {
@@ -213,6 +253,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
             let comparisons = &mut repo.ref_comparisons;
             match result {
                 Ok(target) => {
+                    comparisons.target_reservation = reservation;
                     if comparisons
                         .captured_target
                         .as_ref()
@@ -222,7 +263,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
                     }
                     comparisons.captured_target = Some(target.clone());
                     comparisons.publication_generation = Some(generation);
-                    comparisons.resolved_source = comparisons.source.clone();
+                    comparisons.resolved_source = comparisons.source;
                     comparisons.target = Loadable::Ready(target);
                 }
                 Err(error) => comparisons.target = Loadable::Error(error.to_string()),
@@ -234,8 +275,10 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
             lifetime,
             generation,
             batch,
+            reservation,
             ..
         } => {
+            let _reservation = reservation;
             if lifetime != repo.lifetime_id()
                 || Some(generation) != repo.ref_comparisons.publication_generation
                 || repo
@@ -248,7 +291,24 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
             {
                 return Vec::new();
             }
-            repo.ref_comparisons.decorations.publish(batch.results);
+            if let Some(memory) = &repo.ref_comparisons.memory {
+                let results: Vec<_> = batch
+                    .results
+                    .into_iter()
+                    .filter(|result| {
+                        repo.ref_comparisons
+                            .projections
+                            .members
+                            .contains(&result.subject)
+                    })
+                    .collect();
+                if results.is_empty() {
+                    return Vec::new();
+                }
+                if let Err(reason) = repo.ref_comparisons.decorations.publish(memory, results) {
+                    repo.ref_comparisons.deferred = Some(reason);
+                }
+            }
             repo.ref_comparisons.rev = repo.ref_comparisons.rev.wrapping_add(1);
             Vec::new()
         }

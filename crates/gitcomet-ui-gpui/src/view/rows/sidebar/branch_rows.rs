@@ -305,10 +305,18 @@ impl SidebarPaneView {
                         name,
                         section: BranchSection::Local,
                         ..
-                    } => repo.ref_comparisons.branches.get(name.as_ref()).cloned(),
-                    BranchSidebarRow::WorktreeItem { path, .. } => {
-                        repo.ref_comparisons.worktrees.get(path).cloned()
-                    }
+                    } => repo
+                        .ref_comparisons
+                        .projections
+                        .branches
+                        .get(name.as_ref())
+                        .cloned(),
+                    BranchSidebarRow::WorktreeItem { path, .. } => repo
+                        .ref_comparisons
+                        .projections
+                        .worktrees
+                        .get(path)
+                        .cloned(),
                     _ => None,
                 })
                 .take(128)

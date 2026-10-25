@@ -202,8 +202,10 @@ impl SidebarPaneView {
 
         if section == BranchSection::Local
             && let Some(repo) = this.active_repo()
-            && let Some(badge) =
-                this.comparison_badge(ctx, repo.ref_comparisons.branches.get(name.as_ref()))
+            && let Some(badge) = this.comparison_badge(
+                ctx,
+                repo.ref_comparisons.projections.branches.get(name.as_ref()),
+            )
         {
             row = row.child(badge);
         }

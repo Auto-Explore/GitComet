@@ -18,6 +18,10 @@ The first result publishes immediately, then publications are spaced by at least
 
 The backend shares caches through its repository and object-store identity boundary, which includes filesystem identity. Results are keyed by immutable subject and target, graph context, analysis depth, and algorithm version. Closing a repository releases its queued work and cache ownership.
 
+The shared memory authority limits comparison allocations to 32 MiB per repository and 128 MiB globally. Reservations cover captured row projections, queued subject sets, coordinator results, active backend buffers, retained backend caches, publication buffers, and immutable decoration pages. Snapshots retain their own reservations until the last reader releases them. Exhaustion yields an unavailable or deferred comparison; it does not publish partial numeric walks or repeatedly restart analysis. The queue admits at most 256 subscribers, and each accepted projection contains at most 65,536 combined local-branch and worktree rows. Native Git process memory is measured separately in scale probes.
+
+Visible subjects precede other worktree HEADs in both analysis and queued publications. Malformed or incomplete backend batches become unconfirmed results without automatic retries. A refresh with an unfinished worktree-list load waits for that snapshot before deciding whether comparison inputs changed.
+
 ## Integration evidence
 
 Evidence runs after counts, in this order:

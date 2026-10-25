@@ -3,10 +3,31 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 static GLOBAL_BYTES: AtomicUsize = AtomicUsize::new(0);
+pub const COMPARISON_OID_BYTES: usize = 64 + 4 * std::mem::size_of::<usize>();
+
+pub fn hash_table_bytes<K, V>(entries: usize) -> usize {
+    if entries == 0 {
+        return 0;
+    }
+    entries
+        .saturating_add(entries / 2)
+        .max(4)
+        .checked_next_power_of_two()
+        .unwrap_or(usize::MAX)
+        .saturating_mul(std::mem::size_of::<(K, V)>().saturating_add(16))
+        .saturating_add(64)
+}
+
+pub fn vector_bytes<T>(entries: usize) -> usize {
+    entries
+        .saturating_mul(std::mem::size_of::<T>())
+        .saturating_add(64)
+}
 
 #[derive(Debug, Default)]
 pub struct ComparisonMemory {
     bytes: AtomicUsize,
+    peak: AtomicUsize,
 }
 
 impl ComparisonMemory {
@@ -19,7 +40,8 @@ impl ComparisonMemory {
     }
 
     fn claim(&self, bytes: usize) -> Option<()> {
-        self.bytes
+        let previous = self
+            .bytes
             .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes)
                     .filter(|next| *next <= COMPARISON_REPOSITORY_BYTES)
@@ -35,11 +57,15 @@ impl ComparisonMemory {
             self.bytes.fetch_sub(bytes, Ordering::AcqRel);
             return None;
         }
+        self.peak.fetch_max(previous + bytes, Ordering::Relaxed);
         Some(())
     }
 
     pub fn used_bytes(&self) -> usize {
         self.bytes.load(Ordering::Acquire)
+    }
+    pub fn peak_bytes(&self) -> usize {
+        self.peak.load(Ordering::Acquire)
     }
     pub fn global_used_bytes() -> usize {
         GLOBAL_BYTES.load(Ordering::Acquire)
@@ -53,6 +79,18 @@ pub struct ComparisonReservation {
 }
 
 impl ComparisonReservation {
+    pub fn grow(&self, additional: usize) -> bool {
+        let mut charged = self.bytes.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(next) = charged.checked_add(additional) else {
+            return false;
+        };
+        if self.owner.claim(additional).is_none() {
+            return false;
+        }
+        *charged = next;
+        true
+    }
+
     pub fn resize(&self, bytes: usize) -> bool {
         let mut charged = self.bytes.lock().unwrap_or_else(|error| error.into_inner());
         let previous = *charged;

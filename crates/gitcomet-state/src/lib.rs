@@ -8,6 +8,8 @@ pub mod indexed_history;
 pub mod model;
 pub mod msg;
 pub mod name_summary;
+pub mod ref_comparison_decorations;
+pub mod ref_comparison_projections;
 pub mod ref_comparisons;
 pub mod session;
 pub mod store;
