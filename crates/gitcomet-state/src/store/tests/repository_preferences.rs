@@ -960,7 +960,7 @@ fn an_opened_repository_walks_without_its_hidden_remotes_from_the_first_load() {
 }
 
 #[test]
-fn hidden_remotes_that_are_gone_leave_the_hidden_set() {
+fn hidden_remotes_leave_the_hidden_set_only_when_removed() {
     let loaded = |names: &[&str]| {
         Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
             repo_id: RepoId(1),
@@ -989,12 +989,18 @@ fn hidden_remotes_that_are_gone_leave_the_hidden_set() {
     let mut repos = RepositoryRuntimes::default();
     let id_alloc = std::sync::atomic::AtomicU64::new(2);
     let mut run = |msg| reduce(&mut repos, &id_alloc, &mut state, msg);
+    // `fork` is hidden from another window that has already listed it.
     run(hiding(
         &key,
         HistoryMode::FirstParent,
-        &["origin", "upstream"],
+        &["origin", "upstream", "fork"],
     ));
 
+    let first = run(loaded(&["origin", "upstream"]));
+    assert!(
+        shown_again(&first).is_empty(),
+        "a first listing removes nothing: {first:?}"
+    );
     let failed = run(Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
         repo_id: RepoId(1),
         result: Err(gitcomet_core::error::Error::new(
@@ -1002,11 +1008,12 @@ fn hidden_remotes_that_are_gone_leave_the_hidden_set() {
         )),
     }));
     assert!(shown_again(&failed).is_empty(), "{failed:?}");
-    let both = run(loaded(&["origin", "upstream", "fork"]));
-    assert!(shown_again(&both).is_empty(), "{both:?}");
-    let without_upstream = run(loaded(&["origin", "fork"]));
+    let still_listed = run(loaded(&["origin", "upstream"]));
+    assert!(shown_again(&still_listed).is_empty(), "{still_listed:?}");
+    let without_upstream = run(loaded(&["origin"]));
     assert_eq!(
         shown_again(&without_upstream),
-        [("upstream".to_string(), false)]
+        [("upstream".to_string(), false)],
+        "this tab listed `upstream` and not `fork`"
     );
 }
