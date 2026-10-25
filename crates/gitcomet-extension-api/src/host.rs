@@ -352,6 +352,14 @@ pub trait WindowHostImpl {
     fn focus_terminal(&self, _terminal: &TerminalTab, _cx: &mut App) -> Result<(), HostError> {
         Err(HostError::Unsupported)
     }
+    fn reveal_commit(
+        &self,
+        _repository: &RepositoryHandle,
+        _commit: &gitcomet_core::domain::CommitId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
 
     /// See [`WindowHost::open_terminal`]; `command`, when given, is typed
     /// with Enter into an embedded terminal's new tab.
@@ -403,6 +411,16 @@ pub trait WindowHostImpl {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError>;
 
+    fn open_menu_with_on_closed(
+        &self,
+        _anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        _items: Vec<crate::HostedMenuItem>,
+        _on_closed: OnMenuClosed,
+        _cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        Err(HostError::Unsupported)
+    }
+
     fn toast(
         &self,
         kind: crate::NotificationKind,
@@ -448,6 +466,9 @@ pub type WindowContent = Box<dyn FnOnce(&mut Window, &mut App) -> AnyView>;
 
 /// Runs once when a pop-out window closes, however it closes.
 pub type OnWindowClosed = Box<dyn FnOnce(&mut App)>;
+
+/// Runs once when a menu closes, however it closes.
+pub type OnMenuClosed = Box<dyn FnOnce(&mut App)>;
 
 /// What the host implements behind a [`PopOutWindow`].
 #[doc(hidden)]
@@ -652,6 +673,21 @@ impl WindowHost {
     pub fn focus_terminal(&self, terminal: &TerminalTab, cx: &mut App) -> Result<(), HostError> {
         self.check(&terminal.repository, cx)?;
         self.0.focus_terminal(terminal, cx)
+    }
+
+    /// Shows `commit` in `repository`'s History once this update ends, as a
+    /// click on a branch in the sidebar shows its tip: switches to History,
+    /// selects the commit and scrolls its row into view. A commit History's
+    /// mode leaves out switches History to all branches, and that mode is
+    /// kept, as the sidebar keeps it.
+    pub fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.reveal_commit(repository, commit, cx)
     }
 
     pub fn set_commit_identity_resolver(
@@ -891,6 +927,23 @@ impl WindowHost {
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
         self.0.open_menu(anchor, items, cx)
+    }
+
+    /// Opens a menu as [`Self::open_menu`] does, and runs `on_closed` once
+    /// it has closed, however it closed: an item chosen, Escape, a click
+    /// away, another popover opening in its place, or its window closing.
+    /// It runs on a later turn of the app, never inside the update that
+    /// closed the menu. So an extension can show what the menu was opened
+    /// from as open until then.
+    pub fn open_menu_with_on_closed(
+        &self,
+        anchor: gitcomet_ui_kit::gpui::Point<gitcomet_ui_kit::gpui::Pixels>,
+        items: Vec<crate::HostedMenuItem>,
+        on_closed: impl FnOnce(&mut App) + 'static,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.0
+            .open_menu_with_on_closed(anchor, items, Box::new(on_closed), cx)
     }
 
     pub fn toast(

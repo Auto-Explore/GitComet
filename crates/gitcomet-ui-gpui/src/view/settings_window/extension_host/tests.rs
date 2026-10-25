@@ -90,3 +90,52 @@ fn settings_menu_preserves_disabled_release_and_close_before_callback_ordering(
     cx.simulate_mouse_up(enabled, gpui::MouseButton::Left, gpui::Modifiers::default());
     assert_eq!(calls.get(), 1);
 }
+
+#[gpui::test]
+fn settings_menu_entries_show_their_tooltips_on_hover(cx: &mut gpui::TestAppContext) {
+    cx.update(|app| {
+        crate::view::extension_host::install(
+            Registry::build(vec![Box::new(MenuExtension)]).unwrap(),
+            app,
+        );
+    });
+    let (settings, cx) = cx.add_window_view(SettingsWindowView::new);
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        let host = settings.read(app).extension_window.as_ref().unwrap().host();
+        host.open_menu(
+            gpui::point(px(100.0), px(100.0)),
+            vec![
+                HostedMenuItem::action(HostedAction::new("Re-run failed jobs", |_| {}))
+                    .with_tooltip("Runs the failed jobs again"),
+                HostedMenuItem::action(HostedAction::new("Open run", |_| {})),
+                HostedMenuItem::action(HostedAction::new("Cancel run", |_| {}))
+                    .disabled(true)
+                    .with_tooltip("The run has finished"),
+            ],
+            app,
+        )
+        .unwrap();
+    });
+    cx.run_until_parked();
+    crate::view::test_support::redraw(cx);
+
+    for (selector, expected) in [
+        (
+            "settings_hosted_action_0",
+            Some("Runs the failed jobs again"),
+        ),
+        ("settings_hosted_action_1", None),
+        ("settings_hosted_action_2", Some("The run has finished")),
+    ] {
+        let center = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+        crate::view::tooltip::clear_visible_tooltip_text_for_test();
+        crate::view::test_support::wait_for_native_tooltip(cx);
+        assert_eq!(
+            crate::view::tooltip::tooltip_text_for_test().as_deref(),
+            expected,
+            "{selector}"
+        );
+    }
+}

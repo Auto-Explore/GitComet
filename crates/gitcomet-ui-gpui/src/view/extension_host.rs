@@ -337,6 +337,38 @@ impl StateObservers {
 }
 
 impl HostWindow {
+    /// Opens a hosted menu once this update ends; `on_closed`, if any, goes
+    /// with it and runs once it is gone.
+    fn open_menu_watched(
+        &self,
+        anchor: Point<Pixels>,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+        on_closed: Option<crate::view::panels::popover::OnClosed>,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        self.live()?;
+        let weak = self.view.clone();
+        let window = self.window_handle;
+        let id = next_dialog_id();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = weak.update(cx, |root, cx| {
+                    root.popover_host.update(cx, |host, cx| {
+                        host.open_hosted_menu(id, items, anchor, on_closed, window, cx)
+                    });
+                });
+            });
+        });
+        let weak = self.view.clone();
+        Ok(DialogHandle::new(move |cx| {
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| {
+                    let _ = weak.update(cx, |root, cx| root.close_extension_dialog(id, window, cx));
+                });
+            })
+        }))
+    }
+
     /// Selects a registered panel tab once the current
     /// update ends; `Unsupported` when no such tab is registered.
     fn show_tab(
@@ -918,6 +950,37 @@ impl WindowHostImpl for HostWindow {
         });
         Ok(())
     }
+    fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.live()?;
+        let view = self.view.clone();
+        let handle = self.window_handle;
+        let repository = repository.clone();
+        let commit = commit.clone();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = view.update(cx, |root, cx| {
+                    if root.repository_state(&repository).is_none() {
+                        return;
+                    }
+                    root.select_repository_view(&repository, None, window, cx);
+                    root.main_pane.update(cx, |pane, cx| {
+                        pane.reveal_history_commit(
+                            repository.repo_id(),
+                            commit,
+                            Some(gitcomet_core::domain::LogScope::AllBranches),
+                            cx,
+                        );
+                    });
+                });
+            });
+        });
+        Ok(())
+    }
     fn set_commit_identity_resolver(
         &self,
         resolver: Option<gitcomet_extension_api::CommitIdentityResolver>,
@@ -1056,27 +1119,18 @@ impl WindowHostImpl for HostWindow {
         items: Vec<gitcomet_extension_api::HostedMenuItem>,
         cx: &mut App,
     ) -> Result<DialogHandle, HostError> {
-        self.live()?;
-        let weak = self.view.clone();
-        let window = self.window_handle;
-        let id = next_dialog_id();
-        cx.defer(move |cx| {
-            let _ = window.update(cx, |_, window, cx| {
-                let _ = weak.update(cx, |root, cx| {
-                    root.popover_host.update(cx, |host, cx| {
-                        host.open_hosted_menu(id, items, anchor, window, cx)
-                    });
-                });
-            });
-        });
-        let weak = self.view.clone();
-        Ok(DialogHandle::new(move |cx| {
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, cx| {
-                    let _ = weak.update(cx, |root, cx| root.close_extension_dialog(id, window, cx));
-                });
-            })
-        }))
+        self.open_menu_watched(anchor, items, None, cx)
+    }
+
+    fn open_menu_with_on_closed(
+        &self,
+        anchor: Point<Pixels>,
+        items: Vec<gitcomet_extension_api::HostedMenuItem>,
+        on_closed: gitcomet_extension_api::OnMenuClosed,
+        cx: &mut App,
+    ) -> Result<DialogHandle, HostError> {
+        let on_closed = crate::view::panels::popover::OnClosed::new(on_closed, cx);
+        self.open_menu_watched(anchor, items, Some(on_closed), cx)
     }
 
     fn toast(

@@ -401,9 +401,10 @@ impl GitCometView {
                 if command.is_some() {
                     self.push_toast(
                         components::ToastKind::Warning,
-                        "The terminal opened outside GitComet, where the command could not be \
-                         typed"
-                            .to_string(),
+                        format!(
+                            "The terminal opened outside {}, where the command could not be typed",
+                            crate::view::product_name()
+                        ),
                         cx,
                     );
                 }
