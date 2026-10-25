@@ -80,6 +80,12 @@ impl GixRepo {
                 "The comparison target did not resolve to an object ID.".into(),
             ))
         })?;
+        if self.identity != super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo()) {
+            return Err(Error::new(ErrorKind::Backend(
+                "The repository was replaced. Refresh before comparing refs.".into(),
+            )));
+        }
+        cancellation.check_cancelled()?;
         Ok(RefComparisonTarget {
             reference: reference
                 .strip_prefix("refs/remotes/")
@@ -87,7 +93,7 @@ impl GixRepo {
                 .unwrap_or(&reference)
                 .into(),
             oid: CommitId(oid.to_string().into()),
-            context: self.shared_store().id,
+            context: store.id,
         })
     }
 

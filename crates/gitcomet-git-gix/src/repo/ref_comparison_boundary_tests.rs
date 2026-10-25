@@ -159,3 +159,48 @@ fn comparison_targets_and_walks_ignore_inherited_repository_overrides() {
         RefIntegration::Confirmed(IntegrationEvidence::Merged)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn target_resolution_rejects_a_repository_replaced_before_final_rev_parse() {
+    let Some(root) = std::env::var_os(CHILD_ROOT) else {
+        let fixture = fixture();
+        let output = child_command("repo::ref_comparison_boundary_tests::target_resolution_rejects_a_repository_replaced_before_final_rev_parse", fixture.path()).output().unwrap();
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = PathBuf::from(root);
+    let repo = crate::test_support::open_repo(&root.join("a"));
+    let wrapper = root.join("comparison-git-wrapper");
+    std::fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+set -eu
+case " $* " in
+    *" rev-parse --verify "*)
+        mv "$GITCOMET_COMPARISON_BOUNDARY_ROOT/a" "$GITCOMET_COMPARISON_BOUNDARY_ROOT/original"
+        mv "$GITCOMET_COMPARISON_BOUNDARY_ROOT/b" "$GITCOMET_COMPARISON_BOUNDARY_ROOT/a"
+        : > "$GITCOMET_COMPARISON_BOUNDARY_ROOT/swapped"
+        ;;
+esac
+exec git "$@"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    gitcomet_core::process::install_git_executable_path(Some(wrapper));
+    let result = repo.ref_comparison_target(None, &CancellationToken::new());
+    assert!(
+        root.join("swapped").exists(),
+        "the target lookup never reached the replacement barrier"
+    );
+    let error =
+        result.expect_err("a replaced repository cannot supply a current comparison target");
+    assert!(error.to_string().contains("replaced"), "{error}");
+}
