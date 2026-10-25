@@ -156,7 +156,8 @@ fn hidden_remotes_leave_every_all_branches_reader() {
     remote_only_commit(repo, "refs/remotes/origin2/feature", "origin2.txt");
     remote_only_commit(repo, "refs/remotes/upstream/feature", "upstream.txt");
     remote_only_commit(repo, "refs/pull/1/head", "pull.txt");
-    commit_as(repo, "local", "local.txt");
+    let local = commit_as(repo, "local", "local.txt");
+    run_git(repo, &["update-ref", "refs/remotes/upstream/main", &local]);
 
     let options = RepositoryOptions::default()
         .with_history_ref_filter(HistoryRefFilter::excluding(["refs/pull"]));
@@ -180,6 +181,24 @@ fn hidden_remotes_leave_every_all_branches_reader() {
             "origin2.txt",
             "upstream.txt"
         ]
+    );
+    let shown_index = repo
+        .build_history_index(&HistoryMode::AllBranches.into(), None, &cancel, &mut |_| {})
+        .unwrap()
+        .unwrap();
+    let main_only = HistoryRefFilter::excluding(["refs/remotes/upstream/main"]);
+    let same_tips = repo
+        .build_history_index(
+            &HistoryWalk::new(HistoryMode::AllBranches, main_only),
+            None,
+            &cancel,
+            &mut |_| {},
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        Arc::ptr_eq(&shown_index, &same_tips),
+        "hiding a ref that points where a local branch does walks the same history"
     );
     let without_origin = ["base.txt", "local.txt", "origin2.txt", "upstream.txt"];
     assert_eq!(sorted(hiding(repo, &origin)), without_origin);

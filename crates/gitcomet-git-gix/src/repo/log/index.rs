@@ -6,13 +6,14 @@ use gitcomet_core::services::{HistorySnapshot, HistoryWalk};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+/// Everything a history walk reads. Excluded refs are already applied to
+/// `tips`, so two walks that start from the same commits share results.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in super::super) struct HistoryQuery {
     pub common: u64,
     pub generation: u64,
     pub mode: HistoryMode,
     pub author: Option<AuthorFilter>,
-    pub exclusions: gitcomet_core::services::HistoryRefFilter,
     pub tips: Arc<[gix::ObjectId]>,
     pub shallow: ShallowSnapshot,
 }
@@ -57,8 +58,8 @@ impl GixRepo {
     ) -> Result<HistoryQuery> {
         let shallow = shallow_snapshot(repo)?;
         let mode = walk.mode();
-        let exclusions = self.history_ref_filter.union(walk.excluded_refs());
         let tips = if mode == HistoryMode::AllBranches {
+            let exclusions = self.history_ref_filter.union(walk.excluded_refs());
             self.all_branches_tips(repo, &exclusions, Some(cancellation))?
         } else {
             Arc::from(gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>())
@@ -68,7 +69,6 @@ impl GixRepo {
             generation,
             mode,
             author: AuthorFilter::new(author),
-            exclusions,
             tips,
             shallow,
         })
