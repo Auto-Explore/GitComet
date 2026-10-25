@@ -738,7 +738,6 @@ impl GixRepo {
     pub(super) fn all_branches_tips(
         &self,
         repo: &gix::Repository,
-        filter: &gitcomet_core::services::HistoryRefFilter,
         hidden_remotes: &[Arc<str>],
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
@@ -760,6 +759,7 @@ impl GixRepo {
         // Refs left out of History. Every all-branches reader (pages, authors,
         // the index, snapshots) starts from these tips, so excluding here
         // reaches all of them and their caches.
+        let filter = &self.history_ref_filter;
         let excluded = |reference: &crate::refs::Reference<'_>| {
             hidden_refs.contains(reference.name())
                 || !filter.is_empty() && filter.excludes(&reference.name().as_bstr().to_string())
@@ -889,7 +889,7 @@ impl GixRepo {
 
         let repo = self.repo();
         let shallow = shallow_snapshot(&repo)?;
-        let tips = self.all_branches_tips(&repo, &self.history_ref_filter, &[], cancellation)?;
+        let tips = self.all_branches_tips(&repo, &[], cancellation)?;
 
         let cache_key = self.log_page_cache_key(
             HistoryMode::AllBranches,

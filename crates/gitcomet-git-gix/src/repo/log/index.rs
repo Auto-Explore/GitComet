@@ -59,12 +59,7 @@ impl GixRepo {
         let shallow = shallow_snapshot(repo)?;
         let mode = walk.mode();
         let tips = if mode == HistoryMode::AllBranches {
-            self.all_branches_tips(
-                repo,
-                &self.history_ref_filter,
-                walk.hidden_remotes(),
-                Some(cancellation),
-            )?
+            self.all_branches_tips(repo, walk.hidden_remotes(), Some(cancellation))?
         } else {
             Arc::from(gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>())
         };
