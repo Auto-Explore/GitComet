@@ -361,6 +361,18 @@ pub trait WindowHostImpl {
         Err(HostError::Unsupported)
     }
 
+    /// See [`WindowHost::open_terminal`]; `command`, when given, is typed
+    /// with Enter into an embedded terminal's new tab.
+    fn open_terminal(
+        &self,
+        _repository: &RepositoryHandle,
+        _cwd: &Path,
+        _command: Option<&str>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unsupported)
+    }
+
     fn dispatch(&self, msg: Msg, cx: &mut App) -> Result<(), HostError>;
 
     /// Shows `content` in a modal dialog titled `title`, deferred to the next
@@ -685,6 +697,40 @@ impl WindowHost {
     ) -> Result<(), HostError> {
         self.0.set_commit_identity_resolver(resolver, cx)
     }
+    /// Opens a terminal at `cwd` once this update ends, as the user's
+    /// terminal button would: a new tab of `repository`'s embedded terminal,
+    /// brought to the front and focused, or the external terminal they
+    /// chose. A relative `cwd` is joined to the workdir; one that is not a
+    /// folder opens nothing, and the window says so. The repository's own
+    /// terminal still opens in its workdir.
+    pub fn open_terminal(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.open_terminal(repository, cwd, None, cx)
+    }
+
+    /// Like [`Self::open_terminal`], then types `command` and Enter once the
+    /// new tab first prints, so it runs as the user's own: text for whatever
+    /// shell they use, kept in its history. Quoting what goes into it is the
+    /// caller's. One line only: a command with a control character (a line
+    /// break, an escape) is [`HostError::InvalidRequest`]. Only the embedded
+    /// terminal can be handed a command: [`HostError::Unsupported`] when the
+    /// user's terminal button opens an external one.
+    pub fn open_terminal_with_command(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        command: &str,
+        cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.check(repository, cx)?;
+        self.0.open_terminal(repository, cwd, Some(command), cx)
+    }
+
     /// Open these repositories together in a new main window, from any host
     /// kind including Settings. Repository entry gates still run normally.
     pub fn open_workspace(

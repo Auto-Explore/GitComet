@@ -61,6 +61,11 @@ pub enum HostRequest {
     Notify(SharedString),
     OpenUrl(String),
     OpenPath(PathBuf),
+    OpenTerminal {
+        repository: RepositoryHandle,
+        cwd: PathBuf,
+        command: Option<String>,
+    },
     RevealCommit {
         repository: RepositoryHandle,
         commit: gitcomet_core::domain::CommitId,
@@ -439,6 +444,21 @@ impl WindowHostImpl for FakeWindowHost {
 
     fn open_path(&self, path: &Path, _cx: &mut App) -> Result<(), HostError> {
         self.record(HostRequest::OpenPath(path.to_path_buf()));
+        Ok(())
+    }
+
+    fn open_terminal(
+        &self,
+        repository: &RepositoryHandle,
+        cwd: &Path,
+        command: Option<&str>,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.record(HostRequest::OpenTerminal {
+            repository: repository.clone(),
+            cwd: cwd.to_path_buf(),
+            command: command.map(str::to_owned),
+        });
         Ok(())
     }
 

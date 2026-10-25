@@ -528,10 +528,25 @@ fn candidate_ports(path: &Path) -> impl Iterator<Item = u16> {
 mod tests {
     use super::*;
 
+    // Windows can reserve a whole candidate range. Find a usable range before
+    // testing broker behavior, and keep its listeners until the caller is ready.
+    fn reserve_candidate_ports(dir: &Path) -> (PathBuf, Vec<TcpListener>) {
+        (0..128)
+            .find_map(|index| {
+                let path = dir.join(format!("instance-{index}.json"));
+                let listeners = candidate_ports(&path)
+                    .map(|port| TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+                    .collect::<io::Result<Vec<_>>>()
+                    .ok()?;
+                Some((path, listeners))
+            })
+            .expect("find available browser instance ports")
+    }
+
     #[test]
     fn pr530_broker_rejects_requests_after_ui_receiver_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
-        let descriptor = dir.path().join("instance.json");
+        let descriptor = reserve_candidate_ports(dir.path()).0;
         let StartResult::Primary(mut primary) = start_or_forward_at(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
@@ -558,7 +573,7 @@ mod tests {
     #[test]
     fn pr530_idle_broker_shuts_down_promptly() {
         let dir = tempfile::tempdir().unwrap();
-        let descriptor = dir.path().join("instance.json");
+        let descriptor = reserve_candidate_ports(dir.path()).0;
         let primary = start_or_forward_at(
             &descriptor,
             request(PathBuf::from("initial"), BrowserOpenTarget::ExistingWindow),
@@ -608,7 +623,7 @@ mod tests {
     #[test]
     fn second_browser_process_forwards_to_the_primary_instance() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor = dir.path().join("instance.json");
+        let descriptor = reserve_candidate_ports(dir.path()).0;
         let path = dir.path().join("repo");
         let mut primary = match start_or_forward_at(
             &descriptor,
@@ -642,7 +657,7 @@ mod tests {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor = dir.path().join("instance.json");
+        let descriptor = reserve_candidate_ports(dir.path()).0;
         let path = PathBuf::from(std::ffi::OsString::from_vec(b"repo-\xff".to_vec()));
         let mut primary = match start_or_forward_at(
             &descriptor,
@@ -678,7 +693,7 @@ mod tests {
         use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor = dir.path().join("instance.json");
+        let descriptor = reserve_candidate_ports(dir.path()).0;
         let path = PathBuf::from(std::ffi::OsString::from_wide(&[
             b'r' as u16,
             b'e' as u16,
@@ -768,7 +783,7 @@ mod tests {
     #[test]
     fn stale_descriptor_is_replaced_by_a_new_primary() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor_path = dir.path().join("instance.json");
+        let descriptor_path = reserve_candidate_ports(dir.path()).0;
         write_descriptor(
             &descriptor_path,
             &InstanceDescriptor {
@@ -803,7 +818,7 @@ mod tests {
     #[test]
     fn review_regression_followup_broker_claim_serializes_descriptor_publication() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor_path = dir.path().join("instance.json");
+        let descriptor_path = reserve_candidate_ports(dir.path()).0;
         let BrowserInstanceClaim::Acquired(claim) = acquire_browser_instance_claim(
             &descriptor_path,
             &request(PathBuf::from("first"), BrowserOpenTarget::ExistingWindow),
@@ -862,7 +877,7 @@ mod tests {
     #[test]
     fn contended_claim_waits_until_timeout_then_can_be_reclaimed_after_release() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor_path = dir.path().join("instance.json");
+        let descriptor_path = reserve_candidate_ports(dir.path()).0;
         let request = request(PathBuf::from("repo"), BrowserOpenTarget::NewWindow);
         let BrowserInstanceClaim::Acquired(claim) =
             acquire_browser_instance_claim(&descriptor_path, &request, CLAIM_WAIT_TIMEOUT)
@@ -916,7 +931,7 @@ mod tests {
 
     fn assert_launch_falls_back(case: &str, break_forwarding: impl FnOnce(&Path)) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor_path = dir.path().join("instance.json");
+        let descriptor_path = reserve_candidate_ports(dir.path()).0;
         let primary = match start_or_forward_at(
             &descriptor_path,
             request(PathBuf::from("first"), BrowserOpenTarget::ExistingWindow),
@@ -1005,15 +1020,9 @@ mod tests {
     #[test]
     fn occupied_candidate_ports_are_skipped_without_waiting() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let descriptor_path = dir.path().join("instance.json");
+        let (descriptor_path, mut listeners) = reserve_candidate_ports(dir.path());
+        listeners.truncate(4);
         let occupied: Vec<u16> = candidate_ports(&descriptor_path).take(4).collect();
-        // A port something else already holds is occupied just the same.
-        let _listeners: Vec<TcpListener> = occupied
-            .iter()
-            .filter_map(|&port| {
-                TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).ok()
-            })
-            .collect();
 
         let started = Instant::now();
         let primary = match start_or_forward_at(

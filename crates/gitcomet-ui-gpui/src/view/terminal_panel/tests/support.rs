@@ -68,6 +68,7 @@ pub(super) fn test_terminal_instance(
         viewport,
         session_seq,
         title: format!("terminal-{session_seq}"),
+        pending_input: None,
     }
 }
 
