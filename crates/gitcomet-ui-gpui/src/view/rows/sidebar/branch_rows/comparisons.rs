@@ -11,7 +11,7 @@ impl SidebarPaneView {
                 format!("{label} · {}", target.reference).into(),
                 format!("Comparing with locally available {} ({}). Fetch updates local remote refs. Right-click to choose a comparison ref or run a deeper check.", target.reference, target.oid).into(),
             ),
-            Loadable::Error(error) => (format!("{label} · choose target").into(), error.clone().into()),
+            Loadable::Error(error) => (format!("{label} · comparison unavailable").into(), error.clone().into()),
             Loadable::Loading => (label.to_owned().into(), "Resolving the locally available comparison target…".into()),
             Loadable::NotLoaded => (label.to_owned().into(), label.to_owned().into()),
         }

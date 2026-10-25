@@ -213,6 +213,10 @@ impl CommonRepository {
                 .as_ref()
                 .map(|store| store.comparisons.clone())
                 .unwrap_or_default(),
+            comparison_patches: previous
+                .as_ref()
+                .map(|store| store.comparison_patches.clone())
+                .unwrap_or_default(),
         });
         stores.push(Arc::downgrade(&shared));
         shared
@@ -248,6 +252,7 @@ impl CommonRepository {
 
 pub(super) struct SharedStore {
     pub comparisons: Arc<Mutex<super::ref_comparison_cache::ComparisonCache>>,
+    pub comparison_patches: Arc<Mutex<Option<super::ref_comparison_patches::TargetPatchIndex>>>,
     /// Object interpretation, stable across I/O recovery.
     pub id: u64,
     /// Physical mappings, changed on every rotation.

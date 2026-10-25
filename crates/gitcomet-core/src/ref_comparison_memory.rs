@@ -80,3 +80,30 @@ impl Drop for ComparisonReservation {
         GLOBAL_BYTES.fetch_sub(bytes, Ordering::AcqRel);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_and_global_reservations_include_shared_owners_and_release_on_last_drop() {
+        let owners: Vec<_> = (0..4)
+            .map(|_| Arc::new(ComparisonMemory::default()))
+            .collect();
+        let reservations: Vec<_> = owners
+            .iter()
+            .map(|owner| owner.reserve(32 * 1024 * 1024).unwrap())
+            .collect();
+        assert_eq!(ComparisonMemory::global_used_bytes(), 128 * 1024 * 1024);
+        assert!(owners[0].reserve(1).is_none());
+        assert!(Arc::new(ComparisonMemory::default()).reserve(1).is_none());
+        let retained = reservations[0].clone();
+        drop(reservations);
+        assert_eq!(ComparisonMemory::global_used_bytes(), 32 * 1024 * 1024);
+        assert!(retained.resize(16 * 1024 * 1024));
+        assert_eq!(owners[0].used_bytes(), 16 * 1024 * 1024);
+        drop(retained);
+        assert_eq!(owners[0].used_bytes(), 0);
+        assert_eq!(ComparisonMemory::global_used_bytes(), 0);
+    }
+}

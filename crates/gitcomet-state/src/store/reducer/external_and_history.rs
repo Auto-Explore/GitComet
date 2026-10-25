@@ -232,6 +232,9 @@ pub(super) fn repo_externally_changed(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if change.git_state || change.verification_context {
+        repo_state.ref_comparisons.invalidate_context();
+    }
     // Outside the index/worktree chain below: an event that touched both must
     // still tell the view to look at the open file.
     if change.worktree {
@@ -372,6 +375,9 @@ pub(super) fn repo_externally_changed(
         });
     }
 
+    if change.verification_context && !change.git_state {
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
+    }
     effects
 }
 
@@ -850,6 +856,7 @@ pub(super) fn log_loaded(
         }
 
         effects.extend(finish_log_load(repo_state, seq));
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
     effects
 }

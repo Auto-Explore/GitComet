@@ -75,6 +75,8 @@ mod patch_action;
 mod porcelain;
 mod ref_comparison;
 mod ref_comparison_cache;
+mod ref_comparison_evidence;
+mod ref_comparison_patches;
 mod ref_comparison_process;
 #[cfg(test)]
 mod ref_comparison_tests;

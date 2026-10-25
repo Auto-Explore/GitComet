@@ -20,7 +20,22 @@ The backend shares caches through its repository and object-store identity bound
 
 ## Integration evidence
 
-The integration-evidence and explicit worktree-observation slices are under implementation. Counts currently establish Up to date for equal tips and Merged when the subject has no commits ahead. Committed evidence is independent of uncommitted files and does not change deletion or pruning behavior.
+Evidence runs after counts, in this order:
+
+| Label | Evidence |
+| --- | --- |
+| Up to date | The subject and target identify the same commit. |
+| Merged | The subject's history is reachable from the target. |
+| Changes match | Every path changed since the single merge base has the same final object and exact mode, or deletion, in the target. |
+| Equivalent history | An ordinary target commit matches the aggregate branch patch, or every unique ordinary branch commit has a distinct patch match. The tooltip names the route. |
+| No net changes | The subject's tree has no final changes relative to its merge base. |
+| Not confirmed | The available checks did not establish incorporation, or analysis reached a limit. |
+
+Content comparisons include binary objects, rename source deletions, modes, symlinks, and gitlinks. Multiple merge bases prevent this content check. Unique merge commits prevent individual-commit proof; aggregate or content evidence can still succeed. Empty ordinary commits cannot supply patch evidence.
+
+The shared target-history index incrementally examines up to 1,000 target commits automatically, or 10,000 during a deeper check. Diff settings are pinned, external diff and text conversion are disabled, and patch IDs use `--verbatim` to preserve whitespace. Exact inverse patches later in the examined target history cancel older matches. Historical matches describe historical patches; they do not assert current content, identical history, or safe deletion. Edited squashes, conflict resolutions, edited reverts, partial incorporation, and later rewrites may remain unconfirmed.
+
+The explicit worktree-observation slice is under implementation. Committed evidence remains independent of uncommitted files and does not change deletion or pruning behavior.
 
 ## Validation
 

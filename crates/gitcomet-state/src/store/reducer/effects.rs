@@ -1851,12 +1851,12 @@ pub(super) fn branches_loaded(
             }
         };
         repo_state.set_branches(branches);
-        effects.extend(super::ref_comparisons::ensure(repo_state, false));
         if repo_state.loads_in_flight.finish(LoadKind::Branches) {
             effects.push(Effect::References(ReferenceEffect::LoadBranches {
                 repo_id,
             }));
         }
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
     effects
 }
@@ -1877,10 +1877,10 @@ pub(super) fn remotes_loaded(
             }
         };
         repo_state.set_remotes(remotes);
-        effects.extend(super::ref_comparisons::ensure(repo_state, false));
         if repo_state.loads_in_flight.finish(LoadKind::Remotes) {
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
     effects
 }

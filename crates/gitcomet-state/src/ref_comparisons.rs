@@ -58,7 +58,8 @@ pub struct RefComparisonsState {
     pub worktrees: Arc<FxHashMap<PathBuf, CommitId>>,
     pub rev: u64,
     pub(crate) generation: u64,
-    pub(crate) publication_generation: u64,
+    pub(crate) publication_generation: Option<u64>,
+    pub(crate) context_epoch: u64,
     pub(crate) source: Option<(u64, u64, u64, u64, Option<String>)>,
     pub(crate) visible: Arc<Vec<CommitId>>,
     pub(crate) captured_target: Option<RefComparisonTarget>,
@@ -74,7 +75,8 @@ impl Default for RefComparisonsState {
             worktrees: Arc::default(),
             rev: 0,
             generation: 0,
-            publication_generation: 0,
+            publication_generation: None,
+            context_epoch: 0,
             source: None,
             visible: Arc::default(),
             captured_target: None,
@@ -84,6 +86,13 @@ impl Default for RefComparisonsState {
 }
 
 impl RefComparisonsState {
+    pub(crate) fn invalidate_context(&mut self) {
+        self.invalidate();
+        self.context_epoch = self.context_epoch.wrapping_add(1);
+        self.publication_generation = None;
+        self.decorations = ComparisonDecorations::default();
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.source = None;

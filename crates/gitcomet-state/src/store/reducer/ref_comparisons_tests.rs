@@ -215,3 +215,38 @@ fn an_unchanged_snapshot_cannot_restore_a_previous_target_while_an_override_is_p
         Loadable::Loading
     ));
 }
+
+#[test]
+fn a_verification_context_only_event_restarts_comparisons_without_waiting_for_ref_loads() {
+    let mut state = fixture();
+    let work = start(&mut state);
+    resolve(&mut state, &work);
+    publish(&mut state, &work);
+    let change = crate::msg::RepoExternalChange {
+        verification_context: true,
+        ..Default::default()
+    };
+    let effects = super::external_and_history::repo_externally_changed(
+        &super::test_inputs::clock(),
+        &mut state,
+        work.repo_id,
+        change,
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::RefComparisons(_)))
+    );
+    assert!(matches!(
+        state.repos[0].ref_comparisons.target,
+        Loadable::Loading
+    ));
+    publish(&mut state, &work);
+    assert!(
+        state.repos[0]
+            .ref_comparisons
+            .decorations
+            .get(&work.subjects[0])
+            .is_none()
+    );
+}

@@ -83,14 +83,47 @@ impl Analysis<'_> {
 
     pub fn run<T: Send>(
         &self,
+        cmd: Command,
+        input: &[u8],
+        parse: impl FnOnce(BufReader<std::process::ChildStdout>) -> AnalysisResult<T> + Send,
+    ) -> AnalysisResult<T> {
+        self.run_with_exit_policy(cmd, input, false, parse)
+    }
+
+    pub fn run_merge_base<T: Send>(
+        &self,
+        cmd: Command,
+        input: &[u8],
+        parse: impl FnOnce(BufReader<std::process::ChildStdout>) -> AnalysisResult<T> + Send,
+    ) -> AnalysisResult<T> {
+        self.run_with_exit_policy(cmd, input, true, parse)
+    }
+
+    pub fn capture_merge_base(&self, args: &[&str]) -> AnalysisResult<Vec<u8>> {
+        let limit = self.memory / 4;
+        self.run_merge_base(self.command(args), &[], move |reader| {
+            let mut bytes = Vec::new();
+            reader
+                .take(limit as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| RefComparisonReason::IncompleteHistory)?;
+            if bytes.len() > limit {
+                return Err(RefComparisonReason::Budget);
+            }
+            Ok(bytes)
+        })
+    }
+
+    fn run_with_exit_policy<T: Send>(
+        &self,
         mut cmd: Command,
         input: &[u8],
+        allow_no_merge_base: bool,
         parse: impl FnOnce(BufReader<std::process::ChildStdout>) -> AnalysisResult<T> + Send,
     ) -> AnalysisResult<T> {
         self.check()?;
         configure_background_command(&mut cmd);
         configure_git_process_tree(&mut cmd);
-        let allow_no_merge_base = cmd.get_args().any(|arg| arg == "merge-base");
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -185,3 +218,6 @@ impl Drop for ReapedChild {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

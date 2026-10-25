@@ -11,7 +11,7 @@ const ENTRY_BYTES: usize = 384;
 
 #[derive(Default)]
 pub(super) struct ComparisonCache {
-    results: FxHashMap<(u32, CommitId, CommitId, RefComparisonDepth), RefComparison>,
+    results: FxHashMap<(u32, CommitId, CommitId), (RefComparisonDepth, RefComparison)>,
     bytes: usize,
     reservation: Option<Arc<ComparisonReservation>>,
 }
@@ -28,9 +28,17 @@ impl ComparisonCache {
                 COMPARISON_ALGORITHM_VERSION,
                 target.clone(),
                 subject.clone(),
-                depth,
             ))
-            .cloned()
+            .filter(|(stored, result)| {
+                depth == RefComparisonDepth::Counts
+                    || *stored == depth
+                    || *stored == RefComparisonDepth::Deep
+                    || matches!(
+                        result.integration,
+                        gitcomet_core::ref_comparison::RefIntegration::Confirmed(_)
+                    )
+            })
+            .map(|(_, result)| result.clone())
     }
 
     pub fn insert(
@@ -40,6 +48,19 @@ impl ComparisonCache {
         depth: RefComparisonDepth,
         memory: &Arc<ComparisonMemory>,
     ) {
+        let mut result = result.clone();
+        let depth = if matches!(
+            result.integration,
+            gitcomet_core::ref_comparison::RefIntegration::NotConfirmed(
+                gitcomet_core::ref_comparison::RefComparisonReason::IncompleteHistory
+                    | gitcomet_core::ref_comparison::RefComparisonReason::Unsupported
+            )
+        ) {
+            result.integration = gitcomet_core::ref_comparison::RefIntegration::Pending;
+            RefComparisonDepth::Counts
+        } else {
+            depth
+        };
         if matches!(
             result.counts,
             gitcomet_core::ref_comparison::RefComparisonCounts::Unavailable(
@@ -53,10 +74,9 @@ impl ComparisonCache {
             COMPARISON_ALGORITHM_VERSION,
             target.clone(),
             result.subject.clone(),
-            depth,
         );
         if let Some(existing) = self.results.get_mut(&key) {
-            *existing = result.clone();
+            *existing = (depth, result.clone());
             return;
         }
         if self.bytes + ENTRY_BYTES > CACHE_BYTES {
@@ -70,7 +90,7 @@ impl ComparisonCache {
         }
         self.reservation = Some(reservation);
         self.bytes += ENTRY_BYTES;
-        self.results.insert(key, result.clone());
+        self.results.insert(key, (depth, result.clone()));
     }
 
     fn clear(&mut self) {

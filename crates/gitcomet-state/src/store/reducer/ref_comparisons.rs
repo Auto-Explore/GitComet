@@ -12,6 +12,16 @@ fn source(
     repo: &RepoState,
     reference: Option<String>,
 ) -> Option<(u64, u64, u64, u64, Option<String>)> {
+    if [
+        crate::model::LoadKind::Branches,
+        crate::model::LoadKind::Remotes,
+        crate::model::LoadKind::RemoteBranches,
+    ]
+    .iter()
+    .any(|kind| repo.loads_in_flight.is_in_flight(*kind))
+    {
+        return None;
+    }
     let (Loadable::Ready(branches), Loadable::Ready(remotes), Loadable::Ready(remote_branches)) =
         (&repo.branches, &repo.remotes, &repo.remote_branches)
     else {
@@ -22,10 +32,19 @@ fn source(
         branch.name.hash(&mut local);
         branch.target.hash(&mut local);
     }
-    if let Loadable::Ready(head) = &repo.head_branch {
+    if reference
+        .as_deref()
+        .is_some_and(|reference| reference.contains("HEAD"))
+    {
+        let Loadable::Ready(head) = &repo.head_branch else {
+            return None;
+        };
+        if head == "HEAD" && repo.detached_head_commit.is_none() {
+            return None;
+        }
         head.hash(&mut local);
+        repo.detached_head_commit.hash(&mut local);
     }
-    repo.detached_head_commit.hash(&mut local);
     if reference.is_some()
         && let Loadable::Ready(tags) = &repo.tags
     {
@@ -41,6 +60,7 @@ fn source(
         branch.target.hash(&mut remote);
     }
     let mut defaults = rustc_hash::FxHasher::default();
+    repo.ref_comparisons.context_epoch.hash(&mut defaults);
     for remote in remotes.iter() {
         remote.name.hash(&mut defaults);
         remote.default_branch.hash(&mut defaults);
@@ -201,7 +221,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
                         comparisons.decorations = ComparisonDecorations::default();
                     }
                     comparisons.captured_target = Some(target.clone());
-                    comparisons.publication_generation = generation;
+                    comparisons.publication_generation = Some(generation);
                     comparisons.resolved_source = comparisons.source.clone();
                     comparisons.target = Loadable::Ready(target);
                 }
@@ -217,7 +237,7 @@ pub(super) fn reduce(state: &mut AppState, message: RefComparisonsMsg) -> Vec<Ef
             ..
         } => {
             if lifetime != repo.lifetime_id()
-                || generation != repo.ref_comparisons.publication_generation
+                || Some(generation) != repo.ref_comparisons.publication_generation
                 || repo
                     .ref_comparisons
                     .captured_target

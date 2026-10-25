@@ -15,6 +15,11 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<RefComparisonTarget> {
         cancellation.check_cancelled()?;
+        if self.identity != super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo()) {
+            return Err(Error::new(ErrorKind::Backend(
+                "The repository was replaced. Refresh before comparing refs.".into(),
+            )));
+        }
         let analysis = Analysis {
             workdir: &self.spec.workdir,
             deadline: Instant::now() + RefComparisonBudget::automatic().elapsed,
@@ -22,6 +27,12 @@ impl GixRepo {
             memory: RefComparisonBudget::automatic().memory_bytes,
             empty_graph: None,
         };
+        graph_available(&analysis).map_err(|reason| {
+            Error::new(ErrorKind::Backend(format!(
+                "Comparison analysis is unavailable. {}",
+                reason.description()
+            )))
+        })?;
         let reference = match reference {
             Some(reference) if !reference.is_empty() && !reference.starts_with('-') => {
                 reference.to_string()
@@ -118,9 +129,16 @@ impl GixRepo {
             memory: memory_bytes,
             empty_graph: Some(empty_graph.path()),
         };
-        let graph = graph_available(&analysis);
+        let graph = if self.identity
+            == super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo())
+        {
+            graph_available(&analysis)
+        } else {
+            Err(RefComparisonReason::IncompleteHistory)
+        };
         let context = self.shared_store().id;
         let mut cached = Vec::new();
+        let mut counted = Vec::new();
         let mut uncached = Vec::new();
         {
             let cache = store
@@ -140,15 +158,31 @@ impl GixRepo {
                     {
                         cached.push(result)
                     }
-                    _ => uncached.push(subject.clone()),
+                    _ => {
+                        if request.depth != RefComparisonDepth::Counts
+                            && let Some(mut result) =
+                                cache.get(&request.target.oid, subject, RefComparisonDepth::Counts)
+                            && matches!(result.counts, RefComparisonCounts::Exact { .. })
+                        {
+                            result.integration = RefIntegration::Pending;
+                            counted.push(result);
+                        } else {
+                            uncached.push(subject.clone());
+                        }
+                    }
                 }
             }
         }
         if context != request.target.context || graph.is_err() {
             cached.clear();
+            counted.clear();
             uncached = subjects.clone();
         }
-        if uncached.is_empty() && context == request.target.context && graph.is_ok() {
+        if uncached.is_empty()
+            && counted.is_empty()
+            && context == request.target.context
+            && graph.is_ok()
+        {
             return Ok(RefComparisonBatch {
                 target: request.target.clone(),
                 cache_hits: cached.len(),
@@ -174,11 +208,7 @@ impl GixRepo {
                         } else if ahead == 0 {
                             RefIntegration::Confirmed(IntegrationEvidence::Merged)
                         } else {
-                            if request.depth == RefComparisonDepth::Counts {
-                                RefIntegration::Pending
-                            } else {
-                                RefIntegration::NotConfirmed(RefComparisonReason::Unsupported)
-                            }
+                            RefIntegration::Pending
                         };
                         RefComparison {
                             subject,
@@ -201,6 +231,39 @@ impl GixRepo {
                 0,
             ),
         };
+        results.append(&mut counted);
+        if request.depth != RefComparisonDepth::Counts {
+            for result in &mut results {
+                if result.integration == RefIntegration::Pending {
+                    result.integration = match super::ref_comparison_evidence::analyze(
+                        self,
+                        &analysis,
+                        &request.target.oid,
+                        &result.subject,
+                        &request.budget,
+                    ) {
+                        Ok(evidence) => RefIntegration::Confirmed(evidence),
+                        Err(reason) => RefIntegration::NotConfirmed(reason),
+                    };
+                }
+            }
+        }
+        if self.identity != super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo()) {
+            cached.clear();
+            results = subjects
+                .iter()
+                .cloned()
+                .map(|subject| RefComparison {
+                    subject,
+                    counts: RefComparisonCounts::Unavailable(
+                        RefComparisonReason::IncompleteHistory,
+                    ),
+                    integration: RefIntegration::NotConfirmed(
+                        RefComparisonReason::IncompleteHistory,
+                    ),
+                })
+                .collect();
+        }
         {
             let mut cache = store
                 .comparisons
@@ -228,6 +291,12 @@ impl GixRepo {
 }
 
 fn graph_available(analysis: &Analysis<'_>) -> AnalysisResult<()> {
+    if ["GIT_SHALLOW_FILE", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        return Err(RefComparisonReason::Unsupported);
+    }
     let shallow = analysis.capture_live_graph(&["rev-parse", "--is-shallow-repository"])?;
     if shallow.trim_ascii() != b"false" {
         return Err(RefComparisonReason::IncompleteHistory);
@@ -275,7 +344,7 @@ fn shared_counts(
         .collect::<AnalysisResult<_>>()?;
     let mut command = analysis.command(&["merge-base", "--all", "--octopus"]);
     command.args(seeds.iter().map(ToString::to_string));
-    let common = analysis.run(command, &[], |mut reader| {
+    let common = analysis.run_merge_base(command, &[], |mut reader| {
         let mut bytes = Vec::new();
         std::io::Read::by_ref(&mut reader)
             .take(64 * 1024 + 1)

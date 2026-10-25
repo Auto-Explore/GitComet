@@ -208,3 +208,60 @@ fn visible_priority_changes_during_running_analysis_apply_to_the_next_batch() {
     assert_eq!(depth, RefComparisonDepth::Counts);
     assert_eq!(subjects, vec![oid(500)]);
 }
+
+#[test]
+fn a_deeper_request_reuses_exact_counts_and_retries_integration() {
+    let (mut subscriber, _rx) = subscriber("/first", &[oid(1)]);
+    subscriber.request.deep = true;
+    let owner = subscriber.request.lifetime;
+    let mut work = RepositoryWork::default();
+    work.targets.insert(owner, subscriber);
+    work.cohorts.push(Cohort {
+        target: target(8),
+        results: FxHashMap::from_iter([(
+            oid(1),
+            RefComparison {
+                subject: oid(1),
+                counts: RefComparisonCounts::Exact {
+                    ahead: 1,
+                    behind: 3,
+                },
+                integration: RefIntegration::NotConfirmed(RefComparisonReason::Budget),
+            },
+        )]),
+        subscribers: FxHashMap::default(),
+    });
+    let mut queue = Queue::default();
+    queue.repositories.insert(1, work);
+    resolve_all(&mut queue, &FxHashMap::from_iter([(owner, target(8))]));
+    let task = take_task(&mut queue).unwrap();
+    assert!(
+        matches!(task.step, Step::Analyze { depth: RefComparisonDepth::Deep, budget, .. } if budget.elapsed == Duration::from_secs(30))
+    );
+    assert!(matches!(
+        queue.repositories[&1].cohorts[0].results[&oid(1)].counts,
+        RefComparisonCounts::Exact {
+            ahead: 1,
+            behind: 3
+        }
+    ));
+}
+
+#[test]
+fn deeper_coverage_applies_to_the_requested_subjects() {
+    let (mut deeper, _deeper_rx) = subscriber("/deep", &[oid(1)]);
+    deeper.request.deep = true;
+    let (automatic, _automatic_rx) = subscriber("/automatic", &[oid(2)]);
+    let cohort = Cohort {
+        target: target(8),
+        results: FxHashMap::default(),
+        subscribers: FxHashMap::from_iter([
+            (deeper.request.lifetime, deeper),
+            (automatic.request.lifetime, automatic),
+        ]),
+    };
+    let (_, step) = cohort.next(0).unwrap();
+    assert!(
+        matches!(step, Step::Analyze { subjects, budget, .. } if subjects == vec![oid(2)] && budget.elapsed == Duration::from_secs(5))
+    );
+}

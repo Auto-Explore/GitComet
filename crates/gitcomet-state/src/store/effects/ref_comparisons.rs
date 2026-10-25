@@ -111,9 +111,11 @@ impl Cohort {
         let mut counts = FxHashSet::default();
         let mut evidence = FxHashSet::default();
         let mut visible = FxHashSet::default();
-        let mut deep = false;
+        let mut deeper = FxHashSet::default();
         for subscriber in self.subscribers.values() {
-            deep |= subscriber.request.deep;
+            if subscriber.request.deep {
+                deeper.extend(subscriber.subjects.iter().cloned());
+            }
             visible.extend(subscriber.visible.iter().cloned());
             for id in subscriber.subjects.iter() {
                 match self.results.get(id) {
@@ -127,11 +129,6 @@ impl Cohort {
                 }
             }
         }
-        let budget = if deep {
-            RefComparisonBudget::deep()
-        } else {
-            RefComparisonBudget::automatic()
-        };
         for (set, stage, depth, limit) in [
             (
                 &counts,
@@ -139,24 +136,30 @@ impl Cohort {
                 RefComparisonDepth::Counts,
                 MAX_COMPARISON_SUBJECTS,
             ),
-            (
-                &evidence,
-                3,
-                if deep {
-                    RefComparisonDepth::Deep
-                } else {
-                    RefComparisonDepth::Evidence
-                },
-                1,
-            ),
+            (&evidence, 3, RefComparisonDepth::Evidence, 1),
         ] {
             if set.is_empty() {
                 continue;
             }
             let has_visible = set.iter().any(|id| visible.contains(id));
+            let deep = set
+                .iter()
+                .filter(|id| !has_visible || visible.contains(*id))
+                .all(|id| deeper.contains(id));
+            let budget = if deep {
+                RefComparisonBudget::deep()
+            } else {
+                RefComparisonBudget::automatic()
+            };
+            let depth = if deep && depth == RefComparisonDepth::Evidence {
+                RefComparisonDepth::Deep
+            } else {
+                depth
+            };
             let subjects = set
                 .iter()
                 .filter(|id| !has_visible || visible.contains(*id))
+                .filter(|id| deeper.contains(*id) == deep)
                 .take(limit)
                 .cloned()
                 .collect();
@@ -295,11 +298,32 @@ fn complete(queue: &mut Queue, task: &Task, completion: Completion) {
                     work.cohorts.len() - 1
                 });
             let cohort = &mut work.cohorts[index];
-            if subscriber.request.deep {
-                cohort
-                    .results
-                    .retain(|_, result| matches!(result.integration, RefIntegration::Confirmed(_)));
-            }
+            cohort.results.retain(|subject, result| {
+                if !subscriber.subjects.contains(subject) {
+                    return true;
+                }
+                if matches!(
+                    result.counts,
+                    RefComparisonCounts::Unavailable(
+                        RefComparisonReason::IncompleteHistory | RefComparisonReason::Unsupported
+                    )
+                ) || (subscriber.request.deep
+                    && matches!(result.counts, RefComparisonCounts::Unavailable(_)))
+                {
+                    return false;
+                }
+                if matches!(
+                    result.integration,
+                    RefIntegration::NotConfirmed(
+                        RefComparisonReason::IncompleteHistory | RefComparisonReason::Unsupported
+                    )
+                ) || (subscriber.request.deep
+                    && matches!(result.integration, RefIntegration::NotConfirmed(_)))
+                {
+                    result.integration = RefIntegration::Pending;
+                }
+                true
+            });
             subscriber.pending = subscriber
                 .subjects
                 .iter()
