@@ -134,10 +134,10 @@ workspace = true
 [dependencies.serde_json]
 workspace = true
 
-[dependencies.thiserror]
+[dependencies.skrifa]
 workspace = true
 
-[dependencies.ttf-parser]
+[dependencies.thiserror]
 workspace = true
 
 [dependencies.usvg]
