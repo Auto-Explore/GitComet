@@ -1751,13 +1751,11 @@ fn summarize_command(
             format!("Patch exported → {}", dest.display())
         }
         RepoCommandKind::ApplyPatch { patch } => format!("Patch applied → {}", patch.display()),
-        RepoCommandKind::AddWorktree { path, reference } => {
-            if let Some(reference) = reference {
-                format!("Worktree added → {} ({reference})", path.display())
-            } else {
-                format!("Worktree added → {}", path.display())
-            }
-        }
+        RepoCommandKind::AddWorktree { path, checkout, .. } => format!(
+            "Worktree added → {} ({})",
+            path.display(),
+            crate::msg::worktree_checkout_label(checkout)
+        ),
         RepoCommandKind::RemoveWorktree { path } => {
             format!("Worktree removed → {}", path.display())
         }

@@ -1153,6 +1153,10 @@ mod diff_text;
 mod history;
 pub(in crate::view) use history::history_row_height;
 mod history_canvas;
+#[cfg(test)]
+pub(in crate::view) use history_canvas::{
+    history_mark_chip, history_mark_menu_chip, history_mark_menu_invoker, history_row_menu_is_open,
+};
 pub(in crate::view) mod history_graph_paint;
 pub(in crate::view) mod history_node;
 mod history_shapes;
@@ -1204,7 +1208,9 @@ pub(in crate::view) use self::markdown_flow_text::{
     markdown_flow_painted_offset, markdown_flow_range_rects, markdown_flow_row_offset,
 };
 pub(in crate::view) use self::sidebar::active_worktree_paths_by_branch;
-pub(in crate::view) use self::sidebar::listed_worktree_paths_by_branch;
+pub(in crate::view) use self::sidebar::{
+    branch_checked_out_at, branch_held_elsewhere, listed_worktree_paths_by_branch,
+};
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document;

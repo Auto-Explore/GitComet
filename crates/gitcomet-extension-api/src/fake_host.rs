@@ -61,6 +61,10 @@ pub enum HostRequest {
     Notify(SharedString),
     OpenUrl(String),
     OpenPath(PathBuf),
+    RevealCommit {
+        repository: RepositoryHandle,
+        commit: gitcomet_core::domain::CommitId,
+    },
 }
 
 /// A window host for tests. Pass [`FakeWindowHost::host`] to extension code
@@ -202,6 +206,19 @@ impl WindowHostImpl for FakeWindowHost {
 
     fn open_settings_at(&self, target: SettingsTarget, _cx: &mut App) -> Result<(), HostError> {
         self.record(HostRequest::OpenSettings(target));
+        Ok(())
+    }
+
+    fn reveal_commit(
+        &self,
+        repository: &RepositoryHandle,
+        commit: &gitcomet_core::domain::CommitId,
+        _cx: &mut App,
+    ) -> Result<(), HostError> {
+        self.record(HostRequest::RevealCommit {
+            repository: repository.clone(),
+            commit: commit.clone(),
+        });
         Ok(())
     }
 

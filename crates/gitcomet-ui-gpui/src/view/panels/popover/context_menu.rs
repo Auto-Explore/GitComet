@@ -681,6 +681,10 @@ impl PopoverHost {
             } => Some(worktree_section::model(*repo_id)),
             PopoverKind::Repo {
                 repo_id,
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::CommitMenu { commit_id }),
+            } => Some(worktree::commit_model(self, *repo_id, commit_id)),
+            PopoverKind::Repo {
+                repo_id,
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path, branch }),
             } => Some(worktree::model(
                 *repo_id,

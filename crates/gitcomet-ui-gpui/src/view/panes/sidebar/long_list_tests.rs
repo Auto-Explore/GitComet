@@ -189,6 +189,7 @@ pub(super) fn branch_fixture(count: usize) -> Arc<AppState> {
     repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
         name: "origin".to_string(),
         url: None,
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(
         (0..count)

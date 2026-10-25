@@ -1,9 +1,25 @@
 use gitcomet_core::domain::{CommitId, Upstream};
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget, WorktreeCheckout,
 };
 use std::path::PathBuf;
+
+/// How the command log and toasts name what a new worktree checks out.
+pub(crate) fn worktree_checkout_label(checkout: &WorktreeCheckout) -> String {
+    match checkout {
+        WorktreeCheckout::Existing { reference } => reference.clone(),
+        WorktreeCheckout::NewBranch { name, start: None } => format!("new branch {name}"),
+        WorktreeCheckout::NewBranch {
+            name,
+            start: Some(start),
+        } => format!("new branch {name} from {start}"),
+        WorktreeCheckout::TrackRemote { name, upstream } => format!(
+            "new branch {name} tracking {}/{}",
+            upstream.remote, upstream.branch
+        ),
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RepoCommandKind {
@@ -169,7 +185,8 @@ pub enum RepoCommandKind {
     },
     AddWorktree {
         path: PathBuf,
-        reference: Option<String>,
+        checkout: WorktreeCheckout,
+        open_after: bool,
     },
     RemoveWorktree {
         path: PathBuf,
@@ -286,6 +303,29 @@ impl RepoCommandKind {
             | Self::StageHunk
             | Self::UnstageHunk => false,
             Self::LargeFile { command } => command.writes_worktree(),
+        }
+    }
+
+    /// The worktree this command opens as a tab once it succeeds.
+    pub(crate) fn opens_worktree(&self) -> Option<&PathBuf> {
+        match self {
+            Self::AddWorktree {
+                path,
+                open_after: true,
+                ..
+            } => Some(path),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn opens_worktree_mut(&mut self) -> Option<&mut PathBuf> {
+        match self {
+            Self::AddWorktree {
+                path,
+                open_after: true,
+                ..
+            } => Some(path),
+            _ => None,
         }
     }
 

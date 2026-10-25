@@ -88,6 +88,25 @@ fn branches_to_prune(
     candidates
 }
 
+/// The branch `refs/remotes/<remote>/HEAD` points at, as `git remote set-head`
+/// records it. An unreadable HEAD reads as none: only the Add-worktree dialog's
+/// preselection depends on it, never the remote itself.
+fn remote_default_branch(refs: &crate::refs::RefsView<'_>, remote: &str) -> Option<String> {
+    let head = refs
+        .find(format!("refs/remotes/{remote}/HEAD"))
+        .ok()
+        .flatten()?;
+    let gix::refs::TargetRef::Symbolic(target) = head.target() else {
+        return None;
+    };
+    let prefix = format!("refs/remotes/{remote}/");
+    target
+        .as_bstr()
+        .strip_prefix(prefix.as_bytes())
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| branch.to_str_lossy().into_owned())
+}
+
 /// Forward-map an exact remote branch through that remote's fetch refspecs.
 /// This deliberately does not inspect any other remote, even when another
 /// remote maps to the same local tracking ref.
@@ -919,6 +938,7 @@ impl GixRepo {
 
     pub(super) fn list_remotes_impl(&self) -> Result<Vec<Remote>> {
         let repo = self.reopen_repo()?;
+        let refs = crate::refs::view(&repo).ok();
         let mut remotes = Vec::new();
 
         for name in repo.remote_names() {
@@ -936,9 +956,14 @@ impl GixRepo {
                 })
                 .filter(|url| !url.is_empty());
 
+            let name = name.to_str_lossy().into_owned();
+            let default_branch = refs
+                .as_ref()
+                .and_then(|refs| remote_default_branch(refs, &name));
             remotes.push(Remote {
-                name: name.to_str_lossy().into_owned(),
+                name,
                 url,
+                default_branch,
             });
         }
 

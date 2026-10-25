@@ -10,6 +10,7 @@ fn remote(name: &str, url: Option<&str>) -> Remote {
     Remote {
         name: name.to_string(),
         url: url.map(str::to_string),
+        default_branch: None,
     }
 }
 
