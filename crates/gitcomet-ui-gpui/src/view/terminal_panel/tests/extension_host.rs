@@ -395,12 +395,16 @@ fn a_relative_folder_is_joined_to_the_workdir(cx: &mut gpui::TestAppContext) {
     })
     .expect("the request is taken");
     cx.run_until_parked();
+    let expected_error = format!(
+        "{} is not a folder",
+        repository.workdir().join("no-such-folder-here").display()
+    );
     cx.update(|_window, app| {
         let toasts = view.read(app).toast_host.read(app).toasts_for_tests(app);
         assert!(
-            toasts.iter().any(|(_, text)| {
-                text.contains("/tmp/terminal-host-1/no-such-folder-here is not a folder")
-            }),
+            toasts
+                .iter()
+                .any(|(_, text)| text.contains(&expected_error)),
             "{toasts:?}"
         );
     });
