@@ -114,6 +114,20 @@ fn sidebar_repaints_when_either_status_lane_changes() {
 }
 
 #[test]
+fn cleanliness_repaints_without_changing_the_structural_sidebar_fingerprint() {
+    let mut state = AppState {
+        repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+        active_repo: Some(RepoId(1)),
+        ..AppState::test_default()
+    };
+    let before = SidebarNotifyFingerprint::from_state(&state);
+    state.repos[0].worktree_observations_rev += 1;
+    let after = SidebarNotifyFingerprint::from_state(&state);
+    assert_ne!(before, after);
+    assert_eq!(before.repo_fingerprint, after.repo_fingerprint);
+}
+
+#[test]
 fn sidebar_notify_fingerprint_tracks_open_repo_workdirs() {
     let mut state = AppState {
         repos: vec![repo_state(RepoId(1), "/tmp/repo")],

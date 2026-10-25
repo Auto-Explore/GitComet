@@ -2,7 +2,8 @@
 use super::*;
 use crate::model::WorktreeDirtyScope;
 use crate::msg::InternalMsg;
-use gitcomet_core::domain::{FileStatus, FileStatusKind, WorktreeDirtySummary};
+use gitcomet_core::domain::{FileStatus, FileStatusKind, Worktree, WorktreeDirtySummary};
+use gitcomet_core::worktree_scan::{WorktreeCleanliness, WorktreeObservation, WorktreeScan};
 
 fn summary(path: &str, modified: usize) -> WorktreeDirtySummary {
     WorktreeDirtySummary {
@@ -64,7 +65,24 @@ fn changed(state: &AppState, path: &str) -> Msg {
 }
 
 fn loaded(paths: &[&str], result: Result<Vec<WorktreeDirtySummary>>) -> Msg {
-    Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
+    use gitcomet_core::worktree_scan::{WorktreeObservation, WorktreeScan};
+    let mut result = WorktreeScan::from_dirty_for_test(result);
+    if let Ok(observations) = &mut result.outcome {
+        for path in paths {
+            if !observations
+                .iter()
+                .any(|observation| observation.path() == Path::new(path))
+            {
+                observations.push(WorktreeObservation::Clean(Worktree {
+                    path: path.into(),
+                    head: Some(CommitId("tip".into())),
+                    branch: None,
+                    detached: false,
+                }));
+            }
+        }
+    }
+    Msg::Internal(InternalMsg::WorktreeScanLoaded {
         repo_id: RepoId(1),
         scope: WorktreeDirtyScope::Paths(paths.iter().map(PathBuf::from).collect()),
         result,
@@ -81,6 +99,154 @@ fn scan(effects: &[Effect]) -> (&WorktreeDirtyScope, &Option<PathBuf>) {
     let scan = scans.next().expect("one linked checkout scan");
     assert!(scans.next().is_none(), "refreshes must coalesce");
     scan
+}
+
+fn observed(scope: WorktreeDirtyScope, result: WorktreeScan) -> Msg {
+    Msg::Internal(InternalMsg::WorktreeScanLoaded {
+        repo_id: RepoId(1),
+        scope,
+        result,
+    })
+}
+
+fn clean(path: &str) -> WorktreeObservation {
+    WorktreeObservation::Clean(Worktree {
+        path: path.into(),
+        head: Some(CommitId("tip".into())),
+        branch: None,
+        detached: false,
+    })
+}
+
+#[test]
+fn incomplete_or_duplicate_targeted_observations_cannot_establish_cleanliness() {
+    for observations in [Vec::new(), vec![clean("/wt/b"), clean("/wt/b")]] {
+        let mut state = state();
+        dispatch(
+            &mut state,
+            observed(
+                WorktreeDirtyScope::Paths(vec!["/wt/b".into()]),
+                WorktreeScan::new(Ok(observations)),
+            ),
+        );
+        assert_eq!(state.repos[0].worktree_dirty.ready().unwrap().len(), 2);
+        assert!(state.repos[0].history_state.worktree_selection.is_some());
+        assert!(matches!(
+            state.repos[0].worktree_observations[Path::new("/wt/b")].cleanliness,
+            WorktreeCleanliness::Unknown(_)
+        ));
+    }
+}
+
+#[test]
+fn explicit_unknown_preserves_dirty_files_and_selection_until_a_clean_observation() {
+    let mut state = state();
+    let scan = WorktreeScan::new(Ok(vec![WorktreeObservation::Unknown {
+        worktree: Worktree {
+            path: "/wt/b".into(),
+            head: Some(CommitId("tip".into())),
+            branch: None,
+            detached: true,
+        },
+        error: "checkout inaccessible".into(),
+    }]));
+    let id = scan.id;
+    dispatch(
+        &mut state,
+        observed(WorktreeDirtyScope::Paths(vec!["/wt/b".into()]), scan),
+    );
+    assert_eq!(state.repos[0].worktree_dirty.ready().unwrap().len(), 2);
+    assert!(
+        !state.repos[0].worktree_dirty.ready().unwrap()[1]
+            .unstaged
+            .is_empty()
+    );
+    assert_eq!(
+        state.repos[0].history_state.worktree_selection.as_deref(),
+        Some(Path::new("/wt/b"))
+    );
+    let record = &state.repos[0].worktree_observations[Path::new("/wt/b")];
+    assert_eq!(record.scan_id, id);
+    assert!(
+        matches!(&record.cleanliness, WorktreeCleanliness::Unknown(error) if error.as_ref() == "checkout inaccessible")
+    );
+    dispatch(
+        &mut state,
+        observed(
+            WorktreeDirtyScope::Paths(vec!["/wt/b".into()]),
+            WorktreeScan::new(Ok(vec![clean("/wt/b")])),
+        ),
+    );
+    assert_eq!(state.repos[0].worktree_dirty.ready().unwrap().len(), 1);
+    assert!(state.repos[0].history_state.worktree_selection.is_none());
+    assert_eq!(
+        state.repos[0].worktree_observations[Path::new("/wt/b")].cleanliness,
+        WorktreeCleanliness::Clean
+    );
+}
+
+#[test]
+fn scans_keep_newer_targeted_observations_and_reject_older_full_results() {
+    let mut state = state();
+    let oldest = WorktreeScan::new(Ok(vec![clean("/wt/a"), clean("/wt/b")]));
+    let full = WorktreeScan::new(Ok(vec![clean("/wt/a")]));
+    let newer = WorktreeScan::from_dirty_for_test(Ok(vec![summary("/wt/b", 7)]));
+    dispatch(
+        &mut state,
+        observed(WorktreeDirtyScope::Paths(vec!["/wt/b".into()]), newer),
+    );
+    dispatch(&mut state, observed(WorktreeDirtyScope::All, full));
+    assert_eq!(state.repos[0].worktree_dirty.ready().unwrap().len(), 1);
+    assert_eq!(
+        state.repos[0].worktree_dirty.ready().unwrap()[0].modified,
+        7
+    );
+    let rev = state.repos[0].worktree_observations_rev;
+    dispatch(&mut state, observed(WorktreeDirtyScope::All, oldest));
+    assert_eq!(state.repos[0].worktree_observations_rev, rev);
+    assert_eq!(
+        state.repos[0].worktree_dirty.ready().unwrap()[0].modified,
+        7
+    );
+    let repeated = WorktreeScan::new(Ok(vec![clean("/wt/a")]));
+    dispatch(
+        &mut state,
+        observed(WorktreeDirtyScope::Paths(vec!["/wt/a".into()]), repeated),
+    );
+    assert_eq!(
+        state.repos[0].worktree_observations_rev, rev,
+        "scan identity alone must not repaint"
+    );
+}
+
+#[test]
+fn failed_scans_mark_known_checkouts_unknown_without_dropping_dirty_files() {
+    let mut state = state();
+    let mut summary = summary("/repo", 1);
+    summary.unstaged[0].kind = FileStatusKind::Untracked;
+    dispatch(
+        &mut state,
+        observed(
+            WorktreeDirtyScope::All,
+            WorktreeScan::new(Ok(vec![WorktreeObservation::Dirty(summary)])),
+        ),
+    );
+    assert_eq!(state.repos[0].worktree_dirty.ready().unwrap().len(), 1);
+    assert_eq!(
+        state.repos[0].worktree_observations[Path::new("/repo")].cleanliness,
+        WorktreeCleanliness::Dirty
+    );
+    dispatch(
+        &mut state,
+        observed(
+            WorktreeDirtyScope::All,
+            WorktreeScan::new(Err(Error::new(ErrorKind::Backend("scan failed".into())))),
+        ),
+    );
+    assert!(matches!(
+        state.repos[0].worktree_observations[Path::new("/repo")].cleanliness,
+        WorktreeCleanliness::Unknown(_)
+    ));
 }
 
 #[test]
@@ -250,10 +416,12 @@ fn queued_full_refresh_takes_precedence_over_targeted_refreshes() {
         assert_eq!(*scan(&effects).0, WorktreeDirtyScope::All);
         dispatch(
             &mut state,
-            Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
+            Msg::Internal(InternalMsg::WorktreeScanLoaded {
                 repo_id: RepoId(1),
                 scope: WorktreeDirtyScope::All,
-                result: Ok(vec![summary("/wt/a", 1)]),
+                result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                    summary("/wt/a", 1),
+                ])),
             }),
         );
         assert_eq!(
@@ -281,10 +449,12 @@ fn failed_initial_scan_replays_a_full_snapshot_before_targeted_updates() {
     assert!(dispatch(&mut state, msg).is_empty());
     let effects = dispatch(
         &mut state,
-        Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: WorktreeDirtyScope::All,
-            result: Err(Error::new(ErrorKind::Cancelled)),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Err(
+                Error::new(ErrorKind::Cancelled),
+            )),
         }),
     );
     assert_eq!(*scan(&effects).0, WorktreeDirtyScope::All);

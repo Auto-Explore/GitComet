@@ -85,6 +85,25 @@ impl GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<RepoStatus> {
+        self.with_current_checkout(|| self.status_cancellable_inner(cancellation))
+    }
+
+    fn with_current_checkout<T>(&self, read: impl FnOnce() -> Result<T>) -> Result<T> {
+        let validate = || {
+            if self.identity
+                != super::shared::WorktreeIdentity::new(&self.spec.workdir, &self.repo())
+            {
+                return Err(Error::new(ErrorKind::Backend("The checkout was replaced or its Git directory changed. Refresh before reading status.".into())));
+            }
+            Ok(())
+        };
+        validate()?;
+        let result = read()?;
+        validate()?;
+        Ok(result)
+    }
+
+    fn status_cancellable_inner(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
         cancellation.check_cancelled()?;
         #[cfg(feature = "benchmarks")]
         let timing = crate::status_trace::StageTimer::new("repository-config");
@@ -178,6 +197,13 @@ impl GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<FileStatus>> {
+        self.with_current_checkout(|| self.worktree_status_cancellable_inner(cancellation))
+    }
+
+    fn worktree_status_cancellable_inner(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
         let repo = self.status_repo();
         if repo.workdir().is_none() {
@@ -218,6 +244,13 @@ impl GixRepo {
     }
 
     pub(super) fn staged_status_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
+        self.with_current_checkout(|| self.staged_status_cancellable_inner(cancellation))
+    }
+
+    fn staged_status_cancellable_inner(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<FileStatus>> {

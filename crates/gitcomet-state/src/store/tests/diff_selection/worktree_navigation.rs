@@ -256,10 +256,10 @@ fn a_selection_on_a_worktree_that_went_clean_is_dropped() {
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                 repo_id: RepoId(1),
                 scope: crate::model::WorktreeDirtyScope::All,
-                result,
+                result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(result),
             }),
         );
 
@@ -294,21 +294,23 @@ fn a_selection_on_a_still_dirty_worktree_survives_a_rescan() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: crate::model::WorktreeDirtyScope::All,
-            result: Ok(vec![WorktreeDirtySummary {
-                path: selected.clone(),
-                head: Some(CommitId("tip".into())),
-                branch: None,
-                detached: true,
-                added: 0,
-                modified: 2,
-                deleted: 0,
-                staged: Vec::new(),
-                unstaged: Vec::new(),
-                line_stats: Default::default(),
-            }]),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                WorktreeDirtySummary {
+                    path: selected.clone(),
+                    head: Some(CommitId("tip".into())),
+                    branch: None,
+                    detached: true,
+                    added: 0,
+                    modified: 2,
+                    deleted: 0,
+                    staged: Vec::new(),
+                    unstaged: Vec::new(),
+                    line_stats: Default::default(),
+                },
+            ])),
         }),
     );
 
@@ -357,11 +359,13 @@ fn a_failed_worktree_scan_keeps_the_rows_and_the_selection() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: crate::model::WorktreeDirtyScope::All,
-            result: Err(gitcomet_core::error::Error::new(
-                gitcomet_core::error::ErrorKind::Backend("scan failed".to_string()),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Err(
+                gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
+                    "scan failed".to_string(),
+                )),
             )),
         }),
     );
@@ -439,10 +443,12 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
             &mut repos,
             &id_alloc,
             state,
-            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                 repo_id: RepoId(1),
                 scope: crate::model::WorktreeDirtyScope::All,
-                result: Ok(vec![summary(files)]),
+                result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                    summary(files),
+                ])),
             }),
         );
     };
@@ -507,10 +513,12 @@ fn a_rescan_reloads_the_open_worktree_patch_even_when_nothing_moved() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: crate::model::WorktreeDirtyScope::All,
-            result: Ok(vec![worktree_dirty_summary(&["a.rs"], "side")]),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                worktree_dirty_summary(&["a.rs"], "side"),
+            ])),
         }),
     );
 
@@ -554,10 +562,12 @@ fn a_rescan_that_moved_nothing_does_not_rebuild_the_worktree_entry_list() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: crate::model::WorktreeDirtyScope::All,
-            result: Ok(vec![worktree_dirty_summary(&["a.rs", "b.rs"], "side")]),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                worktree_dirty_summary(&["a.rs", "b.rs"], "side"),
+            ])),
         }),
     );
 
@@ -576,13 +586,12 @@ fn a_rescan_that_moved_nothing_does_not_rebuild_the_worktree_entry_list() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: crate::model::WorktreeDirtyScope::All,
-            result: Ok(vec![worktree_dirty_summary(
-                &["a.rs", "b.rs", "c.rs"],
-                "side",
-            )]),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                worktree_dirty_summary(&["a.rs", "b.rs", "c.rs"], "side"),
+            ])),
         }),
     );
     let inline = state.repos[0]
@@ -671,10 +680,12 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: crate::model::WorktreeDirtyScope::All,
-            result: Ok(vec![summary()]),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                summary(),
+            ])),
         }),
     );
 
@@ -710,10 +721,12 @@ fn a_rescan_refreshes_the_branch_the_worktree_diff_is_labelled_with() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id: RepoId(1),
             scope: crate::model::WorktreeDirtyScope::All,
-            result: Ok(vec![worktree_dirty_summary(&["a.rs"], "other")]),
+            result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(vec![
+                worktree_dirty_summary(&["a.rs"], "other"),
+            ])),
         }),
     );
 
@@ -846,10 +859,13 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
         ),
         (
             "a scan that no longer lists the worktree",
-            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                 repo_id: RepoId(1),
                 scope: crate::model::WorktreeDirtyScope::All,
-                result: Ok(Vec::<WorktreeDirtySummary>::new()),
+                result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(Vec::<
+                    WorktreeDirtySummary,
+                >::new(
+                ))),
             }),
         ),
         (

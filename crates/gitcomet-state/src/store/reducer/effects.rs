@@ -13,8 +13,8 @@ use crate::store::reducer::prepared::ReducerInputs;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, CommitSignature, FileEntry, FileSource,
     FileStatusKind, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag,
-    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree, WorktreeDirtySummary,
-    empty_tree_id_like, is_empty_tree_id,
+    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree, empty_tree_id_like,
+    is_empty_tree_id,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
@@ -89,37 +89,17 @@ pub(super) fn worktrees_loaded(
     effects
 }
 
-pub(super) fn worktree_dirty_loaded(
+pub(super) fn worktree_scan_loaded(
     state: &mut AppState,
     repo_id: RepoId,
     scope: WorktreeDirtyScope,
-    result: std::result::Result<Vec<WorktreeDirtySummary>, Error>,
+    result: gitcomet_core::worktree_scan::WorktreeScan,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     let mut inline_refresh = None;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        match result {
-            Ok(mut refreshed) => {
-                let mut dirty = if matches!(scope, WorktreeDirtyScope::All) {
-                    refreshed
-                } else {
-                    let mut merged = Vec::new();
-                    if let Loadable::Ready(previous) = &repo_state.worktree_dirty {
-                        for summary in previous.iter() {
-                            if scope.includes(&summary.path) {
-                                if let Some(ix) =
-                                    refreshed.iter().position(|new| new.path == summary.path)
-                                {
-                                    merged.push(refreshed.remove(ix));
-                                }
-                            } else {
-                                merged.push(summary.clone());
-                            }
-                        }
-                    }
-                    merged.extend(refreshed);
-                    merged
-                };
+        match super::worktree_observations::apply(repo_state, &scope, result) {
+            Some(Ok(mut dirty)) => {
                 // A reply may belong to a selection that has since moved. Keep
                 // details only for the currently selected checkout, including
                 // when a targeted update leaves other summaries untouched.
@@ -132,38 +112,21 @@ pub(super) fn worktree_dirty_loaded(
                 }
                 repo_state.set_worktree_dirty(Loadable::Ready(dirty));
             }
-            // A worktree that cannot be opened (removed, on an unmounted
-            // volume) is a routine condition, not something worth a diagnostic
-            // banner -- the scan simply reports nothing for it, per worktree,
-            // inside the scan.
-            //
-            // A failure of the whole reply is a different thing: it means the
-            // scan never ran (cancelled load, repo handle gone, git runtime
-            // unavailable), not that the worktrees are clean. Overwriting a good
-            // list with it would blank every row and -- through
-            // `selected_worktree_is_gone` below -- drop the selection and close
-            // the inline diff the user is reading. Keep the last known counts on
-            // screen, and record the error only when there is nothing to keep.
-            Err(e) => {
-                if !matches!(repo_state.worktree_dirty, Loadable::Ready(_)) {
-                    // A cancelled scan is not a failure worth showing: the load
-                    // it belonged to was abandoned deliberately, and the trigger
-                    // that abandoned it queues another. Anything else is a real
-                    // failure and the pane should say so rather than sit on
-                    // `Loading` forever.
-                    let next = if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
-                        Loadable::NotLoaded
-                    } else {
-                        Loadable::Error(e.to_string())
-                    };
-                    repo_state.set_worktree_dirty(next);
-                }
+            Some(Err(e)) if !matches!(repo_state.worktree_dirty, Loadable::Ready(_)) => {
+                // A cancelled scan is not a failure worth showing: the load
+                // it belonged to was abandoned deliberately, and the trigger
+                // that abandoned it queues another. Anything else is a real
+                // failure and the pane should say so rather than sit on
+                // `Loading` forever.
+                let next = if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                    Loadable::NotLoaded
+                } else {
+                    Loadable::Error(e.to_string())
+                };
+                repo_state.set_worktree_dirty(next);
             }
+            Some(Err(_)) | None => {}
         }
-        // A selected worktree row only exists while that worktree has changes.
-        // Once it goes clean -- committed, stashed, reverted -- or drops out of a
-        // failed scan, its row is gone, and a selection pointing at a row nothing
-        // renders leaves the details pane with nothing to show and no way back.
         let selected_worktree_is_gone = repo_state
             .history_state
             .worktree_selection

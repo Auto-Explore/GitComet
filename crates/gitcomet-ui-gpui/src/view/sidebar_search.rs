@@ -177,6 +177,7 @@ mod tests {
     fn auxiliary_paths_and_stash_labels_are_searchable() {
         let rows = [
             BranchSidebarRow::WorktreeItem {
+                head: None,
                 path: "/tmp/project-sandbox".into(),
                 branch: Some("topic/release".into()),
                 detached: false,

@@ -1525,10 +1525,10 @@ pub enum InternalMsg {
         read: WorktreeListRead,
         result: Result<Arc<Vec<Worktree>>, Error>,
     },
-    WorktreeDirtyLoaded {
+    WorktreeScanLoaded {
         repo_id: RepoId,
         scope: crate::model::WorktreeDirtyScope,
-        result: Result<Vec<WorktreeDirtySummary>, Error>,
+        result: gitcomet_core::worktree_scan::WorktreeScan,
     },
     RefMetadataLoaded {
         repo_id: RepoId,

@@ -429,12 +429,13 @@ impl SidebarPaneView {
                     ctx.placeholder_row("worktree_placeholder", slot.ix, message)
                 }
                 BranchSidebarRow::WorktreeItem {
+                    head,
                     path,
                     branch,
                     detached,
                     is_active,
                 } => Self::sidebar_worktree_item_row(
-                    this, &ctx, slot, path, branch, detached, is_active, cx,
+                    this, &ctx, slot, path, head, branch, detached, is_active, cx,
                 ),
                 BranchSidebarRow::SubmodulesHeader {
                     top_border: _,

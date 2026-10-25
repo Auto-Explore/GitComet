@@ -322,12 +322,12 @@ impl std::fmt::Debug for InternalMsg {
                 .field("read", read)
                 .field("result", result)
                 .finish(),
-            InternalMsg::WorktreeDirtyLoaded {
+            InternalMsg::WorktreeScanLoaded {
                 repo_id,
                 scope,
                 result,
             } => f
-                .debug_struct("WorktreeDirtyLoaded")
+                .debug_struct("WorktreeScanLoaded")
                 .field("scope", scope)
                 .field("repo_id", repo_id)
                 .field("result", result)

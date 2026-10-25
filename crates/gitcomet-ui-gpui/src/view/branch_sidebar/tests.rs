@@ -647,6 +647,24 @@ fn source_fingerprint_ignores_status_only_changes() {
 }
 
 #[test]
+fn worktree_head_movement_rebuilds_its_recorded_row_input() {
+    let mut repo = populated_repo();
+    repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        path: "/tmp/linked".into(),
+        head: Some(commit_id("old")),
+        branch: None,
+        detached: true,
+    }]));
+    let (before, parts) = branch_sidebar_source_fingerprint(&repo, None);
+    let mut next = repo.worktrees.ready().unwrap().as_ref().clone();
+    next[0].head = Some(commit_id("new"));
+    repo.worktrees = Loadable::Ready(Arc::new(next));
+    repo.worktrees_rev += 1;
+    let (after, _) = branch_sidebar_source_fingerprint(&repo, Some(&parts));
+    assert_ne!(before, after);
+}
+
+#[test]
 fn source_fingerprint_reuses_unchanged_partitions_when_worktrees_change() {
     let mut repo = populated_repo();
     let (before_fingerprint, before_parts) = branch_sidebar_source_fingerprint(&repo, None);

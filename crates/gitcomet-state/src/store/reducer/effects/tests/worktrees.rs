@@ -1,5 +1,6 @@
 use super::*;
 use crate::model::LoadKind;
+use gitcomet_core::domain::WorktreeDirtySummary;
 
 fn listing(branch: &str) -> Arc<Vec<Worktree>> {
     Arc::new(vec![Worktree {
@@ -19,7 +20,7 @@ fn requested_worktree_list_does_not_wait_for_targeted_scan_replays() {
     // A full scan failed to read the list, but checkout edits keep the dirty
     // lane occupied. Neither the active target nor its repeat publishes lists.
     load_worktree_dirty(&mut state, repo_id);
-    worktree_dirty_loaded(
+    legacy_scan_loaded(
         &mut state,
         repo_id,
         WorktreeDirtyScope::All,
@@ -219,7 +220,7 @@ fn failed_background_scans_leave_collapsed_worktrees_retryable() {
     for _ in 0..3 {
         assert_eq!(load_worktree_dirty(&mut state, repo_id).len(), 1);
         assert!(
-            worktree_dirty_loaded(
+            legacy_scan_loaded(
                 &mut state,
                 repo_id,
                 WorktreeDirtyScope::All,
@@ -274,7 +275,7 @@ fn expanded_worktrees_load_independently_of_full_scans() {
             Err(backend_error("unavailable"))
         };
         assert!(
-            worktree_dirty_loaded(&mut state, repo_id, WorktreeDirtyScope::All, result).is_empty()
+            legacy_scan_loaded(&mut state, repo_id, WorktreeDirtyScope::All, result).is_empty()
         );
         assert!(
             state.repos[0]
@@ -319,4 +320,18 @@ fn fixture_observations_do_not_finish_an_explicit_load() {
             .loads_in_flight
             .is_in_flight(LoadKind::Worktrees)
     );
+}
+
+fn legacy_scan_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    scope: WorktreeDirtyScope,
+    result: Result<Vec<WorktreeDirtySummary>, Error>,
+) -> Vec<Effect> {
+    crate::store::reducer::effects::worktree_scan_loaded(
+        state,
+        repo_id,
+        scope,
+        gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(result),
+    )
 }

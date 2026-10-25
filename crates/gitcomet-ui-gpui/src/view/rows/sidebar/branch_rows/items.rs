@@ -103,6 +103,7 @@ impl SidebarPaneView {
         ctx: &SidebarRowContext,
         slot: SidebarRowSlot,
         path: std::path::PathBuf,
+        head: Option<CommitId>,
         branch: Option<SharedString>,
         detached: bool,
         is_active: bool,
@@ -132,6 +133,7 @@ impl SidebarPaneView {
         let comparison = this
             .active_repo()
             .and_then(|repo| this.comparison_badge(ctx, repo.ref_comparisons.worktrees.get(&path)));
+        let cleanliness = this.worktree_cleanliness_badge(ctx, &path, head.as_ref(), is_active);
         let context_menu_invoker_for_right_click = context_menu_invoker.clone();
         let row_group: SharedString = format!("worktree_row_{}_{}", repo_id.0, ix).into();
         let row_debug_selector = row_group.as_ref().to_owned();
@@ -255,6 +257,7 @@ impl SidebarPaneView {
                     }),
             )
             .children(comparison)
+            .child(cleanliness)
             .on_activate(
                 false,
                 controls::ControlActivation::Composite,

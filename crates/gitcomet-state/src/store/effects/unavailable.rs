@@ -181,13 +181,15 @@ pub(super) fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::LoadWorktreeDirty { repo_id, scope, .. } => send(Msg::Internal(
-            crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Effect::LoadWorktreeDirty { repo_id, scope, .. } => {
+            send(Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                 repo_id,
                 scope,
-                result: Err(git_unavailable_error(runtime)),
-            },
-        )),
+                result: gitcomet_core::worktree_scan::WorktreeScan::new(Err(
+                    git_unavailable_error(runtime),
+                )),
+            }))
+        }
         Effect::LoadSubmodules { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
                 repo_id,

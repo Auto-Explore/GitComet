@@ -5,6 +5,93 @@ use std::path::Path;
 
 const CHILD: &str = "modules/child [literal] é";
 
+#[test]
+fn cached_status_rejects_replaced_checkout_and_rewritten_git_indirection() {
+    #[derive(Clone, Copy, Debug)]
+    enum Replacement {
+        Root,
+        GitFile,
+        CommonDir,
+    }
+    for replacement_kind in [
+        Replacement::Root,
+        Replacement::GitFile,
+        Replacement::CommonDir,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        init_test_repo(&main);
+        write_file(&main, "file.txt", "original\n");
+        git_success(&main, &["add", "."]);
+        git_success(&main, &["commit", "-qm", "original"]);
+        let checkout = dir.path().join("linked");
+        git_success(
+            &main,
+            &["worktree", "add", "--detach", checkout.to_str().unwrap()],
+        );
+        let cached = open_repo(&checkout);
+        assert!(
+            cached
+                .status_cancellable_impl(&CancellationToken::new())
+                .unwrap()
+                .unstaged
+                .is_empty()
+        );
+        let replacement = if !matches!(replacement_kind, Replacement::Root) {
+            dir.path().join("other")
+        } else {
+            std::fs::rename(&checkout, dir.path().join("parked")).unwrap();
+            checkout.clone()
+        };
+        std::fs::create_dir(&replacement).unwrap();
+        init_test_repo(&replacement);
+        write_file(&replacement, "file.txt", "replacement\n");
+        git_success(&replacement, &["add", "."]);
+        git_success(&replacement, &["commit", "-qm", "replacement"]);
+        if matches!(replacement_kind, Replacement::GitFile) {
+            std::fs::write(
+                checkout.join(".git"),
+                format!("gitdir: {}\n", replacement.join(".git").display()),
+            )
+            .unwrap();
+        }
+        if matches!(replacement_kind, Replacement::CommonDir) {
+            std::fs::write(
+                cached.repo().git_dir().join("commondir"),
+                format!("{}\n", replacement.join(".git").display()),
+            )
+            .unwrap();
+        }
+        write_file(&checkout, "file.txt", "original\n");
+        let fresh = open_repo(&checkout).status_cancellable_impl(&CancellationToken::new());
+        if matches!(replacement_kind, Replacement::CommonDir) {
+            assert!(
+                fresh.is_err(),
+                "the redirected common store lacks the recorded HEAD"
+            );
+        } else {
+            assert!(!fresh.unwrap().unstaged.is_empty());
+        }
+        assert!(
+            cached
+                .status_cancellable_impl(&CancellationToken::new())
+                .is_err(),
+            "replacement must invalidate cached status; {replacement_kind:?}"
+        );
+        assert!(
+            cached
+                .worktree_status_cancellable_impl(&CancellationToken::new())
+                .is_err()
+        );
+        assert!(
+            cached
+                .staged_status_cancellable_impl(&CancellationToken::new())
+                .is_err()
+        );
+    }
+}
+
 fn empty_gitlink_fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

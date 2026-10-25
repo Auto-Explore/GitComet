@@ -416,6 +416,7 @@ pub(in super::super) struct SidebarPaneView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SidebarNotifyFingerprint {
     comparison_rev: u64,
+    worktree_observations_rev: u64,
     sidebar_mode: SidebarMode,
     active_repo_id: Option<RepoId>,
     repo_fingerprint: Option<BranchSidebarFingerprint>,
@@ -453,6 +454,7 @@ impl SidebarNotifyFingerprint {
             .unwrap_or_default();
         Self {
             comparison_rev: repo.map_or(0, |repo| repo.ref_comparisons.rev),
+            worktree_observations_rev: repo.map_or(0, |repo| repo.worktree_observations_rev),
             sidebar_mode: state.sidebar_mode,
             active_repo_id,
             repo_fingerprint,

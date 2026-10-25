@@ -119,10 +119,12 @@ fn activation_refresh_scans_worktrees_once_and_real_follow_up_changes_are_retain
             assert_eq!(count(&reduce(&mut repos, &ids, &mut state, refresh())), 0);
         }
         let complete = || {
-            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                 repo_id: RepoId(1),
                 scope: crate::model::WorktreeDirtyScope::All,
-                result: Ok(Vec::new()),
+                result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(
+                    Vec::new(),
+                )),
             })
         };
         assert_eq!(
@@ -4201,10 +4203,12 @@ fn an_index_only_change_does_not_rescan_the_other_worktrees() {
             repos,
             id_alloc,
             state,
-            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                 repo_id,
                 scope: crate::model::WorktreeDirtyScope::All,
-                result: Ok(Vec::new()),
+                result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(
+                    Vec::new(),
+                )),
             }),
         );
     };

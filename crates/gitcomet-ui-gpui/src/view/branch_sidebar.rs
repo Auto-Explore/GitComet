@@ -303,6 +303,7 @@ pub(super) enum BranchSidebarRow {
         message: SharedString,
     },
     WorktreeItem {
+        head: Option<CommitId>,
         path: std::path::PathBuf,
         branch: Option<SharedString>,
         detached: bool,
@@ -777,6 +778,7 @@ fn hash_branch_sidebar_worktree_source<H: Hasher>(repo: &RepoState, hasher: &mut
     if let Loadable::Ready(worktrees) = &repo.worktrees {
         for worktree in worktrees.iter() {
             worktree.path.hash(hasher);
+            worktree.head.hash(hasher);
             worktree.branch.hash(hasher);
             worktree.detached.hash(hasher);
         }
@@ -1286,6 +1288,7 @@ fn sidebar_rows(
                 for worktree in worktrees.iter() {
                     any = true;
                     rows.push(BranchSidebarRow::WorktreeItem {
+                        head: worktree.head.clone(),
                         path: worktree.path.clone(),
                         branch: worktree
                             .branch

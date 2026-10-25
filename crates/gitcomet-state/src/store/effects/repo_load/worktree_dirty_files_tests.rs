@@ -1,6 +1,7 @@
 use super::*;
 use crate::store::repository_runtime::RepositoryRuntime;
 use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
+use gitcomet_core::worktree_scan::{WorktreeObservation, WorktreeScan};
 
 #[test]
 fn unchanged_full_scans_do_not_republish_the_list() {
@@ -28,8 +29,19 @@ fn unchanged_full_scans_do_not_republish_the_list() {
         loop {
             match rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() {
                 Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { .. }) => listings += 1,
-                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { result, .. }) => {
-                    result.unwrap();
+                Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded { result, .. }) => {
+                    let observations = result.outcome.unwrap();
+                    assert_eq!(
+                        observations.len(),
+                        1,
+                        "clean checkouts require explicit observations"
+                    );
+                    assert!(
+                        observations.iter().all(|observation| matches!(
+                            observation,
+                            WorktreeObservation::Clean(_)
+                        ))
+                    );
                     break;
                 }
                 other => panic!("unexpected reply: {other:?}"),
@@ -38,6 +50,58 @@ fn unchanged_full_scans_do_not_republish_the_list() {
         assert_eq!(
             listings, expected,
             "unchanged scans must not cause extra state copies"
+        );
+    }
+}
+
+#[test]
+fn replaced_linked_checkout_remains_unknown_after_cached_handle_is_evicted() {
+    use gitcomet_core::test_support::git_fixture::git_command;
+    let (dir, own, linked) = crate::store::tests::repo_with_linked_worktree();
+    let repo_id = RepoId(4108);
+    let worker = ScanTestWorker::new();
+    let backend: Arc<dyn GitBackend> = Arc::new(gitcomet_git_gix::GixBackend);
+    let repos = RepositoryRuntimes::from_iter([(repo_id, backend.open(&own).unwrap())]);
+    let scan = || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        schedule_load_worktree_dirty(
+            &worker.executor,
+            backend.clone(),
+            &repos,
+            StoreWorkerSender::for_test_msg_sender(tx),
+            repo_id,
+            worker.runtime.worktree_cache(),
+            own.clone(),
+            WorktreeDirtyScope::Paths(vec![linked.clone()]),
+            None,
+            CancellationToken::new(),
+            worker.publisher.clone(),
+        );
+        match rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() {
+            Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded { result, .. }) => {
+                result.outcome.unwrap()
+            }
+            other => panic!("unexpected observation: {other:?}"),
+        }
+    };
+    assert!(matches!(scan().as_slice(), [WorktreeObservation::Clean(_)]));
+    std::fs::rename(&linked, dir.path().join("parked")).unwrap();
+    std::fs::create_dir(&linked).unwrap();
+    let output = git_command()
+        .arg("-C")
+        .arg(&linked)
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    for _ in 0..2 {
+        let observations = scan();
+        assert!(
+            matches!(
+                observations.as_slice(),
+                [WorktreeObservation::Unknown { .. }]
+            ),
+            "replacement cannot become Clean after reopening: {observations:?}"
         );
     }
 }
@@ -121,7 +185,13 @@ fn failed_scan_does_not_publish_a_worktree_listing() {
         assert!(
             matches!(
                 reply,
-                Msg::Internal(InternalMsg::WorktreeDirtyLoaded { result: Err(_), .. })
+                Msg::Internal(InternalMsg::WorktreeScanLoaded {
+                    result: WorktreeScan {
+                        outcome: Err(_),
+                        ..
+                    },
+                    ..
+                })
             ),
             "a failed scan must only finish its dirty-scan request: {reply:?}"
         );
@@ -225,9 +295,9 @@ fn panicking_worktree_scan_finishes_and_replays_pending_refresh() {
                 .recv_timeout(Duration::from_secs(5))
                 .expect("even a panicking scan must send its completion");
             let finished =
-                if let Msg::Internal(InternalMsg::WorktreeDirtyLoaded { result, .. }) = &msg {
-                    assert_eq!(result.is_err(), fails, "{result:?}");
-                    if let Err(error) = result {
+                if let Msg::Internal(InternalMsg::WorktreeScanLoaded { result, .. }) = &msg {
+                    assert_eq!(result.outcome.is_err(), fails, "{result:?}");
+                    if let Err(error) = &result.outcome {
                         assert!(error.to_string().contains("injected worktree scan panic"));
                     }
                     true
@@ -375,9 +445,33 @@ fn scan_publishes_complete_worktree_list_before_opening_checkouts() {
     }
     assert!(matches!(premature, Err(mpsc::TryRecvError::Empty)));
     match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
-        Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
-            result: Ok(dirty), ..
-        }) => assert!(dirty.is_empty()),
+        Msg::Internal(InternalMsg::WorktreeScanLoaded {
+            result:
+                WorktreeScan {
+                    outcome: Ok(observations),
+                    ..
+                },
+            ..
+        }) => {
+            assert_eq!(observations.len(), 2);
+            assert_eq!(
+                observations
+                    .iter()
+                    .filter(|observation| matches!(observation, WorktreeObservation::Clean(_)))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                observations
+                    .iter()
+                    .filter(|observation| matches!(
+                        observation,
+                        WorktreeObservation::Unknown { .. }
+                    ))
+                    .count(),
+                1
+            );
+        }
         other => panic!("expected clean dirty-summary result, got {other:?}"),
     }
     drop(worker);
@@ -456,7 +550,7 @@ fn targeted_worker_opens_only_the_requested_checkout_and_full_worker_scans_all()
             if matches!(&msg, Msg::Internal(InternalMsg::WorktreesLoaded { .. })) {
                 listings += 1;
             }
-            if let Msg::Internal(InternalMsg::WorktreeDirtyLoaded {
+            if let Msg::Internal(InternalMsg::WorktreeScanLoaded {
                 scope: returned,
                 result,
                 ..
@@ -468,15 +562,16 @@ fn targeted_worker_opens_only_the_requested_checkout_and_full_worker_scans_all()
                     usize::from(matches!(scope, WorktreeDirtyScope::All)),
                     "targeted file edits must not publish an extra state snapshot"
                 );
-                break result.unwrap();
+                break result.outcome.unwrap();
             }
         }
     };
-    let summaries = scan(
+    let observations = scan(
         WorktreeDirtyScope::Paths(vec![selected.clone()]),
         Some(selected.clone()),
     );
-    assert_eq!(summaries.len(), 1);
+    assert_eq!(observations.len(), 1);
+    let summaries = dirty_summaries(observations);
     assert_eq!(summaries[0].path, selected);
     assert_eq!(summaries[0].unstaged[0].path, PathBuf::from("a.txt"));
     assert_eq!(
@@ -484,14 +579,29 @@ fn targeted_worker_opens_only_the_requested_checkout_and_full_worker_scans_all()
         vec![selected.clone()],
         "unrelated checkouts must not be opened or scanned"
     );
-    let summaries = scan(WorktreeDirtyScope::All, None);
+    let observations = scan(WorktreeDirtyScope::All, None);
+    assert_eq!(observations.len(), 2);
+    let summaries = dirty_summaries(observations);
     assert_eq!(summaries.len(), 2);
     assert!(summaries.iter().all(|summary| summary.unstaged.is_empty()));
     assert!(summaries.iter().any(|summary| summary.path == other));
-    // A removed target returns a scoped empty result; it cannot erase other rows.
     let missing = dir.path().join("missing");
-    assert!(scan(WorktreeDirtyScope::Paths(vec![missing]), None).is_empty());
+    let missing = scan(WorktreeDirtyScope::Paths(vec![missing]), None);
+    assert_eq!(missing.len(), 1);
+    assert!(matches!(missing[0], WorktreeObservation::Unknown { .. }));
     drop(worker);
+}
+
+fn dirty_summaries(
+    observations: Vec<gitcomet_core::worktree_scan::WorktreeObservation>,
+) -> Vec<WorktreeDirtySummary> {
+    observations
+        .into_iter()
+        .filter_map(|observation| match observation {
+            WorktreeObservation::Dirty(summary) => Some(summary),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The file lists are the expensive part of a summary -- an un-ignored build

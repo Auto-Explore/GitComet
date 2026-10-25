@@ -3085,9 +3085,10 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     // An unchanged full-scan listing is suppressed after the explicit reply.
     assert!(matches!(
         recv_effect_message(&rx, Duration::from_secs(5)),
-        Ok(Msg::Internal(
-            crate::msg::InternalMsg::WorktreeDirtyLoaded { result: Ok(_), .. }
-        ))
+        Ok(Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
+            result: gitcomet_core::worktree_scan::WorktreeScan { outcome: Ok(_), .. },
+            ..
+        }))
     ));
     // Cancellation must also suppress a scan still queued on the new pool.
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -3149,9 +3150,10 @@ fn linked_worktree_scan_does_not_block_foreground_repository_loads() {
     ));
     assert!(matches!(
         recv_effect_message(&rx, Duration::from_secs(5)),
-        Ok(Msg::Internal(
-            crate::msg::InternalMsg::WorktreeDirtyLoaded { result: Ok(_), .. }
-        ))
+        Ok(Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
+            result: gitcomet_core::worktree_scan::WorktreeScan { outcome: Ok(_), .. },
+            ..
+        }))
     ));
     foreground.join_workers();
     scans.join_workers();

@@ -3,6 +3,7 @@ use super::{GixRepo, log};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::history_index::{HistoryIndex, HistoryIndexHandle, HistoryIndexProgress};
 use gitcomet_core::services::{CancellationToken, HistorySnapshot, Result};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak, mpsc};
@@ -45,6 +46,49 @@ pub(crate) struct WorktreeIdentity {
     root: Identity,
     git: Identity,
     common: Identity,
+    marker: CheckoutMarker,
+    common_marker: CheckoutMarker,
+}
+
+const MAX_CHECKOUT_MARKER_BYTES: u64 = 64 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CheckoutMarker {
+    Absent,
+    Directory(Identity),
+    File {
+        identity: Identity,
+        contents: Vec<u8>,
+    },
+    Unavailable(u64),
+}
+
+impl CheckoutMarker {
+    fn read(path: &Path) -> Self {
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Self::Absent,
+            Err(_) => return Self::Unavailable(next_id()),
+        };
+        if metadata.is_dir() {
+            return Self::Directory(Identity::read(path));
+        }
+        if !metadata.is_file() {
+            return Self::Unavailable(next_id());
+        }
+        let mut contents = Vec::new();
+        let read = std::fs::File::open(path).and_then(|file| {
+            file.take(MAX_CHECKOUT_MARKER_BYTES + 1)
+                .read_to_end(&mut contents)
+        });
+        if read.is_err() || contents.len() as u64 > MAX_CHECKOUT_MARKER_BYTES {
+            return Self::Unavailable(next_id());
+        }
+        Self::File {
+            identity: Identity::read(path),
+            contents,
+        }
+    }
 }
 
 impl WorktreeIdentity {
@@ -53,6 +97,8 @@ impl WorktreeIdentity {
             root: Identity::read(workdir),
             git: Identity::read(repo.git_dir()),
             common: Identity::read(repo.common_dir()),
+            marker: CheckoutMarker::read(&workdir.join(".git")),
+            common_marker: CheckoutMarker::read(&repo.git_dir().join("commondir")),
         }
     }
 }
@@ -489,6 +535,24 @@ impl Drop for CommonRepository {
 mod tests {
     use super::*;
     use gitcomet_core::domain::HistoryMode;
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_markers_reject_special_files_without_opening_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("marker");
+        let _socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert!(matches!(
+            CheckoutMarker::read(&path),
+            CheckoutMarker::Unavailable(_)
+        ));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "gitdir: ../repo/.git\n").unwrap();
+        assert!(matches!(
+            CheckoutMarker::read(&path),
+            CheckoutMarker::File { .. }
+        ));
+    }
 
     #[test]
     fn alternate_resolution_errors_are_stable_and_private() {

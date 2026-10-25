@@ -41,6 +41,7 @@ mod submodule_trust;
 #[cfg(test)]
 pub(super) mod test_inputs;
 mod util;
+mod worktree_observations;
 
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoPath, RepoPathList, WorktreeSaveBaseline};
@@ -2308,11 +2309,11 @@ fn reduce_inner(
             read,
             result,
         }) => effects::worktrees_loaded(inputs, state, repo_id, read, result),
-        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
             repo_id,
             scope,
             result,
-        }) => effects::worktree_dirty_loaded(state, repo_id, scope, result),
+        }) => effects::worktree_scan_loaded(state, repo_id, scope, result),
         Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded { repo_id, result }) => {
             effects::ref_metadata_loaded(state, repo_id, result)
         }

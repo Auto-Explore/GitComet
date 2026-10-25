@@ -35,7 +35,9 @@ Content comparisons include binary objects, rename source deletions, modes, syml
 
 The shared target-history index incrementally examines up to 1,000 target commits automatically, or 10,000 during a deeper check. Diff settings are pinned, external diff and text conversion are disabled, and patch IDs use `--verbatim` to preserve whitespace. Exact inverse patches later in the examined target history cancel older matches. Historical matches describe historical patches; they do not assert current content, identical history, or safe deletion. Edited squashes, conflict resolutions, edited reverts, partial incorporation, and later rewrites may remain unconfirmed.
 
-The explicit worktree-observation slice is under implementation. Committed evidence remains independent of uncommitted files and does not change deletion or pruning behavior.
+Worktree rows independently show Clean, Dirty, or Unknown from filesystem status scans. Every scanned linked checkout produces an explicit observation, including clean and inaccessible checkouts. Missing observations cannot establish cleanliness. Scan identities prevent older full or targeted results from replacing newer observations. Failed observations retain the last dirty file list and an open diff until a successful scan establishes cleanliness or a successful complete listing removes the checkout. The active checkout reuses its existing staged and unstaged status lanes without another scan or uncommitted-history row. Recorded HEAD changes invalidate cleanliness independently of comparison-target availability.
+
+Filesystem scans use their existing separate worker pool and checkout-handle cache. Comparison analysis adds no checkout watchers. Committed evidence remains independent of uncommitted files and does not change deletion or pruning behavior.
 
 ## Validation
 

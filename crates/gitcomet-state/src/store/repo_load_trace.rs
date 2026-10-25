@@ -246,12 +246,14 @@ mod tests {
     #[test]
     fn the_worktree_dirty_reply_is_named() {
         assert_eq!(
-            internal_msg_name(&InternalMsg::WorktreeDirtyLoaded {
+            internal_msg_name(&InternalMsg::WorktreeScanLoaded {
                 repo_id: RepoId(7),
                 scope: crate::model::WorktreeDirtyScope::All,
-                result: Ok(Vec::new()),
+                result: gitcomet_core::worktree_scan::WorktreeScan::from_dirty_for_test(Ok(
+                    Vec::new()
+                )),
             }),
-            "WorktreeDirtyLoaded"
+            "WorktreeScanLoaded"
         );
     }
 }

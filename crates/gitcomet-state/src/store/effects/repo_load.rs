@@ -315,17 +315,6 @@ pub(super) fn schedule_load_worktrees(
     );
 }
 
-/// Scans all other linked worktrees, or just the requested checkouts.
-///
-/// The worktree list is re-read inside the task rather than passed in from
-/// state: this way the scan can never disagree with the paths it walks, and it
-/// has no ordering dependency on `LoadWorktrees` having landed first. Full scans
-/// publish changed listings before status work, keeping the sidebar current
-/// even when checkouts are inaccessible. Targeted scans avoid another state
-/// publication on every file edit; git-state changes already request full scans.
-///
-/// A worktree that cannot be opened or stat'd is skipped rather than failing the
-/// whole scan — removed directories and unmounted volumes are routine.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_worktree_dirty(
     executor: &TaskExecutor,
@@ -348,6 +337,8 @@ pub(super) fn schedule_load_worktree_dirty(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
+            use gitcomet_core::worktree_scan::{WorktreeObservation, WorktreeScan};
+            let mut scan = WorktreeScan::new(Ok(Vec::new()));
             let lifetime = cache_lease.lifetime();
             let own_workdir = canonicalize_or_original(own_workdir);
             let read = WorktreeListRead::from_dirty_scan();
@@ -377,7 +368,8 @@ pub(super) fn schedule_load_worktree_dirty(
                             // state or produce a diagnostic on every focus/flush.
                             publisher.publish(&msg_tx, repo_id, read, Ok(worktrees.clone()));
                         }
-                        let mut summaries = Vec::new();
+                        let mut observations = Vec::new();
+                        let common_dir = repo.common_dir();
                         let mut scanned = Vec::with_capacity(worktrees.len());
                         for worktree in worktrees.iter() {
                             // A scan that stops here has seen only a prefix of the
@@ -397,14 +389,30 @@ pub(super) fn schedule_load_worktree_dirty(
                             if !scope.includes(&worktree.path) {
                                 continue;
                             }
-                            let Some(handle) = worktree_scan_handle(
+                            let handle = worktree_scan_handle(
                                 worktree_scan_handles(),
                                 &*backend,
                                 &cache_lease,
                                 &worktree.path,
-                            ) else {
+                            );
+                            let Some(handle) = handle else {
+                                observations.push(WorktreeObservation::Unknown {
+                                    worktree: worktree.clone(),
+                                    error: "Checkout could not be opened.".into(),
+                                });
                                 continue;
                             };
+                            if common_dir.is_some() && common_dir != handle.common_dir() {
+                                forget_worktree_scan_handle(
+                                    worktree_scan_handles(),
+                                    &worktree.path,
+                                );
+                                observations.push(WorktreeObservation::Unknown {
+                                    worktree: worktree.clone(),
+                                    error: "Checkout now belongs to a different repository.".into(),
+                                });
+                                continue;
+                            }
                             let status = match handle.status(&cancellation) {
                                 Ok(status) => status,
                                 // Cancellation surfaces as an `Err` here like any
@@ -416,7 +424,7 @@ pub(super) fn schedule_load_worktree_dirty(
                                 Err(_) if cancellation.is_cancelled() => {
                                     return Err(Error::new(ErrorKind::Cancelled));
                                 }
-                                Err(_) => {
+                                Err(error) => {
                                     // A handle that cannot report status is not
                                     // worth keeping: the worktree may have been
                                     // removed or replaced underneath it.
@@ -424,10 +432,20 @@ pub(super) fn schedule_load_worktree_dirty(
                                         worktree_scan_handles(),
                                         &worktree.path,
                                     );
+                                    observations.push(WorktreeObservation::Unknown {
+                                        worktree: worktree.clone(),
+                                        error: error
+                                            .to_string()
+                                            .chars()
+                                            .take(512)
+                                            .collect::<String>()
+                                            .into(),
+                                    });
                                     continue;
                                 }
                             };
                             if status.staged.is_empty() && status.unstaged.is_empty() {
+                                observations.push(WorktreeObservation::Clean(worktree.clone()));
                                 continue;
                             }
                             // Only the selected worktree's files are carried back;
@@ -458,8 +476,26 @@ pub(super) fn schedule_load_worktree_dirty(
                                 keep_files,
                                 line_stats,
                             );
-                            if summary.is_dirty() {
-                                summaries.push(summary);
+                            observations.push(WorktreeObservation::Dirty(summary));
+                        }
+                        if let WorktreeDirtyScope::Paths(paths) = &scope {
+                            for path in paths {
+                                if !observations
+                                    .iter()
+                                    .any(|observation| observation.path() == path)
+                                {
+                                    observations.push(WorktreeObservation::Unknown {
+                                        worktree: Worktree {
+                                            path: path.clone(),
+                                            head: None,
+                                            branch: None,
+                                            detached: false,
+                                        },
+                                        error:
+                                            "Checkout is absent from the recorded worktree list."
+                                                .into(),
+                                    });
+                                }
                             }
                         }
                         // Reaching here means the whole list was walked, so `scanned`
@@ -467,7 +503,7 @@ pub(super) fn schedule_load_worktree_dirty(
                         // part-way returned above rather than falling through with a
                         // partial set.
                         retain_worktree_scan_handles(worktree_scan_handles(), lifetime, &scanned);
-                        Ok(summaries)
+                        Ok(observations)
                     })
             }))
             .unwrap_or_else(|payload| {
@@ -479,22 +515,25 @@ pub(super) fn schedule_load_worktree_dirty(
                     gitcomet_core::panic::payload_message(payload.as_ref()),
                 ))))
             });
+            scan.outcome = result;
             send_or_log(
                 &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                     repo_id,
                     scope,
-                    result,
+                    result: scan,
                 }),
             );
         },
         move |msg_tx| {
             send_or_log(
                 &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                Msg::Internal(crate::msg::InternalMsg::WorktreeScanLoaded {
                     repo_id,
                     scope: missing_scope,
-                    result: Err(missing_repo_error(repo_id)),
+                    result: gitcomet_core::worktree_scan::WorktreeScan::new(Err(
+                        missing_repo_error(repo_id),
+                    )),
                 }),
             );
         },

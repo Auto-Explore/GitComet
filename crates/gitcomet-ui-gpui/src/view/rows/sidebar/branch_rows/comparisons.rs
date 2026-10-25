@@ -1,7 +1,182 @@
 use super::*;
 use gitcomet_core::ref_comparison::{RefComparisonCounts, RefIntegration};
+use gitcomet_core::worktree_scan::WorktreeCleanliness;
+
+fn checkout_cleanliness(
+    repo: &RepoState,
+    path: &std::path::Path,
+    head: Option<&CommitId>,
+    is_current: bool,
+) -> WorktreeCleanliness {
+    if !is_current {
+        return repo
+            .worktree_observations
+            .get(path)
+            .filter(|observation| observation.head.as_ref() == head)
+            .map(|observation| observation.cleanliness.clone())
+            .unwrap_or_else(|| {
+                WorktreeCleanliness::Unknown(
+                    "Waiting for a filesystem scan of this checkout.".into(),
+                )
+            });
+    }
+    let mut unknown = None;
+    for (lane, staged) in [(&repo.worktree_status, false), (&repo.staged_status, true)] {
+        let entries = match lane {
+            Loadable::Ready(entries) => Some(entries.as_slice()),
+            Loadable::NotLoaded => match &repo.status {
+                Loadable::Ready(status) => Some(if staged {
+                    status.staged.as_slice()
+                } else {
+                    status.unstaged.as_slice()
+                }),
+                Loadable::Error(error) => {
+                    unknown = Some(error.as_str());
+                    None
+                }
+                Loadable::Loading | Loadable::NotLoaded => None,
+            },
+            Loadable::Error(error) => {
+                unknown = Some(error.as_str());
+                None
+            }
+            Loadable::Loading => None,
+        };
+        match entries {
+            Some(entries) if !entries.is_empty() => return WorktreeCleanliness::Dirty,
+            None => {
+                unknown.get_or_insert("Waiting for a filesystem scan of this checkout.");
+            }
+            Some(_) => {}
+        }
+    }
+    unknown.map_or(WorktreeCleanliness::Clean, |error| {
+        WorktreeCleanliness::Unknown(error.into())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{FileStatus, FileStatusKind, RepoSpec};
+    use gitcomet_core::worktree_scan::ObservedWorktreeStatus;
+
+    #[test]
+    fn cleanliness_uses_recorded_head_when_comparison_metadata_is_unavailable() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: "/repo".into(),
+            },
+        );
+        let path = std::path::Path::new("/linked");
+        let old = CommitId("old".into());
+        let new = CommitId("new".into());
+        Arc::make_mut(&mut repo.worktree_observations).insert(
+            path.into(),
+            ObservedWorktreeStatus {
+                scan_id: 1,
+                head: Some(old.clone()),
+                cleanliness: WorktreeCleanliness::Clean,
+            },
+        );
+        assert!(matches!(
+            checkout_cleanliness(&repo, path, Some(&new), false),
+            WorktreeCleanliness::Unknown(_)
+        ));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, Some(&old), false),
+            WorktreeCleanliness::Clean
+        );
+        Arc::make_mut(&mut repo.worktree_observations)
+            .get_mut(path)
+            .unwrap()
+            .head = Some(new.clone());
+        assert_eq!(
+            checkout_cleanliness(&repo, path, Some(&new), false),
+            WorktreeCleanliness::Clean
+        );
+        assert!(matches!(
+            checkout_cleanliness(&repo, std::path::Path::new("/missing"), Some(&new), false),
+            WorktreeCleanliness::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn active_checkout_cleanliness_uses_both_live_status_lanes() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: "/repo".into(),
+            },
+        );
+        let path = std::path::Path::new("/repo");
+        repo.status = Loadable::Ready(Arc::new(gitcomet_core::domain::RepoStatus {
+            staged: Arc::new(Vec::new()),
+            unstaged: Arc::new(Vec::new()),
+        }));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Clean
+        );
+        repo.worktree_status = Loadable::Ready(Arc::new(vec![FileStatus {
+            path: "new.txt".into(),
+            kind: FileStatusKind::Untracked,
+            conflict: None,
+        }]));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Dirty
+        );
+        repo.worktree_status = Loadable::Ready(Arc::new(Vec::new()));
+        repo.staged_status = Loadable::Error("unavailable".into());
+        assert!(matches!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Unknown(_)
+        ));
+        repo.staged_status = Loadable::Loading;
+        assert!(matches!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Unknown(_)
+        ));
+        repo.staged_status = Loadable::Ready(Arc::new(Vec::new()));
+        assert_eq!(
+            checkout_cleanliness(&repo, path, None, true),
+            WorktreeCleanliness::Clean
+        );
+    }
+}
 
 impl SidebarPaneView {
+    pub(super) fn worktree_cleanliness_badge(
+        &self,
+        ctx: &SidebarRowContext,
+        path: &std::path::Path,
+        head: Option<&CommitId>,
+        is_current: bool,
+    ) -> AnyElement {
+        let current = self
+            .active_repo()
+            .map(|repo| checkout_cleanliness(repo, path, head, is_current));
+        let (label, detail) = match current {
+            Some(WorktreeCleanliness::Clean) => ("Clean", "The latest filesystem scan found no staged, unstaged, or untracked changes.".to_owned()),
+            Some(WorktreeCleanliness::Dirty) => ("Dirty", "The latest filesystem scan found uncommitted changes. Committed-history evidence is separate.".to_owned()),
+            Some(WorktreeCleanliness::Unknown(error)) => ("Unknown", format!("Filesystem status is unknown: {error}")),
+            None => ("Unknown", "Waiting for a filesystem scan of this checkout.".to_owned()),
+        };
+        div()
+            .id(SharedString::from(format!(
+                "worktree_cleanliness_{}",
+                path.display()
+            )))
+            .flex_none()
+            .text_size(ctx.theme.ui_text(11.0))
+            .text_color(ctx.theme.colors.foreground.secondary)
+            .child(label)
+            .gitcomet_tooltip(ctx.theme, detail.into())
+            .into_any_element()
+    }
+
     pub(super) fn comparison_heading(&self, label: &str) -> (SharedString, SharedString) {
         let Some(repo) = self.active_repo() else {
             return (label.to_owned().into(), label.to_owned().into());

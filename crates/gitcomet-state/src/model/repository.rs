@@ -159,6 +159,10 @@ pub struct RepoState {
     /// being viewed. Only worktrees with changes are kept.
     pub worktree_dirty: Loadable<Arc<Vec<WorktreeDirtySummary>>>,
     pub worktree_dirty_rev: u64,
+    pub worktree_observations:
+        Arc<FxHashMap<PathBuf, gitcomet_core::worktree_scan::ObservedWorktreeStatus>>,
+    pub worktree_observations_rev: u64,
+    pub(crate) worktree_scan_id: u64,
     /// Tip-commit author/date/summary per short refname, loaded on demand by
     /// pickers that display it. Invalidated whenever the branch or
     /// remote-branch lists change, so it never outlives the refs it describes.
@@ -399,6 +403,9 @@ impl RepoState {
             worktrees_read_seq: 0,
             worktree_dirty: Loadable::NotLoaded,
             worktree_dirty_rev: 0,
+            worktree_observations: Arc::default(),
+            worktree_observations_rev: 0,
+            worktree_scan_id: 0,
             ref_metadata: Loadable::NotLoaded,
             ref_metadata_rev: 0,
             submodules: Loadable::NotLoaded,
