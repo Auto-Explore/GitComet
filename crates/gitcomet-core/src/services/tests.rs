@@ -238,7 +238,12 @@ fn provided_trait_methods_use_unsupported_fallback_behavior() {
     assert_unsupported(repo.apply_unified_patch_to_index_with_output(b"@@ -1 +1 @@", false));
     assert_unsupported(repo.apply_unified_patch_to_worktree_with_output(b"@@ -1 +1 @@", true));
     assert_unsupported(repo.list_worktrees(&CancellationToken::new()));
-    assert_unsupported(repo.add_worktree_with_output(path, Some("main")));
+    assert_unsupported(repo.add_worktree_with_output(
+        path,
+        &super::WorktreeCheckout::Existing {
+            reference: "main".to_string(),
+        },
+    ));
     assert_unsupported(repo.remove_worktree_with_output(path));
     assert_unsupported(repo.force_remove_worktree_with_output(path));
     assert_unsupported(repo.list_submodules(&CancellationToken::new()));

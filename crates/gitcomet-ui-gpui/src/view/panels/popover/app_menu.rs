@@ -303,6 +303,7 @@ pub(super) fn activate(
                 directories: false,
                 multiple: false,
                 prompt: Some("Select patch file".into()),
+                directory: None,
             });
             window
                 .spawn(cx, async move |cx| {

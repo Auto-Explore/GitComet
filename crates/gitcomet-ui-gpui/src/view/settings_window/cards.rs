@@ -164,9 +164,14 @@ impl SettingsWindowView {
             let browse_button =
                 components::Button::new("settings_window_external_code_editor_browse", "Browse")
                     .style(components::ButtonStyle::Outlined)
-                    .on_click(theme, cx, |_this, _e, window, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         let view = cx.weak_entity();
-                        let rx = cx.prompt_for_paths(custom_external_editor_path_prompt_options());
+                        let directory = crate::view::path_prompt::folder_of_existing_entry(
+                            this.external_editor_custom_path_input.read(cx).text(),
+                        );
+                        let rx = cx.prompt_for_paths(custom_external_editor_path_prompt_options(
+                            directory,
+                        ));
 
                         window
                             .spawn(cx, async move |cx| {
@@ -2016,13 +2021,17 @@ impl SettingsWindowView {
             let browse_button =
                 components::Button::new("settings_window_git_executable_browse", "Browse")
                     .style(components::ButtonStyle::Outlined)
-                    .on_click(theme, cx, |_this, _e, window, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         let view = cx.weak_entity();
+                        let directory = crate::view::path_prompt::folder_of_existing_entry(
+                            this.git_executable_input.read(cx).text(),
+                        );
                         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
                             files: true,
                             directories: false,
                             multiple: false,
                             prompt: Some("Select Git executable".into()),
+                            directory,
                         });
 
                         window

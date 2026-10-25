@@ -22,6 +22,7 @@ faster-hex = { workspace = true }
 filetime = { workspace = true }
 fnv = { workspace = true }
 gix-quote = { workspace = true }
+gix-validate = { workspace = true }
 jiff = { workspace = true }
 md-5 = { workspace = true }
 sha2 = { workspace = true }

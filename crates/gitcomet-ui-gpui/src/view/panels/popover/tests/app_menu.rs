@@ -302,6 +302,7 @@ fn web_remote(name: &str, url: &str) -> gitcomet_core::domain::Remote {
     gitcomet_core::domain::Remote {
         name: name.to_string(),
         url: Some(url.to_string()),
+        default_branch: None,
     }
 }
 

@@ -205,11 +205,16 @@ impl SettingsWindowView {
             TerminalProgramInputTarget::ExternalTerminal => "Select terminal launcher",
         };
         let allow_directories = cfg!(target_os = "macos");
+        let typed = match target {
+            TerminalProgramInputTarget::ExternalTerminal => &self.terminal_external_program_input,
+        };
+        let directory = crate::view::path_prompt::folder_of_existing_entry(typed.read(cx).text());
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: allow_directories,
             multiple: false,
             prompt: Some(prompt.into()),
+            directory,
         });
         let view = cx.weak_entity();
 

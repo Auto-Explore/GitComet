@@ -26,10 +26,12 @@ fn tracked_repo(repo_id: RepoId) -> RepoState {
         Remote {
             name: "origin".to_string(),
             url: None,
+            default_branch: None,
         },
         Remote {
             name: "mirror".to_string(),
             url: None,
+            default_branch: None,
         },
     ]));
     repo.remote_branches = Loadable::Ready(Arc::new(vec![
@@ -323,6 +325,7 @@ fn upstream_picker_preserves_a_configured_remote_name_containing_slashes(
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "forks/alice".to_string(),
         url: None,
+        default_branch: None,
     }]));
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
         remote: "forks/alice".to_string(),
@@ -371,10 +374,12 @@ fn upstream_picker_distinguishes_overlapping_remote_names(cx: &mut gpui::TestApp
         Remote {
             name: "team".to_string(),
             url: None,
+            default_branch: None,
         },
         Remote {
             name: "team/alice".to_string(),
             url: None,
+            default_branch: None,
         },
     ]));
     repo.remote_branches = Loadable::Ready(Arc::new(vec![
@@ -705,6 +710,7 @@ fn first_push_with_one_remote_keeps_a_static_remote_label(cx: &mut gpui::TestApp
     repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
         name: "origin".to_string(),
         url: None,
+        default_branch: None,
     }]));
     let (_view, cx) = open_popover(
         cx,

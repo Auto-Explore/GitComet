@@ -5,7 +5,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{CommitId, Worktree};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, Result, WorktreeCheckout};
 use gix::bstr::ByteSlice as _;
 use std::path::Path;
 use std::process::Command;
@@ -69,10 +69,35 @@ impl GixRepo {
     pub(super) fn add_worktree_with_output_impl(
         &self,
         path: &Path,
-        reference: Option<&str>,
+        checkout: &WorktreeCheckout,
     ) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        let label = push_worktree_args(&mut cmd, &["add"], path, reference)?;
+        let label = match checkout {
+            WorktreeCheckout::Existing { reference } => {
+                push_worktree_args(&mut cmd, &["add"], path, Some(reference))?
+            }
+            WorktreeCheckout::NewBranch { name, start } => {
+                validate_ref_like_arg(name, "worktree branch")?;
+                push_worktree_args(
+                    &mut cmd,
+                    &["add", "--no-track", "-b", name],
+                    path,
+                    start.as_deref(),
+                )?
+            }
+            WorktreeCheckout::TrackRemote { name, upstream } => {
+                validate_ref_like_arg(name, "worktree branch")?;
+                validate_ref_like_arg(&upstream.remote, "remote name")?;
+                validate_ref_like_arg(&upstream.branch, "branch name")?;
+                let tracking_ref = self.live_tracking_ref(upstream, "git worktree add --track")?;
+                push_worktree_args(
+                    &mut cmd,
+                    &["add", "--track", "-b", name],
+                    path,
+                    Some(&tracking_ref),
+                )?
+            }
+        };
         run_git_with_output(cmd, &label)
     }
 
