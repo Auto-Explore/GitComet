@@ -2409,16 +2409,7 @@ fn remote_menu_checks_show_in_history_graph_for_shown_remotes(cx: &mut gpui::Tes
                 web_remote("origin", None),
                 web_remote("upstream", None),
             ]));
-            repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
-                key: gitcomet_state::model::RepositoryKey::Worktree(repo.spec.workdir.clone()),
-                revision: 1,
-                preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
-                    history_hidden_remotes: std::collections::BTreeSet::from([
-                        "upstream".to_string()
-                    ]),
-                    ..Default::default()
-                }),
-            });
+            crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
@@ -2495,16 +2486,7 @@ fn commit_menu_leaves_out_branches_of_remotes_hidden_from_history(cx: &mut gpui:
                     })
                     .to_vec(),
             ));
-            repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
-                key: gitcomet_state::model::RepositoryKey::Worktree(repo.spec.workdir.clone()),
-                revision: 1,
-                preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
-                    history_hidden_remotes: std::collections::BTreeSet::from([
-                        "upstream".to_string()
-                    ]),
-                    ..Default::default()
-                }),
-            });
+            crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),

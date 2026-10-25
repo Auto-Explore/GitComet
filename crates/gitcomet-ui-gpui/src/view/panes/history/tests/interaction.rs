@@ -2792,11 +2792,10 @@ fn hiding_a_remote_drops_its_branch_labels_from_the_graph(cx: &mut gpui::TestApp
 
     let repo_id = RepoId(1);
     let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
-    let repo_path = PathBuf::from("/tmp/history-hidden-remote-labels");
     let mut shown_repo = RepoState::new_opening(
         repo_id,
         RepoSpec {
-            workdir: repo_path.clone(),
+            workdir: PathBuf::from("/tmp/history-hidden-remote-labels"),
         },
     );
     shown_repo.history_state.history_scope = LogScope::CurrentBranch;
@@ -2814,15 +2813,7 @@ fn hiding_a_remote_drops_its_branch_labels_from_the_graph(cx: &mut gpui::TestApp
     shown_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
     shown_repo.history_state.log_rev = 1;
     let mut hidden_repo = shown_repo.clone();
-    hidden_repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
-        key: gitcomet_state::model::RepositoryKey::Worktree(repo_path),
-        revision: 1,
-        preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
-            history_mode: LogScope::CurrentBranch,
-            history_hidden_remotes: std::collections::BTreeSet::from(["upstream".to_string()]),
-            ..Default::default()
-        }),
-    });
+    crate::view::test_support::hide_remotes_in_history(&mut hidden_repo, &["upstream"]);
     let state_with = |repo: RepoState| {
         Arc::new(AppState {
             repos: vec![repo],

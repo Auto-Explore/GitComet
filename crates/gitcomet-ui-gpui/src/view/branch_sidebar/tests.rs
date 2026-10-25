@@ -886,14 +886,7 @@ fn a_remote_hidden_from_history_marks_its_header_and_changes_the_cache_source() 
     );
     let (shown_source, cached) = branch_sidebar_source_fingerprint(&repo, None);
 
-    repo.shared_preferences = Some(gitcomet_state::model::RepositoryPreferencesSnapshot {
-        key: gitcomet_state::model::RepositoryKey::Worktree(repo.spec.workdir.clone()),
-        revision: 1,
-        preferences: Arc::new(gitcomet_state::model::SharedRepositoryPreferences {
-            history_hidden_remotes: BTreeSet::from(["upstream".to_string()]),
-            ..Default::default()
-        }),
-    });
+    crate::view::test_support::hide_remotes_in_history(&mut repo, &["upstream"]);
     assert_eq!(
         hidden_headers(&repo),
         [
