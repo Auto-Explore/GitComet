@@ -67,7 +67,8 @@ pristine baseline, built by this recipe:
   `vendored_parsers/highlights/*.scm`; delete everything else.
 - Follow symlinks to their target files, and store `src/main.rs` as `src/lib.rs`.
 
-Unlike the other vendored crates it is a workspace member: that lets its grammars
+Unlike most vendored crates it is a workspace member (so is
+`mermaid-rs-renderer/`; see its `GITCOMET_PATCHES.md`): that lets its grammars
 use `workspace = true`, so each language resolves to the one grammar crate
 GitComet links. Two crates defining the same `tree_sitter_<lang>` symbol both
 get built and the linker silently keeps one, so `scripts/ci/grammar_symbols.py`

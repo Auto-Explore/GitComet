@@ -1278,15 +1278,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
-name = "core_maths"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30"
-dependencies = [
- "libm",
-]
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2151,20 +2142,6 @@ dependencies = [
 
 [[package]]
 name = "fontdb"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "457e789b3d1202543297a350643cf459f836cade38934e7a4cf6a39e7cde2905"
-dependencies = [
- "fontconfig-parser",
- "log",
- "memmap2",
- "slotmap",
- "tinyvec",
- "ttf-parser",
-]
-
-[[package]]
-name = "fontdb"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2660c5e9157bf76d2db1294e4a9feba604ef610819a3b591088d0d8392a3290f"
@@ -2626,7 +2603,7 @@ dependencies = [
  "gitcomet-win32-window-utils",
  "gix",
  "itertools 0.15.0",
- "lru 0.19.0",
+ "lru",
  "memchr",
  "rustc-hash 2.1.3",
  "rustix",
@@ -2797,7 +2774,7 @@ dependencies = [
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
  "jiff",
- "lru 0.19.0",
+ "lru",
  "memchr",
  "rustc-hash 2.1.3",
  "smallvec",
@@ -2870,7 +2847,7 @@ dependencies = [
 name = "gitcomet-ui-kit"
 version = "0.3.2"
 dependencies = [
- "fontdb 0.24.0",
+ "fontdb",
  "gitcomet-base",
  "gitcomet-fonts",
  "gitcomet-text",
@@ -2878,7 +2855,7 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_parley",
  "gpui_ce_platform",
- "lru 0.19.0",
+ "lru",
  "memchr",
  "palette",
  "raw-window-handle",
@@ -2905,7 +2882,7 @@ dependencies = [
  "gitcomet-ui-kit",
  "gpui-ce",
  "image",
- "lru 0.19.0",
+ "lru",
  "resvg",
  "rustc-hash 2.1.3",
  "tempfile",
@@ -5138,15 +5115,6 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.18.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
-dependencies = [
- "hashbrown 0.17.1",
-]
-
-[[package]]
-name = "lru"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a9f71e3591c7ec44d3e563e87bf14ddc2bada8519dca046e5b0e560cd004e2d"
@@ -5303,16 +5271,20 @@ name = "mermaid-rs-renderer"
 version = "0.3.1"
 dependencies = [
  "anyhow",
- "fontdb 0.23.0",
+ "clap",
+ "criterion",
+ "fontdb",
  "gitcomet-fonts",
  "json5",
- "lru 0.18.5",
+ "lru",
  "once_cell",
  "regex",
+ "resvg",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "ttf-parser",
+ "usvg",
 ]
 
 [[package]]
@@ -8863,9 +8835,6 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
-dependencies = [
- "core_maths",
-]
 
 [[package]]
 name = "typed-arena"
@@ -9041,7 +9010,7 @@ checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
 dependencies = [
  "base64 0.23.1",
  "data-url",
- "fontdb 0.24.0",
+ "fontdb",
  "harfrust",
  "imagesize",
  "kurbo",
