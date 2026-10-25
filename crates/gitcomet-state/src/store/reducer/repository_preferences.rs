@@ -119,6 +119,7 @@ pub(super) fn apply(state: &mut AppState, snapshot: RepositoryPreferencesSnapsho
             }
         }
         repo.shared_preferences = Some(snapshot.clone());
+        effects.extend(super::ref_comparisons::ensure(repo, false));
         repo.branch_sidebar_rev += 1;
     }
     effects

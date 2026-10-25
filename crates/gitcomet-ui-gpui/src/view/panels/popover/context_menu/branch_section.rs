@@ -61,6 +61,10 @@ fn model_for_section(repo_id: RepoId, section: BranchSection, pins: usize) -> Co
         });
     }
 
+    if section == BranchSection::Local {
+        items.extend(comparison_items(repo_id));
+    }
+
     items.push(ContextMenuItem::Separator);
     let section_name = match section {
         BranchSection::Local => "local",
@@ -74,6 +78,37 @@ fn model_for_section(repo_id: RepoId, section: BranchSection, pins: usize) -> Co
         action: Box::new(ContextMenuAction::UnpinAllBranches { repo_id, section }),
     });
     ContextMenuModel::new(items)
+}
+
+pub(super) fn comparison_items(repo_id: RepoId) -> Vec<ContextMenuItem> {
+    vec![
+        ContextMenuItem::Separator,
+        ContextMenuItem::Entry {
+            label: "Choose comparison ref…".into(),
+            icon: Some("icons/git_branch.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::BranchPicker {
+                    purpose: BranchPickerPurpose::ComparisonTarget,
+                },
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: "Use origin/HEAD for comparison".into(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::ComparisonDefault { repo_id }),
+        },
+        ContextMenuItem::Entry {
+            label: "Run deeper comparison".into(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::ComparisonDeeper { repo_id }),
+        },
+    ]
 }
 
 #[cfg(test)]

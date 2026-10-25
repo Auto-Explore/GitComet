@@ -379,6 +379,7 @@ fn preferences_sync_across_tabs_and_windows_without_lost_fields_or_clone_leakage
         );
     }
     let expected = SharedRepositoryPreferences {
+        comparison_ref: None,
         history_mode: HistoryMode::FirstParent,
         pinned_items: BTreeSet::from(["local:dev".into(), "group:local:topic".into()]),
         collapsed_items: BTreeSet::from(["group:local:topic".into()]),

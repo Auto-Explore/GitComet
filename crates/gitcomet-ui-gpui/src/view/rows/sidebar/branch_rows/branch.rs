@@ -200,6 +200,14 @@ impl SidebarPaneView {
                 .flex_1(),
             );
 
+        if section == BranchSection::Local
+            && let Some(repo) = this.active_repo()
+            && let Some(badge) =
+                this.comparison_badge(ctx, repo.ref_comparisons.branches.get(name.as_ref()))
+        {
+            row = row.child(badge);
+        }
+
         let show_branch_badges = divergence_behind.is_some()
             || divergence_ahead.is_some()
             || (is_upstream && section == BranchSection::Remote)

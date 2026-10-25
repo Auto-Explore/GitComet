@@ -34,6 +34,8 @@ pub mod partial_patch;
 pub mod patch_action;
 pub mod path_utils;
 pub mod process;
+pub mod ref_comparison;
+pub mod ref_comparison_memory;
 pub mod remote_url;
 pub mod services;
 pub mod signing_tools;

@@ -5,6 +5,7 @@ use super::*;
 
 mod annex;
 mod branch;
+mod comparisons;
 mod headers;
 mod items;
 
@@ -295,6 +296,36 @@ impl SidebarPaneView {
             return Vec::new();
         };
         let rows = presentation.rows.clone();
+        let range: Vec<_> = range.collect();
+        if let Some(repo) = this.active_repo() {
+            let priority: Vec<_> = range
+                .iter()
+                .filter_map(|(ix, _)| match rows.get(*ix)? {
+                    BranchSidebarRow::Branch {
+                        name,
+                        section: BranchSection::Local,
+                        ..
+                    } => repo.ref_comparisons.branches.get(name.as_ref()).cloned(),
+                    BranchSidebarRow::WorktreeItem { path, .. } => {
+                        repo.ref_comparisons.worktrees.get(path).cloned()
+                    }
+                    _ => None,
+                })
+                .take(128)
+                .collect();
+            if this.comparison_priority.as_ref() != Some(&(repo_id, priority.clone())) {
+                this.comparison_priority = Some((repo_id, priority.clone()));
+                let store = this.store.clone();
+                cx.defer(move |_| {
+                    store.dispatch(Msg::RefComparisons(
+                        gitcomet_state::ref_comparisons::RefComparisonsMsg::Prioritize {
+                            repo_id,
+                            subjects: priority,
+                        },
+                    ))
+                });
+            }
+        }
         let ctx = SidebarRowContext::new(this, repo_id, surface, presentation, ui_scale_percent);
         let decorated: std::rc::Rc<[usize]> = if surface == SidebarRowSurface::Tree {
             this.decorated_sidebar_rows()
@@ -302,6 +333,7 @@ impl SidebarPaneView {
             std::rc::Rc::from([])
         };
         range
+            .into_iter()
             .filter_map(|(ix, stuck)| {
                 rows.get(ix).cloned().map(|row| {
                     (

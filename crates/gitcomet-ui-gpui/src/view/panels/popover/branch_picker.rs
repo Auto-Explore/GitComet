@@ -526,7 +526,15 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             purpose: BranchPickerPurpose::RebaseOnto
         })
     );
-    let title = if is_delete {
+    let is_comparison = matches!(
+        this.popover,
+        Some(PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::ComparisonTarget
+        })
+    );
+    let title = if is_comparison {
+        "Compare With Local Ref"
+    } else if is_delete {
         "Delete Branch"
     } else if is_rebase_onto {
         "Rebase Onto"
@@ -629,7 +637,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     let repo_id = repo.id;
                     // The current branch cannot be rebased onto itself; deleting
                     // it is impossible too.
-                    let spec = RefRowsSpec::branches(is_delete || is_rebase_onto);
+                    let spec = if is_comparison {
+                        RefRowsSpec::source_ref()
+                    } else {
+                        RefRowsSpec::branches(is_delete || is_rebase_onto)
+                    };
                     let query = search.read(cx).text().trim().to_string();
                     let built = ref_rows_cached(this, spec, &query);
                     let names = Rc::clone(&built.payloads);

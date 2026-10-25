@@ -32,6 +32,7 @@ impl Effect {
 
 #[derive(Clone, Debug, strum::IntoStaticStr)]
 pub enum Effect {
+    RefComparisons(crate::ref_comparisons::RefComparisonsEffect),
     Persistence(super::PersistenceEffect),
     Control(super::ControlEffect),
     Status(super::StatusEffect),
@@ -403,6 +404,7 @@ impl Effect {
             | Self::Control(_)
             | Self::ValidateAuthPrompt { .. } => false,
             Self::Status(_)
+            | Self::RefComparisons(_)
             | Self::References(_)
             | Self::RepoCommand(_)
             | Self::IndexedHistory(_)

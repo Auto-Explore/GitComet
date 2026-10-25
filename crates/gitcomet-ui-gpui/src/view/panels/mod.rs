@@ -56,6 +56,12 @@ pub(in crate::view) enum HistoryMenuRef {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    ComparisonDeeper {
+        repo_id: RepoId,
+    },
+    ComparisonDefault {
+        repo_id: RepoId,
+    },
     Explorer {
         repo_id: RepoId,
         path: std::path::PathBuf,

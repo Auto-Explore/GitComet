@@ -27,7 +27,11 @@ impl SidebarPaneView {
             BranchSection::Local => ("icons/computer.svg", "Local Branches".into()),
             BranchSection::Remote => ("icons/cloud.svg", "Remote Branches".into()),
         };
-        let tooltip = label.clone();
+        let (label, tooltip) = if section == BranchSection::Local {
+            this.comparison_heading(&label)
+        } else {
+            (label.clone(), label.clone())
+        };
         let section_key = match section {
             BranchSection::Local => "local",
             BranchSection::Remote => "remote",
@@ -216,6 +220,7 @@ impl SidebarPaneView {
                 || matches!(r.worktrees, Loadable::Loading)
                 || (!collapsed && matches!(r.worktrees, Loadable::NotLoaded))
         });
+        let (heading, tooltip) = this.comparison_heading("Worktrees");
         let context_menu_invoker: SharedString =
             format!("worktrees_section_menu_{}", repo_id.0).into();
         let context_menu_active =
@@ -246,7 +251,7 @@ impl SidebarPaneView {
                     .whitespace_nowrap()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.colors.foreground.primary)
-                    .child("Worktrees"),
+                    .child(heading),
             )
             .when(show_worktrees_spinner, |d| {
                 d.child(
@@ -259,7 +264,7 @@ impl SidebarPaneView {
                         )),
                 )
             })
-            .gitcomet_tooltip(theme, "Worktrees (Add / Refresh / Open / Remove)".into())
+            .gitcomet_tooltip(theme, tooltip)
             .on_activate(
                 false,
                 ctx.header_activation,

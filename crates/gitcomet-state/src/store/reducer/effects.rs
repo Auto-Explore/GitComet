@@ -66,6 +66,7 @@ pub(super) fn worktrees_loaded(
                 Ok(worktrees) => {
                     repo_state.worktrees_read_seq = read.seq;
                     repo_state.set_worktrees_shared(Loadable::Ready(worktrees));
+                    effects.extend(super::ref_comparisons::ensure(repo_state, false));
                 }
                 Err(e) => {
                     // Only explicit loads publish errors. Cancelled replies are
@@ -1850,6 +1851,7 @@ pub(super) fn branches_loaded(
             }
         };
         repo_state.set_branches(branches);
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
         if repo_state.loads_in_flight.finish(LoadKind::Branches) {
             effects.push(Effect::References(ReferenceEffect::LoadBranches {
                 repo_id,
@@ -1875,6 +1877,7 @@ pub(super) fn remotes_loaded(
             }
         };
         repo_state.set_remotes(remotes);
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
         if repo_state.loads_in_flight.finish(LoadKind::Remotes) {
             effects.push(Effect::References(ReferenceEffect::LoadRemotes { repo_id }));
         }
@@ -1915,6 +1918,7 @@ pub(super) fn remote_branches_loaded(
             }
         };
         repo_state.set_remote_branches(branches);
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
     }
     effects
 }
@@ -2282,6 +2286,7 @@ pub(super) fn head_branch_loaded(
             (Loadable::Ready(before), Loadable::Ready(after)) if before != after
         );
         repo_state.set_head_branch(head_branch);
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
         if repo_state.loads_in_flight.finish(LoadKind::HeadBranch) {
             effects.push(Effect::References(ReferenceEffect::LoadHeadBranch {
                 repo_id,
@@ -2344,6 +2349,7 @@ pub(super) fn tags_loaded(
             }
         };
         repo_state.set_tags(tags);
+        effects.extend(super::ref_comparisons::ensure(repo_state, false));
         if repo_state.loads_in_flight.finish(LoadKind::Tags) {
             effects.push(Effect::References(ReferenceEffect::LoadTags { repo_id }));
         }

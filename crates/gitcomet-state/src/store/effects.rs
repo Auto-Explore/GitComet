@@ -10,6 +10,7 @@ mod indexed_history;
 mod load_tokens;
 mod open_repo;
 mod persistence;
+pub(super) mod ref_comparisons;
 mod references;
 mod repo_actions;
 mod repo_commands;
@@ -428,6 +429,7 @@ pub(super) fn schedule_effect(
                 );
             }
         }
+        Effect::RefComparisons(work) => ref_comparisons::schedule(repos, msg_tx, work),
         Effect::LoadWorktreeDirty {
             repo_id,
             workdir,

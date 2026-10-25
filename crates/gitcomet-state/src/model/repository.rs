@@ -97,6 +97,7 @@ pub struct RepoState {
     pub upstream_divergence_rev: u64,
     pub branches: Loadable<Arc<Vec<Branch>>>,
     pub branches_rev: u64,
+    pub ref_comparisons: crate::ref_comparisons::RefComparisonsState,
     pub tags: Loadable<Arc<Vec<Tag>>>,
     pub tags_rev: u64,
     pub remote_tags: Loadable<Arc<Vec<RemoteTag>>>,
@@ -354,6 +355,7 @@ impl RepoState {
             upstream_divergence_rev: 0,
             branches: Loadable::NotLoaded,
             branches_rev: 0,
+            ref_comparisons: Default::default(),
             tags: Loadable::NotLoaded,
             tags_rev: 0,
             remote_tags: Loadable::NotLoaded,
@@ -496,6 +498,9 @@ impl RepoState {
     }
 
     pub(crate) fn set_branches(&mut self, branches: Loadable<Vec<Branch>>) {
+        if !matches!(branches, Loadable::Ready(_)) {
+            self.ref_comparisons.invalidate();
+        }
         let branches = loadable_into_arc(branches);
         if self.branches == branches {
             return;
@@ -525,6 +530,9 @@ impl RepoState {
     }
 
     pub(crate) fn set_remotes(&mut self, remotes: Loadable<Vec<Remote>>) {
+        if !matches!(remotes, Loadable::Ready(_)) {
+            self.ref_comparisons.invalidate();
+        }
         let remotes = loadable_into_arc(remotes);
         if self.remotes == remotes {
             return;
@@ -535,6 +543,9 @@ impl RepoState {
     }
 
     pub(crate) fn set_remote_branches(&mut self, remote_branches: Loadable<Vec<RemoteBranch>>) {
+        if !matches!(remote_branches, Loadable::Ready(_)) {
+            self.ref_comparisons.invalidate();
+        }
         let remote_branches = loadable_into_arc(remote_branches);
         if self.remote_branches == remote_branches {
             return;

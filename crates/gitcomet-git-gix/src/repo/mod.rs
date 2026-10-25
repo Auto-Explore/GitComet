@@ -73,6 +73,11 @@ pub(crate) mod object_store;
 mod patch;
 mod patch_action;
 mod porcelain;
+mod ref_comparison;
+mod ref_comparison_cache;
+mod ref_comparison_process;
+#[cfg(test)]
+mod ref_comparison_tests;
 mod remotes;
 mod shared;
 mod shared_ranges;
@@ -642,6 +647,30 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 }
 
 impl GitRepository for GixRepo {
+    fn ref_comparison_memory(
+        &self,
+    ) -> Option<Arc<gitcomet_core::ref_comparison_memory::ComparisonMemory>> {
+        Some(self.shared_store().common.comparison_memory.clone())
+    }
+    fn ref_comparison_scope(&self) -> Option<u64> {
+        Some(self.common_identity())
+    }
+    fn ref_comparison_target(
+        &self,
+        reference: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::ref_comparison::RefComparisonTarget> {
+        self.ref_comparison_target_impl(reference, cancellation)
+    }
+
+    fn analyze_ref_comparisons(
+        &self,
+        request: &gitcomet_core::ref_comparison::RefComparisonRequest,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::ref_comparison::RefComparisonBatch> {
+        self.analyze_ref_comparisons_impl(request, cancellation)
+    }
+
     fn diff_action_snapshot(
         &self,
         target: &DiffTarget,

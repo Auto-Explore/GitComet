@@ -30,6 +30,9 @@ pub(super) mod maintenance;
 #[cfg(test)]
 mod nav_history_tests;
 pub(super) mod prepared;
+mod ref_comparisons;
+#[cfg(test)]
+mod ref_comparisons_tests;
 mod repo_management;
 mod repo_watch;
 mod repository_preferences;
@@ -719,6 +722,7 @@ fn reduce_inner(
     }
 
     match msg {
+        Msg::RefComparisons(event) => ref_comparisons::reduce(state, event),
         Msg::OpenDocumentRepository { path, activate } => {
             repo_management::open_document_repository(inputs, id_alloc, state, path, activate)
         }

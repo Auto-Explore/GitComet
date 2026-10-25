@@ -387,6 +387,7 @@ pub(in super::super) struct SidebarPaneView {
     root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
+    pub(in crate::view) comparison_priority: Option<(RepoId, Vec<CommitId>)>,
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     selected_branch: Option<SelectedBranch>,
@@ -414,6 +415,7 @@ pub(in super::super) struct SidebarPaneView {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SidebarNotifyFingerprint {
+    comparison_rev: u64,
     sidebar_mode: SidebarMode,
     active_repo_id: Option<RepoId>,
     repo_fingerprint: Option<BranchSidebarFingerprint>,
@@ -450,6 +452,7 @@ impl SidebarNotifyFingerprint {
             .map(|r| (r.worktree_status_cache_rev(), r.staged_status_cache_rev()))
             .unwrap_or_default();
         Self {
+            comparison_rev: repo.map_or(0, |repo| repo.ref_comparisons.rev),
             sidebar_mode: state.sidebar_mode,
             active_repo_id,
             repo_fingerprint,
@@ -666,6 +669,7 @@ impl SidebarPaneView {
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
+            comparison_priority: None,
             sidebar_request_fingerprint: SidebarRequestFingerprint::default(),
             active_context_menu_invoker: None,
             selected_branch: None,

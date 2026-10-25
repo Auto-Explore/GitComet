@@ -38,5 +38,6 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         }),
     });
 
+    items.extend(super::branch_section::comparison_items(repo_id));
     ContextMenuModel::new(items)
 }

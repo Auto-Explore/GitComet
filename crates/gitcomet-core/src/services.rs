@@ -580,6 +580,32 @@ pub enum SafePushAfterCommitDecision {
 /// result; a caller without a cancellable task can pass a fresh token. Keep the
 /// same token when delegating so cancellation reaches the underlying work.
 pub trait GitRepository: Send + Sync {
+    fn ref_comparison_memory(&self) -> Option<Arc<crate::ref_comparison_memory::ComparisonMemory>> {
+        None
+    }
+    fn ref_comparison_scope(&self) -> Option<u64> {
+        None
+    }
+    fn ref_comparison_target(
+        &self,
+        _reference: Option<&str>,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::ref_comparison::RefComparisonTarget> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "ref comparisons are not implemented",
+        )))
+    }
+
+    fn analyze_ref_comparisons(
+        &self,
+        _request: &crate::ref_comparison::RefComparisonRequest,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::ref_comparison::RefComparisonBatch> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "ref comparisons are not implemented",
+        )))
+    }
+
     fn rebase_range_with_output(&self, _range: &RebaseRange) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "explicit-range rebase is not implemented",

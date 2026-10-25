@@ -1067,7 +1067,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
     match kind {
         PopoverKind::RepoPicker { .. }
         | PopoverKind::BranchPicker {
-            purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
+            purpose:
+                BranchPickerPurpose::Delete
+                | BranchPickerPurpose::RebaseOnto
+                | BranchPickerPurpose::ComparisonTarget,
         } => Some(PICKER_WIDTH),
         PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Checkout,

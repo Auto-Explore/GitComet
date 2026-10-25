@@ -262,6 +262,7 @@ mod tests {
         // Migration and several updates succeeded only in memory. The next
         // successful save must seed the missing disk record with all of them.
         let preferences = SharedRepositoryPreferences {
+            comparison_ref: Some("origin/release".into()),
             history_mode: HistoryMode::FirstParent,
             pinned_items: BTreeSet::from(["local:main".into(), "local:dev".into()]),
             collapsed_items: BTreeSet::from(["group:local:existing".into()]),

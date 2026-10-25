@@ -91,6 +91,17 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         match &self.popover {
+            Some(PopoverKind::BranchPicker {
+                purpose: BranchPickerPurpose::ComparisonTarget,
+            }) => {
+                self.store.dispatch(Msg::UpdateRepositoryPreference {
+                    repo_id,
+                    update: gitcomet_state::model::RepositoryPreferenceUpdate::ComparisonRef(Some(
+                        name,
+                    )),
+                });
+                self.close_popover(cx);
+            }
             Some(PopoverKind::CreateBranchFromRefPrompt { .. }) => {
                 self.create_branch_source_target = name;
                 if let Some(input) = &self.branch_picker_search_input {

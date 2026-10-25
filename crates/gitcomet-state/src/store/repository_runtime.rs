@@ -67,6 +67,7 @@ impl Drop for RepositoryRuntime {
         // opening outside that lock must check again under it before insertion.
         self.worktree_cache.open.store(false, Ordering::Release);
         super::effects::release_worktree_scan_handles(self.worktree_cache.lifetime);
+        super::effects::ref_comparisons::release(self.worktree_cache.lifetime);
         if let Some(scope) = &self.load_scope {
             scope.cancel();
         }

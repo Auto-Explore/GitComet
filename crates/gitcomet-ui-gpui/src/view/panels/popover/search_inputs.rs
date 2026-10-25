@@ -899,6 +899,9 @@ impl PopoverHost {
 /// and cannot offer the one that is checked out.
 fn ref_rows_spec(this: &PopoverHost) -> branch_picker::RefRowsSpec {
     match &this.popover {
+        Some(PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::ComparisonTarget,
+        }) => branch_picker::RefRowsSpec::source_ref(),
         Some(PopoverKind::CreateBranchFromRefPrompt { .. })
         | Some(PopoverKind::Repo {
             kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),

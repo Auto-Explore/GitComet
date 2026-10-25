@@ -246,6 +246,7 @@ pub enum RepoWatchDegradedReason {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, strum::IntoStaticStr)]
 pub enum Msg {
+    RefComparisons(crate::ref_comparisons::RefComparisonsMsg),
     OpenDocumentRepository {
         path: PathBuf,
         activate: bool,

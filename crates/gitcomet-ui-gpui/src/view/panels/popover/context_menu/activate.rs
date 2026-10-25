@@ -965,6 +965,19 @@ impl PopoverHost {
             ContextMenuAction::LoadWorktrees { repo_id } => {
                 self.store.dispatch(Msg::LoadWorktrees { repo_id });
             }
+            ContextMenuAction::ComparisonDeeper { repo_id } => {
+                self.store.dispatch(Msg::RefComparisons(
+                    gitcomet_state::ref_comparisons::RefComparisonsMsg::Deeper { repo_id },
+                ));
+                self.close_popover(cx);
+            }
+            ContextMenuAction::ComparisonDefault { repo_id } => {
+                self.store.dispatch(Msg::UpdateRepositoryPreference {
+                    repo_id,
+                    update: gitcomet_state::model::RepositoryPreferenceUpdate::ComparisonRef(None),
+                });
+                self.close_popover(cx);
+            }
             ContextMenuAction::Pull { repo_id, mode } => {
                 self.store.dispatch(Msg::Pull { repo_id, mode });
             }

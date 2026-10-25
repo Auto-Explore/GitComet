@@ -23,7 +23,7 @@ pub(super) fn git_command_wait_poll(
     Some(poll.min(remaining))
 }
 
-pub(super) fn configure_git_process_tree(cmd: &mut Command) {
+pub(crate) fn configure_git_process_tree(cmd: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -499,7 +499,7 @@ pub(super) fn proc_process_state_and_group(pid: i32) -> Option<(char, i32)> {
     Some((state, group))
 }
 
-pub(super) fn terminate_process_tree_and_wait(
+pub(crate) fn terminate_process_tree_and_wait(
     child: &mut std::process::Child,
 ) -> io::Result<std::process::ExitStatus> {
     #[cfg(unix)]

@@ -137,6 +137,7 @@ impl StoreKey {
 }
 
 pub(super) struct CommonRepository {
+    pub comparison_memory: Arc<gitcomet_core::ref_comparison_memory::ComparisonMemory>,
     pub id: u64,
     identity: Identity,
     stores: Mutex<Vec<Weak<SharedStore>>>,
@@ -158,6 +159,7 @@ impl CommonRepository {
             return common;
         }
         let common = Arc::new(Self {
+            comparison_memory: Arc::default(),
             id: next_id(),
             identity,
             stores: Mutex::new(Vec::new()),
@@ -207,6 +209,10 @@ impl CommonRepository {
                 .as_ref()
                 .map(|store| store.decode.clone())
                 .unwrap_or_default(),
+            comparisons: previous
+                .as_ref()
+                .map(|store| store.comparisons.clone())
+                .unwrap_or_default(),
         });
         stores.push(Arc::downgrade(&shared));
         shared
@@ -241,6 +247,7 @@ impl CommonRepository {
 }
 
 pub(super) struct SharedStore {
+    pub comparisons: Arc<Mutex<super::ref_comparison_cache::ComparisonCache>>,
     /// Object interpretation, stable across I/O recovery.
     pub id: u64,
     /// Physical mappings, changed on every rotation.

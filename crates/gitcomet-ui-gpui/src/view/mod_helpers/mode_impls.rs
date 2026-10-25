@@ -44,6 +44,7 @@ pub(crate) struct TerminalMenuContext {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BranchPickerPurpose {
+    ComparisonTarget,
     Checkout,
     Delete,
     RebaseOnto,

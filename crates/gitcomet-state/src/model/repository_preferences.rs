@@ -57,6 +57,7 @@ pub struct SharedRepositoryPreferences {
     pub file_sorts: BTreeMap<RepositoryListKind, RepositoryFileSort>,
     pub show_hidden_files: bool,
     pub show_ignored_files: bool,
+    pub comparison_ref: Option<String>,
 }
 
 impl Default for SharedRepositoryPreferences {
@@ -68,6 +69,7 @@ impl Default for SharedRepositoryPreferences {
             file_sorts: BTreeMap::new(),
             show_hidden_files: true,
             show_ignored_files: false,
+            comparison_ref: None,
         }
     }
 }
@@ -75,6 +77,7 @@ impl Default for SharedRepositoryPreferences {
 /// Updates contain only the user's changes, never a stale window's whole map.
 #[derive(Clone, Debug)]
 pub enum RepositoryPreferenceUpdate {
+    ComparisonRef(Option<String>),
     HistoryMode(HistoryMode),
     Pin {
         key: String,
@@ -99,6 +102,9 @@ pub enum RepositoryPreferenceUpdate {
 impl SharedRepositoryPreferences {
     pub fn apply(&mut self, update: &RepositoryPreferenceUpdate) {
         match update {
+            RepositoryPreferenceUpdate::ComparisonRef(reference) => {
+                self.comparison_ref = reference.clone()
+            }
             RepositoryPreferenceUpdate::HistoryMode(mode) => self.history_mode = *mode,
             RepositoryPreferenceUpdate::Pin { key, pinned } => {
                 if *pinned {
